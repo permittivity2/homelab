@@ -70,13 +70,20 @@ $config['oauth_token_uri']     = '__SSO_BASE_URL__/oauth/token';
 $config['oauth_identity_uri']  = '__SSO_BASE_URL__/oauth/userinfo';
 $config['oauth_logout_uri']    = '__SSO_BASE_URL__/logout';
 $config['oauth_scope']         = 'openid';
-// Visible "Login with Homelab SSO" button alongside the normal password
-// form, not a silent full-page auto-redirect -- a deliberately cautious
-// default for a first rollout (this project's prior private repo's own
-// SSO work only flipped the equivalent of this to auto-redirect after
-// proving the flow correct in production first). Change to `true` once
-// this deployment's SSO flow is proven solid.
-$config['oauth_login_redirect'] = false;
+// Silent full-page auto-redirect through homelab-sso on any
+// unauthenticated visit -- this is what actually delivers "login once,
+// login everywhere": without it, a live Drive session does NOT carry
+// over automatically when visiting Roundcube fresh, because Roundcube
+// still shows its own login page (with a manual "Login with Homelab
+// SSO" link/button) instead of silently checking homelab-sso's IdP
+// session on your behalf. Started as `false` (a deliberately cautious
+// default for the first rollout, matching this project's prior private
+// repo's own SSO work, which only flipped the equivalent of this after
+// proving the flow correct in production) and was flipped to `true`
+// once a real user confirmed the flow itself was solid but the missing
+// auto-redirect made "login once, login everywhere" not actually feel
+// that way in a real browser.
+$config['oauth_login_redirect'] = true;
 
 // Must stay aligned with homelab-api's jwt.expiry_seconds (config/
 // api.example.yml; currently 1800s = 30 minutes) by hand -- there is no

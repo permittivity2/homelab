@@ -131,11 +131,31 @@ token, via a new `oauth2` passdb that introspects it against
 `homelab-api`) lives in `homelab-dovecot`, not here — see that package's
 README.
 
-`oauth_login_redirect` defaults to `false` here (a visible "Login with
-Homelab SSO" button alongside the password form, not a silent full-page
-auto-redirect) — a deliberately cautious default for a first rollout,
-flippable later via `config.inc.php` once this deployment's flow is
-proven solid.
+`oauth_login_redirect` is `true` (flipped from a deliberately cautious
+`false` first-rollout default, after a real user's bug report: a live
+Drive session wasn't carrying over on a bare visit to Mail — only the
+explicit "Login with Homelab SSO" link triggered it, which isn't what
+"login once, login everywhere" is supposed to feel like). With it on,
+Roundcube's own `unauthenticated` hook auto-redirects to homelab-sso on
+**every** request where nobody's logged in, unconditionally, for every
+task/action — confirmed by reading `index.php`'s own dispatch code, not
+just empirically.
+
+**Real, deliberately accepted tradeoff**: this means Roundcube's own
+native password-login form is no longer reachable by an anonymous
+visitor through any URL at all — there's no query-param combination
+that skips the redirect (a plausible-looking `?_err=session` escape
+hatch does NOT work: `unauthenticated`'s own `error` field only becomes
+non-empty via a real `$RCMAIL->session_error()` check, not a spoofable
+request param). Plain-password auth itself is untouched and still fully
+functional at the protocol level — `homelab-cli mail`, or any real IMAP/
+SMTP client, still authenticates with a password exactly as before —
+what's gone specifically is a way to reach Roundcube's *own web UI* login
+form without going through homelab-sso first. If homelab-sso is ever
+down, Roundcube's web UI is unreachable until it's back up; email itself
+is not (IMAP/SMTP keep working directly). See
+`tests/e2e/test_roundcube_login.py`'s module docstring for the full
+investigation.
 
 `session_lifetime` (30 minutes) is set to match `homelab-api`'s
 `jwt.expiry_seconds` (`config/api.example.yml`) — the two are **not**

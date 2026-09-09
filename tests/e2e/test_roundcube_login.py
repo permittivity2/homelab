@@ -1,106 +1,108 @@
-"""Phase 6 (mail stack) regression test: a real browser-equivalent login
-to homelab-roundcube over real HTTPS — the last piece of the mail stack,
-and the one that proves the unified cross-feature identity design from
-the actual end-user's side. Unlike every other test in this suite, this
-one needs no SSH tunnel: homelab-webproxy's real Let's Encrypt
-certificate for mail.test.mailmasker.org means this hits the genuine
-public internet-facing path directly, the same way a real user's browser
-would (see webproxy/README.md for how that got confirmed working).
+"""Phase 6 (mail stack) regression test: a real browser-equivalent visit
+to homelab-roundcube over real HTTPS. Unlike every other test in this
+suite, this one needs no SSH tunnel for the HTTP calls themselves:
+homelab-webproxy's real Let's Encrypt certificate for
+mail.test.mailmasker.org means this hits the genuine public
+internet-facing path directly, the same way a real user's browser would
+(see webproxy/README.md for how that got confirmed working).
 
 Also the regression test for a real upstream incompatibility: Ubuntu's
 roundcube-core 1.6.11 unconditionally redeclares array_first(), which
 PHP 8.5 now ships as a genuine builtin — a hard PHP fatal on every page
 load. See roundcube/script/homelab-roundcube-patch-php85-compat and
 roundcube/README.md for the full story. If that patch ever regresses
-(e.g. a roundcube-core package upgrade resets the file), every request
-here 500s instead of returning real HTML — this test would catch that
-immediately as a non-200 status or a missing login form, not just an
-IMAP-level auth failure.
+(e.g. a roundcube-core package upgrade resets the file), the redirect
+test below would 500 instead of cleanly 302.
+
+Historical note, why there's no "plain password login via the web UI"
+test here any more: earlier versions of this file logged in with a real
+account by scraping a CSRF token off Roundcube's own bare `/` login
+page and POSTing credentials directly, bypassing SSO entirely. Once
+oauth_login_redirect was flipped to true (see the test below — a real
+user's bug report: a live Drive session wasn't carrying over to a bare
+Mail visit), Roundcube's own `unauthenticated` hook fires unconditionally
+whenever nobody's logged in, for EVERY task/action, before any
+Roundcube-side page can render — there is no URL that reaches the native
+login form as an anonymous visitor any more, so that path can no longer
+be exercised over HTTP at all (confirmed by reading index.php's own
+dispatch code, not just empirically). Plain-password auth itself is
+still fully covered at the protocol level by test_dovecot_login.py's
+direct IMAP tests (Roundcube's SQL passdb is completely untouched by
+any of this) — what's gone is coverage of Roundcube's OWN web-login code
+path specifically, which is a real, deliberately-accepted reduction in
+what this file can verify, not an oversight.
 """
 
-import http.cookiejar
-import re
 import subprocess
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 
-import pytest
+from test_sso_flow import DRIVE_LOGIN_URL, SSO_URL, _new_opener, _submit_credentials
 
 BASE_URL = "https://mail.test.mailmasker.org"
 
 
-@pytest.fixture(scope="module")
-def mail_account(ssh_host):
-    """A fresh, real homelab-api account — the same registration path
-    every other mail-stack e2e test proves unified identity against."""
-    email = f"e2e-roundcube-{int(time.time())}@test.mailmasker.org"
-    password = "E2eRoundcubeTest1Aa"
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Installed on an opener that should inspect a redirect response
+    itself rather than transparently follow it."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def test_bare_visit_auto_redirects_to_sso():
+    """The actual regression test for the real bug: a bare visit to
+    mail.test.mailmasker.org must immediately redirect to homelab-sso,
+    not show Roundcube's own login page and wait for a manual click.
+    Before oauth_login_redirect was flipped to true, this is exactly
+    where "login once, login everywhere" silently stopped being true in
+    a real browser — a live Drive session existed, but visiting Mail
+    fresh still showed a local login page instead of checking it.
+
+    Also still catches the array_first PHP 8.5 regression this file
+    originally existed for (see the module docstring) — a PHP fatal
+    here would 500, not cleanly 302."""
+    opener = urllib.request.build_opener(_NoRedirect())
+    # A redirect_request() that returns None (i.e. "don't follow") makes
+    # urllib raise the 302 as an HTTPError rather than just returning it
+    # as a normal response — the HTTPError object itself is what carries
+    # the real status/headers here, not a separate response object.
+    try:
+        resp = opener.open(f"{BASE_URL}/", timeout=15)
+        status, headers = resp.status, resp.headers
+    except urllib.error.HTTPError as e:
+        status, headers = e.code, e.headers
+    assert status == 302, f"expected an immediate redirect to homelab-sso, got {status}"
+    location = headers["Location"]
+    assert location.startswith(f"{SSO_URL}/oauth/authorize"), f"redirected somewhere unexpected: {location}"
+    assert "client_id=roundcube" in location
+
+
+def test_live_drive_session_reaches_inbox_on_a_bare_mail_visit(ssh_host):
+    """The property a real user actually expects from "login once,
+    login everywhere": after logging into Drive, a completely bare,
+    unprompted visit to Mail — not clicking anything Roundcube-specific,
+    just typing the URL — lands straight in the inbox with zero clicks.
+    test_sso_flow.py's own login-once test proves the underlying
+    mechanism using Roundcube's explicit SSO entry point; this is the
+    narrower, more literal regression test for oauth_login_redirect
+    specifically — without it, even a live IdP session wasn't enough on
+    a bare visit (see test_bare_visit_auto_redirects_to_sso's own
+    history for why)."""
+    email = f"e2e-roundcube-bare-{int(time.time())}@test.mailmasker.org"
+    password = "E2eRoundcubeBareTest1Aa"
     result = subprocess.run(
         ["ssh", ssh_host, "homelab-cli", "register", email, "--password", password],
         capture_output=True, text=True, timeout=20,
     )
     assert result.returncode == 0, f"test account registration failed: {result.stderr}"
-    return email, password
 
+    opener = _new_opener()
+    _submit_credentials(opener, DRIVE_LOGIN_URL, email, password)
 
-def _new_session():
-    cj = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-    return opener
-
-
-def _fetch_login_token(opener):
-    resp = opener.open(f"{BASE_URL}/", timeout=15)
-    html = resp.read().decode()
-    assert resp.status == 200, f"login page did not load: HTTP {resp.status}"
-    m = re.search(r'name="_token"\s+value="([^"]+)"', html)
-    assert m, "no CSRF token found on the login page — is homelab-roundcube actually serving real HTML (see the array_first PHP 8.5 Gotcha)?"
-    return m.group(1)
-
-
-def _attempt_login(opener, token, email, password):
-    data = urllib.parse.urlencode({
-        "_token": token,
-        "_task": "login",
-        "_action": "login",
-        "_timezone": "UTC",
-        "_url": "",
-        "_user": email,
-        "_pass": password,
-    }).encode()
-    req = urllib.request.Request(f"{BASE_URL}/?_task=login", data=data, method="POST")
-    req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    req.add_header("Referer", f"{BASE_URL}/")
-    resp = opener.open(req, timeout=15)
-    return resp.read().decode()
-
-
-def test_real_https_login_reaches_inbox(mail_account):
-    email, password = mail_account
-    opener = _new_session()
-    token = _fetch_login_token(opener)
-    html = _attempt_login(opener, token, email, password)
-    assert "Inbox" in html or "taskbar" in html, (
-        "login did not land on the Inbox — check homelab-dovecot's IMAP passdb "
-        "and that this account is active"
+    mail_html = opener.open(f"{BASE_URL}/", timeout=15).read().decode()
+    assert "Inbox" in mail_html or "taskbar" in mail_html, (
+        "a live Drive session did not carry over to a bare Mail visit — "
+        "check oauth_login_redirect in roundcube's config.inc.php"
     )
-
-
-def test_wrong_password_does_not_reach_inbox(mail_account):
-    """A wrong password must never reach the Inbox. Roundcube answers
-    this particular rejection with a real HTTP 401 (not a 200 with a
-    login-form-again page), which urllib raises as HTTPError by
-    default — that exception IS the passing case here, not a test
-    infrastructure failure; only a 2xx/3xx response showing the Inbox
-    would mean the IMAP passdb rejection isn't being honored."""
-    email, _ = mail_account
-    opener = _new_session()
-    token = _fetch_login_token(opener)
-    try:
-        html = _attempt_login(opener, token, email, "definitely-the-wrong-password")
-    except urllib.error.HTTPError as e:
-        assert e.code in (401, 403), f"expected a real auth-rejection status, got {e.code}"
-        return
-    assert "Inbox" not in html, "a WRONG password reached the Inbox — SASL/IMAP passdb rejection isn't being honored"

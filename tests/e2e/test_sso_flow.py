@@ -175,8 +175,18 @@ def test_logout_via_roundcube_kills_drive_session(sso_account):
     token = m.group(1)
 
     logout_html = opener.open(f"{MAIL_URL}/?_task=logout&_token={token}", timeout=15).read().decode()
-    assert "rcmloginuser" in logout_html or "rcmloginoauth" in logout_html, (
-        f"logout request did not land back on Roundcube's own login page -- did the CSRF token extraction fail? {logout_html[:300]}"
+    # Now that oauth_login_redirect is true (see roundcube/README.md),
+    # the final landing page can legitimately be EITHER Roundcube's own
+    # login page OR homelab-sso's: logout_after() redirects through
+    # homelab-sso's /logout, which lands back on Roundcube's own bare
+    # URL -- but Roundcube's session is gone by then too, so its own
+    # unauthenticated hook immediately auto-redirects to homelab-sso
+    # AGAIN, which (since the shared session was just revoked) shows
+    # its OWN login form rather than looping. Landing on SSO's form here
+    # is actually the MORE thorough proof: it means both Roundcube's
+    # local session AND the shared IdP session are dead, not just one.
+    assert any(marker in logout_html for marker in ("rcmloginuser", "rcmloginoauth", "Homelab SSO")), (
+        f"logout request did not land on a real login page (either app's) -- did the CSRF token extraction fail? {logout_html[:300]}"
     )
 
     landed, _ = _start_login(opener, DRIVE_LOGIN_URL)
