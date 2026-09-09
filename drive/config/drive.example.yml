@@ -1,13 +1,27 @@
 # Homelab Drive Configuration
 #
 # A file-storage web UI (BFF pattern): browsers talk to this app, never
-# directly to homelab-api. Login is proxied through to homelab-api's
-# /api/v1/auth/login (Homelab::Common::AuthClient::login), and the
-# resulting token/refresh_token are held in this app's own signed
-# session cookie — the same shape homelab-sso will later use too.
+# directly to homelab-api or homelab-sso. Login is delegated entirely to
+# homelab-sso (see sso: below) via an OAuth2-style authorization-code
+# flow — this app never sees a password. The resulting access_token/
+# refresh_token are held in this app's own signed session cookie, and
+# re-verified against homelab-api's introspect on every request (see
+# homelab_api: below) — a session cookie surviving doesn't mean the
+# underlying token is still valid.
 
 homelab_api:
   base_url: https://login.test.mailmasker.org   # wherever homelab-api is actually reachable
+
+# homelab-sso is the only place a user ever types a password. This app
+# redirects here for /login and /logout; postinst prompts for base_url
+# and client_secret via debconf (the secret must match exactly what
+# homelab-sso's own install printed for the "drive" client — see
+# ../sso/README.md's "Wiring in a relying party").
+sso:
+  base_url: YOUR_SSO_BASE_URL_HERE
+  client_id: drive
+  client_secret: YOUR_SSO_CLIENT_SECRET_HERE
+  redirect_uri: https://drive.test.mailmasker.org/oauth/callback
 
 # RUNTIME connection — CRUD only, no DDL. Point this at pgbouncer.
 database:

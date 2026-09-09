@@ -22,3 +22,28 @@ Template: homelab-drive/listen_port
 Type: string
 Default: 2501
 Description: Port for homelab-drive to listen on:
+
+Template: homelab-drive/sso_base_url
+Type: string
+Default: http://127.0.0.1:2502
+Description: Base URL where homelab-sso is reachable:
+ Written into config.yml's sso.base_url. homelab-sso is the only place
+ a user ever types a password -- this app redirects here for /login
+ and /logout.
+
+Template: homelab-drive/sso_redirect_uri
+Type: string
+Default: https://drive.test.mailmasker.org/oauth/callback
+Description: This app's own OAuth callback URL:
+ Must match exactly what's registered for the "drive" client in
+ homelab-sso's own config (homelab-sso/drive_redirect_uri at that
+ package's install time).
+
+Template: homelab-drive/sso_client_secret
+Type: password
+Description: Shared secret for this app's "drive" OAuth client:
+ Must match exactly what homelab-sso's own install printed for the
+ "drive" client (dpkg-reconfigure homelab-sso to see it again, or
+ rotate it). Unlike homelab-sso's own client secrets, there's no
+ sensible default to auto-generate here -- this app is the consumer of
+ a secret homelab-sso mints, not the minter.

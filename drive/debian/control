@@ -14,12 +14,16 @@ Depends: perl (>= 5.36),
          libyaml-libyaml-perl,
          libmojo-pg-perl,
          adduser
-Recommends: homelab-database, homelab-pgbouncer, homelab-api
+Recommends: homelab-database, homelab-pgbouncer, homelab-api, homelab-sso
 Description: File storage web UI for the homelab-* ecosystem
- A BFF-style Mojolicious app: browsers talk only to this app, which
- proxies login through to homelab-api (Homelab::Common::AuthClient) and
- holds the resulting token in its own session cookie. Upload/list/
- download/delete files, stored on local disk under
+ A BFF-style Mojolicious app: browsers talk only to this app, never
+ directly to homelab-api or homelab-sso. Login is delegated entirely to
+ homelab-sso via an OAuth2-style authorization-code flow
+ (Homelab::Common::SSOClient) -- this app never sees a password, and a
+ live homelab-sso IdP session lets a user land here already logged in.
+ The resulting token is held in its own session cookie and re-verified
+ against homelab-api (Homelab::Common::AuthClient) on every request.
+ Upload/list/download/delete files, stored on local disk under
  /var/lib/homelab/drive-storage, indexed in its own `drive` Postgres
  schema (split runtime/migrate roles, see CLAUDE.md). Registers itself
  in homelab-api's service registry on startup.

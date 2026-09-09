@@ -1,12 +1,20 @@
 # homelab-drive
 
 A file-storage web UI, built BFF-style: browsers only ever talk to this
-app, never directly to `homelab-api`. Login proxies through to
-`homelab-api`'s `/api/v1/auth/login`
-(`Homelab::Common::AuthClient::login`) and the resulting token is held
-in this app's own signed session cookie, re-verified against
-`homelab-api`'s `/api/v1/auth/introspect` on every request (a session
-cookie surviving doesn't mean the underlying JWT is still valid).
+app, never directly to `homelab-api` or `homelab-sso`. Login is
+delegated entirely to `homelab-sso` (an OAuth2-style authorization-code
+flow — `/login` redirects to homelab-sso's `/oauth/authorize`,
+`/oauth/callback` exchanges the resulting code server-to-server via
+`Homelab::Common::SSOClient::exchange_code`); this app never sees a
+password, and a live homelab-sso IdP session lets a user land here
+already logged in ("login once, login everywhere" — see
+`../sso/README.md`). The resulting access token is held in this app's
+own signed session cookie, re-verified against homelab-api's
+`/api/v1/auth/introspect` on every request (a session cookie surviving
+doesn't mean the underlying token is still valid). `/logout` redirects
+to homelab-sso's own `/logout` rather than just clearing this app's
+cookie — that's what makes it a real, single logout instead of only a
+local one.
 
 Files are stored on local disk under `/var/lib/homelab/drive-storage`,
 named by a random UUID (never the user-supplied filename — that's kept
@@ -32,8 +40,12 @@ HOMELAB_DRIVE_HOME=. \
 ```
 
 Needs a real config (real runtime DB credentials, migrations already
-applied) and a real, already-registered `homelab-api` account —
-`t/basic.t` exercises the full flow for real: login failure/success,
-upload, list, download (byte-for-byte round-trip check), delete
-(including confirming the download link is genuinely gone afterward,
-not just hidden from the list), and logout.
+applied, a real `sso.*` section pointing at a real, already-running
+homelab-sso with this deployment's actual "drive" client registered)
+and a real, already-registered `homelab-api` account — `t/basic.t`
+exercises the full flow for real: the OAuth round trip through
+homelab-sso (wrong-password rejection, correct-credential code
+issuance, state/CSRF round-tripping, code exchange), upload, list,
+download (byte-for-byte round-trip check), delete (including confirming
+the download link is genuinely gone afterward, not just hidden from
+the list), and logout (redirects to homelab-sso's own `/logout`).
