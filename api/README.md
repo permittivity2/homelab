@@ -57,13 +57,31 @@ Add an entry to `homelab-webproxy`'s `sites.yml` (see
 need to know or care that this one issues credentials instead of
 serving a webmail UI.
 
+## Admin endpoints (site_admin role required)
+
+`GET /api/v1/admin/users` (list every user with their granted role
+names), `POST /api/v1/admin/users/:id/roles` (`{role: "..."}`, granting
+an unknown role name 400s rather than silently no-op'ing), `DELETE
+/api/v1/admin/users/:id/roles/:role` — gated by a hardcoded `site_admin`
+role check (`_require_site_admin`), not a separate permissions table
+(see `migrations/003-rbac.sql`'s own comment on why: a bad row edit in a
+permissions table could lock every admin out at once). There's no
+self-service "become the first admin" endpoint by design — the first
+`site_admin` grant is always a direct SQL insert into `api.user_roles`,
+same as `test-admin@test.mailmasker.org` was granted. This is what
+`homelab-cli admin` talks to.
+
 ## Testing
 
-`t/auth.t` (unit, no DB) and `t/basic.t` (real Postgres, real HTTP —
-set `HOMELAB_API_CONFIG`) cover registration, login/introspect/refresh/
-logout, the session-revocation property specifically (a JWT rejected
-immediately after logout despite being nowhere near its own expiry),
-rate limiting (loops until a real 429 shows up, then cleans up its own
-rows so repeated test runs don't self-interfere via the shared per-IP
-counter), and the service registry. Live coverage of the public HTTPS
-path is `tests/e2e/test_api_public.py`.
+`t/auth.t` (unit, no DB), `t/basic.t` (real Postgres, real HTTP — set
+`HOMELAB_API_CONFIG`), and `t/admin.t` (same, covering the admin
+endpoints specifically: 401 with no token, 403 with a valid token but no
+site_admin role, unknown-role/nonexistent-user rejection, and that both
+granting and revoking are idempotent rather than erroring on a repeat
+call) cover registration, login/introspect/refresh/logout, the session-
+revocation property specifically (a JWT rejected immediately after
+logout despite being nowhere near its own expiry), rate limiting (loops
+until a real 429 shows up, then cleans up its own rows so repeated test
+runs don't self-interfere via the shared per-IP counter), and the
+service registry. Live coverage of the public HTTPS path is
+`tests/e2e/test_api_public.py`.

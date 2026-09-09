@@ -74,6 +74,15 @@ sub startup ($self) {
     $r->get('/files/:id/download')->to('drive#download');
     $r->post('/files/:id/delete') ->to('drive#delete_file');
 
+    # --- JSON API (Bearer-token authenticated, e.g. homelab-cli or any
+    # third-party script -- see README.md and ../../CLAUDE.md). Not
+    # session-cookie-based like the browser routes above: a CLI holds
+    # its own homelab-api JWT directly, no SSO redirect dance needed. ---
+    $r->get('/api/v1/files')        ->to('drive#api_list');
+    $r->post('/api/v1/files')       ->to('drive#api_upload');
+    $r->get('/api/v1/files/:id')    ->to('drive#download');
+    $r->delete('/api/v1/files/:id') ->to('drive#api_delete');
+
     return;
 }
 
@@ -100,8 +109,16 @@ use Homelab::Common::SSOClient qw(exchange_code);
 # as Homelab::Common::AuthClient exists for in the first place — a
 # session that's still present but whose JWT expired must not keep
 # working.
+#
+# Checks a Bearer Authorization header FIRST, falling back to the
+# browser session cookie -- this is what lets the same handler back
+# both the browser UI (session cookie, set via the SSO redirect flow)
+# and the /api/v1/files JSON API below (a bearer token, e.g. homelab-cli
+# holding its own homelab-api JWT directly -- no session/cookie
+# involved at all for a CLI client).
 sub _current_email ($c) {
-    my $jwt = $c->session('token');
+    my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+    $jwt //= $c->session('token');
     return undef unless $jwt;
     my $result = introspect($jwt, api_base => $c->app->api_base);
     return $result ? $result->{email} : undef;
@@ -192,6 +209,24 @@ sub logout ($c) {
     return $c->redirect_to($url);
 }
 
+# Shared by the browser form (upload()) and the JSON API (api_upload())
+# below -- inserts the DB row and moves the uploaded file into storage,
+# returning the new row (id, filename, size_bytes, mime_type,
+# uploaded_at). Callers decide how to respond (redirect vs JSON).
+sub _save_upload ($c, $email, $upload) {
+    my $row = $c->app->pg->db->query(
+        q{INSERT INTO drive.files (user_email, filename, size_bytes, mime_type)
+          VALUES (?, ?, ?, ?) RETURNING id, filename, size_bytes, mime_type, uploaded_at, uuid},
+        $email, $upload->filename, $upload->size, $upload->headers->content_type,
+    )->hash;
+
+    my $dest = $c->app->storage_path . '/' . $row->{uuid};
+    $upload->move_to($dest);
+
+    delete $row->{uuid};    # internal storage detail, never exposed
+    return $row;
+}
+
 sub upload ($c) {
     my $email = _current_email($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
@@ -199,16 +234,39 @@ sub upload ($c) {
     my $upload = $c->req->upload('file');
     return $c->redirect_to('/') unless $upload;
 
-    my $row = $c->app->pg->db->query(
-        q{INSERT INTO drive.files (user_email, filename, size_bytes, mime_type)
-          VALUES (?, ?, ?, ?) RETURNING id, uuid},
-        $email, $upload->filename, $upload->size, $upload->headers->content_type,
-    )->hash;
-
-    my $dest = $c->app->storage_path . '/' . $row->{uuid};
-    $upload->move_to($dest);
-
+    _save_upload($c, $email, $upload);
     return $c->redirect_to('/');
+}
+
+# POST /api/v1/files (multipart, field name "file") -- Bearer-authed
+# equivalent of the browser upload form above, for homelab-cli (`homelab-cli
+# drive upload`) or any third-party script (see ../../CLAUDE.md and this
+# package's own README on why a real JSON API matters here, not just the
+# browser UI).
+sub api_upload ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $upload = $c->req->upload('file');
+    return $c->render(json => { error => 'no file provided (multipart field name must be "file")' }, status => 400)
+        unless $upload;
+
+    my $row = _save_upload($c, $email, $upload);
+    return $c->render(json => $row, status => 201);
+}
+
+# GET /api/v1/files -- this user's own files, as JSON. Same query
+# index() already uses for the browser's own file listing.
+sub api_list ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $files = $c->app->pg->db->query(
+        'SELECT id, filename, size_bytes, mime_type, uploaded_at FROM drive.files
+         WHERE user_email = ? ORDER BY uploaded_at DESC',
+        $email,
+    )->hashes;
+    return $c->render(json => $files);
 }
 
 sub download ($c) {
@@ -230,20 +288,41 @@ sub download ($c) {
     return $c->reply->file($path);
 }
 
+# Shared by the browser form (delete_file()) and the JSON API
+# (api_delete()) below. Returns true if a matching file was found and
+# deleted, false if there was nothing to delete (nonexistent id, or one
+# belonging to a different user -- deliberately indistinguishable, same
+# as download()'s own "not found" for the same reason: a bare id in a
+# URL shouldn't confirm/deny another user's file exists).
+sub _delete_file ($c, $email, $id) {
+    my $file = $c->app->pg->db->query(
+        'SELECT uuid FROM drive.files WHERE id = ? AND user_email = ?', $id, $email,
+    )->hash;
+    return 0 unless $file;
+
+    $c->app->pg->db->query('DELETE FROM drive.files WHERE id = ?', $id);
+    my $path = $c->app->storage_path . '/' . $file->{uuid};
+    unlink($path) if -f $path;
+    return 1;
+}
+
 sub delete_file ($c) {
     my $email = _current_email($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
 
-    my $id = $c->param('id');
-    my $file = $c->app->pg->db->query(
-        'SELECT uuid FROM drive.files WHERE id = ? AND user_email = ?', $id, $email,
-    )->hash;
-    if ($file) {
-        $c->app->pg->db->query('DELETE FROM drive.files WHERE id = ?', $id);
-        my $path = $c->app->storage_path . '/' . $file->{uuid};
-        unlink($path) if -f $path;
-    }
+    _delete_file($c, $email, $c->param('id'));
     return $c->redirect_to('/');
+}
+
+# DELETE /api/v1/files/:id -- Bearer-authed equivalent of the browser
+# delete form above.
+sub api_delete ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $deleted = _delete_file($c, $email, $c->param('id'));
+    return $c->render(json => { error => 'not found' }, status => 404) unless $deleted;
+    return $c->render(json => { ok => \1 });
 }
 
 1;

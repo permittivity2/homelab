@@ -29,6 +29,25 @@ Deliberately minimal for the first pass: flat file list per user, no
 directories/sharing/trash/versioning — those are straightforward to
 add later once the core upload/list/download/delete path is proven.
 
+## JSON API (for homelab-cli and third-party scripts)
+
+Alongside the browser routes above, `GET /api/v1/files`, `POST
+/api/v1/files` (multipart, field name `file`), `GET /api/v1/files/:id`
+(also backs the browser's own download link — same handler, no
+duplicated logic), and `DELETE /api/v1/files/:id` are Bearer-token
+authenticated, not session-cookie authenticated — `_current_email`
+checks an `Authorization: Bearer <jwt>` header first, falling back to
+the session cookie only if that's absent. This is what
+`homelab-cli drive` talks to: a CLI already holds its own homelab-api
+JWT directly (from `homelab-cli login`), so it never goes through the
+SSO redirect dance at all — see the root `CLAUDE.md` on why the API
+being genuinely usable by third-party clients, not just this browser
+UI, is a deliberate design goal. A file's internal storage `uuid` is
+never exposed over the API (only used server-side to name the on-disk
+blob); ownership is enforced the same way as the browser routes — a
+file id belonging to a different user 404s, not 403s (indistinguishable
+from "doesn't exist" on purpose).
+
 ## Testing
 
 ```bash
@@ -43,9 +62,13 @@ Needs a real config (real runtime DB credentials, migrations already
 applied, a real `sso.*` section pointing at a real, already-running
 homelab-sso with this deployment's actual "drive" client registered)
 and a real, already-registered `homelab-api` account — `t/basic.t`
-exercises the full flow for real: the OAuth round trip through
-homelab-sso (wrong-password rejection, correct-credential code
-issuance, state/CSRF round-tripping, code exchange), upload, list,
-download (byte-for-byte round-trip check), delete (including confirming
-the download link is genuinely gone afterward, not just hidden from
-the list), and logout (redirects to homelab-sso's own `/logout`).
+exercises the full browser/session-cookie flow for real: the OAuth
+round trip through homelab-sso (wrong-password rejection, correct-
+credential code issuance, state/CSRF round-tripping, code exchange),
+upload, list, download (byte-for-byte round-trip check), delete
+(including confirming the download link is genuinely gone afterward,
+not just hidden from the list), and logout (redirects to homelab-sso's
+own `/logout`). `t/api.t` covers the Bearer-token JSON API specifically
+(no token/bogus token rejection, the same upload/list/download/delete
+round trip, and that one user's token can't see or reach another
+user's files — 404, not 403).

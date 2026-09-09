@@ -43,6 +43,15 @@ sub startup ($self) {
     $r->post('/api/v1/registry/register' => sub ($c) { $self->_registry_register($c) });
     $r->get('/api/v1/registry/:feature'  => sub ($c) { $self->_registry_lookup($c) });
 
+    # --- Admin (site_admin role required — see migrations/003-rbac.sql's
+    # own comment: admin routes are deliberately hardcoded role checks,
+    # not gated by a separate permissions table, so a bad row edit can't
+    # lock every admin out at once). This is what homelab-cli's `admin`
+    # subcommands talk to. ------------------------------------------
+    $r->get('/api/v1/admin/users'                => sub ($c) { $self->_admin_list_users($c) });
+    $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
+    $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
+
     return;
 }
 
@@ -268,6 +277,104 @@ sub _registry_lookup ($self, $c) {
     my $entry   = $self->registry->lookup($feature);
     return $c->render(json => { error => 'not found' }, status => 404) unless $entry;
     return $c->render(json => $entry);
+}
+
+# Verifies a bearer JWT (signature+expiry+not-revoked -- the same three
+# checks _introspect's own response is built from) and returns the
+# authenticated user's {id, email}, or undef if any check fails. A
+# separate, small helper rather than a refactor of _introspect itself
+# (which has its own, already-tested distinct error messages per failure
+# reason) -- this one only needs a yes/no plus the DB id, for the admin
+# routes below.
+sub _authenticated_user ($self, $c) {
+    my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+    return undef unless $jwt;
+
+    my $payload = verify_jwt($jwt, secret => $self->config->{jwt}{secret});
+    return undef unless $payload;
+
+    my $session = $self->pg->db->query(
+        'SELECT revoked FROM api.sessions WHERE jti = ?', $payload->{jti} // '',
+    )->hash;
+    return undef unless $session && !$session->{revoked};
+
+    return $self->pg->db->query('SELECT id, email FROM api.users WHERE email = ?', $payload->{email})->hash;
+}
+
+# Renders 401/403 itself and returns undef on failure, so callers can
+# just do `my $user = $self->_require_site_admin($c) or return;`.
+sub _require_site_admin ($self, $c) {
+    my $user = $self->_authenticated_user($c);
+    unless ($user) {
+        $c->render(json => { error => 'authentication required' }, status => 401);
+        return undef;
+    }
+
+    my $has_role = $self->pg->db->query(
+        q{SELECT 1 FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+          WHERE ur.user_id = ? AND r.name = 'site_admin'},
+        $user->{id},
+    )->hash;
+    unless ($has_role) {
+        $c->render(json => { error => 'site_admin role required' }, status => 403);
+        return undef;
+    }
+
+    return $user;
+}
+
+# GET /api/v1/admin/users -- every user, with their granted role names.
+sub _admin_list_users ($self, $c) {
+    $self->_require_site_admin($c) or return;
+
+    my $users = $self->pg->db->query(
+        'SELECT id, email, active, created_at FROM api.users ORDER BY id',
+    )->hashes;
+    my $roles_by_user = $self->pg->db->query(
+        q{SELECT ur.user_id, r.name FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id},
+    )->hashes;
+    my %roles;
+    push @{ $roles{ $_->{user_id} } }, $_->{name} for @$roles_by_user;
+
+    return $c->render(json => [
+        map { { %$_, roles => ($roles{ $_->{id} } // []) } } @$users,
+    ]);
+}
+
+# POST /api/v1/admin/users/:id/roles {role: "site_admin"}
+sub _admin_grant_role ($self, $c) {
+    $self->_require_site_admin($c) or return;
+
+    my $user_id = $c->param('id');
+    my $role    = ($c->req->json // {})->{role};
+    return $c->render(json => { error => 'role is required' }, status => 400) unless $role;
+
+    my $target = $self->pg->db->query('SELECT id FROM api.users WHERE id = ?', $user_id)->hash;
+    return $c->render(json => { error => 'user not found' }, status => 404) unless $target;
+
+    my $role_row = $self->pg->db->query('SELECT id FROM api.roles WHERE name = ?', $role)->hash;
+    return $c->render(json => { error => "unknown role: $role" }, status => 400) unless $role_row;
+
+    $self->pg->db->query(
+        'INSERT INTO api.user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
+        $user_id, $role_row->{id},
+    );
+    return $c->render(json => { ok => \1 });
+}
+
+# DELETE /api/v1/admin/users/:id/roles/:role
+sub _admin_revoke_role ($self, $c) {
+    $self->_require_site_admin($c) or return;
+
+    my $user_id = $c->param('id');
+    my $role    = $c->param('role');
+
+    $self->pg->db->query(
+        q{DELETE FROM api.user_roles WHERE user_id = ?
+          AND role_id = (SELECT id FROM api.roles WHERE name = ?)},
+        $user_id, $role,
+    );
+    return $c->render(json => { ok => \1 });
 }
 
 1;

@@ -15,7 +15,14 @@ CONFIG_DIR = Path(os.environ.get("HOMELAB_CLI_CONFIG_DIR", Path.home() / ".confi
 CONFIG_FILE = CONFIG_DIR / "config.yml"
 SESSION_FILE = CONFIG_DIR / "session.yml"
 
-DEFAULT_CONFIG = {"api_base": "http://localhost:3000"}
+DEFAULT_CONFIG = {
+    "api_base": "http://localhost:3000",
+    "drive_base": "http://localhost:2501",
+    "imap_host": "localhost",
+    "imap_port": 993,
+    "smtp_host": "localhost",
+    "smtp_port": 587,
+}
 
 
 def load_config():

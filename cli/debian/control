@@ -10,11 +10,17 @@ X-Python3-Version: >= 3.10
 Package: homelab-cli
 Architecture: all
 Depends: ${misc:Depends}, ${python3:Depends}, python3-requests, python3-yaml
-Description: Command-line client for homelab-api
- Register/login/whoami/logout against homelab-api's JSON REST API, and
- look up a feature's address in the service registry. Session
- (token/refresh_token) is stored 0600 in ~/.config/homelab-cli/session.yml,
- separate from the non-secret api_base config. The one shipped package
- in this ecosystem deliberately allowed to be Python rather than Perl
- (see CLAUDE.md's Language section) — a good fit for a pure CLI tool
- that's mostly argument parsing and HTTP calls.
+Description: Command-line client for the homelab-* ecosystem
+ Register/login/whoami/logout against homelab-api's JSON REST API, look
+ up a feature's address in the service registry, and (nearly all the
+ same activities as the web UIs) read/send email via direct IMAP/SMTP
+ (XOAUTH2, using the same saved JWT -- no separate mail login), manage
+ files via homelab-drive's Bearer-token JSON API, and (site_admin
+ accounts only) manage users/roles via homelab-api's admin endpoints.
+ Session (token/refresh_token) is stored 0600 in
+ ~/.config/homelab-cli/session.yml, separate from the non-secret
+ api_base/drive_base/imap_*/smtp_* config. The one shipped package in
+ this ecosystem deliberately allowed to be Python rather than Perl (see
+ CLAUDE.md's Language section) -- a good fit for a pure CLI tool that's
+ mostly argument parsing and HTTP/IMAP/SMTP calls, and easy for a Linux
+ user to read, edit, or take apart for their own purposes.

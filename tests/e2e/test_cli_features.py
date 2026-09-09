@@ -1,0 +1,126 @@
+"""Regression test for homelab-cli's mail/drive/admin commands (see
+cli/README.md) — runs the REAL, packaged `homelab-cli` binary on the
+target host over SSH (not `python3 -m homelab_cli.cli` from a source
+checkout), the same way an actual user would invoke it after `apt
+install homelab-cli`. Package-local unit tests
+(cli/tests/test_client.py, test_mail.py) already cover the HTTP/IMAP/
+SMTP logic in isolation with everything mocked; this is what proves the
+installed CLI actually reaches the real, live services end-to-end.
+
+Uses a throwaway HOMELAB_CLI_CONFIG_DIR per test run so this never
+touches whatever config a real user of the target host already has.
+"""
+
+import shlex
+import subprocess
+import time
+
+import pytest
+
+CONFIG_DIR = "/tmp/e2e-cli-config"
+
+
+def _run_cli(ssh_host, *cli_args, check=True):
+    # ssh joins a list of remote-command args with plain spaces and
+    # hands the result to the remote shell for re-tokenizing — a naive
+    # list (no quoting) silently splits any argument containing a space
+    # (e.g. an email --body) into several argv entries on the far side.
+    # shlex.quote() each piece so the remote shell sees exactly what was
+    # passed here.
+    remote_cmd = shlex.join(["env", f"HOMELAB_CLI_CONFIG_DIR={CONFIG_DIR}", "homelab-cli", *cli_args])
+    result = subprocess.run(["ssh", ssh_host, remote_cmd], capture_output=True, text=True, timeout=30)
+    if check:
+        assert result.returncode == 0, f"homelab-cli {' '.join(cli_args)} failed: {result.stderr or result.stdout}"
+    return result
+
+
+@pytest.fixture
+def cli_account(ssh_host):
+    """Registers a fresh, real homelab-api account and configures a
+    throwaway homelab-cli config dir on the target host, pointed at the
+    real public endpoints. Cleans up the config dir afterward — never
+    the registered account or anything it created, same "don't clean up
+    real accounts" precedent as every other e2e test in this suite."""
+    email = f"e2e-cli-{int(time.time() * 1000)}@test.mailmasker.org"
+    password = "E2eCliTest1Aa!!"
+
+    _run_cli(ssh_host, "configure",
+        "--api-base", "https://api.test.mailmasker.org",
+        "--drive-base", "https://drive.test.mailmasker.org",
+        "--imap-host", "mail.test.mailmasker.org", "--imap-port", "993",
+        "--smtp-host", "mail.test.mailmasker.org", "--smtp-port", "587")
+    _run_cli(ssh_host, "register", email, "--password", password)
+    _run_cli(ssh_host, "login", email, "--password", password)
+
+    yield email
+
+    subprocess.run(["ssh", ssh_host, "rm", "-rf", CONFIG_DIR], capture_output=True, timeout=15)
+
+
+def test_whoami_matches_logged_in_account(ssh_host, cli_account):
+    result = _run_cli(ssh_host, "whoami")
+    assert cli_account in result.stdout
+
+
+def test_drive_upload_list_delete_round_trip(ssh_host, cli_account):
+    marker = f"e2e-cli-drive-{int(time.time())}.txt"
+    remote_path = f"/tmp/{marker}"
+
+    # The CLI itself runs ON the target host (invoked over ssh), so the
+    # file to upload has to exist THERE, not on this admin workstation.
+    subprocess.run(["ssh", ssh_host, "sh", "-c", f"echo 'e2e cli drive test' > {remote_path}"], check=True, timeout=15)
+    try:
+        _run_cli(ssh_host, "drive", "list")  # confirm it doesn't error on an empty account
+
+        upload = _run_cli(ssh_host, "drive", "upload", remote_path)
+        assert marker in upload.stdout
+        file_id = upload.stdout.split("id ")[1].strip().rstrip(")")
+
+        listing = _run_cli(ssh_host, "drive", "list")
+        assert marker in listing.stdout
+
+        _run_cli(ssh_host, "drive", "delete", file_id)
+        listing_after = _run_cli(ssh_host, "drive", "list")
+        assert marker not in listing_after.stdout
+    finally:
+        subprocess.run(["ssh", ssh_host, "rm", "-f", remote_path], capture_output=True, timeout=15)
+
+
+def test_mail_send_then_list_shows_it(ssh_host, cli_account):
+    email = cli_account
+    subject = f"e2e-cli-mail-{int(time.time())}"
+
+    _run_cli(ssh_host, "mail", "send", "--to", email, "--subject", subject, "--body", "e2e cli mail test body")
+
+    # IMAP delivery isn't instantaneous — poll briefly rather than
+    # assuming it's already visible the instant SMTP accepted it.
+    listing = None
+    for _ in range(10):
+        listing = _run_cli(ssh_host, "mail", "list")
+        if subject in listing.stdout:
+            break
+        time.sleep(1)
+    assert listing is not None and subject in listing.stdout, (
+        f"sent message never appeared in mail list within 10s: {listing.stdout if listing else '(no attempt ran)'}"
+    )
+
+    uid = listing.stdout.split("[", 1)[1].split("]", 1)[0]
+    read = _run_cli(ssh_host, "mail", "read", uid)
+    assert subject in read.stdout
+    assert "e2e cli mail test body" in read.stdout
+    # Regression check for a real bug found while building this: Python's
+    # EmailMessage doesn't set a Date header on its own — see
+    # homelab_cli/mail.py's fix.
+    date_line = next((line for line in read.stdout.splitlines() if line.startswith("Date:")), "")
+    assert date_line.strip() != "Date:", "Date header came back empty"
+
+
+def test_admin_commands_reject_non_admin_account(ssh_host, cli_account):
+    """This test's own account is deliberately NOT a site_admin (there's
+    no self-service way to become one, by design — see api/README.md's
+    Admin endpoints section) — confirms the CLI surfaces the server's
+    real 403 cleanly rather than crashing or silently pretending to
+    succeed."""
+    result = _run_cli(ssh_host, "admin", "users", "list", check=False)
+    assert result.returncode != 0
+    assert "site_admin role required" in result.stdout or "site_admin role required" in result.stderr

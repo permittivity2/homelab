@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "homelab-cli"
 version = "0.1.0"
-description = "Command-line client for homelab-api"
+description = "Command-line client for the homelab-* ecosystem"
 requires-python = ">=3.10"
 dependencies = ["requests", "PyYAML"]
 
