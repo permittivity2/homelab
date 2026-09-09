@@ -1,0 +1,32 @@
+Template: homelab-database/listen_addresses
+Type: string
+Default: localhost
+Description: PostgreSQL listen_addresses:
+ Comma-separated list, or '*'. Leave as localhost unless other hosts
+ need to reach this database over the network.
+
+Template: homelab-database/allowed_networks
+Type: string
+Default:
+Description: CIDR ranges to permit in pg_hba.conf (space-separated):
+ e.g. "10.20.0.115/32". Leave blank for localhost-only. Each is added as
+ an additive scram-sha-256 rule for "all" databases/users -- tighten by
+ hand afterward in /etc/postgresql/<ver>/main/pg_hba.conf.d/90-homelab-database.conf
+ if a narrower rule is wanted.
+
+Template: homelab-database/adopt_existing
+Type: boolean
+Default: true
+Description: An existing PostgreSQL cluster was detected -- adopt it in place?
+ Skip any tuning that would override values already present in
+ postgresql.conf; only add new, additive settings via our own drop-in
+ file. Decline to treat this as a from-scratch install instead.
+
+Template: homelab-database/enable_backups
+Type: boolean
+Default: false
+Description: Enable a basic pg_dump-based nightly backup?
+ No backup mechanism exists by default. This installs a cron job dumping
+ every database to /var/backups/homelab-database/, retaining 7 days.
+ Decline to leave backups out of scope (e.g. if handled by external
+ tooling already).

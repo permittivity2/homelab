@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 conf.d/90-homelab-database.conf.template \
+		debian/homelab-database/usr/share/homelab-database/conf.d/90-homelab-database.conf.template
+	install -D -m 755 scripts/backup.sh \
+		debian/homelab-database/usr/share/homelab-database/scripts/backup.sh
+	install -D -m 644 backup-paths.txt \
+		debian/homelab-database/usr/share/homelab-database/backup-paths.txt
+	install -D -m 755 backup-hook.sh \
+		debian/homelab-database/usr/share/homelab-database/backup-hook.sh

@@ -1,0 +1,132 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+SHARE_DIR=/usr/share/homelab-database
+
+case "$1" in
+    configure)
+        echo "homelab-database post-installation setup..."
+
+        PGVER="$(pg_lsclusters -h | awk '{print $1}' | sort -V | tail -1)"
+        if [ -z "$PGVER" ]; then
+            echo "WARNING: no PostgreSQL cluster found (pg_lsclusters returned nothing)."
+            echo "         Skipping configuration -- run 'sudo dpkg-reconfigure homelab-database'"
+            echo "         once a cluster exists."
+            exit 0
+        fi
+
+        PG_CONF_DIR="/etc/postgresql/$PGVER/main"
+        CONF_DROPIN="$PG_CONF_DIR/conf.d/90-homelab-database.conf"
+        HBA_FILE="$PG_CONF_DIR/pg_hba.conf"
+        HBA_DROPIN_DIR="$PG_CONF_DIR/pg_hba.conf.d"
+        HBA_DROPIN="$HBA_DROPIN_DIR/90-homelab-database.conf"
+
+        db_get homelab-database/listen_addresses || true; LISTEN_ADDRESSES="${RET:-localhost}"
+        db_get homelab-database/allowed_networks || true; ALLOWED_NETWORKS="${RET:-}"
+        db_get homelab-database/adopt_existing || true;   ADOPT_EXISTING="${RET:-true}"
+        db_get homelab-database/enable_backups || true;   ENABLE_BACKUPS="${RET:-false}"
+
+        mkdir -p "$PG_CONF_DIR/conf.d"
+        mkdir -p "$HBA_DROPIN_DIR"
+
+        # Our own conf.d file, never the vendor's postgresql.conf. In
+        # adopt_existing mode we still write this (it's additive-only by
+        # design -- a single listen_addresses line), since Postgres itself
+        # takes the LAST include_dir-loaded value for a scalar GUC, and an
+        # admin who explicitly answered the debconf prompt has expressed an
+        # actual preference, not silence.
+        sed "s/__LISTEN_ADDRESSES__/$LISTEN_ADDRESSES/" \
+            "$SHARE_DIR/conf.d/90-homelab-database.conf.template" > "$CONF_DROPIN"
+        echo "  wrote $CONF_DROPIN"
+
+        # Idempotently activate conf.d (postgresql.conf) -- Debian's own
+        # postgresql-common already wires this by default on modern
+        # releases, but don't assume; check first, only touch if missing,
+        # sentinel-wrapped so it's identifiable and never duplicated.
+        PG_MAIN_CONF="$PG_CONF_DIR/postgresql.conf"
+        if [ -f "$PG_MAIN_CONF" ] && ! grep -q "^include_dir = 'conf.d'" "$PG_MAIN_CONF" 2>/dev/null; then
+            {
+                echo ""
+                echo "# BEGIN homelab-database managed include"
+                echo "include_dir = 'conf.d'"
+                echo "# END homelab-database managed include"
+            } >> "$PG_MAIN_CONF"
+            echo "  activated conf.d include in $PG_MAIN_CONF"
+        fi
+
+        # Same idempotent-sentinel pattern for pg_hba.conf's own include_dir
+        # (a real, separate directive from postgresql.conf's) -- never
+        # reorders or removes any of the admin's existing hand-written
+        # rules, only appends the activation line once.
+        if [ -f "$HBA_FILE" ] && ! grep -q "^include_dir 'pg_hba.conf.d'" "$HBA_FILE" 2>/dev/null; then
+            {
+                echo ""
+                echo "# BEGIN homelab-database managed include"
+                echo "include_dir 'pg_hba.conf.d'"
+                echo "# END homelab-database managed include"
+            } >> "$HBA_FILE"
+            echo "  activated pg_hba.conf.d include in $HBA_FILE"
+        fi
+
+        # Our own pg_hba rules -- purely additive, one line per requested
+        # network, never replacing/reordering anything already in the main
+        # file.
+        {
+            echo "# Managed by homelab-database -- do not hand-edit, edit debconf"
+            echo "# answers instead (dpkg-reconfigure homelab-database)."
+            for net in $ALLOWED_NETWORKS; do
+                echo "host    all             all             $net            scram-sha-256"
+            done
+        } > "$HBA_DROPIN"
+        echo "  wrote $HBA_DROPIN"
+
+        # Opt-in nightly backup cron -- installed/removed purely based on
+        # the current debconf answer, every configure run (so
+        # dpkg-reconfigure toggling it later takes effect immediately).
+        CRON_FILE=/etc/cron.d/homelab-database-backup
+        if [ "$ENABLE_BACKUPS" = "true" ]; then
+            echo "0 3 * * * root $SHARE_DIR/scripts/backup.sh >>/var/log/homelab-database-backup.log 2>&1" > "$CRON_FILE"
+            echo "  enabled nightly backup cron ($CRON_FILE)"
+        else
+            rm -f "$CRON_FILE"
+        fi
+
+        # Reload, never restart -- live connections from every homelab-*
+        # feature must never be dropped by a routine install/upgrade.
+        if command -v pg_ctlcluster >/dev/null 2>&1; then
+            pg_ctlcluster "$PGVER" main reload || echo "  WARNING: reload failed -- check 'pg_lsclusters' and reload by hand."
+        fi
+
+        db_stop
+
+        # The one shared substrate database every homelab-* feature's own
+        # schema lives inside (each feature creates and owns only its own
+        # schema + split runtime/migrate role pair within it -- see
+        # homelab-bootstrap-app-role -- this package still never creates or
+        # owns any feature's schema beyond this shared shell).
+        if [ "$(sudo -u postgres psql -X -tAc "SELECT 1 FROM pg_database WHERE datname='homelab'")" != "1" ]; then
+            sudo -u postgres createdb homelab
+            echo "  created shared 'homelab' database"
+        fi
+
+        echo ""
+        echo "homelab-database configured (cluster $PGVER, adopt_existing=$ADOPT_EXISTING)."
+        echo "conf.d:          $CONF_DROPIN"
+        echo "pg_hba.conf.d:   $HBA_DROPIN"
+        echo "shared database: homelab"
+        echo "bootstrap tool:  homelab-bootstrap-app-role (on PATH)"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

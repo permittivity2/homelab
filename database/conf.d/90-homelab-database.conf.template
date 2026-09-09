@@ -1,0 +1,5 @@
+# Managed by homelab-database — do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-database) and let postinst regenerate
+# this file. Never touches postgresql.conf itself; loaded via that file's
+# native `include_dir = 'conf.d'` (Debian's postgresql-common default).
+listen_addresses = '__LISTEN_ADDRESSES__'

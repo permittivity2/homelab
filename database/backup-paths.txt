@@ -1,0 +1,2 @@
+# Read by homelab-borg-service-backup-client's homelab_only mode.
+/etc/postgresql

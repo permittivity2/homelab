@@ -1,0 +1,53 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        # Stop/undo only what THIS package created. Never touch the
+        # postgresql service itself, any database, schema, or table --
+        # those are out of scope for this package on every code path, not
+        # just here.
+        for PGVER in $(pg_lsclusters -h 2>/dev/null | awk '{print $1}'); do
+            PG_CONF_DIR="/etc/postgresql/$PGVER/main"
+            rm -f "$PG_CONF_DIR/conf.d/90-homelab-database.conf"
+            rm -f "$PG_CONF_DIR/pg_hba.conf.d/90-homelab-database.conf"
+
+            # Remove our sentinel-guarded include-activation blocks, but
+            # only the exact lines we added -- never touch anything else
+            # in these files, including if the admin (or another package)
+            # added their own competing include_dir line outside our
+            # sentinels, which we leave alone.
+            for f in "$PG_CONF_DIR/postgresql.conf" "$PG_CONF_DIR/pg_hba.conf"; do
+                [ -f "$f" ] || continue
+                sed -i '/# BEGIN homelab-database managed include/,/# END homelab-database managed include/d' "$f"
+            done
+
+            if command -v pg_ctlcluster >/dev/null 2>&1; then
+                pg_ctlcluster "$PGVER" main reload 2>/dev/null || true
+            fi
+        done
+
+        rm -f /etc/cron.d/homelab-database-backup
+
+        # Debconf answers themselves are left in place on remove (not
+        # purge) per standard Debian convention, so a subsequent reinstall
+        # doesn't need to re-prompt.
+        ;;
+
+    purge)
+        if [ -x /usr/share/debconf/confmodule ] || [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

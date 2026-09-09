@@ -1,0 +1,22 @@
+Source: homelab-database
+Section: database
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-database
+Architecture: all
+Depends: perl (>= 5.36),
+         postgresql,
+         postgresql-client
+Description: PostgreSQL provisioning substrate for the homelab-* ecosystem
+ Installs/configures PostgreSQL itself and idempotently creates the one
+ shared `homelab` database every feature's own narrow schema lives
+ inside. Ships homelab-bootstrap-app-role, which creates a split pair of
+ Postgres roles (a CRUD-only runtime role and a separate CRUD+DDL
+ migrate role, both scoped to one schema) for any homelab-* feature,
+ using OS-level peer auth only — local `sudo -u postgres`, or the same
+ over SSH, or a printed-SQL manual fallback. Never a stored or
+ network-transmitted admin Postgres credential.

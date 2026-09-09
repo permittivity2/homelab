@@ -1,0 +1,11 @@
+homelab-database (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Tue, 08 Sep 2026 22:11:19 -0500
+
+homelab-database (0.0.0) unstable; urgency=medium
+
+  * Placeholder seed entry — build-package.sh prepends real entries above this.
+
+ -- Gardner <gardner@homelab>  Tue, 08 Sep 2026 22:10:27 -0500
