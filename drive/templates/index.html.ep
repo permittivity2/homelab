@@ -254,20 +254,18 @@
   // the subfolder came out as a SIBLING of "turkeys" under the drop
   // target instead of nested inside it. The recursive walk below
   // (processEntry) *does* correctly nest a directory's own children
-  // under it -- so the leading hypothesis is that some browser/OS/
-  // file-manager combination hands back a dropped folder's descendants
-  // as SEPARATE top-level DataTransferItems too, alongside the folder
-  // itself, which would bypass that recursion entirely for the
-  // redundant copy. Not confirmed against the real browser (no
-  // automation tooling for a real drag gesture -- see README.md) --
-  // this is a defensive fix for that leading hypothesis, safe
-  // regardless: fullPath is a real FileSystemEntry property (absolute,
-  // rooted at whatever was dragged, e.g. "/turkeys" and
-  // "/turkeys/Downloads") -- if one top-level entry's path is a prefix
-  // of another's, the shorter one is the real ancestor and the longer
-  // one is dropped here, to be picked back up naturally when the
-  // ancestor is recursed into. console.warn so real evidence exists if
-  // this fires and the bug turns out to have a different cause.
+  // under it -- root cause (confirmed by that same user re-testing the
+  // same real drag after this landed) is that some browser/OS/file-
+  // manager combination hands back a dropped folder's descendants as
+  // SEPARATE top-level DataTransferItems too, alongside the folder
+  // itself, bypassing that recursion entirely for the redundant copy.
+  // fullPath is a real FileSystemEntry property (absolute, rooted at
+  // whatever was dragged, e.g. "/turkeys" and "/turkeys/Downloads") --
+  // if one top-level entry's path is a prefix of another's, the shorter
+  // one is the real ancestor and the longer one is dropped here, to be
+  // picked back up naturally when the ancestor is recursed into.
+  // console.warn so there's still visible evidence on any future
+  // recurrence, even now that the mechanism itself is confirmed.
   function dedupeNestedTopLevelEntries(entries) {
     var paths = entries.map(function (e) { return e.fullPath || null; });
     return entries.filter(function (e, i) {
