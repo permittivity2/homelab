@@ -9,3 +9,11 @@ sites:
     upstream: 127.0.0.1:2501
   - domain: mail.test.mailmasker.org
     upstream: 127.0.0.1:8080
+  # homelab-api is deliberately public, not just an internal service --
+  # it's the interface homelab-cli (and anyone's own scripts) uses from
+  # OUTSIDE this network. See api/README.md. Requires
+  # MOJO_REVERSE_PROXY=1 in homelab-api's own systemd unit (already set)
+  # so its per-IP rate limiting sees real client IPs instead of this
+  # proxy's own loopback address.
+  - domain: api.test.mailmasker.org
+    upstream: 127.0.0.1:3000

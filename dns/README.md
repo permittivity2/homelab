@@ -30,6 +30,22 @@ locally and via a real external public resolver (`8.8.8.8`).
 already-running `homelab-dns` host must restart `pdns` afterward, not
 just add the zone and expect it to appear.
 
+**Update (2026-09-09)**: this isn't limited to whole new zones — adding
+a brand-new **name** to an *already-served* zone (e.g. `pdnsutil
+add-record test.mailmasker.org api.test.mailmasker.org A ...` for a
+domain that already has other records) showed the identical symptom:
+`add-record` reports success, `dig` against the authoritative server
+itself returns nothing until `pdns` is restarted, then resolves
+correctly both locally and externally. Existing names' *record values*
+still update live (confirmed separately) — it's specifically
+introducing a name PowerDNS hasn't served before, whether via a new
+zone or a new name within an existing one, that needs the restart.
+Also note `pdnsutil add-record`'s `NAME` argument wants the **fully
+qualified** name (`api.test.mailmasker.org`), not the bare relative
+label (`api`) — the latter fails with `Name "api." to add is not part
+of zone ...` since it gets treated as an absolute name in its own
+right, not "api" *within* the given zone.
+
 ## Testing
 
 See `tests/e2e/test_dns_delegation.py` for the external-resolution
