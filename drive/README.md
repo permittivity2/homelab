@@ -149,6 +149,51 @@ browser-rendered view, not in the JSON API's own `uploaded_at`
 precision; presentation trimming belongs in the UI layer, not the API
 contract.
 
+### Timestamp timezone display
+
+`uploaded_at_display` (browser-rendered `index()` view only, same
+UI-only/API-keeps-full-precision split as before) is now built with
+`to_char(uploaded_at, 'YYYY-MM-DD HH24:MI:SS TZ')` instead of a Perl
+regex trim of the plain numeric-offset text. Postgres's `TZ` format
+spec pulls a real zone ABBREVIATION (e.g. "CDT") from the session's
+`timezone` GUC — confirmed live to already be a real IANA zone name,
+`America/Chicago`, not a bare offset (`SHOW timezone;` on the DB host).
+This is what makes the abbreviation DST-correct for free: `to_char`
+picks CDT or CST per-row based on each file's actual `uploaded_at`
+date, not a hardcoded label that would silently go wrong across a DST
+transition. Dropping fractional seconds falls out of the explicit
+format string for free too — no separate regex step needed any more.
+`data-date` (what column sorting reads) is unaffected — still the
+plain, full-precision `uploaded_at` value.
+
+### Size unit toggle (Bytes / Human Readable)
+
+A toggle switch in the page header (so it's present on every folder
+view, not just the current one) flips every row's size cell between
+raw bytes ("1108959 bytes") and human-readable ("1.1 MB"). Entirely
+client-side: the byte count is already on the page (the `data-size`
+attribute column sorting already relies on), so re-formatting on
+toggle is just a DOM text update, no re-fetch. Human-readable uses
+1024-based units (KB/MB/GB/TB/PB, one decimal place) — the common
+`ls -lh`/Finder/Explorer convention, not the technically-distinct
+KiB/MiB.
+
+Defaults to Human Readable (the checkbox's `checked` attribute in the
+markup matches this, so there's no flash-of-wrong-state before JS
+runs). Preference is stored in `sessionStorage`, deliberately not
+`localStorage` — the ask was specifically "for the duration of the
+session": survives a page refresh or navigating between folders (same
+tab), but doesn't linger forever past that the way `localStorage`
+would. Only `'bytes'` is ever written/checked for; anything else
+(unset, corrupted, a future third value) falls back to the Human
+Readable default rather than needing its own explicit case.
+
+This is inherently a client-side interaction (a checkbox click) —
+verified here by confirming the toggle markup, its `id`, and the size
+cell's `file-size` class hook all render correctly (`t/basic.t`), but
+*not* by an actual click (no browser-automation tooling in this
+project) — worth a quick real-browser check after touching this code.
+
 ## Upload size limit
 
 `MOJO_MAX_MESSAGE_SIZE=104857600` (100MB) in `systemd/

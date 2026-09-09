@@ -185,20 +185,25 @@ sub index ($c) {
         $email, @folder_bind,
     )->hashes;
 
+    # uploaded_at_display is a browser-UI-only presentation column --
+    # the JSON API (api_list) deliberately keeps selecting plain
+    # uploaded_at with full precision and a numeric offset, since a
+    # script consuming it might actually want that. to_char's TZ format
+    # spec pulls the zone ABBREVIATION (e.g. "CDT") from the session's
+    # `timezone` GUC (already a real IANA zone, "America/Chicago" --
+    # confirmed via `SHOW timezone` -- not a bare offset), which is what
+    # makes this DST-correct for free: to_char picks CDT or CST based on
+    # the actual date of each row, not a hardcoded label. This also
+    # drops fractional seconds as a side effect of the explicit format
+    # string (no regex trimming needed, unlike the old plain-offset
+    # version of this field).
     my $files = $c->app->pg->db->query(
-        "SELECT id, filename, size_bytes, mime_type, uploaded_at FROM drive.files
+        "SELECT id, filename, size_bytes, mime_type, uploaded_at,
+                to_char(uploaded_at, 'YYYY-MM-DD HH24:MI:SS TZ') AS uploaded_at_display
+         FROM drive.files
          WHERE user_email = ? AND $file_filter ORDER BY uploaded_at DESC",
         $email, @folder_bind,
     )->hashes;
-
-    # Postgres's own timestamptz text output includes fractional seconds
-    # (e.g. "2026-09-09 10:24:45.492803-05") -- real, but useless noise
-    # for a human reading a file listing. A separate _display field
-    # rather than trimming uploaded_at itself: this is a browser-UI-only
-    # presentation choice, not a change to the data -- the JSON API
-    # (api_list) deliberately keeps full precision, since a script
-    # consuming it might actually want it.
-    $_->{uploaded_at_display} = $_->{uploaded_at} =~ s/\.\d+(?=[+-]|\z)//r for @$files;
 
     return $c->render(
         template => 'index', email => $email, files => $files, folders => $subfolders,

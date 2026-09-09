@@ -18,6 +18,17 @@
   header button { background: none; border: 1px solid #4b4f58; color: #fff; border-radius: 4px; padding: 0.3rem 0.7rem; cursor: pointer; }
   header button:hover { background: #2f333c; }
 
+  .size-toggle { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.78rem; color: #c9ccd3; cursor: pointer; user-select: none; }
+  .size-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .size-toggle .switch { position: relative; width: 32px; height: 17px; background: #4b4f58; border-radius: 999px; flex-shrink: 0; transition: background-color 0.15s; }
+  .size-toggle .switch::before {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px;
+    background: #fff; border-radius: 50%; transition: transform 0.15s;
+  }
+  .size-toggle input:checked + .switch { background: #3562d4; }
+  .size-toggle input:checked + .switch::before { transform: translateX(15px); }
+  .size-toggle input:focus-visible + .switch { outline: 2px solid #7ba0f5; outline-offset: 2px; }
+
   nav.breadcrumb { padding: 0.6rem 1.25rem; font-size: 0.9rem; background: #fff; border-bottom: 1px solid #e3e5e9; }
   nav.breadcrumb a { color: #3562d4; text-decoration: none; }
   nav.breadcrumb a:hover { text-decoration: underline; }
@@ -125,6 +136,12 @@
 <body>
 <header>
   <h1>Homelab Drive</h1>
+  <label class="size-toggle" title="File size display, remembered for this browser session">
+    <span>Bytes</span>
+    <input type="checkbox" id="size-unit-toggle" checked>
+    <span class="switch"></span>
+    <span>Human Readable</span>
+  </label>
   <div class="who">
     <%= $email %>
     <form method="post" action="/logout"><button type="submit">Log out</button></form>
@@ -200,7 +217,7 @@
       <tr data-name="<%= lc($f->{filename}) %>" data-size="<%= $f->{size_bytes} %>"
           data-type="<%= lc($f->{mime_type} // '') %>" data-date="<%= $f->{uploaded_at} %>">
         <td><a href="/files/<%= $f->{id} %>/download"><%= $f->{filename} %></a></td>
-        <td><%= $f->{size_bytes} %> bytes</td>
+        <td class="file-size"><%= $f->{size_bytes} %> bytes</td>
         <td><%= $f->{mime_type} %></td>
         <td><%= $f->{uploaded_at_display} %></td>
         <td class="file-actions">
@@ -463,6 +480,57 @@
       });
       rows.forEach(function (row) { tbody.appendChild(row); });
     });
+  });
+})();
+</script>
+
+<script>
+// Bytes / Human Readable size toggle, in the header so it applies
+// everywhere file sizes render on this page (every folder view shares
+// this one template). sessionStorage, not localStorage: the ask was
+// specifically "for the duration of the session" -- survives a page
+// refresh or folder navigation (same tab), but doesn't linger forever
+// past that the way localStorage would. Defaults to Human Readable
+// (the checkbox's own "checked" attribute in the markup matches this,
+// so a no-JS or JS-not-yet-run instant shows the right initial state).
+// The server always renders raw "<N> bytes" client-side reformats on
+// load and on toggle off of the same data-size attribute the column
+// sort already relies on -- no new data from the backend needed.
+(function () {
+  'use strict';
+  var STORAGE_KEY = 'homelab-drive-size-unit';
+  var toggle = document.getElementById('size-unit-toggle');
+  if (!toggle) return;
+
+  function formatHuman(bytes) {
+    if (bytes < 1024) return bytes + ' bytes';
+    var units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+    var value = bytes;
+    var i = -1;
+    do { value /= 1024; i++; } while (value >= 1024 && i < units.length - 1);
+    return value.toFixed(1) + ' ' + units[i];
+  }
+
+  function applyUnit(unit) {
+    document.querySelectorAll('#files-table tbody tr').forEach(function (row) {
+      var cell = row.querySelector('.file-size');
+      if (!cell) return;
+      var bytes = Number(row.dataset.size);
+      cell.textContent = unit === 'bytes' ? bytes + ' bytes' : formatHuman(bytes);
+    });
+  }
+
+  // Anything other than the literal stored string 'bytes' (including
+  // unset, i.e. first visit this session) resolves to the default,
+  // Human Readable.
+  var unit = sessionStorage.getItem(STORAGE_KEY) === 'bytes' ? 'bytes' : 'human';
+  toggle.checked = (unit === 'human');
+  applyUnit(unit);
+
+  toggle.addEventListener('change', function () {
+    var newUnit = toggle.checked ? 'human' : 'bytes';
+    sessionStorage.setItem(STORAGE_KEY, newUnit);
+    applyUnit(newUnit);
   });
 })();
 </script>

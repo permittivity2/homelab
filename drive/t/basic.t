@@ -78,7 +78,10 @@ $t->get_ok("/oauth/callback?code=$code&state=$state")
   ->status_is(302)
   ->header_is(Location => '/');
 
-$t->get_ok('/')->status_is(200)->content_like(qr/\Q$email\E/);
+$t->get_ok('/')->status_is(200)->content_like(qr/\Q$email\E/)
+  # Bytes/Human-Readable size toggle lives in the page header, so it's
+  # present regardless of whether this folder has any files yet.
+  ->content_like(qr/id="size-unit-toggle"/, 'size unit toggle control is present');
 
 # Upload a small real file, confirm it shows up in the listing, then
 # download it back and confirm the bytes round-trip exactly.
@@ -90,7 +93,20 @@ close($fh);
 $t->post_ok('/upload' => form => { file => { file => $path, filename => 'roundtrip.txt' } })
   ->status_is(302);
 
-$t->get_ok('/')->status_is(200)->content_like(qr/roundtrip\.txt/);
+$t->get_ok('/')->status_is(200)->content_like(qr/roundtrip\.txt/)
+  # The size cell needs this class for the client-side bytes/human-
+  # readable toggle to find and reformat it.
+  ->content_like(qr/class="file-size"/, 'file size cell has the toggle\'s class hook')
+  # uploaded_at_display: to_char(..., 'TZ') pulls a real zone
+  # abbreviation (e.g. "CDT") straight from the session's `timezone`
+  # GUC (a real IANA zone, "America/Chicago" on this deployment — see
+  # README.md) and, as a side effect of the explicit format string,
+  # drops fractional seconds. A raw numeric offset like "-05" would NOT
+  # match here (digits/dash, not letters) -- catches a regression back
+  # to the old plain-offset display just as much as it confirms the
+  # fractional-seconds trim.
+  ->content_like(qr/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [A-Z]{2,5}\b/,
+    'upload time displays with no fractional seconds and a real timezone abbreviation');
 
 # Find the uploaded file's id by scraping the download link out of the
 # page — no separate "list files as JSON" endpoint exists yet, so this
