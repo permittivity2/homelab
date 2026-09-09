@@ -9,6 +9,14 @@ User=homelab
 Group=homelab
 WorkingDirectory=/var/lib/homelab
 Environment="HOMELAB_API_CONFIG=/etc/homelab/api/config.yml"
+# Trusts X-Forwarded-For/X-Forwarded-Proto from whatever's connecting --
+# safe because homelab-api only ever listens on 127.0.0.1 (see
+# config/api.example.yml), so the only thing that CAN connect is
+# something already running on this same host, i.e. homelab-webproxy
+# once it fronts this service. Without this, every request would look
+# like it came from 127.0.0.1, defeating the per-IP login-attempt
+# tracking in Homelab::API::App (_login/_register) entirely.
+Environment="MOJO_REVERSE_PROXY=1"
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-api
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-api
 TimeoutStopSec=10

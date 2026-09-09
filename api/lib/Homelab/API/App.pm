@@ -4,7 +4,7 @@ use Mojo::Base 'Mojolicious', -signatures;
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
-use Homelab::API::Auth qw(hash_password verify_password generate_jwt verify_jwt generate_refresh_token);
+use Homelab::API::Auth qw(hash_password verify_password generate_jwt verify_jwt generate_jti generate_refresh_token);
 use Homelab::API::Registry;
 
 has 'pg';
@@ -46,6 +46,40 @@ sub startup ($self) {
     return;
 }
 
+# Rate limiting + a structured, queryable log of every auth attempt --
+# see migrations/006-login-attempts.sql for why this is a real table
+# rather than app log lines. Threshold/window deliberately generous (10
+# failures / 15 minutes) -- this is throttling credential stuffing, not
+# rate-limiting a legitimate user who mistyped a password twice.
+#
+# IMPORTANT: relies on $c->tx->remote_address resolving to the real
+# client IP, not homelab-webproxy's own loopback address -- only true
+# when MOJO_REVERSE_PROXY=1 is set (see systemd/homelab-api.service)
+# AND homelab-webproxy is actually the only thing that can reach this
+# service (homelab-api binds 127.0.0.1 only). Without both of those
+# holding, every request looks like it came from 127.0.0.1 and this
+# rate-limits the whole service as a single client instead of per
+# attacker -- fails toward "too strict for everyone" in that case, not
+# toward silently doing nothing.
+use constant RATE_LIMIT_MAX_FAILURES => 10;
+use constant RATE_LIMIT_WINDOW_MIN   => 15;
+
+sub _rate_limited ($self, $ip) {
+    my $count = $self->pg->db->query(
+        q{SELECT count(*) AS n FROM api.login_attempts
+          WHERE ip = ? AND success = FALSE AND attempted_at > NOW() - (? * INTERVAL '1 minute')},
+        $ip, RATE_LIMIT_WINDOW_MIN,
+    )->hash->{n};
+    return $count >= RATE_LIMIT_MAX_FAILURES;
+}
+
+sub _log_attempt ($self, %fields) {
+    $self->pg->db->query(
+        'INSERT INTO api.login_attempts (ip, email, endpoint, success) VALUES (?, ?, ?, ?)',
+        @fields{qw(ip email endpoint success)},
+    );
+}
+
 # POST /api/v1/auth/register {email, password}
 # Deliberately open (no auth required) for now — this is a test/dev
 # domain (test.mailmasker.org) and the fastest path to real test
@@ -55,12 +89,20 @@ sub _register ($self, $c) {
     my $body     = $c->req->json // {};
     my $email    = $body->{email};
     my $password = $body->{password};
+    my $ip       = $c->tx->remote_address;
 
     return $c->render(json => { error => 'email and password are required' }, status => 400)
         unless $email && $password;
 
+    if ($self->_rate_limited($ip)) {
+        return $c->render(json => { error => 'Too many attempts. Please wait 15 minutes.' }, status => 429);
+    }
+
     my $existing = $self->pg->db->query('SELECT id FROM api.users WHERE email = ?', $email)->hash;
-    return $c->render(json => { error => 'email already registered' }, status => 409) if $existing;
+    if ($existing) {
+        $self->_log_attempt(ip => $ip, email => $email, endpoint => 'register', success => 0);
+        return $c->render(json => { error => 'email already registered' }, status => 409);
+    }
 
     my $hash = hash_password($password);
     my $user = $self->pg->db->query(
@@ -74,6 +116,7 @@ sub _register ($self, $c) {
         $user->{id}, $user_role_id,
     );
 
+    $self->_log_attempt(ip => $ip, email => $email, endpoint => 'register', success => 1);
     return $c->render(json => { id => $user->{id}, email => $email }, status => 201);
 }
 
@@ -81,25 +124,37 @@ sub _login ($self, $c) {
     my $body     = $c->req->json // {};
     my $email    = $body->{email};
     my $password = $body->{password};
+    my $ip       = $c->tx->remote_address;
 
     return $c->render(json => { error => 'email and password are required' }, status => 400)
         unless $email && $password;
+
+    if ($self->_rate_limited($ip)) {
+        return $c->render(json => { error => 'Too many login attempts. Please wait 15 minutes.' }, status => 429);
+    }
 
     my $user = $self->pg->db->query(
         'SELECT id, password_hash, active FROM api.users WHERE email = ?', $email,
     )->hash;
 
     unless ($user && $user->{active} && verify_password($password, $user->{password_hash})) {
+        $self->_log_attempt(ip => $ip, email => $email, endpoint => 'login', success => 0);
         return $c->render(json => { error => 'invalid email or password' }, status => 401);
     }
+    $self->_log_attempt(ip => $ip, email => $email, endpoint => 'login', success => 1);
 
-    my ($jwt, $expires_in) = generate_jwt($email, secret => $self->config->{jwt}{secret}, expires_in => $self->config->{jwt}{expiry_seconds});
+    my $jti = generate_jti();
+    my ($jwt, $expires_in) = generate_jwt($email, secret => $self->config->{jwt}{secret}, expires_in => $self->config->{jwt}{expiry_seconds}, jti => $jti);
     my $refresh_token = generate_refresh_token();
     my $refresh_ttl_days = $self->config->{jwt}{refresh_expiry_days} // 30;
 
-    $self->pg->db->query(
-        q{INSERT INTO api.refresh_tokens (user_id, token, expires_at) VALUES (?, ?, NOW() + (? * INTERVAL '1 day'))},
+    my $refresh_row = $self->pg->db->query(
+        q{INSERT INTO api.refresh_tokens (user_id, token, expires_at) VALUES (?, ?, NOW() + (? * INTERVAL '1 day')) RETURNING id},
         $user->{id}, $refresh_token, $refresh_ttl_days,
+    )->hash;
+    $self->pg->db->query(
+        q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at) VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'))},
+        $jti, $user->{id}, $refresh_row->{id}, $expires_in,
     );
 
     return $c->render(json => {
@@ -117,6 +172,20 @@ sub _introspect ($self, $c) {
 
     my $payload = verify_jwt($jwt, secret => $self->config->{jwt}{secret});
     return $c->render(json => { error => 'invalid or expired token' }, status => 401) unless $payload;
+
+    # The actual revocation check -- see migrations/005-sessions.sql for
+    # why this exists: without it, a JWT stays valid on pure signature+
+    # expiry grounds regardless of logout, for up to its own ~30min
+    # expiry_seconds. A missing session row (jti not found at all) fails
+    # closed the same as an explicitly revoked one -- every JWT minted
+    # from here on always has one, so "no row" only ever means "this
+    # token predates session tracking" or "forged jti", neither of which
+    # should introspect as valid.
+    my $session = $self->pg->db->query(
+        'SELECT revoked FROM api.sessions WHERE jti = ?', $payload->{jti} // '',
+    )->hash;
+    return $c->render(json => { error => 'session revoked' }, status => 401)
+        unless $session && !$session->{revoked};
 
     return $c->render(json => { email => $payload->{email}, exp => $payload->{exp} });
 }
@@ -136,16 +205,25 @@ sub _refresh ($self, $c) {
 
     # Rotate: revoke the old token, issue a new one — a stolen, already-
     # used refresh token becomes immediately useless to an attacker on
-    # the legitimate client's next refresh.
+    # the legitimate client's next refresh. Also revoke the OLD jti's
+    # session row (not just the refresh_token) so a still-unexpired copy
+    # of the previous JWT can't keep passing introspect() after its own
+    # refresh_token has already been rotated away.
     $self->pg->db->query('UPDATE api.refresh_tokens SET revoked = TRUE WHERE id = ?', $row->{id});
+    $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE refresh_token_id = ?', $row->{id});
 
-    my ($jwt, $expires_in) = generate_jwt($row->{email}, secret => $self->config->{jwt}{secret}, expires_in => $self->config->{jwt}{expiry_seconds});
+    my $jti = generate_jti();
+    my ($jwt, $expires_in) = generate_jwt($row->{email}, secret => $self->config->{jwt}{secret}, expires_in => $self->config->{jwt}{expiry_seconds}, jti => $jti);
     my $new_refresh_token = generate_refresh_token();
     my $refresh_ttl_days  = $self->config->{jwt}{refresh_expiry_days} // 30;
 
-    $self->pg->db->query(
-        q{INSERT INTO api.refresh_tokens (user_id, token, expires_at) VALUES (?, ?, NOW() + (? * INTERVAL '1 day'))},
+    my $new_refresh_row = $self->pg->db->query(
+        q{INSERT INTO api.refresh_tokens (user_id, token, expires_at) VALUES (?, ?, NOW() + (? * INTERVAL '1 day')) RETURNING id},
         $row->{user_id}, $new_refresh_token, $refresh_ttl_days,
+    )->hash;
+    $self->pg->db->query(
+        q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at) VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'))},
+        $jti, $row->{user_id}, $new_refresh_row->{id}, $expires_in,
     );
 
     return $c->render(json => {
@@ -159,8 +237,19 @@ sub _refresh ($self, $c) {
 sub _logout ($self, $c) {
     my $body          = $c->req->json // {};
     my $refresh_token = $body->{refresh_token};
-    $self->pg->db->query('UPDATE api.refresh_tokens SET revoked = TRUE WHERE token = ?', $refresh_token)
-        if $refresh_token;
+    if ($refresh_token) {
+        my $row = $self->pg->db->query(
+            'UPDATE api.refresh_tokens SET revoked = TRUE WHERE token = ? RETURNING id', $refresh_token,
+        )->hash;
+        # This is the actual "logout" from introspect()'s point of view
+        # -- revoking just the refresh_token above only blocks *future*
+        # token issuance; this is what makes the *current* JWT (still
+        # sitting in whatever app called us) fail its very next
+        # introspect() check, however much of its own exp window is
+        # left. See migrations/005-sessions.sql.
+        $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE refresh_token_id = ?', $row->{id})
+            if $row;
+    }
     return $c->render(json => { success => \1 });
 }
 

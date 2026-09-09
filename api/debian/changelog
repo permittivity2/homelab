@@ -1,3 +1,15 @@
+homelab-api (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 07:19:25 -0500
+
+homelab-api (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 07:09:32 -0500
+
 homelab-api (0.1.0) unstable; urgency=medium
 
   * Release v0.1.0
