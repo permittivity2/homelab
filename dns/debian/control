@@ -1,0 +1,23 @@
+Source: homelab-dns
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-dns
+Architecture: all
+Depends: ${misc:Depends}, pdns-server, pdns-backend-pgsql, postgresql-client, adduser
+Description: PowerDNS authoritative DNS provisioning for the homelab-* ecosystem
+ Wires PowerDNS's PostgreSQL (gpgsql) backend via the native pdns.d
+ drop-in directory -- never edits pdns.conf directly. Supports a real
+ primary/secondary (master/slave) topology. Applies the official
+ upstream schema (referenced from the installed pdns-backend-pgsql
+ package, not vendored/duplicated) only if it isn't already present,
+ and never touches any other tenant of the same database. PowerDNS
+ keeps its own dedicated `powerdns` database with its own conventional
+ role -- unlike the Perl homelab-* features, it is not part of the
+ shared `homelab` database / split-role bootstrap design (see
+ CLAUDE.md) since its schema/migration lifecycle is owned upstream by
+ the PowerDNS project itself, not by this ecosystem.

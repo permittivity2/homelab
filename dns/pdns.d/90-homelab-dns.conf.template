@@ -1,0 +1,11 @@
+# Managed by homelab-dns — do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-dns). Never touches
+# /etc/powerdns/pdns.conf itself; loaded via that file's own
+# include-dir=/etc/powerdns/pdns.d (already the shipped default).
+launch=gpgsql
+gpgsql-host=__DB_HOST__
+gpgsql-port=__DB_PORT__
+gpgsql-dbname=__DB_NAME__
+gpgsql-user=__DB_USER__
+gpgsql-password=__DB_PASS__
+gpgsql-dnssec=no

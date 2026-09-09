@@ -1,0 +1,145 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+SHARE_DIR=/usr/share/homelab-dns
+PDNS_D=/etc/powerdns/pdns.d
+MARKER="$PDNS_D/90-homelab-dns.conf"
+UPSTREAM_SCHEMA=/usr/share/pdns-backend-pgsql/schema/schema.pgsql.sql
+
+case "$1" in
+    configure)
+        echo "homelab-dns post-installation setup..."
+
+        db_get homelab-dns/db_host || true;     DB_HOST="${RET:-localhost}"
+        db_get homelab-dns/db_port || true;     DB_PORT="${RET:-5432}"
+        db_get homelab-dns/db_name || true;     DB_NAME="${RET:-powerdns}"
+        db_get homelab-dns/db_user || true;     DB_USER="${RET:-pdnsuser}"
+        db_get homelab-dns/db_password || true; DB_PASS="$RET"
+        db_get homelab-dns/role || true;        ROLE="${RET:-master}"
+        db_get homelab-dns/allow_axfr_ips || true;      ALLOW_AXFR_IPS="$RET"
+        db_get homelab-dns/also_notify || true;         ALSO_NOTIFY="$RET"
+        db_get homelab-dns/slave_cycle_interval || true; SLAVE_CYCLE="${RET:-60}"
+        db_get homelab-dns/disable_axfr || true;        DISABLE_AXFR="${RET:-true}"
+
+        mkdir -p "$PDNS_D"
+        sed \
+            -e "s#__DB_HOST__#$DB_HOST#g" \
+            -e "s#__DB_PORT__#$DB_PORT#g" \
+            -e "s#__DB_NAME__#$DB_NAME#g" \
+            -e "s#__DB_USER__#$DB_USER#g" \
+            -e "s#__DB_PASS__#$DB_PASS#g" \
+            "$SHARE_DIR/pdns.d/90-homelab-dns.conf.template" > "$MARKER"
+
+        # PowerDNS 5.x renamed master/slave to primary/secondary (and
+        # slave-cycle-interval to xfr-cycle-interval) -- a hard break,
+        # not an alias (confirmed empirically: 5.0.2 fails with "Trying
+        # to set unknown setting 'master'"). Same functionality either
+        # way, so support both rather than refusing.
+        PDNS_VERSION="$(dpkg-query -W -f='${Version}' pdns-server 2>/dev/null)"
+        PDNS_MAJOR="${PDNS_VERSION%%.*}"
+
+        if [ "$ROLE" = "master" ]; then
+            if [ "$PDNS_MAJOR" -ge 5 ] 2>/dev/null; then
+                echo "primary=yes" >> "$MARKER"
+                echo "secondary=no" >> "$MARKER"
+            else
+                echo "master=yes" >> "$MARKER"
+                echo "slave=no" >> "$MARKER"
+            fi
+            [ -n "$ALLOW_AXFR_IPS" ] && echo "allow-axfr-ips=$(echo "$ALLOW_AXFR_IPS" | tr ' ' ',')" >> "$MARKER"
+            [ -n "$ALSO_NOTIFY" ] && echo "also-notify=$(echo "$ALSO_NOTIFY" | tr ' ' ',')" >> "$MARKER"
+        else
+            if [ "$PDNS_MAJOR" -ge 5 ] 2>/dev/null; then
+                echo "primary=no" >> "$MARKER"
+                echo "secondary=yes" >> "$MARKER"
+                echo "xfr-cycle-interval=$SLAVE_CYCLE" >> "$MARKER"
+            else
+                echo "master=no" >> "$MARKER"
+                echo "slave=yes" >> "$MARKER"
+                echo "slave-cycle-interval=$SLAVE_CYCLE" >> "$MARKER"
+            fi
+            [ "$DISABLE_AXFR" = "true" ] && echo "disable-axfr=yes" >> "$MARKER"
+        fi
+        chmod 640 "$MARKER"
+        chgrp pdns "$MARKER" 2>/dev/null || true
+        echo "  wrote $MARKER (role: $ROLE)"
+
+        # Apply PowerDNS's own official schema, but ONLY if it isn't
+        # already present -- referenced live from the installed
+        # pdns-backend-pgsql package, never vendored/duplicated in this
+        # package (avoids drift across pdns version bumps). Never touches
+        # any other tenant of the same "powerdns" database.
+        if command -v psql >/dev/null 2>&1 && [ -f "$UPSTREAM_SCHEMA" ]; then
+            SCHEMA_PRESENT="$(PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -w -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+                -tAc "SELECT to_regclass('public.domains')" 2>/dev/null || true)"
+            if [ -z "$SCHEMA_PRESENT" ]; then
+                echo "Applying PowerDNS's official schema (not present yet)..."
+                if PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -w -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+                        -v ON_ERROR_STOP=1 -f "$UPSTREAM_SCHEMA" >/dev/null 2>&1; then
+                    echo "  applied $UPSTREAM_SCHEMA"
+                else
+                    echo "  WARNING: failed to apply $UPSTREAM_SCHEMA — check connectivity/permissions and re-run by hand."
+                fi
+            else
+                echo "  schema already present -- skipping (existing data is untouched)"
+            fi
+        fi
+
+        # Validate before touching the service. pdns.service ships with
+        # NO ExecReload= at all ("Job type reload is not applicable for
+        # unit pdns.service") -- unlike every other service in this
+        # ecosystem, there is no reload path for this daemon's
+        # config-file settings. A genuine config change here unavoidably
+        # requires systemctl restart -- inherent to PowerDNS's
+        # architecture. Still validate first, and still prefer doing
+        # nothing over restarting into a broken config.
+        port_53_owner() {
+            ss -ulnp 2>/dev/null | awk '$4 ~ /:53$/ {print $NF}'
+        }
+
+        if pdns_server --config=check >/dev/null 2>&1; then
+            OWNER_BEFORE="$(port_53_owner)"
+            systemctl enable pdns >/dev/null 2>&1 || true
+            if systemctl is-active --quiet pdns; then
+                RESTART_VERB="restart"
+            else
+                RESTART_VERB="start"
+            fi
+            if ! systemctl "$RESTART_VERB" pdns; then
+                echo "WARNING: pdns failed to $RESTART_VERB -- check 'systemctl status pdns' / 'journalctl -xeu pdns' by hand."
+                case "$OWNER_BEFORE" in
+                    *systemd-resolve*)
+                        echo "         Port 53 is already held by systemd-resolved's stub listener."
+                        echo "         This is common on a fresh/desktop-oriented Ubuntu install and"
+                        echo "         is not something this package can safely disable for you."
+                        echo "         Fix: set DNSStubListener=no in /etc/systemd/resolved.conf,"
+                        echo "         then 'systemctl restart systemd-resolved', then re-run"
+                        echo "         'systemctl start pdns'."
+                        ;;
+                esac
+            fi
+        else
+            echo "WARNING: PowerDNS config check failed -- NOT touching pdns."
+            echo "         Run 'pdns_server --config=check' by hand to see the error;"
+            echo "         the previous running config (if any) is untouched."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-dns configured (role: $ROLE)."
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0
