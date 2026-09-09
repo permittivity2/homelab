@@ -1,0 +1,38 @@
+# Perl build artifacts (per-package, mirrors homelab-api's convention)
+*/blib/
+*/Makefile
+*/MYMETA.*
+*/pm_to_blib
+*/debian/homelab-*/
+*/debian/.debhelper/
+*/debian/debhelper-build-stamp
+*/debian/files
+*/debian/*.substvars
+*/debian/*.debhelper.log
+*/debian/*.debhelper
+
+# Python build artifacts
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Built packages
+*.deb
+*.buildinfo
+*.changes
+
+# Secret-safety defense-in-depth (real config/keys should never be staged in
+# the first place — see CLAUDE.md's "Public-repo secret safety" — but these
+# patterns are excluded as a backstop regardless)
+*.pem
+*_rsa
+!*_rsa.pub
+credentials*
+secrets*
+.env
+migrate-credentials.yml
+
+# tests/e2e local target-environment config (hostnames, not secrets, but
+# still environment-specific — ships only as *.example.*)
+tests/e2e/env.yml
+!tests/e2e/env.example.yml

@@ -1,0 +1,12 @@
+# Secret-scanning backstop — see CLAUDE.md's "Public-repo secret safety".
+# The primary defense is discipline (real config never enters this repo);
+# this hook is a safety net, not the main line of defense.
+#
+# Install once per clone:
+#   pip install pre-commit && pre-commit install
+# (or: pipx install pre-commit)
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks

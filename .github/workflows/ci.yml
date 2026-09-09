@@ -1,0 +1,77 @@
+name: CI
+
+# Package-local unit tests only — these must run without any live
+# infrastructure. The full tests/e2e/ regression suite needs a real,
+# pre-provisioned host (test-static-internet-ip) and is run separately,
+# on-demand/scheduled, not from these runners. See CLAUDE.md.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  perl-unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Perl test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmojolicious-perl cpanminus
+          sudo cpanm --notest Test::Mojo Minion::Backend::Pg || true
+      - name: Run every package's t/*.t (skips packages with none)
+        run: |
+          set -e
+          shopt -s nullglob
+          for pkg in */; do
+            if [ -d "${pkg}t" ] && [ -d "${pkg}lib" ]; then
+              echo "::group::prove: $pkg"
+              (cd "$pkg" && prove -I lib -r t) || exit 1
+              echo "::endgroup::"
+            fi
+          done
+
+  python-unit-tests:
+    # homelab-cli is the one shipped package allowed to be Python (see
+    # CLAUDE.md's Language section) — runs its own pytest suite here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - name: Run every package's pytest suite (skips packages with none)
+        run: |
+          set -e
+          shopt -s nullglob
+          for pkg in */; do
+            if [ -d "${pkg}tests" ] && { [ -f "${pkg}pyproject.toml" ] || [ -f "${pkg}setup.py" ]; }; then
+              echo "::group::pytest: $pkg"
+              (cd "$pkg" && python -m pytest tests/) || exit 1
+              echo "::endgroup::"
+            fi
+          done
+
+  e2e-suite-lint:
+    # The tests/e2e/ suite is pytest too. It needs a real, pre-provisioned
+    # host to actually RUN against, so CI only collects/lints it here to
+    # catch syntax errors early, rather than executing it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - run: python -m pytest tests/e2e/ --collect-only
