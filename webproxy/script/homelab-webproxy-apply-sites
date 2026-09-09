@@ -1,0 +1,102 @@
+#!/usr/bin/perl
+# Reads /etc/homelab/webproxy/sites.yml and, for each site without an
+# existing vhost, writes an HTTP-only nginx vhost, reloads nginx, then
+# runs `certbot --nginx` to obtain a cert and upgrade the vhost to
+# HTTPS-with-redirect. Idempotent — safe to re-run after adding a new
+# site to sites.yml; existing sites (vhost file already present) are
+# left completely alone, including whatever certbot has since done to
+# them.
+use strict;
+use warnings;
+use YAML::XS qw(LoadFile);
+
+my $SITES_CONFIG    = $ENV{HOMELAB_WEBPROXY_SITES}      // '/etc/homelab/webproxy/sites.yml';
+my $VHOST_TEMPLATE  = $ENV{HOMELAB_WEBPROXY_TEMPLATE}   // '/usr/share/homelab-webproxy/config/vhost.conf.template';
+my $SITES_AVAILABLE = $ENV{HOMELAB_WEBPROXY_AVAILABLE}  // '/etc/nginx/sites-available';
+my $SITES_ENABLED   = $ENV{HOMELAB_WEBPROXY_ENABLED}    // '/etc/nginx/sites-enabled';
+
+unless (-f $SITES_CONFIG) {
+    print "homelab-webproxy: no $SITES_CONFIG yet — nothing to apply.\n";
+    print "  Copy /usr/share/homelab-webproxy/config/sites.example.yml there and re-run.\n";
+    exit 0;
+}
+
+my $config = LoadFile($SITES_CONFIG);
+my $email  = $config->{letsencrypt_email};
+my @sites  = @{ $config->{sites} // [] };
+
+die "sites.yml: letsencrypt_email is required\n" unless $email && $email !~ /YOUR_EMAIL_HERE/;
+
+my $template = do {
+    open(my $fh, '<', $VHOST_TEMPLATE) or die "Cannot read $VHOST_TEMPLATE: $!\n";
+    local $/ = undef;
+    <$fh>;
+};
+
+my $applied = 0;
+for my $site (@sites) {
+    my $domain   = $site->{domain}   // die "sites.yml: a site is missing 'domain'\n";
+    my $upstream = $site->{upstream} // die "sites.yml: site '$domain' is missing 'upstream'\n";
+
+    my $vhost_path = "$SITES_AVAILABLE/$domain";
+
+    # A vhost that already has HTTPS (certbot's --nginx plugin adds a
+    # `listen 443 ssl` line to the file on success) is genuinely done —
+    # skip it. A vhost that exists but is STILL http-only means a
+    # previous run's certbot step failed (e.g. port 80 wasn't reachable
+    # from the internet yet) — retry the cert step for it rather than
+    # silently treating "the http-only vhost file exists" as "fully
+    # configured" forever. Hit this exact scenario for real on
+    # test-static-internet-ip (a network-level firewall blocked the
+    # ACME HTTP-01 challenge) — without this check, fixing the firewall
+    # and re-running would never have picked it back up.
+    if (-f $vhost_path && _vhost_has_https($vhost_path)) {
+        print "homelab-webproxy: $domain already has a vhost with HTTPS configured — skipping.\n";
+        next;
+    }
+
+    if (-f $vhost_path) {
+        print "homelab-webproxy: $domain has an HTTP-only vhost (a previous certbot attempt likely failed) — retrying the cert...\n";
+    }
+    else {
+        print "homelab-webproxy: configuring $domain -> $upstream...\n";
+        my $vhost = $template;
+        $vhost =~ s/__DOMAIN__/$domain/g;
+        $vhost =~ s/__UPSTREAM__/$upstream/g;
+
+        open(my $fh, '>', $vhost_path) or die "Cannot write $vhost_path: $!\n";
+        print $fh $vhost;
+        close($fh);
+
+        symlink($vhost_path, "$SITES_ENABLED/$domain") unless -e "$SITES_ENABLED/$domain";
+
+        system('nginx', '-t') == 0 or die "nginx config test failed after adding $domain — check $vhost_path\n";
+        system('systemctl', 'reload', 'nginx') == 0 or die "nginx reload failed after adding $domain\n";
+    }
+
+    print "  requesting a cert for $domain via certbot...\n";
+    my $rc = system(
+        'certbot', '--nginx', '-d', $domain,
+        '--non-interactive', '--agree-tos', '-m', $email, '--redirect',
+    );
+    if ($rc != 0) {
+        warn "  WARNING: certbot failed for $domain (exit $rc) — $domain is live on HTTP only for now.\n";
+        warn "           Check DNS actually resolves to this host, then re-run: certbot --nginx -d $domain\n";
+    }
+    else {
+        print "  $domain is live over HTTPS.\n";
+    }
+
+    $applied++;
+}
+
+print "homelab-webproxy: $applied new site(s) configured.\n";
+
+sub _vhost_has_https {
+    my ($path) = @_;
+    open(my $fh, '<', $path) or return 0;
+    local $/ = undef;
+    my $content = <$fh>;
+    close($fh);
+    return $content =~ /listen\s+443\s+ssl/ ? 1 : 0;
+}

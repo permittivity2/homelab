@@ -1,0 +1,19 @@
+Source: homelab-webproxy
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-webproxy
+Architecture: all
+Depends: perl (>= 5.36), libyaml-libyaml-perl, nginx, certbot, python3-certbot-nginx
+Description: nginx + Let's Encrypt reverse proxy for the homelab-* ecosystem
+ Ships homelab-webproxy-apply-sites, which reads an editable
+ /etc/homelab/webproxy/sites.yml (domain -> upstream host:port pairs)
+ and, for each site without an existing vhost yet, writes an nginx vhost
+ and obtains a Let's Encrypt certificate via certbot's nginx plugin
+ (which also upgrades the vhost to HTTPS-with-redirect and wires up
+ renewal). Idempotent -- re-run after adding a new site to sites.yml;
+ existing sites are left completely alone.

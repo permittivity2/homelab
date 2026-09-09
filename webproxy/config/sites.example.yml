@@ -1,0 +1,11 @@
+# Copy to /etc/homelab/webproxy/sites.yml and edit. Re-run
+# `homelab-webproxy-apply-sites` (or just reinstall/reconfigure the
+# package) after adding a new site — it's idempotent, only touches
+# sites that don't already have a vhost.
+letsencrypt_email: YOUR_EMAIL_HERE
+
+sites:
+  - domain: drive.test.mailmasker.org
+    upstream: 127.0.0.1:2501
+  - domain: mail.test.mailmasker.org
+    upstream: 127.0.0.1:8080

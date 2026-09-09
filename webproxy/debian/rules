@@ -1,0 +1,13 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/vhost.conf.template \
+		debian/homelab-webproxy/usr/share/homelab-webproxy/config/vhost.conf.template
+	install -D -m 644 config/sites.example.yml \
+		debian/homelab-webproxy/usr/share/homelab-webproxy/config/sites.example.yml
