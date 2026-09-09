@@ -1,0 +1,20 @@
+# Managed by homelab-postfix -- do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-postfix). Postfix's own pgsql map
+# format (see `man 5 pgsql_table`) -- stable, documented, unlike
+# Dovecot 2.4's rewritten config language, so this file is a much more
+# direct translation of the docs than dovecot's own templates needed to
+# be.
+#
+# Recipient existence check ONLY -- the value returned (1) is never used
+# as a delivery path; virtual_transport (lmtp:127.0.0.1:24, see main.cf)
+# routes ALL accepted mail to homelab-dovecot over LMTP, which does its
+# own independent userdb lookup. This map's only job is deciding
+# accept/reject at RCPT TO time so we never accept mail for an address
+# we can't actually deliver (avoiding backscatter) -- see
+# reject_unlisted_recipient, on by default whenever virtual_mailbox_maps
+# is set, in smtpd_recipient_restrictions.
+hosts = __DB_HOST__:__DB_PORT__
+user = __DB_USER__
+password = __DB_PASS__
+dbname = __DB_NAME__
+query = SELECT 1 FROM api.users WHERE email='%s' AND active = true

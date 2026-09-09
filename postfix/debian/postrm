@@ -1,0 +1,47 @@
+#!/bin/sh
+set -e
+
+MAP_CF=/etc/postfix/pgsql-virtual-mailbox.cf
+DOVECOT_SASL_DROPIN=/etc/dovecot/conf.d/92-homelab-postfix-sasl.conf
+MASTER_CF=/etc/postfix/master.cf
+
+case "$1" in
+    remove)
+        # Only remove what THIS package created -- never touch main.cf
+        # (it's shared/seeded, not ours to delete), never touch the
+        # homelab_postfix_runtime Postgres role or its grant (a
+        # deliberate, explicit admin action, same reasoning as every
+        # other package here), never touch queued/in-flight mail.
+        rm -f "$MAP_CF"
+        rm -f "$DOVECOT_SASL_DROPIN"
+
+        # Remove our marked block from master.cf, nothing else in it.
+        if [ -f "$MASTER_CF" ] && grep -q '^# BEGIN homelab-postfix managed' "$MASTER_CF"; then
+            sed -i '/^# BEGIN homelab-postfix managed$/,/^# END homelab-postfix managed$/d' "$MASTER_CF"
+        fi
+
+        if command -v postfix >/dev/null 2>&1 && postfix check >/dev/null 2>&1; then
+            systemctl reload-or-restart postfix 2>/dev/null || true
+        fi
+        if command -v doveconf >/dev/null 2>&1 && doveconf -n >/dev/null 2>&1; then
+            systemctl reload-or-restart dovecot 2>/dev/null || true
+        fi
+        ;;
+
+    purge)
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

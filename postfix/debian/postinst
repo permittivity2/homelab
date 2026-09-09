@@ -1,0 +1,196 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+SHARE_DIR=/usr/share/homelab-postfix
+MAP_CF=/etc/postfix/pgsql-virtual-mailbox.cf
+DOVECOT_SASL_DROPIN=/etc/dovecot/conf.d/92-homelab-postfix-sasl.conf
+MASTER_CF=/etc/postfix/master.cf
+
+case "$1" in
+    configure)
+        echo "homelab-postfix post-installation setup..."
+
+        # postfix's OWN postinst may or may not have created main.cf,
+        # entirely depending on whatever debconf answer (or preseed) it
+        # saw for "general type of mail configuration" -- rather than
+        # depend on that, seed from the vendor's own minimal Debian
+        # starting point ONLY if nothing exists yet, then ALWAYS layer
+        # our settings on top via idempotent `postconf -e` regardless of
+        # which case we're in. This is the authoritative config for
+        # this deployment either way.
+        if [ ! -f /etc/postfix/main.cf ]; then
+            cp /usr/share/postfix/main.cf.debian /etc/postfix/main.cf
+            echo "  seeded /etc/postfix/main.cf from the vendor's Debian default"
+        fi
+
+        db_get homelab-postfix/hostname || true;      HOSTNAME="${RET:-mail.test.mailmasker.org}"
+        db_get homelab-postfix/mail_domain || true;    MAIL_DOMAIN="${RET:-test.mailmasker.org}"
+        db_get homelab-postfix/db_host || true;        DB_HOST="${RET:-localhost}"
+        db_get homelab-postfix/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
+
+        postconf -e \
+            "myhostname = $HOSTNAME" \
+            "mydomain = $MAIL_DOMAIN" \
+            'mydestination =' \
+            'local_recipient_maps =' \
+            'mynetworks = 127.0.0.0/8 [::1]/128' \
+            "virtual_mailbox_domains = $MAIL_DOMAIN" \
+            "virtual_mailbox_maps = pgsql:$MAP_CF" \
+            'virtual_transport = lmtp:127.0.0.1:24' \
+            'smtpd_sasl_type = dovecot' \
+            'smtpd_sasl_path = private/auth' \
+            'smtpd_sasl_auth_enable = yes' \
+            'smtpd_sasl_security_options = noanonymous' \
+            'broken_sasl_auth_clients = yes' \
+            'smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem' \
+            'smtpd_tls_key_file = /etc/ssl/private/ssl-cert-snakeoil.key' \
+            'smtpd_tls_security_level = may' \
+            'smtp_tls_security_level = may' \
+            'smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination' \
+            'smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination, reject_invalid_hostname'
+        echo "  applied main.cf settings (myhostname=$HOSTNAME, virtual_mailbox_domains=$MAIL_DOMAIN)"
+
+        # PgBouncer/Postgres credential -- only bootstrap once; a
+        # dpkg-reconfigure is the deliberate way to redo it (e.g. after
+        # a password rotation), same convention as homelab-dovecot.
+        if [ ! -f "$MAP_CF" ]; then
+            echo "  bootstrapping 'homelab_postfix_runtime' on $DB_HOST..."
+            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-postfix-bootstrap-role" --db-host "$DB_HOST")"
+
+            ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^ROLE=//p')"
+            PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^PASSWORD=//p')"
+            SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^SCRAM_SECRET=//p')"
+
+            if [ -z "$ROLE" ]; then
+                echo "ERROR: homelab-postfix-bootstrap-role did not report success -- see output above."
+                echo "       Not writing $MAP_CF; re-run 'dpkg-reconfigure homelab-postfix' once fixed"
+                echo "       (needs homelab-api already installed/migrated on $DB_HOST -- see README.md)."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$ROLE" \
+                --scram-secret "$SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$ROLE' by hand."
+
+            sed \
+                -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
+                -e "s#__DB_PORT__#6432#g" \
+                -e "s#__DB_NAME__#homelab#g" \
+                -e "s#__DB_USER__#$ROLE#g" \
+                -e "s#__DB_PASS__#$PASSWORD#g" \
+                "$SHARE_DIR/config/pgsql-virtual-mailbox.cf.template" > "$MAP_CF"
+            chmod 640 "$MAP_CF"
+            chgrp postfix "$MAP_CF" 2>/dev/null || true
+            echo "  wrote $MAP_CF"
+        else
+            echo "  $MAP_CF already exists -- leaving it and the bootstrapped role untouched"
+            echo "  (dpkg-reconfigure homelab-postfix to redo bootstrap, e.g. after a password rotation)"
+        fi
+
+        # Start postfix FIRST -- it creates /var/spool/postfix/private/,
+        # which the dovecot SASL socket below must already exist before
+        # dovecot can create a unix_listener inside it.
+        if postfix check >/dev/null 2>&1; then
+            systemctl enable postfix >/dev/null 2>&1 || true
+            if systemctl is-active --quiet postfix; then
+                systemctl reload postfix \
+                    || echo "  WARNING: postfix reload failed -- check 'systemctl status postfix' by hand."
+            else
+                systemctl start postfix \
+                    || echo "  WARNING: postfix failed to start -- check 'systemctl status postfix' / 'journalctl -xeu postfix' by hand."
+            fi
+        else
+            echo "  WARNING: 'postfix check' reports a config error -- NOT touching postfix."
+            echo "           Run 'postfix check' by hand to see it; the previous running config (if any) is untouched."
+        fi
+
+        # PgBouncer can serve a stale pooled backend connection for a
+        # role that was DROPPED AND RECREATED, predating its current
+        # grants -- "permission denied for schema api" from the pgsql
+        # map even though a direct psql check confirms the grant is
+        # correct (root-caused 2026-09-09 building homelab-dovecot and
+        # homelab-postfix together -- see either package's README.md).
+        # `postmap -q` opens a brand-new connection every invocation, so
+        # it's a clean, direct probe of the SAME path virtual_mailbox_maps
+        # uses. The real fix is `systemctl restart pgbouncer`, out of
+        # scope for this package's own postinst to do on every other
+        # feature's behalf -- but restarting postfix itself is cheap,
+        # harmless, and observed to help in practice, so try it once
+        # before giving up. Very unlikely on a genuinely fresh deployment
+        # -- this is defense in depth for a hand-rotated role, not an
+        # expected first-install failure mode.
+        if [ -f "$MAP_CF" ]; then
+            sleep 2
+            PROBE_ERR="$(postmap -q 'postinst-probe@invalid.example' "pgsql:$MAP_CF" 2>&1 >/dev/null || true)"
+            if echo "$PROBE_ERR" | grep -q 'permission denied'; then
+                echo "  first pgsql map query hit a transient permission error -- restarting postfix once to clear it"
+                systemctl restart postfix \
+                    || echo "  WARNING: postfix restart failed -- check 'systemctl status postfix' by hand."
+            fi
+        fi
+
+        # Additive drop-in into homelab-dovecot's OWN conf.d -- see the
+        # template's header comment for the ownership-split reasoning.
+        # Requires /var/spool/postfix/private/ to already exist (just
+        # ensured above) for dovecot to successfully create the socket
+        # inside it.
+        install -D -m 644 "$SHARE_DIR/config/92-homelab-postfix-sasl.conf.template" "$DOVECOT_SASL_DROPIN"
+        if command -v doveconf >/dev/null 2>&1; then
+            if doveconf -n >/dev/null 2>&1; then
+                systemctl reload-or-restart dovecot 2>/dev/null \
+                    || echo "  WARNING: dovecot reload/restart failed after writing $DOVECOT_SASL_DROPIN -- SASL auth won't work until it succeeds. Check 'systemctl status dovecot' by hand."
+            else
+                echo "  WARNING: doveconf -n failed after writing $DOVECOT_SASL_DROPIN -- NOT reloading dovecot. Check it by hand."
+            fi
+        else
+            echo "  WARNING: dovecot not found -- wrote $DOVECOT_SASL_DROPIN but it won't take effect until homelab-dovecot is installed."
+        fi
+
+        # Submission service (port 587, SASL-required, TLS-required) --
+        # master.cf has no native drop-in/include mechanism, so this
+        # appends a clearly-marked, idempotent block once. The vendor's
+        # OWN commented-out #submission example stays untouched; ours is
+        # a fresh, fully-specified stanza rather than an in-place
+        # uncomment, since the exact -o overrides needed here differ
+        # from the vendor's commented defaults.
+        if ! grep -q '^# BEGIN homelab-postfix managed' "$MASTER_CF" 2>/dev/null; then
+            {
+                echo ""
+                cat "$SHARE_DIR/config/master.cf.submission-stanza"
+            } >> "$MASTER_CF"
+            echo "  activated the submission service (587) in $MASTER_CF"
+        fi
+
+        if postfix check >/dev/null 2>&1; then
+            systemctl reload-or-restart postfix \
+                || echo "  WARNING: postfix reload/restart failed -- check 'systemctl status postfix' by hand."
+        else
+            echo "  WARNING: 'postfix check' reports a config error after adding the submission service -- NOT reloading."
+            echo "           Run 'postfix check' by hand to see it."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-postfix configured."
+        echo "main.cf:          /etc/postfix/main.cf"
+        echo "recipient map:    $MAP_CF"
+        echo "submission (587): SASL via Dovecot, TLS required"
+        echo "smtp (25):        virtual_mailbox_domains=$MAIL_DOMAIN, LMTP to homelab-dovecot"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

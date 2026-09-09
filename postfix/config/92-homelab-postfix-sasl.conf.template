@@ -1,0 +1,19 @@
+# Managed by homelab-postfix -- written into homelab-dovecot's OWN
+# conf.d directory (not this package's), because this exists purely to
+# let Postfix's smtpd_sasl_type=dovecot delegate SASL auth to the SAME
+# passdb every other login already uses (see the root CLAUDE.md's
+# "unified cross-feature identity" design) -- Postfix itself never
+# queries Postgres for credentials, only for the narrow recipient-
+# validity check in pgsql-virtual-mailbox.cf. Ownership split: LMTP
+# delivery is homelab-dovecot's own concern (it already depends on
+# dovecot-lmtpd) and lives in ITS template; SASL delegation is
+# fundamentally a Postfix feature that happens to delegate to Dovecot,
+# so homelab-postfix owns this specific drop-in. Reload dovecot (not
+# postfix) after writing this file, or the socket won't exist yet.
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0660
+    user = postfix
+    group = postfix
+  }
+}

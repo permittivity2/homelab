@@ -26,22 +26,39 @@ are left completely alone, so it never re-requests a cert for an
 already-configured domain (Let's Encrypt's real-world rate limits make
 that a genuine footgun to avoid, not just a style preference).
 
-## Known blocker on `test-static-internet-ip` (2026-09-09)
+## Known blocker on `test-static-internet-ip` (2026-09-09, partially addressed)
 
-Cert acquisition fails there right now: Let's Encrypt's HTTP-01
-challenge times out connecting to port 80
+Cert acquisition originally failed there: Let's Encrypt's HTTP-01
+challenge timed out connecting to port 80
 (`Timeout during connect (likely firewall problem)`), and a direct
-`curl` to port 3000 from outside earlier had the same symptom. The
-VM's own local firewall is confirmed wide open (`ufw inactive`,
-`iptables` all-ACCEPT) — port 53 (DNS) and 22 (SSH) both work fine from
-the real internet, so this is a port-specific allowlist further
-upstream (likely the `pfsense02` VM on `pve2`, or `pve2`'s own
-host-level firewall for this VM), outside the four hosts this project
-has standing authorization to modify. **Needs the user to open 80/443
-inbound to this host's public IP** before real certificate issuance
-(and public HTTPS access generally) can be verified end-to-end. Vhost
-generation and the nginx side of this package are fully verified
-working — only the network path from the internet is blocked.
+`curl` to port 3000 from outside earlier had the same symptom.
+
+**Correction to this section's original write-up**: it stated the VM's
+own local firewall was "confirmed wide open" based on `ufw inactive` /
+`iptables` all-ACCEPT — that check was incomplete. This host actually
+runs `nftables` directly (`systemctl status nftables`, config at
+`/etc/nftables.conf`), which `ufw`/`iptables` status checks don't see at
+all when nft rules aren't installed through either of those front-ends.
+The real ruleset had a default-drop `input` chain with a narrow
+allowlist that did NOT include 80 or 443 (only DNS/DHCP/NTP/SSH/mDNS/
+NetBIOS + established/related traffic) — this host's own firewall was
+genuinely part of the blocker, not innocent.
+
+With the user's explicit approval, narrow `nft` allow rules for
+25/80/443/587/993/143 were added to `/etc/nftables.conf` and applied
+live (2026-09-09) — see `postfix/README.md`'s Gotchas section for the
+full change and its (partial) verification. **Not yet confirmed**:
+whether an upstream layer (`pve2` host-level or the `pfsense02` VM, both
+outside this project's 4-host authorization) still filters these ports
+separately — port 53 and 22 were previously reported working from the
+real internet, but ad hoc re-testing during this same session gave
+inconsistent results for 22 specifically, so treat that prior claim as
+unverified rather than re-confirmed. **Needs an independent, genuinely
+external test** (the user's own connection, or a third-party port
+checker) to know for certain whether 80/443 are now reachable end to
+end. Vhost generation and the nginx side of this package are fully
+verified working regardless — only the network path from the internet
+was ever in question.
 
 ## Testing
 

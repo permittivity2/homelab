@@ -107,24 +107,44 @@ None of this is discoverable from `doveconf -n` alone — every one of
 these was only caught by actually running a real login or real delivery
 against a real account. See `tests/e2e/test_dovecot_login.py`.
 
-**Not fully root-caused, mitigated instead**: a dovecot process's very
-first SQL passdb/userdb query, immediately after this package's own
-fresh-install sequence (role bootstrap → pgbouncer registration →
-dovecot start), has been observed to fail with `permission denied for
-schema api` even though a direct `psql` check at that same moment shows
-the grant is already correct — and a plain `systemctl restart dovecot`
-moments later reliably clears it. Leading theory is a PgBouncer/Postgres
-connection-pool warm-up race (PgBouncer or Postgres caching something
-from a connection attempt that predates the grant), but this hasn't been
-confirmed against a genuinely virgin host — this project's own test host
-had been through many manual create/drop/grant/revoke cycles against
-this exact role name before the failure was ever observed, which could
-just as easily be the real explanation. `debian/postinst` mitigates it
-pragmatically: after starting dovecot, it probes with a throwaway
-`doveadm user` lookup and does one extra restart if the probe's error
-mentions "permission denied". If this resurfaces despite the mitigation,
-that's the place to start digging properly, ideally on a host that has
-never had this role name touched before.
+**Root-caused 2026-09-09** (updated from an earlier, less certain writeup
+in this section — see `postfix/README.md` for the twin incident that
+pinned it down): PgBouncer, not Dovecot or Postgres, was the actual
+culprit. When a role is **dropped and recreated** (not merely
+password-rotated via `ALTER ROLE`), PgBouncer can keep serving requests
+through a stale pooled backend connection that predates the new grants
+— `permission denied for schema api` — even though a direct `psql` check
+at that same moment confirms the grant is already correct, and even
+though the CLIENT (a `postmap -q` invocation, in the sibling incident)
+opens a brand-new connection every single time it runs. Restarting the
+*consuming* service (dovecot, or postfix) is not reliably sufficient by
+itself; a full `systemctl restart pgbouncer` is the confirmed, reliable
+fix. Confirmed via a controlled test: after one pgbouncer restart, a
+fresh install of both `homelab-dovecot` and `homelab-postfix` — using
+these exact role names — completed with zero occurrences; a SECOND
+fresh-install cycle immediately after (same role names, no intervening
+pgbouncer restart) reproduced the failure again. That pins the trigger
+down precisely: **the bootstrap scripts themselves never drop a role —
+`CREATE ROLE ... ELSE ALTER ROLE ...` only ever creates-or-alters** —
+so a real admin re-running `dpkg-reconfigure` to rotate credentials
+would never hit this. It only appears when a role is genuinely dropped
+and recreated with the same name, which only happened here because this
+project's own test cleanup between install cycles used `DROP ROLE` to
+simulate a truly virgin host. **Practical rule for anyone continuing to
+test this repo the same way**: run `systemctl restart pgbouncer` right
+after any manual `DROP ROLE` cleanup, before the next install cycle, or
+expect this to resurface — it isn't a bug in the packages, it's a known
+consequence of that specific test methodology. `debian/postinst` still
+keeps a cheap, self-contained
+mitigation regardless: after starting dovecot, it probes with a
+throwaway `doveadm user` lookup and does one extra restart of *dovecot
+itself* if the probe's error
+mentions "permission denied" — restarting dovecot alone isn't guaranteed
+to be the real fix (see above), but it's cheap and harmless to try
+first. If it resurfaces despite the mitigation, `systemctl restart
+pgbouncer` is the confirmed fix — bigger blast radius (it affects every
+feature's connections, not just this one), which is exactly why
+postinst doesn't do it automatically on this package's behalf.
 
 ## Testing
 

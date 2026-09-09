@@ -1,0 +1,34 @@
+Source: homelab-postfix
+Section: mail
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-postfix
+Architecture: all
+Depends: ${misc:Depends}, postfix, postfix-pgsql, homelab-dovecot (>= 0.1.2), adduser, postgresql-client
+Description: SMTP submission/relay wired to the homelab-* shared identity
+ Wires Postfix to the shared `homelab` Postgres database for recipient
+ validation only -- a narrow, column-scoped cross-schema grant (email/
+ active, no password_hash at all -- see
+ script/homelab-postfix-bootstrap-role) backing a virtual_mailbox_maps
+ pgsql lookup that decides accept/reject at RCPT TO time. SASL
+ authentication for the submission service is delegated entirely to
+ Dovecot's own passdb over a unix socket (smtpd_sasl_type = dovecot) --
+ Postfix never queries Postgres for credentials itself. One Argon2id
+ password in api.users backs both, but each service holds its own
+ narrowly-scoped secret: the unified cross-feature identity design
+ described in CLAUDE.md. Accepted mail is handed to homelab-dovecot over
+ LMTP (127.0.0.1:24).
+ .
+ Like homelab-dovecot, this package owns no schema/tables of its own and
+ therefore has no migrate role, unlike the standard split runtime/
+ migrate Postgres role pattern most other homelab-* features use --
+ an intentional, documented exception (see README.md), not an oversight.
+ .
+ Depends on homelab-dovecot as a hard runtime requirement, not just a
+ recommendation: SASL authentication and all mail delivery both fail
+ without it (the SASL socket and the LMTP listener it delivers to are
+ both provided by homelab-dovecot).

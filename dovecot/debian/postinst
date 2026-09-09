@@ -87,19 +87,21 @@ case "$1" in
                     || echo "  WARNING: dovecot failed to start -- check 'systemctl status dovecot' / 'journalctl -xeu dovecot' by hand."
             fi
 
-            # A dovecot process's FIRST SQL passdb/userdb query, right
-            # after this exact sequence (fresh role bootstrap -> fresh
-            # pgbouncer registration -> fresh dovecot start), has been
-            # observed to fail with "permission denied for schema api"
-            # even though the grant is already correct and confirmed via
-            # a direct psql check at that same moment -- a genuinely
-            # fresh `systemctl restart` moments later reliably clears it.
-            # Root cause not fully nailed down (a pgbouncer/Postgres
-            # connection-pool warm-up race is the leading theory, not
-            # confirmed) -- this probe+one-retry is a pragmatic
-            # mitigation so a fresh install doesn't hand back a broken
-            # first impression, not a substitute for understanding it
-            # properly if it recurs. See dovecot/README.md.
+            # Root-caused 2026-09-09 (see README.md): PgBouncer can serve
+            # a stale pooled backend connection for a role that was
+            # DROPPED AND RECREATED, predating its current grants --
+            # "permission denied for schema api" even though a direct
+            # psql check confirms the grant is correct. Restarting
+            # dovecot itself isn't guaranteed to fix it (the real fix is
+            # `systemctl restart pgbouncer`, out of scope for this
+            # package's own postinst to do on every other feature's
+            # behalf) -- but it's cheap, harmless, and observed to help
+            # in practice, so try it once before giving up. Very unlikely
+            # on a genuinely fresh deployment (confirmed: a pgbouncer
+            # restart followed by fresh installs using these exact role
+            # names produced zero occurrences) -- this is defense in
+            # depth for the rarer case of a hand-rotated role, not an
+            # expected first-install failure mode.
             sleep 2
             PROBE_ERR="$(doveadm user 'postinst-probe@invalid.example' 2>&1 >/dev/null || true)"
             if echo "$PROBE_ERR" | grep -q 'permission denied'; then

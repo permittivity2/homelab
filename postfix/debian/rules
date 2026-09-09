@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/pgsql-virtual-mailbox.cf.template \
+		debian/homelab-postfix/usr/share/homelab-postfix/config/pgsql-virtual-mailbox.cf.template
+	install -D -m 644 config/92-homelab-postfix-sasl.conf.template \
+		debian/homelab-postfix/usr/share/homelab-postfix/config/92-homelab-postfix-sasl.conf.template
+	install -D -m 644 config/master.cf.submission-stanza \
+		debian/homelab-postfix/usr/share/homelab-postfix/config/master.cf.submission-stanza
+	install -D -m 755 script/homelab-postfix-bootstrap-role \
+		debian/homelab-postfix/usr/share/homelab-postfix/script/homelab-postfix-bootstrap-role
+
+override_dh_auto_build:
+	# Nothing to compile
+
+override_dh_auto_test:
+	# No package-build-time tests (t/postfix-bootstrap-role.t, if any,
+	# needs a real Postgres with homelab-api already migrated)

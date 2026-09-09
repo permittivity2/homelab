@@ -1,0 +1,17 @@
+homelab-postfix (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 05:56:22 -0500
+
+homelab-postfix (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 05:46:30 -0500
+
+homelab-postfix (0.0.0) unstable; urgency=medium
+
+  * Placeholder seed entry — build-package.sh prepends real entries above this.
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 05:38:49 -0500
