@@ -65,13 +65,19 @@ jobs:
           python-version: "3.12"
       - run: pip install pytest
       - name: Run every package's pytest suite (skips packages with none)
+        # `pip install -e .` each package before testing it — installs
+        # its own pyproject.toml-declared runtime deps (requests, PyYAML,
+        # ...) automatically, so this scales to future Python packages
+        # without needing a hand-maintained dependency list here that
+        # silently drifts out of sync (this list already had exactly
+        # that problem once already).
         run: |
           set -e
           shopt -s nullglob
           for pkg in */; do
             if [ -d "${pkg}tests" ] && { [ -f "${pkg}pyproject.toml" ] || [ -f "${pkg}setup.py" ]; }; then
               echo "::group::pytest: $pkg"
-              (cd "$pkg" && python -m pytest tests/) || exit 1
+              (cd "$pkg" && pip install -e . && python -m pytest tests/) || exit 1
               echo "::endgroup::"
             fi
           done
