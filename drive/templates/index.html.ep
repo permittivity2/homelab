@@ -249,6 +249,39 @@
     return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') !== -1;
   }
 
+  // A real user found this by actually dragging a folder-with-a-
+  // subfolder (e.g. "turkeys" containing "Downloads") onto the page:
+  // the subfolder came out as a SIBLING of "turkeys" under the drop
+  // target instead of nested inside it. The recursive walk below
+  // (processEntry) *does* correctly nest a directory's own children
+  // under it -- so the leading hypothesis is that some browser/OS/
+  // file-manager combination hands back a dropped folder's descendants
+  // as SEPARATE top-level DataTransferItems too, alongside the folder
+  // itself, which would bypass that recursion entirely for the
+  // redundant copy. Not confirmed against the real browser (no
+  // automation tooling for a real drag gesture -- see README.md) --
+  // this is a defensive fix for that leading hypothesis, safe
+  // regardless: fullPath is a real FileSystemEntry property (absolute,
+  // rooted at whatever was dragged, e.g. "/turkeys" and
+  // "/turkeys/Downloads") -- if one top-level entry's path is a prefix
+  // of another's, the shorter one is the real ancestor and the longer
+  // one is dropped here, to be picked back up naturally when the
+  // ancestor is recursed into. console.warn so real evidence exists if
+  // this fires and the bug turns out to have a different cause.
+  function dedupeNestedTopLevelEntries(entries) {
+    var paths = entries.map(function (e) { return e.fullPath || null; });
+    return entries.filter(function (e, i) {
+      if (!e.fullPath) return true; // no fullPath (e.g. the getAsFile() fallback shape) -- nothing to compare, keep it
+      for (var k = 0; k < paths.length; k++) {
+        if (k !== i && paths[k] && e.fullPath.indexOf(paths[k] + '/') === 0) {
+          console.warn('homelab-drive: dropping redundant top-level entry', e.fullPath, '-- nested under', paths[k]);
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
   async function handleDrop(items, targetFolderId) {
     var entries = [];
     for (var i = 0; i < items.length; i++) {
@@ -264,6 +297,7 @@
         if (file) entries.push({ isFile: true, isDirectory: false, name: file.name, file: function (cb) { cb(file); } });
       }
     }
+    entries = dedupeNestedTopLevelEntries(entries);
     if (!entries.length) return;
 
     var progress = document.getElementById('upload-progress');

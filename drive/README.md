@@ -98,6 +98,22 @@ it locally) a no-op merge instead of an error. Uploads are processed
 one at a time, not in parallel — simpler, and avoids two branches of
 the same drop racing to create the same not-yet-existing folder.
 
+**Real bug found by a user actually dragging a nested folder** (e.g.
+"turkeys" containing "Downloads"): the subfolder came out as a *sibling*
+of "turkeys" under the drop target instead of nested inside it, even
+though the recursive walk itself correctly nests a directory's own
+children under it once it's actually recursed into. Leading hypothesis
+(not confirmed against a real browser — see below): some browser/OS/
+file-manager combination hands back a dropped folder's own descendants
+as *separate* top-level `DataTransferItem`s too, alongside the folder
+itself, bypassing the recursion entirely for the redundant copy.
+`dedupeNestedTopLevelEntries()` filters out any top-level entry whose
+`fullPath` is nested under another top-level entry's own `fullPath`
+before processing starts — safe regardless of whether that hypothesis
+turns out to be the exact mechanism, and it `console.warn`s when it
+actually removes something, so real evidence exists to pin the cause
+down precisely if this resurfaces.
+
 This is inherently a client-side, real-browser-gesture feature —
 verified here by directly replicating the exact API call sequence the
 script makes (create → 409 → look-up-and-reuse → upload-with-folder_id)
