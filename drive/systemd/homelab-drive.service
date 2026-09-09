@@ -10,6 +10,15 @@ Group=homelab
 WorkingDirectory=/var/lib/homelab
 Environment="HOMELAB_DRIVE_CONFIG=/etc/homelab/drive/config.yml"
 Environment="HOMELAB_DRIVE_HOME=/usr/share/homelab-drive"
+# Mojolicious defaults to a 16MB request-size ceiling (Mojo::Message's
+# own default, unrelated to and independent of nginx's own
+# client_max_body_size in front of this -- both have to be raised
+# together, or whichever is lower silently wins). 100MB is a deliberate,
+# generous-but-bounded choice for a general file-storage app; found this
+# needed raising at all only by a real user hitting the previous default
+# with an ordinary 1.1MB file upload (nginx's OWN 1MB default was the
+# one actually hit that time, but this would have been next).
+Environment="MOJO_MAX_MESSAGE_SIZE=104857600"
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-drive
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-drive
 TimeoutStopSec=10

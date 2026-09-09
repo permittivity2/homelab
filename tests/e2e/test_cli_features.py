@@ -86,6 +86,40 @@ def test_drive_upload_list_delete_round_trip(ssh_host, cli_account):
         subprocess.run(["ssh", ssh_host, "rm", "-f", remote_path], capture_output=True, timeout=15)
 
 
+def test_drive_upload_over_1mb_and_16mb_succeeds(ssh_host, cli_account):
+    """Regression test for a real bug a user hit live: a plain ~1.1MB
+    upload failed with a slow, confusing timeout instead of a clear
+    error. Root cause was TWO independent size ceilings stacked in
+    front of homelab-drive, both defaulting far too low for a general
+    file-storage app: homelab-webproxy's nginx vhost had no
+    client_max_body_size set at all (nginx's own compiled-in default is
+    1MB), and homelab-drive's own Mojolicious process had no
+    MOJO_MAX_MESSAGE_SIZE override (Mojo::Message's own default is
+    16MB). This can only be caught here, through the real public nginx
+    proxy — a package-local Test::Mojo test (drive/t/api.t) dispatches
+    in-process and never touches nginx at all, so it can prove the
+    Mojolicious-level fix but not the nginx one. 20MB clears both old
+    ceilings at once; a separate ~1.1MB case is also checked since
+    that's the exact size that failed live."""
+    remote_path = "/tmp/e2e-cli-drive-large.bin"
+    subprocess.run(["ssh", ssh_host, "sh", "-c", f"head -c 20000000 /dev/urandom > {remote_path}"], check=True, timeout=30)
+    try:
+        upload = _run_cli(ssh_host, "drive", "upload", remote_path)
+        file_id = upload.stdout.split("id ")[1].strip().rstrip(")")
+        _run_cli(ssh_host, "drive", "delete", file_id)
+    finally:
+        subprocess.run(["ssh", ssh_host, "rm", "-f", remote_path], capture_output=True, timeout=15)
+
+    remote_path_1mb = "/tmp/e2e-cli-drive-1mb.bin"
+    subprocess.run(["ssh", ssh_host, "sh", "-c", f"head -c 1100000 /dev/urandom > {remote_path_1mb}"], check=True, timeout=15)
+    try:
+        upload = _run_cli(ssh_host, "drive", "upload", remote_path_1mb)
+        file_id = upload.stdout.split("id ")[1].strip().rstrip(")")
+        _run_cli(ssh_host, "drive", "delete", file_id)
+    finally:
+        subprocess.run(["ssh", ssh_host, "rm", "-f", remote_path_1mb], capture_output=True, timeout=15)
+
+
 def test_mail_send_then_list_shows_it(ssh_host, cli_account):
     email = cli_account
     subject = f"e2e-cli-mail-{int(time.time())}"

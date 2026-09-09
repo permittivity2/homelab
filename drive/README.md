@@ -28,6 +28,27 @@ shared DB reference" (see `CLAUDE.md`).
 Deliberately minimal for the first pass: flat file list per user, no
 directories/sharing/trash/versioning — those are straightforward to
 add later once the core upload/list/download/delete path is proven.
+Same for the UI itself: a bare file list with no folders, drag/drop, or
+progress indication — real UX work (a proper two-pane layout, upload
+progress instead of a silent wait, etc.) is tracked as follow-up, not
+done here yet.
+
+## Upload size limit
+
+`MOJO_MAX_MESSAGE_SIZE=104857600` (100MB) in `systemd/
+homelab-drive.service` raises Mojolicious's own default 16MB request
+ceiling. This has to stay in sync with `homelab-webproxy`'s
+`client_max_body_size` (also 100MB, see `webproxy/README.md`'s own
+Gotcha on this) — that's a SEPARATE, independent ceiling one layer
+further out, and whichever of the two is lower silently wins. Found
+both defaults were far too low from a real user hitting the *lower* of
+the two (nginx's own 1MB) with an ordinary 1.1MB upload, which failed
+with a slow, confusing timeout rather than an immediate clear error —
+see `tests/e2e/test_cli_features.py`'s
+`test_drive_upload_over_1mb_and_16mb_succeeds` for the permanent
+regression coverage (this can only be caught through the real nginx
+proxy — `t/api.t` dispatches in-process and never touches nginx, so it
+proves the Mojolicious-side fix but not nginx's).
 
 ## JSON API (for homelab-cli and third-party scripts)
 

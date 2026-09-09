@@ -71,6 +71,38 @@ This also resolves the "is there a separate upstream blocker at `pve2`/
 not for port 80 — whatever was blocking it before, this host's own `nft`
 ruleset was sufficient to explain the whole thing once corrected.
 
+## Gotcha: nginx's own 1MB body-size default (found 2026-09-09)
+
+A real user hit this live: an ordinary ~1.1MB `homelab-drive` upload
+failed with a slow, confusing browser timeout instead of a clear error.
+Root cause: `vhost.conf.template` never set `client_max_body_size`, so
+every site fell back to nginx's own compiled-in 1MB default — and
+because that's the OUTER proxy layer, in front of every backend, it was
+also silently making `homelab-roundcube`'s own 25MB attachment limit
+(set on its separate internal vhost) unreachable for anything over 1MB,
+even though nobody had hit that yet. Fixed with one shared
+`client_max_body_size 100m;` in the template, applying to every site
+this package manages — nothing here currently needs a genuinely
+different limit from any other.
+
+**Existing, already-configured vhosts do NOT pick this up automatically**
+— `homelab-webproxy-apply-sites` deliberately never re-touches a vhost
+that already has HTTPS configured (see "Idempotent" above; the same
+policy that protects against Let's Encrypt rate limits also means a
+template improvement like this one doesn't retroactively apply). An
+already-live site needs the directive added to its
+`/etc/nginx/sites-available/<domain>` file by hand (`sudo nginx -t`
+before reloading, always), or the vhost file removed and regenerated
+from scratch (which re-requests a cert — mind the rate limits).
+
+This was also a two-layer bug, not just this one: `homelab-drive`'s own
+Mojolicious process has an independent, unrelated 16MB default
+(`Mojo::Message`'s own `max_message_size`) that would have been hit
+next for anything between 16MB and 100MB — see `drive/systemd/
+homelab-drive.service`'s `MOJO_MAX_MESSAGE_SIZE` for that half of the
+fix. Both ceilings have to be raised together, or whichever is lower
+silently wins.
+
 ## Testing
 
 ```bash

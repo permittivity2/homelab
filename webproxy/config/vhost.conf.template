@@ -8,6 +8,16 @@ server {
     listen [::]:80;
     server_name __DOMAIN__;
 
+    # nginx's own compiled-in default (1m) is why a real ~1.1MB
+    # homelab-drive upload once failed with a slow, confusing timeout
+    # instead of an immediate, clear error -- this is also why it sat
+    # in front of homelab-roundcube's own 25m attachment limit, at the
+    # OUTER proxy layer, making that inner limit unreachable for
+    # anything over 1MB. One shared default here, applying to every
+    # site this package manages, rather than a per-site special case --
+    # nothing here currently needs a *different* limit from any other.
+    client_max_body_size 100m;
+
     location / {
         proxy_pass http://__UPSTREAM__;
         proxy_set_header Host $host;
