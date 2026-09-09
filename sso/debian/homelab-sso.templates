@@ -40,11 +40,13 @@ Description: Shared secret for the "drive" OAuth client (blank = generate one):
 
 Template: homelab-sso/roundcube_redirect_uri
 Type: string
-Default: https://mail.test.mailmasker.org/index.php/login/oauth
+Default: https://mail.test.mailmasker.org/index.php?_task=login&_action=oauth
 Description: homelab-roundcube's OAuth callback URL:
  Registered as this deployment's "roundcube" OAuth client redirect_uri
  -- must match exactly what homelab-roundcube itself is configured to
- use.
+ send (query-string form, NOT Roundcube's PATH_INFO-style default of
+ "index.php/login/oauth" -- see homelab-roundcube's
+ script/homelab-roundcube-patch-oauth-sso for why).
 
 Template: homelab-sso/roundcube_client_secret
 Type: password

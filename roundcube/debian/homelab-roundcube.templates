@@ -29,3 +29,22 @@ Template: homelab-roundcube/product_name
 Type: string
 Default: Homelab Webmail
 Description: Product name shown on the login screen and window title:
+
+Template: homelab-roundcube/sso_base_url
+Type: string
+Default: http://127.0.0.1:2502
+Description: Base URL where homelab-sso is reachable:
+ Written into config.inc.php's oauth_auth_uri/oauth_token_uri/
+ oauth_identity_uri/oauth_logout_uri. homelab-sso is the only place a
+ user ever types a password -- this app's native OAuth support (plus
+ two small core patches, see script/homelab-roundcube-patch-oauth-sso)
+ redirects here for login and logout.
+
+Template: homelab-roundcube/sso_client_secret
+Type: password
+Description: Shared secret for this app's "roundcube" OAuth client:
+ Must match exactly what homelab-sso's own install printed for the
+ "roundcube" client (dpkg-reconfigure homelab-sso to see it again, or
+ rotate it). Unlike homelab-sso's own client secrets, there's no
+ sensible default to auto-generate here -- this app is the consumer of
+ a secret homelab-sso mints, not the minter.

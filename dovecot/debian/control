@@ -15,7 +15,12 @@ Description: IMAP/LMTP mail delivery wired to the homelab-* shared identity
  password_hash/active only -- see script/homelab-dovecot-bootstrap-role),
  so ONE Argon2id password works for both HTTP login (homelab-drive) and
  IMAP/SMTP login -- the unified cross-feature identity design described
- in CLAUDE.md. Static userdb (shared `vmail` system uid/gid, Maildir++
+ in CLAUDE.md. Also wires an XOAUTH2/OAUTHBEARER oauth2 passdb
+ (introspecting against homelab-api's own /api/v1/auth/introspect,
+ alongside the SQL passdb, not instead of it) so a homelab-sso-issued
+ access token authenticates over real IMAP too -- this is what makes
+ Roundcube's SSO login actually reach the mailbox, not just the OAuth
+ redirect dance. Static userdb (shared `vmail` system uid/gid, Maildir++
  storage under /var/mail/vhosts/<domain>/<user>) -- this package owns no
  schema/tables of its own and therefore has no migrate role, unlike the
  standard split runtime/migrate Postgres role pattern most other

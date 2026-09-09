@@ -13,6 +13,8 @@ override_dh_install:
 		debian/homelab-roundcube/usr/share/homelab-roundcube/script/homelab-roundcube-apply-schema
 	install -D -m 755 script/homelab-roundcube-patch-php85-compat \
 		debian/homelab-roundcube/usr/share/homelab-roundcube/script/homelab-roundcube-patch-php85-compat
+	install -D -m 755 script/homelab-roundcube-patch-oauth-sso \
+		debian/homelab-roundcube/usr/share/homelab-roundcube/script/homelab-roundcube-patch-oauth-sso
 
 override_dh_auto_build:
 	# Nothing to compile

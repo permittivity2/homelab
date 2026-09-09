@@ -14,6 +14,16 @@
 # not copied from pre-2.4 documentation, which describes a syntax this
 # version no longer accepts. See README.md's Gotchas section before
 # changing anything here.
+
+# Additive to Debian's stock `plain` mechanism (confirmed via doveconf:
+# this MERGES rather than replaces -- effective auth_mechanisms ends up
+# `plain xoauth2 oauthbearer`, not just the two below). Enables the
+# XOAUTH2/OAUTHBEARER passdb further down.
+auth_mechanisms {
+  xoauth2 = yes
+  oauthbearer = yes
+}
+
 sql_driver = pgsql
 
 # The connection block's positional name IS the host dovecot connects
@@ -34,6 +44,82 @@ pgsql __DB_HOST__ {
 passdb sql {
   default_password_scheme = ARGON2ID
   query = SELECT email AS user, password_hash AS password FROM api.users WHERE email = '%{user}' AND active = true
+
+  # Without these, a WRONG plain password doesn't stop the passdb chain
+  # here -- Dovecot falls through to the oauth2 passdb below next
+  # (declaration order isn't what determines this; see the XOAUTH2/
+  # OAUTHBEARER comment on that passdb for why oauth2 still gets a
+  # chance even after this one already gave a definitive answer), which
+  # then tries to verify the "password" as an OAuth *password grant*
+  # (a completely different, unconfigured flow -- this package has no
+  # oauth2_grant_url) and errors out with "Invalid HTTP URL: Relative
+  # HTTP URL not allowed", surfacing as a generic temp_fail that MASKS
+  # the correct rejection that already happened right here. Explicitly
+  # terminating the chain on this passdb's own result (success or
+  # failure) prevents oauth2 from ever being reached for a plain-
+  # mechanism attempt at all. `doveconf -n` shows nothing wrong either
+  # way; only caught by comparing `doveadm auth test`'s reported code
+  # (temp_fail vs a clean failure) before and after adding the oauth2
+  # passdb below.
+  result_success = return-ok
+  result_failure = return-fail
+}
+
+# XOAUTH2/OAUTHBEARER support (Roundcube's native OAuth login uses this
+# for real IMAP auth once it holds a homelab-sso-issued access token --
+# see ../roundcube/README.md and ../sso/README.md) -- alongside, not
+# instead of, the sql passdb above: this is purely additive, password
+# logins are completely unaffected (see that passdb's own comment for
+# the one interaction that DOES exist between the two).
+#
+# introspection_mode's valid values (`auth`, `get`, `post`, `local`) are
+# NOT documented anywhere reachable from this host -- not in
+# /usr/share/dovecot/conf.d/auth-oauth2.conf.ext (which only shows `get`
+# and `local` in its own commented-out examples), not in any local man
+# page. Found by extracting the literal enum string `:auth:get:post:local`
+# out of the `/usr/lib/dovecot/auth` binary itself, then confirming each
+# candidate's ACTUAL HTTP request shape by pointing introspection_url at
+# a throwaway raw-socket listener that dumps whatever request it
+# receives:
+#   - `get`  -- string-concatenates the raw token onto the END of
+#     introspection_url with NO separator and NO Authorization header
+#     (`GET /probebogus-token-abc`) -- meant for providers like Google's
+#     tokeninfo endpoint where the URL is pre-built ending in
+#     `?access_token=`, not for a URL meant to receive a Bearer header.
+#   - `post` -- sends `POST` with `token=<token>` as an
+#     application/x-www-form-urlencoded body (RFC 7662-style
+#     introspection) -- also not what homelab-api's introspect expects.
+#   - `auth` -- sends a plain `GET` with `Authorization: Bearer <token>`
+#     and an empty body -- this is the one that actually matches
+#     homelab-api's `/api/v1/auth/introspect` contract (same shape
+#     Homelab::Common::AuthClient::introspect already uses). Verified
+#     end-to-end with a real homelab-api-issued JWT via a real raw IMAP
+#     `AUTHENTICATE OAUTHBEARER` exchange (not just doveconf -n, not
+#     just doveadm auth test -- see README.md's Gotchas section for why
+#     that distinction has mattered every time in this package).
+#   - `local` -- deliberately not used: it validates the JWT's signature
+#     locally instead of calling out to homelab-api at all, which would
+#     need an RS256 public key distributed to every mail host -- this
+#     ecosystem's SSO design deliberately has no signing key to manage
+#     in the first place (see ../sso/README.md), so `local` doesn't fit
+#     here even though it would technically parse.
+#
+# A bogus/expired token IS correctly rejected (confirmed with a real
+# invalid-token IMAP attempt) -- but reported as a generic `temp_fail`/
+# "Temporary authentication failure" rather than a clean "authentication
+# failed", because Dovecot's oauth2 module doesn't distinguish "the
+# introspection endpoint said this token is invalid" from "the
+# introspection endpoint itself is broken" -- both surface identically.
+# The security property (bad token never gets in) holds either way; this
+# is just a coarser error message than sql's own password-mismatch path,
+# not a bug in this config.
+oauth2 {
+  introspection_url = "__API_BASE__/api/v1/auth/introspect"
+  introspection_mode = auth
+  username_attribute = email
+}
+
+passdb oauth2 {
 }
 
 # Shared vmail system uid/gid (created by postinst before this file is

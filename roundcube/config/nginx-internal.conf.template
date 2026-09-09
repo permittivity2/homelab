@@ -24,6 +24,22 @@ server {
     location ~ \.php$ {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php__PHP_VERSION__-fpm.sock;
+
+        # Without these, PHP's own $_SERVER['SERVER_PORT'] reflects THIS
+        # vhost's own loopback listen port (__INTERNAL_PORT__), not the
+        # real public-facing port homelab-webproxy terminated TLS on --
+        # this vhost has no visibility into that at all otherwise. Found
+        # via a real, live OAuth round trip: Roundcube's
+        # rcmail_oauth::get_redirect_uri() (see
+        # ../script/homelab-roundcube-patch-oauth-sso) built
+        # "https://mail.test.mailmasker.org:__INTERNAL_PORT__/..." --
+        # the leaked internal port made homelab-sso's exact-match
+        # redirect_uri check fail every time. Always 443 here: this
+        # vhost is only ever reached via homelab-webproxy, which always
+        # terminates TLS on 443 -- same fixed assumption
+        # $config['use_https'] already makes in config.inc.php.template.
+        fastcgi_param HTTPS on;
+        fastcgi_param SERVER_PORT 443;
     }
 
     # Never serve Roundcube's own config/logs/temp/.git etc.

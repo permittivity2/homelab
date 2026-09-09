@@ -103,6 +103,80 @@ that turn out to matter in practice. Specific traps hit along the way:
   -n` shows nothing wrong either way; only a real LMTP delivery attempt
   (not a login, not `doveadm auth test`) surfaces it.
 
+- **`introspection_mode`'s valid values are undocumented anywhere
+  reachable on this host** (not in `/usr/share/dovecot/conf.d/
+  auth-oauth2.conf.ext`'s own commented examples, which only show `get`
+  and `local`; not in any local man page). Found by extracting the
+  literal enum string `:auth:get:post:local` directly out of the
+  `/usr/lib/dovecot/auth` binary, then determining what each candidate
+  actually DOES by pointing `introspection_url` at a throwaway raw-
+  socket listener that dumps the literal HTTP request it receives:
+  `get` string-concatenates the raw token onto the end of the URL with
+  no separator and no header (`GET /probebogus-token-abc`, meant for
+  providers like Google's tokeninfo endpoint whose URL is pre-built
+  ending in `?access_token=`); `post` sends `token=<token>` as an
+  `application/x-www-form-urlencoded` POST body (RFC 7662-style);
+  neither matches homelab-api's `/api/v1/auth/introspect` contract
+  (Bearer header, GET, no body). `auth` is the one that does — a plain
+  `GET` with `Authorization: Bearer <token>` and an empty body, the same
+  shape `Homelab::Common::AuthClient::introspect` already uses.
+  `oauth2_send_auth_headers = yes` (a name that looks relevant) does
+  **not** add this header either — it adds unrelated `X-Dovecot-Auth-*`
+  metadata headers (protocol/local/remote) instead. `local` mode
+  validates the JWT's signature locally instead of calling homelab-api
+  at all — deliberately not used, since it would need an RS256 public
+  key distributed to every mail host, and this ecosystem's SSO design
+  has no signing key to manage in the first place (see
+  `../sso/README.md`).
+- **Adding the oauth2 passdb silently broke plain-password rejection**
+  — a WRONG password stopped returning a clean "auth failed" and
+  started returning `code=temp_fail` / "Temporary authentication
+  failure" instead, even though the SQL passdb was still correctly
+  rejecting it internally. Root cause, found via `auth_debug = yes` and
+  reading the full per-request trace (not just the final result): a
+  passdb chain does NOT stop just because an earlier passdb already
+  gave a definitive answer (success or failure) — after `sql`
+  correctly logs `Password mismatch`, Dovecot proceeds to try `oauth2`
+  next regardless, which for a plain-mechanism attempt means trying an
+  entirely different flow — an OAuth *password grant* (trading the
+  given username+password for a token via `oauth2_grant_url`) — which
+  this package has no `oauth2_grant_url` configured for, so it fails
+  with "Invalid HTTP URL: Relative HTTP URL not allowed", and THAT
+  error is what surfaces as the final `temp_fail`, masking the correct
+  rejection that already happened one step earlier. There is no
+  `mechanism`-scoped filter block for passdbs in 2.4 (confirmed via
+  `man doveconf`'s `-f filter` section, which only lists `protocol`/
+  `local_name`/`local`/`remote`) — the fix instead is on the `sql`
+  passdb itself: `result_success = return-ok` and
+  `result_failure = return-fail` make ITS OWN result terminal, so
+  `oauth2` is never reached at all for a plain-mechanism attempt.
+  Verified via `doveadm auth test` before/after (temp_fail → clean
+  `auth failed`) AND that a correct password, a real XOAUTH2 login with
+  a real JWT, and a rejected bogus-token XOAUTH2 attempt all still work
+  correctly with the fix in place.
+- **A bogus/expired OAuth token IS correctly rejected** (verified with
+  a real invalid-token IMAP `AUTHENTICATE OAUTHBEARER` attempt — the
+  connection is refused, not logged in) **but reported as a generic**
+  `temp_fail` **/ "Temporary authentication failure"**, not a clean
+  "authentication failed" the way a wrong SQL password is. This is a
+  real characteristic of Dovecot's oauth2 module, not a bug in this
+  config: it doesn't distinguish "the introspection endpoint said this
+  token is invalid" from "the introspection endpoint itself is broken"
+  — both surface identically as `oauth2 failed: Introspection failed:
+  ...`. The security property holds (a bad token never gets in) either
+  way; only the error message's precision differs from the SQL path.
+- **`doveadm auth test <user> <password>` needing a SASL mechanism
+  other than plain (to test XOAUTH2/OAUTHBEARER directly) reliably
+  fails with "Couldn't connect to auth socket"** against both
+  `auth-client` and `auth-master`, even as root, even with `-a`
+  pointing at the right socket path (confirmed via `-D` debug: the
+  connection is accepted then immediately reset by the peer). Never
+  root-caused (not worth the time once a working alternative was
+  found) — real IMAP `AUTHENTICATE OAUTHBEARER`/`XOAUTH2` over a plain
+  socket to port 143 (RFC 7628's SASL initial-response format,
+  base64-encoded) is what actually proved this end-to-end instead, and
+  is arguably more representative of what Roundcube itself does anyway.
+
 None of this is discoverable from `doveconf -n` alone — every one of
 these was only caught by actually running a real login or real delivery
 against a real account. See `tests/e2e/test_dovecot_login.py`.

@@ -70,7 +70,7 @@ case "$1" in
                 -e "s#CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS#$SESSION_SECRET#g" \
                 -e "s#https://drive.test.mailmasker.org/oauth/callback#$DRIVE_REDIRECT_URI#g" \
                 -e "s#YOUR_DRIVE_CLIENT_SECRET_HERE#$DRIVE_SECRET#g" \
-                -e "s#https://mail.test.mailmasker.org/index.php/login/oauth#$ROUNDCUBE_REDIRECT_URI#g" \
+                -e "s#https://mail.test.mailmasker.org/index.php?_task=login&_action=oauth#$ROUNDCUBE_REDIRECT_URI#g" \
                 -e "s#YOUR_ROUNDCUBE_CLIENT_SECRET_HERE#$ROUNDCUBE_SECRET#g" \
                 "$SHARE_DIR/config/sso.example.yml" > "$CONFIG_FILE"
             chown root:homelab "$CONFIG_FILE"

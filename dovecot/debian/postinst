@@ -34,6 +34,7 @@ case "$1" in
             db_get homelab-dovecot/db_host || true;        DB_HOST="${RET:-localhost}"
             db_get homelab-dovecot/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
             db_get homelab-dovecot/mail_domain || true;    MAIL_DOMAIN="$RET"
+            db_get homelab-dovecot/api_base || true;       API_BASE="${RET:-http://127.0.0.1:3000}"
 
             echo "  bootstrapping 'homelab_dovecot_runtime' on $DB_HOST..."
             BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-dovecot-bootstrap-role" --db-host "$DB_HOST")"
@@ -62,6 +63,7 @@ case "$1" in
                 -e "s#__DB_NAME__#homelab#g" \
                 -e "s#__DB_USER__#$ROLE#g" \
                 -e "s#__DB_PASS__#$PASSWORD#g" \
+                -e "s#__API_BASE__#$API_BASE#g" \
                 "$SHARE_DIR/conf.d/91-homelab-dovecot.conf.template" > "$MARKER"
             chmod 640 "$MARKER"
             chgrp dovecot "$MARKER" 2>/dev/null || true

@@ -39,6 +39,56 @@ $config['smtp_pass'] = '%p';
 $config['support_url'] = '';
 $config['product_name'] = '__PRODUCT_NAME__';
 
+// Without this, Roundcube generates http:// (not https://) redirect_uri
+// values -- the internal nginx vhost (config/nginx-internal.conf.template)
+// hands off to PHP-FPM over plain loopback HTTP with no
+// X-Forwarded-Proto translation into the HTTPS server var, so PHP has no
+// other way to know the real, public-facing request was HTTPS. Without
+// this, homelab-sso's exact-match redirect_uri check on /oauth/token
+// rejects the callback. (Root-caused once already in this project's
+// prior private repo's own SSO rollout -- see script/
+// homelab-roundcube-patch-oauth-sso's header for the sibling PATH_INFO
+// bug found the same way.)
+$config['use_https'] = true;
+
+// Login is delegated entirely to homelab-sso -- an OAuth2-style
+// authorization-code flow, natively supported by Roundcube
+// (program/include/rcmail_oauth.php), no plugin needed. Two small core
+// patches are required to make it actually work here (see
+// script/homelab-roundcube-patch-oauth-sso's header for why); postinst
+// runs that patch unconditionally on every install/upgrade, same as the
+// PHP 8.5 compat patch. oauth_logout_uri is NOT a stock Roundcube config
+// key -- it's read by that same patch, to redirect a Roundcube-initiated
+// logout through homelab-sso's own /logout (single logout -- see
+// ../sso/README.md) instead of only clearing Roundcube's own session.
+$config['oauth_provider']      = 'homelab-sso';
+$config['oauth_provider_name'] = 'Homelab SSO';
+$config['oauth_client_id']     = 'roundcube';
+$config['oauth_client_secret'] = '__SSO_CLIENT_SECRET__';
+$config['oauth_auth_uri']      = '__SSO_BASE_URL__/oauth/authorize';
+$config['oauth_token_uri']     = '__SSO_BASE_URL__/oauth/token';
+$config['oauth_identity_uri']  = '__SSO_BASE_URL__/oauth/userinfo';
+$config['oauth_logout_uri']    = '__SSO_BASE_URL__/logout';
+$config['oauth_scope']         = 'openid';
+// Visible "Login with Homelab SSO" button alongside the normal password
+// form, not a silent full-page auto-redirect -- a deliberately cautious
+// default for a first rollout (this project's prior private repo's own
+// SSO work only flipped the equivalent of this to auto-redirect after
+// proving the flow correct in production first). Change to `true` once
+// this deployment's SSO flow is proven solid.
+$config['oauth_login_redirect'] = false;
+
+// Must stay aligned with homelab-api's jwt.expiry_seconds (config/
+// api.example.yml; currently 1800s = 30 minutes) by hand -- there is no
+// automatic sync between the two. A shorter local session than the JWT
+// means Roundcube's own PHP session dies first, which the OAuth plugin's
+// unauthenticated-redirect only fires on an actually-clean state (no
+// local session error present, to avoid a redirect loop) -- so a
+// prematurely-dead local session here surfaces Roundcube's raw "session
+// invalid or expired" page instead of silently bouncing through SSO.
+// Same gotcha already hit once in this project's prior private repo.
+$config['session_lifetime'] = 30;
+
 // AES-256-CBC, not the default DES-EDE3-CBC (kept in Debian's own
 // shipped defaults.inc.php only for backward compatibility -- its own
 // comment recommends AES-256-CBC as "a better choice", so use it

@@ -48,4 +48,8 @@ clients:
     redirect_uri: https://drive.test.mailmasker.org/oauth/callback
   - client_id: roundcube
     client_secret: YOUR_ROUNDCUBE_CLIENT_SECRET_HERE
-    redirect_uri: https://mail.test.mailmasker.org/index.php/login/oauth
+    # Query-string form, NOT Roundcube's default PATH_INFO-style
+    # "index.php/login/oauth" -- must match exactly what
+    # homelab-roundcube's own oauth-sso patch actually sends (see
+    # ../roundcube/script/homelab-roundcube-patch-oauth-sso's header).
+    redirect_uri: https://mail.test.mailmasker.org/index.php?_task=login&_action=oauth

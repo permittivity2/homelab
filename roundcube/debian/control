@@ -9,15 +9,21 @@ Homepage: https://github.com/permittivity2/homelab
 Package: homelab-roundcube
 Architecture: all
 Depends: ${misc:Depends}, roundcube-core, roundcube-pgsql, php-fpm, nginx, adduser, postgresql-client, homelab-dovecot, homelab-postfix
+Recommends: homelab-sso
 Description: Roundcube webmail wired to the homelab-* shared identity
  Roundcube webmail (Debian's own roundcube-core/roundcube-pgsql, not
- vendored source), authenticating purely by attempting a real IMAP
- LOGIN against homelab-dovecot with whatever the user types -- unlike
- homelab-dovecot/homelab-postfix's narrow api.users Postgres grants,
- this package never touches api.users at all. It proves the unified
- cross-feature identity design described in CLAUDE.md from the
- browser's side: the same Argon2id-hashed password that logs into
- IMAP, SMTP submission, and homelab-drive's HTTP login also logs into
+ vendored source). Login is delegated to homelab-sso (Roundcube's own
+ native OAuth2 support, plus two small core patches -- see
+ script/homelab-roundcube-patch-oauth-sso) -- IMAP authenticates via a
+ real XOAUTH2 exchange, not a cached password, and a live homelab-sso
+ IdP session lets a user land here already logged in. A plain password
+ form (real IMAP LOGIN against homelab-dovecot) remains as a visible
+ fallback. Either way, unlike homelab-dovecot/homelab-postfix's narrow
+ api.users Postgres grants, this package never touches api.users at
+ all -- it proves the unified cross-feature identity design described
+ in CLAUDE.md from the browser's side: the same Argon2id-hashed
+ password (or, now, the same SSO session) that authenticates IMAP,
+ SMTP submission, and homelab-drive's HTTP login also logs into
  webmail, with zero additional credential plumbing.
  .
  Roundcube's own state (contacts, preferences, message cache -- never

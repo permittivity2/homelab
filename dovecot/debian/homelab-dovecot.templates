@@ -23,3 +23,13 @@ Default:
 Description: Primary mail domain this server handles (optional):
  Purely informational/logged — not enforced anywhere. Virtual users are
  identified by their full email address regardless of this value.
+
+Template: homelab-dovecot/api_base
+Type: string
+Default: http://127.0.0.1:3000
+Description: Base URL where homelab-api is reachable, for XOAUTH2/OAUTHBEARER:
+ Written into the oauth2 passdb's introspection_url (.../api/v1/auth/
+ introspect) — this is what lets Roundcube's SSO login (a homelab-sso-
+ issued access token) actually authenticate over IMAP, alongside the
+ existing SQL passdb for plain-password logins. Server-to-server, so
+ this is normally a loopback address, not a public one.

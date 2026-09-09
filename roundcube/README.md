@@ -5,11 +5,14 @@ packages, not vendored source), wired to the same shared identity every
 other `homelab-*` feature uses — but differently from
 `homelab-dovecot`/`homelab-postfix`:
 
-- **No direct `api.users` grant at all.** Roundcube authenticates purely
-  by attempting a real IMAP `LOGIN` against `homelab-dovecot` with
-  whatever the user typed on its login form — exactly like any other
-  IMAP client would. It proves the unified cross-feature identity design
-  (see the root `CLAUDE.md`) from the browser's side: the same
+- **No direct `api.users` grant at all.** Login is delegated to
+  `homelab-sso` (Roundcube's own native OAuth2 support — no plugin
+  needed, see the SSO section below), which authenticates IMAP via a
+  real XOAUTH2 exchange rather than a password; a plain password form
+  (real IMAP `LOGIN` against `homelab-dovecot` with whatever the user
+  typed, exactly like any other IMAP client) remains as a visible
+  fallback. Either way, it proves the unified cross-feature identity
+  design (see the root `CLAUDE.md`) from the browser's side: the same
   Argon2id-hashed `api.users` row that already backs HTTP login
   (`homelab-drive`), IMAP (`homelab-dovecot`), and SMTP submission
   (`homelab-postfix`) also logs into webmail, with zero additional
@@ -90,6 +93,57 @@ doesn't block a normal first install of this package. If a future
 `roundcube-core` upgrade ever does fail this way, the recovery is the
 same either way: apply the patch script directly to the now-unpacked
 file, then `dpkg --configure -a`.
+
+## Single sign-on via homelab-sso
+
+Roundcube 1.6.11 already has full native OAuth2 authorization-code-flow
+support built in (`program/include/rcmail_oauth.php`), including
+automatic XOAUTH2 IMAP/SMTP login — no custom plugin needed, just
+`oauth_*` config keys (see `config/config.inc.php.template`) pointing at
+`homelab-sso`. Two small, upstream-gap patches are required to make it
+actually work here, applied in-place to the file `roundcube-core` ships
+(never a vendored/forked copy of Roundcube) by
+`script/homelab-roundcube-patch-oauth-sso`, run unconditionally on every
+install/reconfigure (same idempotent, re-apply-after-upgrade pattern as
+the PHP 8.5 compat patch above — see that script's own header for the
+full story on both):
+
+1. **`get_redirect_uri()` builds a PATH_INFO-style URL**
+   (`index.php/login/oauth`) that this package's own internal nginx vhost
+   silently mangles (`try_files ... /index.php$is_args$args` drops the
+   PATH_INFO suffix entirely, with no error logged anywhere — the OAuth
+   callback just never arrives). Patched to build a plain query-string
+   callback instead (`index.php?_task=login&_action=oauth`), which
+   Roundcube's router already handles natively, on any web server.
+2. **`logout_after()` is a stock no-op.** Patched to redirect through
+   homelab-sso's own `/logout` (new `oauth_logout_uri` config key, not a
+   stock Roundcube setting) instead — otherwise a Roundcube-initiated
+   logout would only clear Roundcube's own local session, leaving the
+   *shared* homelab-sso session (and every other relying party riding on
+   it) alive. This is what makes "logout once, logout everywhere" work
+   in **both** directions: logging out via another app already killed
+   Roundcube's session for free (its next introspect/keep-alive check
+   sees the centrally-revoked JWT), but the reverse direction needed this
+   patch.
+
+The IMAP side of this (Dovecot accepting a JWT as an XOAUTH2 bearer
+token, via a new `oauth2` passdb that introspects it against
+`homelab-api`) lives in `homelab-dovecot`, not here — see that package's
+README.
+
+`oauth_login_redirect` defaults to `false` here (a visible "Login with
+Homelab SSO" button alongside the password form, not a silent full-page
+auto-redirect) — a deliberately cautious default for a first rollout,
+flippable later via `config.inc.php` once this deployment's flow is
+proven solid.
+
+`session_lifetime` (30 minutes) is set to match `homelab-api`'s
+`jwt.expiry_seconds` (`config/api.example.yml`) — the two are **not**
+linked automatically; if the JWT lifetime ever changes, this must be
+updated by hand too, or Roundcube's own local session dies well before
+the SSO session does (symptom: a raw "session invalid or expired" page
+instead of a silent SSO bounce, since the OAuth plugin's auto-redirect
+only fires when no local session error is already present).
 
 ## Testing
 

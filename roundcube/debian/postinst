@@ -23,6 +23,16 @@ case "$1" in
         db_get homelab-roundcube/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
         db_get homelab-roundcube/internal_port || true;  INTERNAL_PORT="${RET:-8080}"
         db_get homelab-roundcube/product_name || true;   PRODUCT_NAME="${RET:-Homelab Webmail}"
+        db_get homelab-roundcube/sso_base_url || true;      SSO_BASE_URL="${RET:-http://127.0.0.1:2502}"
+        db_get homelab-roundcube/sso_client_secret || true; SSO_CLIENT_SECRET="$RET"
+
+        if [ -z "$SSO_CLIENT_SECRET" ]; then
+            echo "  WARNING: no sso_client_secret was provided -- homelab-roundcube will not"
+            echo "  be able to complete SSO logins until you set oauth_client_secret in"
+            echo "  $CONFIG_FILE by hand (or dpkg-reconfigure homelab-roundcube) to match"
+            echo "  what homelab-sso's own install printed for the 'roundcube' client."
+            SSO_CLIENT_SECRET="YOUR_SSO_CLIENT_SECRET_HERE"
+        fi
 
         # Real upstream incompatibility (see the script's own header
         # comment and README.md for the full story): Ubuntu's
@@ -34,6 +44,11 @@ case "$1" in
         # future roundcube-core package upgrade could reset the file to
         # its unpatched vendor state at any time.
         "$SHARE_DIR/script/homelab-roundcube-patch-php85-compat"
+
+        # Same reasoning/idempotency as the php85-compat patch above --
+        # run unconditionally every postinst invocation. See the script's
+        # own header for what it fixes and why.
+        "$SHARE_DIR/script/homelab-roundcube-patch-oauth-sso"
 
         if [ ! -f "$CONFIG_FILE.bootstrapped" ]; then
             echo "  bootstrapping split Postgres roles for 'homelab_roundcube' on $DB_HOST..."
@@ -85,6 +100,8 @@ case "$1" in
                 -e "s#__DB_PASS__#$RUNTIME_PASSWORD#g" \
                 -e "s#__PRODUCT_NAME__#$PRODUCT_NAME#g" \
                 -e "s#__CIPHER_KEY__#$CIPHER_KEY#g" \
+                -e "s#__SSO_BASE_URL__#$SSO_BASE_URL#g" \
+                -e "s#__SSO_CLIENT_SECRET__#$SSO_CLIENT_SECRET#g" \
                 "$SHARE_DIR/config/config.inc.php.template" > "$CONFIG_FILE"
             chown root:www-data "$CONFIG_FILE"
             chmod 640 "$CONFIG_FILE"

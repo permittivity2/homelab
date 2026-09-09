@@ -1,0 +1,148 @@
+#!/usr/bin/perl
+# Two small, targeted patches to Roundcube's stock OAuth2 support
+# (program/include/rcmail_oauth.php) needed to make it actually work
+# against homelab-sso -- neither is a design choice, both are upstream
+# gaps found by testing the real flow end-to-end (the same two bugs an
+# earlier iteration of this same architecture, in this project's prior
+# private repo, already hit and fixed the same way -- see that repo's
+# issue_tracking/012-sso-login-for-roundcube.md if it's ever available
+# for reference again).
+#
+# 1. get_redirect_uri() builds a PATH_INFO-style callback URL
+#    ("index.php/login/oauth"). homelab-roundcube's own internal nginx
+#    vhost (config/nginx-internal.conf.template) routes with
+#    `try_files $uri $uri/ /index.php$is_args$args;`, which does NOT
+#    preserve a PATH_INFO suffix -- it silently rewrites the request to
+#    bare /index.php, dropping "/login/oauth" entirely, so the OAuth
+#    callback never reaches Roundcube's oauth action at all (no error
+#    logged anywhere -- it just looks like the redirect never happened).
+#    Fixed here by using a plain query-string callback instead
+#    ("index.php?_task=login&_action=oauth") -- Roundcube's router
+#    already handles _task/_action query-string routing everywhere else
+#    (including the initial redirect-out step), so this needs no
+#    PATH_INFO handling on any web server, ever. This was deliberately
+#    NOT fixed via nginx config (on this package's own internal vhost or
+#    any front-end proxy) -- a web-server-specific PATH_INFO workaround
+#    isn't portable to a future different front end; patching Roundcube
+#    itself is.
+# 2. logout_after() is a stub (just sets $this->no_redirect = true) --
+#    stock Roundcube has no concept of telling an OAuth provider to
+#    revoke anything on logout. Without this, "logout once, logout
+#    everywhere" only ever works in ONE direction (logging out of
+#    another app kills Roundcube's session, since that goes through the
+#    centrally-revoked JWT on Roundcube's next introspect/keep-alive
+#    check) -- logging out of ROUNDCUBE itself would only clear its own
+#    local session, leaving the shared homelab-sso session (and every
+#    OTHER app's session riding on it) alive. Fixed by redirecting
+#    through homelab-sso's own /logout (new oauth_logout_uri config key,
+#    read here, set in config.inc.php.template) instead of just
+#    no-op'ing. Note this can't read $_SESSION['oauth_token'] to find
+#    the refresh_token to revoke -- Roundcube's own index.php calls
+#    kill_session() (which clears $_SESSION down to nothing) BEFORE
+#    firing the logout_after hook -- but it doesn't need to: homelab-sso
+#    reads its OWN separate IdP session cookie server-side to know which
+#    token to revoke, so this only has to send the browser there.
+#
+# Real upstream/deployment-shape incompatibility, not a design choice
+# this project made -- same category as
+# homelab-roundcube-patch-php85-compat (see that script's own header).
+# This wraps ONLY these two methods, in-place, on the file Ubuntu's
+# roundcube-core package actually ships -- never a vendored/forked copy
+# of Roundcube itself. Idempotent (does nothing if already patched). Run
+# every time homelab-roundcube's own postinst runs (not gated behind any
+# bootstrap-already-done marker), since a roundcube-core package upgrade
+# could reset the file to its unpatched vendor state at any time.
+#
+# Usage: homelab-roundcube-patch-oauth-sso [PATH]
+#   (PATH defaults to the real installed location)
+
+use strict;
+use warnings;
+
+my $PATH = shift @ARGV
+    // '/usr/share/roundcube/program/include/rcmail_oauth.php';
+
+sub log_msg { print STDERR "[roundcube-patch-oauth-sso] @_\n" }
+sub die_msg { print STDERR "[roundcube-patch-oauth-sso] ERROR: @_\n"; exit 1 }
+
+exit 0 unless -f $PATH;    # roundcube-core not installed (yet) -- nothing to patch
+
+open(my $fh, '<', $PATH) or die_msg("cannot read $PATH: $!");
+my $content = do { local $/; <$fh> };
+close($fh);
+
+my $changed = 0;
+
+# --- Patch 1: query-string callback instead of PATH_INFO ---
+my $old_redirect = q{        return slashify($url) . 'index.php/login/oauth';};
+my $new_redirect = q{        return slashify($url) . 'index.php?_task=login&_action=oauth';};
+
+if (index($content, $new_redirect) >= 0) {
+    log_msg('get_redirect_uri() already patched -- skipping');
+}
+elsif (index($content, $old_redirect) >= 0) {
+    substr($content, index($content, $old_redirect), length($old_redirect)) = $new_redirect;
+    $changed = 1;
+    log_msg('patched get_redirect_uri() to use a query-string callback');
+}
+else {
+    die_msg("expected get_redirect_uri() return line not found in $PATH -- "
+        . "roundcube-core may have changed; update this script's pattern.");
+}
+
+# --- Patch 2: redirect through homelab-sso's /logout ---
+my $marker = 'homelab addition: redirect through';
+if (index($content, $marker) >= 0) {
+    log_msg('logout_after() already patched -- skipping');
+}
+else {
+    my $old_logout = <<'OLD';
+    public function logout_after($options)
+    {
+        $this->no_redirect = true;
+    }
+OLD
+    chomp $old_logout;
+
+    my $new_logout = <<'NEW';
+    public function logout_after($options)
+    {
+        $this->no_redirect = true;
+
+        // homelab addition: redirect through homelab-sso's own /logout so
+        // the shared session (used by every other homelab-sso relying
+        // party too) is actually revoked, not just this app's local
+        // session -- see oauth_logout_uri in config.inc.php and
+        // ../../sso/README.md in the homelab repo. Roundcube core already
+        // destroyed $_SESSION by the time this hook fires (see index.php's
+        // 'logout' task branch, which calls kill_session() first), so this
+        // can't read the refresh_token out of session state -- it doesn't
+        // need to: homelab-sso reads ITS OWN separate IdP session cookie
+        // server-side to know which token to revoke, so all this needs to
+        // do is send the browser there.
+        $logout_uri = $this->rcmail->config->get('oauth_logout_uri');
+        if (!empty($logout_uri) && $this->is_enabled()) {
+            $redirect_uri = rcube_utils::resolve_url($this->rcmail->url([]));
+            $delimiter = strpos($logout_uri, '?') > 0 ? '&' : '?';
+            $this->rcmail->output->redirect($logout_uri . $delimiter . http_build_query(['redirect_uri' => $redirect_uri]));
+        }
+    }
+NEW
+    chomp $new_logout;
+
+    if (index($content, $old_logout) < 0) {
+        die_msg("expected logout_after() body not found in $PATH -- "
+            . "roundcube-core may have changed; update this script's pattern.");
+    }
+    substr($content, index($content, $old_logout), length($old_logout)) = $new_logout;
+    $changed = 1;
+    log_msg('patched logout_after() to redirect through homelab-sso');
+}
+
+exit 0 unless $changed;
+
+open(my $out, '>', $PATH) or die_msg("cannot write $PATH: $!");
+print $out $content;
+close($out);
+
+log_msg("wrote $PATH");
