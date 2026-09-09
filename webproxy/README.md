@@ -26,7 +26,7 @@ are left completely alone, so it never re-requests a cert for an
 already-configured domain (Let's Encrypt's real-world rate limits make
 that a genuine footgun to avoid, not just a style preference).
 
-## Known blocker on `test-static-internet-ip` (2026-09-09, partially addressed)
+## Former blocker on `test-static-internet-ip` — resolved 2026-09-09
 
 Cert acquisition originally failed there: Let's Encrypt's HTTP-01
 challenge timed out connecting to port 80
@@ -47,18 +47,29 @@ genuinely part of the blocker, not innocent.
 With the user's explicit approval, narrow `nft` allow rules for
 25/80/443/587/993/143 were added to `/etc/nftables.conf` and applied
 live (2026-09-09) — see `postfix/README.md`'s Gotchas section for the
-full change and its (partial) verification. **Not yet confirmed**:
-whether an upstream layer (`pve2` host-level or the `pfsense02` VM, both
-outside this project's 4-host authorization) still filters these ports
-separately — port 53 and 22 were previously reported working from the
-real internet, but ad hoc re-testing during this same session gave
-inconsistent results for 22 specifically, so treat that prior claim as
-unverified rather than re-confirmed. **Needs an independent, genuinely
-external test** (the user's own connection, or a third-party port
-checker) to know for certain whether 80/443 are now reachable end to
-end. Vhost generation and the nginx side of this package are fully
-verified working regardless — only the network path from the internet
-was ever in question.
+full change. Ad hoc connectivity tests run from the admin workstation
+itself immediately afterward gave inconsistent, inconclusive results
+(not a reliable "real internet" vantage point either way — see
+`postfix/README.md`), so this was left as unconfirmed.
+
+**Confirmed resolved, definitively**, minutes later: re-running
+`homelab-webproxy-apply-sites` succeeded in obtaining real Let's
+Encrypt certificates for *both* `drive.test.mailmasker.org` and
+`mail.test.mailmasker.org` via the real HTTP-01 challenge — Let's
+Encrypt's own servers are about as authoritative an independent external
+verifier as exists; there's no more reliable proof that port 80 is
+genuinely reachable from the real internet. `curl
+https://drive.test.mailmasker.org/` from the admin workstation
+afterward got a real `302` (the expected not-logged-in redirect to
+`/login` — homelab-drive answering for real, over real HTTPS, with a
+real trusted certificate). `https://mail.test.mailmasker.org/` correctly
+502s — nginx and the certificate are both fine; there's just no
+`homelab-roundcube` backend listening on `127.0.0.1:8080` yet.
+
+This also resolves the "is there a separate upstream blocker at `pve2`/
+`pfsense02`" question the postfix Gotcha raised: evidently not, at least
+not for port 80 — whatever was blocking it before, this host's own `nft`
+ruleset was sufficient to explain the whole thing once corrected.
 
 ## Testing
 

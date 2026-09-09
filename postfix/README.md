@@ -129,22 +129,22 @@ infrastructure, not just the local test host:
   defense in depth for the rare case of a genuinely hand-dropped role —
   but doesn't restart the shared PgBouncer service on every other
   feature's behalf.
-- **Inbound reachability from the real internet is partially, not
-  fully, confirmed.** `test-static-internet-ip`'s own `nft` firewall
-  originally dropped all inbound traffic except DNS/DHCP/NTP/SSH — with
-  the user's explicit approval (2026-09-09, this host is genuinely
-  public-facing), narrow allow rules for 25/80/443/587/993/143 were
-  added to `/etc/nftables.conf` and verified live (the new rules show up
-  in `nft list ruleset`, and the host's own SSH access survived the
-  reload). What ISN'T independently confirmed: whether traffic on these
-  new ports actually reaches the host from genuine external clients —
-  ad hoc connectivity tests from the admin workstation itself gave
-  inconsistent results (DNS reachable, SSH not, on the same public IP,
-  from the same vantage point), suggesting that workstation isn't a
-  reliable "real internet" test point either way, and don't rule out a
-  separate upstream layer (`pve2` host-level or the `pfsense02` VM,
-  both outside this project's 4-host authorization) still filtering
-  something the same way it was already documented to for 80/443
-  specifically. Confirming true external reachability needs a test from
-  a genuinely independent vantage point — the user's own connection, or
-  a third-party "is my port open" service.
+- **Inbound reachability, port 25 specifically: not yet independently
+  confirmed** (unlike 80, see below). `test-static-internet-ip`'s own
+  `nft` firewall originally dropped all inbound traffic except DNS/
+  DHCP/NTP/SSH — with the user's explicit approval (2026-09-09, this
+  host is genuinely public-facing), narrow allow rules for
+  25/80/443/587/993/143 were added to `/etc/nftables.conf` and applied
+  live. Minutes later, `homelab-webproxy-apply-sites` obtained real
+  Let's Encrypt certificates via the real HTTP-01 challenge for both
+  `drive.test.mailmasker.org` and `mail.test.mailmasker.org` — Let's
+  Encrypt's own servers are an authoritative independent external
+  verifier, so **port 80 reachability is now definitively confirmed**
+  (see `webproxy/README.md`), which also resolves the earlier
+  "separate upstream `pve2`/`pfsense02` layer" concern — evidently there
+  wasn't one, at least not for port 80. Port 25 has no equivalent
+  built-in independent verifier the way 80 does via Let's Encrypt, so it
+  remains unconfirmed from real external mail servers, though the same
+  fix that resolved 80 makes it likely 25 is fine too. Confirming it for
+  real needs either a genuine external mail server actually attempting
+  delivery, or a third-party "is my port open" check.
