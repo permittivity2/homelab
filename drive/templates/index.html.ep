@@ -1,34 +1,173 @@
 <!DOCTYPE html>
 <html>
-<head><title>Homelab Drive</title></head>
+<head>
+<title>Homelab Drive</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0; color: #1a1a1a; background: #f5f6f8;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.75rem 1.25rem; background: #20232a; color: #fff;
+  }
+  header h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
+  header .who { font-size: 0.85rem; color: #c9ccd3; display: flex; align-items: center; gap: 0.75rem; }
+  header button { background: none; border: 1px solid #4b4f58; color: #fff; border-radius: 4px; padding: 0.3rem 0.7rem; cursor: pointer; }
+  header button:hover { background: #2f333c; }
+
+  nav.breadcrumb { padding: 0.6rem 1.25rem; font-size: 0.9rem; background: #fff; border-bottom: 1px solid #e3e5e9; }
+  nav.breadcrumb a { color: #3562d4; text-decoration: none; }
+  nav.breadcrumb a:hover { text-decoration: underline; }
+  nav.breadcrumb .sep { color: #9aa0ab; margin: 0 0.35rem; }
+
+  .layout { display: flex; align-items: flex-start; gap: 1.25rem; padding: 1.25rem; }
+  aside {
+    width: 240px; flex-shrink: 0; background: #fff; border: 1px solid #e3e5e9;
+    border-radius: 8px; padding: 1rem;
+  }
+  aside h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; color: #6b7280; margin: 0 0 0.75rem; }
+  .folder-list { list-style: none; margin: 0 0 1rem; padding: 0; }
+  .folder-list li {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.4rem 0.5rem; border-radius: 5px;
+  }
+  .folder-list li:hover { background: #f0f2f5; }
+  .folder-list a { color: #1a1a1a; text-decoration: none; flex: 1; display: flex; align-items: center; gap: 0.4rem; }
+  .folder-list a:hover { color: #3562d4; }
+  .folder-list form { margin: 0; }
+  .icon-btn { background: none; border: none; cursor: pointer; color: #9aa0ab; font-size: 0.85rem; padding: 0.15rem 0.3rem; }
+  .icon-btn:hover { color: #d1453b; }
+  .empty-hint { color: #9aa0ab; font-size: 0.85rem; padding: 0.2rem 0.5rem; }
+
+  form.new-folder { display: flex; gap: 0.4rem; }
+  form.new-folder input[type=text] {
+    flex: 1; min-width: 0; padding: 0.4rem 0.5rem; border: 1px solid #d5d8dd; border-radius: 5px; font-size: 0.85rem;
+  }
+  form.new-folder button {
+    padding: 0.4rem 0.6rem; border: none; border-radius: 5px; background: #3562d4; color: #fff;
+    cursor: pointer; font-size: 0.85rem;
+  }
+  form.new-folder button:hover { background: #2a4fb0; }
+
+  main { flex: 1; min-width: 0; }
+  .error-banner {
+    background: #fdeceb; border: 1px solid #f3b7b2; color: #8a2c25;
+    padding: 0.6rem 0.9rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem;
+  }
+
+  .upload-bar {
+    display: flex; align-items: center; gap: 0.6rem; background: #fff; border: 1px solid #e3e5e9;
+    border-radius: 8px; padding: 0.8rem 1rem; margin-bottom: 1.25rem;
+  }
+  .upload-bar button {
+    padding: 0.45rem 0.9rem; border: none; border-radius: 5px; background: #1f9d55; color: #fff;
+    cursor: pointer; font-size: 0.9rem;
+  }
+  .upload-bar button:hover { background: #187c43; }
+  .upload-bar button:disabled { background: #9aa0ab; cursor: default; }
+  .upload-status { font-size: 0.85rem; color: #6b7280; }
+
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e3e5e9; border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 0.6rem 0.9rem; font-size: 0.9rem; border-bottom: 1px solid #eef0f3; }
+  th { color: #6b7280; font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; background: #fafbfc; }
+  tr:last-child td { border-bottom: none; }
+  td a { color: #1a1a1a; text-decoration: none; }
+  td a:hover { color: #3562d4; text-decoration: underline; }
+  .file-actions button {
+    background: none; border: 1px solid #d5d8dd; border-radius: 5px; padding: 0.25rem 0.6rem;
+    cursor: pointer; font-size: 0.8rem; color: #6b7280;
+  }
+  .file-actions button:hover { color: #d1453b; border-color: #d1453b; }
+  .empty-state { padding: 2rem; text-align: center; color: #9aa0ab; font-size: 0.9rem; }
+
+  @media (prefers-color-scheme: dark) {
+    body { background: #16181d; color: #e6e8eb; }
+    nav.breadcrumb, aside, .upload-bar, table { background: #1e2128; border-color: #2c2f37; }
+    th { background: #23262d; color: #9aa0ab; }
+    th, td { border-color: #2c2f37; }
+    td a, .folder-list a { color: #e6e8eb; }
+    form.new-folder input[type=text] { background: #16181d; border-color: #2c2f37; color: #e6e8eb; }
+  }
+</style>
+</head>
 <body>
-<h1>Homelab Drive</h1>
-<p>
-  Logged in as <%= $email %> —
-  <form method="post" action="/logout" style="display:inline"><button type="submit">Log out</button></form>
-</p>
+<header>
+  <h1>Homelab Drive</h1>
+  <div class="who">
+    <%= $email %>
+    <form method="post" action="/logout"><button type="submit">Log out</button></form>
+  </div>
+</header>
 
-<form method="post" action="/upload" enctype="multipart/form-data">
-  <input type="file" name="file" required>
-  <button type="submit">Upload</button>
-</form>
-
-<table border="1" cellpadding="4">
-  <tr><th>Name</th><th>Size</th><th>Type</th><th>Uploaded</th><th></th></tr>
-% for my $f (@$files) {
-  <tr>
-    <td><a href="/files/<%= $f->{id} %>/download"><%= $f->{filename} %></a></td>
-    <td><%= $f->{size_bytes} %> bytes</td>
-    <td><%= $f->{mime_type} %></td>
-    <td><%= $f->{uploaded_at} %></td>
-    <td>
-      <form method="post" action="/files/<%= $f->{id} %>/delete" style="display:inline"
-            onsubmit="return confirm('Delete <%= $f->{filename} %>?')">
-        <button type="submit">Delete</button>
-      </form>
-    </td>
-  </tr>
+<nav class="breadcrumb">
+  <a href="/">Home</a>
+% for my $crumb (@$breadcrumb) {
+  <span class="sep">/</span><a href="/folders/<%= $crumb->{id} %>"><%= $crumb->{name} %></a>
 % }
-</table>
+</nav>
+
+<div class="layout">
+  <aside>
+    <h2>Folders</h2>
+    <ul class="folder-list">
+% if (!@$folders) {
+      <li class="empty-hint">No folders yet</li>
+% }
+% for my $f (@$folders) {
+      <li>
+        <a href="/folders/<%= $f->{id} %>">📁 <%= $f->{name} %></a>
+        <form method="post" action="/folders/<%= $f->{id} %>/delete"
+              onsubmit="return confirm('Delete \'<%= $f->{name} %>\' and everything inside it?')">
+          <button type="submit" class="icon-btn" title="Delete folder">✕</button>
+        </form>
+      </li>
+% }
+    </ul>
+    <form class="new-folder" method="post" action="/folders">
+      <input type="hidden" name="parent_folder_id" value="<%= $current_folder_id // '' %>">
+      <input type="text" name="name" placeholder="New folder" required maxlength="255">
+      <button type="submit">+</button>
+    </form>
+  </aside>
+
+  <main>
+% if ($error) {
+    <div class="error-banner"><%= $error %></div>
+% }
+
+    <form class="upload-bar" method="post" action="/upload" enctype="multipart/form-data"
+          onsubmit="this.querySelector('button').disabled = true; this.querySelector('.upload-status').textContent = 'Uploading\x{2026}';">
+      <input type="hidden" name="folder_id" value="<%= $current_folder_id // '' %>">
+      <input type="file" name="file" required>
+      <button type="submit">Upload</button>
+      <span class="upload-status"></span>
+    </form>
+
+% if (!@$files && !@$folders) {
+    <div class="empty-state">This folder is empty. Upload a file or create a folder to get started.</div>
+% } else {
+    <table>
+      <tr><th>Name</th><th>Size</th><th>Type</th><th>Uploaded</th><th></th></tr>
+% for my $f (@$files) {
+      <tr>
+        <td><a href="/files/<%= $f->{id} %>/download"><%= $f->{filename} %></a></td>
+        <td><%= $f->{size_bytes} %> bytes</td>
+        <td><%= $f->{mime_type} %></td>
+        <td><%= $f->{uploaded_at} %></td>
+        <td class="file-actions">
+          <form method="post" action="/files/<%= $f->{id} %>/delete"
+                onsubmit="return confirm('Delete <%= $f->{filename} %>?')">
+            <button type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+% }
+    </table>
+% }
+  </main>
+</div>
 </body>
 </html>

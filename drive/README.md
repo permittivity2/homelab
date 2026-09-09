@@ -25,13 +25,54 @@ user's email (from the JWT) is the only cross-feature identifier used,
 consistent with "cross-feature consistency goes through HTTP, not a
 shared DB reference" (see `CLAUDE.md`).
 
-Deliberately minimal for the first pass: flat file list per user, no
-directories/sharing/trash/versioning — those are straightforward to
-add later once the core upload/list/download/delete path is proven.
-Same for the UI itself: a bare file list with no folders, drag/drop, or
-progress indication — real UX work (a proper two-pane layout, upload
-progress instead of a silent wait, etc.) is tracked as follow-up, not
-done here yet.
+Deliberately minimal for the first pass: no sharing/trash/versioning —
+those are straightforward to add later once the core upload/list/
+download/delete path is proven. No drag/drop upload either — a plain
+`<input type=file>` form, with a small (~10 lines of inline JS, the same
+minimal-JS convention already used for delete confirmations) disable-
+and-say-"Uploading…" touch so a large upload doesn't look like nothing
+is happening.
+
+## Folders
+
+Real, nestable folder hierarchy (`migrations/002-folders.sql`,
+`drive.folders` self-referencing via `parent_folder_id`; `drive.files`
+gained a `folder_id`), added after a user's own hands-on feedback on the
+original flat-list-only UI ("directories on the left, files in the main
+part"). `GET /` (root) and `GET /folders/:id` share one handler
+(`index()`) that shows the current folder's own direct subfolders (the
+left sidebar) and files (the main pane) side by side, plus a clickable
+breadcrumb built by walking `parent_folder_id` up to the root.
+
+Deliberately NOT a full recursive tree view in the sidebar (only direct
+children of the folder you're currently in) — keeps the query a plain
+indexed lookup instead of a recursive CTE for the common case, and a
+breadcrumb plus one level of children is enough to navigate; a full
+tree is a reasonable future enhancement, not a v1 requirement. Also
+deliberately no "move a file/folder to a different folder" yet — create,
+navigate, upload-into, and (recursive) delete are the core primitives
+this pass proves out.
+
+Deleting a folder deletes everything inside it, recursively, via
+`ON DELETE CASCADE` on both `drive.folders.parent_folder_id` and
+`drive.files.folder_id` — but the DB cascade only removes rows, it has
+no idea files also have real on-disk blobs, so `_delete_folder()` walks
+the whole subtree first (a recursive CTE) to collect every `uuid` about
+to be orphaned and unlinks them from disk after the DB delete succeeds.
+Skipping that step would leak storage forever on every folder delete —
+see `t/folders.t`'s disk-file-count assertion, which is what actually
+catches a regression here (the DB-level cascade alone would still pass
+every id-based "is it gone" check even if the on-disk unlink were
+silently dropped).
+
+No `UNIQUE(user_email, parent_folder_id, name)` constraint backs the
+duplicate-folder-name check — Postgres treats `NULL` as distinct from
+`NULL` in unique constraints, so it wouldn't actually catch two
+root-level folders sharing a name anyway (`parent_folder_id IS NULL` for
+both). The check is a deliberate application-level check-then-insert in
+`_create_folder()` instead, with the same narrow, accepted TOCTOU race
+under real concurrent requests as `homelab-api`'s own `register()` has
+for email uniqueness.
 
 ## Upload size limit
 
@@ -52,22 +93,28 @@ proves the Mojolicious-side fix but not nginx's).
 
 ## JSON API (for homelab-cli and third-party scripts)
 
-Alongside the browser routes above, `GET /api/v1/files`, `POST
-/api/v1/files` (multipart, field name `file`), `GET /api/v1/files/:id`
-(also backs the browser's own download link — same handler, no
-duplicated logic), and `DELETE /api/v1/files/:id` are Bearer-token
+Alongside the browser routes above, `GET /api/v1/files` (optional
+`?folder_id=`, omitted means root — NOT "every file everywhere"), `POST
+/api/v1/files` (multipart, field name `file`, optional field
+`folder_id`), `GET /api/v1/files/:id` (also backs the browser's own
+download link — same handler, no duplicated logic), `DELETE
+/api/v1/files/:id`, and the folder equivalents `GET /api/v1/folders`
+(optional `?parent_id=`), `POST /api/v1/folders` (JSON body `{name,
+parent_folder_id}`), `DELETE /api/v1/folders/:id` are all Bearer-token
 authenticated, not session-cookie authenticated — `_current_email`
 checks an `Authorization: Bearer <jwt>` header first, falling back to
 the session cookie only if that's absent. This is what
-`homelab-cli drive` talks to: a CLI already holds its own homelab-api
-JWT directly (from `homelab-cli login`), so it never goes through the
-SSO redirect dance at all — see the root `CLAUDE.md` on why the API
-being genuinely usable by third-party clients, not just this browser
-UI, is a deliberate design goal. A file's internal storage `uuid` is
-never exposed over the API (only used server-side to name the on-disk
-blob); ownership is enforced the same way as the browser routes — a
-file id belonging to a different user 404s, not 403s (indistinguishable
-from "doesn't exist" on purpose).
+`homelab-cli drive` (`list`/`upload`/`download`/`delete`/`mkdir`/`rmdir`,
+all folder-aware via `--folder`/`--parent`) talks to: a CLI already
+holds its own homelab-api JWT directly (from `homelab-cli login`), so it
+never goes through the SSO redirect dance at all — see the root
+`CLAUDE.md` on why the API being genuinely usable by third-party
+clients, not just this browser UI, is a deliberate design goal. A
+file's internal storage `uuid` is never exposed over the API (only used
+server-side to name the on-disk blob); ownership is enforced the same
+way as the browser routes — a file or folder id belonging to a
+different user 404s, not 403s (indistinguishable from "doesn't exist"
+on purpose).
 
 ## Testing
 
@@ -92,4 +139,8 @@ not just hidden from the list), and logout (redirects to homelab-sso's
 own `/logout`). `t/api.t` covers the Bearer-token JSON API specifically
 (no token/bogus token rejection, the same upload/list/download/delete
 round trip, and that one user's token can't see or reach another
-user's files — 404, not 403).
+user's files — 404, not 403). `t/folders.t` covers the folder hierarchy:
+create/nest/navigate, duplicate-name and bad-parent rejection,
+cross-user isolation, and that a recursive folder delete actually
+unlinks every contained file from disk (counts real files in
+`storage.path` before/after, not just DB-row/API-visibility checks).

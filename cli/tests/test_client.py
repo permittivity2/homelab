@@ -160,3 +160,74 @@ def test_drive_delete_file_builds_correct_path():
     with patch("requests.delete", return_value=_mock_get_response(200, {"ok": True})) as m:
         dc.delete_file(7)
     assert m.call_args.args[0] == "http://localhost:2501/api/v1/files/7"
+
+
+def test_drive_list_files_passes_folder_id_when_given():
+    dc = DriveClient("http://localhost:2501", "the-jwt")
+    with patch("requests.get", return_value=_mock_get_response(200, [])) as m:
+        dc.list_files(folder_id=5)
+    assert m.call_args.kwargs["params"] == {"folder_id": 5}
+
+
+def test_drive_list_files_omits_folder_id_param_when_not_given():
+    dc = DriveClient("http://localhost:2501", "the-jwt")
+    with patch("requests.get", return_value=_mock_get_response(200, [])) as m:
+        dc.list_files()
+    assert m.call_args.kwargs["params"] == {}
+
+
+def test_drive_upload_file_passes_folder_id_as_form_data():
+    dc = DriveClient("http://localhost:2501", "the-jwt")
+    fake_path = MagicMock()
+    fake_path.name = "report.txt"
+    with patch("builtins.open", mock_open(read_data=b"content")):
+        with patch("requests.post", return_value=_mock_get_response(201, {"id": 7})) as m:
+            dc.upload_file(fake_path, folder_id=5)
+    assert m.call_args.kwargs["data"] == {"folder_id": 5}
+
+
+def test_drive_list_folders_sends_bearer_token():
+    dc = DriveClient("http://localhost:2501", "the-jwt")
+    with patch("requests.get", return_value=_mock_get_response(200, [{"id": 3, "name": "Docs"}])) as m:
+        result = dc.list_folders()
+    assert result[0]["name"] == "Docs"
+    assert m.call_args.args[0] == "http://localhost:2501/api/v1/folders"
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer the-jwt"
+
+
+def test_drive_list_folders_passes_parent_id_when_given():
+    dc = DriveClient("http://localhost:2501", "the-jwt")
+    with patch("requests.get", return_value=_mock_get_response(200, [])) as m:
+        dc.list_folders(parent_id=3)
+    assert m.call_args.kwargs["params"] == {"parent_id": 3}
+
+
+def test_drive_create_folder_posts_json_body():
+    dc = DriveClient("http://localhost:2501", "the-jwt")
+    with patch("requests.post", return_value=_mock_get_response(201, {"id": 3, "name": "Docs"})) as m:
+        result = dc.create_folder("Docs", parent_folder_id=1)
+    assert result["id"] == 3
+    assert m.call_args.args[0] == "http://localhost:2501/api/v1/folders"
+    assert m.call_args.kwargs["json"] == {"name": "Docs", "parent_folder_id": 1}
+
+
+def test_drive_create_folder_omits_parent_when_not_given():
+    dc = DriveClient("http://localhost:2501", "the-jwt")
+    with patch("requests.post", return_value=_mock_get_response(201, {"id": 3})) as m:
+        dc.create_folder("Docs")
+    assert m.call_args.kwargs["json"] == {"name": "Docs"}
+
+
+def test_drive_create_folder_duplicate_name_raises_api_error():
+    dc = DriveClient("http://localhost:2501", "the-jwt")
+    with patch("requests.post", return_value=_mock_get_response(409, {"error": "a folder with that name already exists here"})):
+        with pytest.raises(ApiError) as exc_info:
+            dc.create_folder("Docs")
+    assert exc_info.value.status_code == 409
+
+
+def test_drive_delete_folder_builds_correct_path():
+    dc = DriveClient("http://localhost:2501", "the-jwt")
+    with patch("requests.delete", return_value=_mock_get_response(200, {"ok": True})) as m:
+        dc.delete_folder(3)
+    assert m.call_args.args[0] == "http://localhost:2501/api/v1/folders/3"

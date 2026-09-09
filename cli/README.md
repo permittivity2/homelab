@@ -56,11 +56,18 @@ CA.
 ## File storage (`drive`)
 
 ```bash
-homelab-cli drive list
-homelab-cli drive upload <path>
+homelab-cli drive list [--folder <folder-id>]
+homelab-cli drive upload <path> [--folder <folder-id>]
 homelab-cli drive download <file-id> [--output <path>]
 homelab-cli drive delete <file-id>
+homelab-cli drive mkdir <name> [--parent <folder-id>]
+homelab-cli drive rmdir <folder-id>
 ```
+
+`list`/`upload` default to the root when `--folder`/no folder is given.
+`rmdir` deletes everything inside the folder too, recursively — same
+cascade as the web UI's own folder delete (see `../drive/README.md`'s
+Folders section).
 
 Talks to homelab-drive's Bearer-token-authenticated JSON API (see
 `../drive/README.md`'s "JSON API" section) — a CLI never goes through

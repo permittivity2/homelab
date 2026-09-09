@@ -120,6 +120,42 @@ def test_drive_upload_over_1mb_and_16mb_succeeds(ssh_host, cli_account):
         subprocess.run(["ssh", ssh_host, "rm", "-f", remote_path_1mb], capture_output=True, timeout=15)
 
 
+def test_drive_nested_folders_round_trip(ssh_host, cli_account):
+    """Real folders (added after a user asked for "directories on the
+    left, files in the main part" — see drive/README.md's Folders
+    section): create a folder, nest a subfolder inside it, upload a
+    file into the subfolder, confirm it's listed there and NOT at the
+    root, then delete the top-level folder and confirm the cascade took
+    the subfolder and file with it."""
+    marker_file = f"e2e-cli-nested-{int(time.time())}.txt"
+    remote_path = f"/tmp/{marker_file}"
+    subprocess.run(["ssh", ssh_host, "sh", "-c", f"echo nested > {remote_path}"], check=True, timeout=15)
+    try:
+        top = _run_cli(ssh_host, "drive", "mkdir", f"e2e-top-{int(time.time())}")
+        top_id = top.stdout.split("id ")[1].strip().rstrip(")")
+
+        sub = _run_cli(ssh_host, "drive", "mkdir", "sub", "--parent", top_id)
+        sub_id = sub.stdout.split("id ")[1].strip().rstrip(")")
+
+        upload = _run_cli(ssh_host, "drive", "upload", remote_path, "--folder", sub_id)
+        file_id = upload.stdout.split("id ")[1].strip().rstrip(")")
+
+        sub_listing = _run_cli(ssh_host, "drive", "list", "--folder", sub_id)
+        assert marker_file in sub_listing.stdout
+
+        root_listing = _run_cli(ssh_host, "drive", "list")
+        assert marker_file not in root_listing.stdout, "a file inside a folder must not appear in the root listing"
+
+        _run_cli(ssh_host, "drive", "rmdir", top_id)
+
+        # Everything nested under top_id -- the subfolder and the file
+        # inside it -- must be gone too, not just top_id itself.
+        assert _run_cli(ssh_host, "drive", "list", "--folder", sub_id, check=False).returncode != 0
+        assert _run_cli(ssh_host, "drive", "download", file_id, check=False).returncode != 0
+    finally:
+        subprocess.run(["ssh", ssh_host, "rm", "-f", remote_path], capture_output=True, timeout=15)
+
+
 def test_mail_send_then_list_shows_it(ssh_host, cli_account):
     email = cli_account
     subject = f"e2e-cli-mail-{int(time.time())}"

@@ -191,16 +191,46 @@ def cmd_drive_list(args):
     session = _require_session()
     if not session:
         return 1
+    client = _drive_client(session)
     try:
-        files = _drive_client(session).list_files()
+        folders = client.list_folders(parent_id=args.folder)
+        files = client.list_files(folder_id=args.folder)
     except ApiError as e:
-        print(f"Could not list files: {e.message}", file=sys.stderr)
+        print(f"Could not list: {e.message}", file=sys.stderr)
         return 1
-    if not files:
-        print("(no files)")
+    if not folders and not files:
+        print("(empty)")
         return 0
+    for f in folders:
+        print(f"[dir  {f['id']}]  {f['name']}/")
     for f in files:
-        print(f"[{f['id']}] {f['uploaded_at']}  {f['size_bytes']:>10} bytes  {f['filename']}")
+        print(f"[file {f['id']}]  {f['uploaded_at']}  {f['size_bytes']:>10} bytes  {f['filename']}")
+    return 0
+
+
+def cmd_drive_mkdir(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        result = _drive_client(session).create_folder(args.name, parent_folder_id=args.parent)
+    except ApiError as e:
+        print(f"Could not create folder: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Created folder: {result['name']} (id {result['id']})")
+    return 0
+
+
+def cmd_drive_rmdir(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _drive_client(session).delete_folder(args.folder_id)
+    except ApiError as e:
+        print(f"Could not delete folder: {e.message}", file=sys.stderr)
+        return 1
+    print("Deleted (including everything inside it)")
     return 0
 
 
@@ -213,7 +243,7 @@ def cmd_drive_upload(args):
         print(f"No such file: {path}", file=sys.stderr)
         return 1
     try:
-        result = _drive_client(session).upload_file(path)
+        result = _drive_client(session).upload_file(path, folder_id=args.folder)
     except ApiError as e:
         print(f"Upload failed: {e.message}", file=sys.stderr)
         return 1
@@ -353,11 +383,13 @@ def build_parser():
     drive = sub.add_parser("drive", help="File storage — homelab-drive's JSON API")
     drive_sub = drive.add_subparsers(dest="drive_command", required=True)
 
-    p = drive_sub.add_parser("list", help="List your files")
+    p = drive_sub.add_parser("list", help="List folders and files (root, or one folder with --folder)")
+    p.add_argument("--folder", help="Folder id to list (omit for the root)")
     p.set_defaults(func=cmd_drive_list)
 
     p = drive_sub.add_parser("upload", help="Upload a file")
     p.add_argument("path")
+    p.add_argument("--folder", help="Folder id to upload into (omit for the root)")
     p.set_defaults(func=cmd_drive_upload)
 
     p = drive_sub.add_parser("download", help="Download a file by id")
@@ -368,6 +400,15 @@ def build_parser():
     p = drive_sub.add_parser("delete", help="Delete a file by id")
     p.add_argument("file_id")
     p.set_defaults(func=cmd_drive_delete)
+
+    p = drive_sub.add_parser("mkdir", help="Create a folder")
+    p.add_argument("name")
+    p.add_argument("--parent", help="Parent folder id (omit to create at the root)")
+    p.set_defaults(func=cmd_drive_mkdir)
+
+    p = drive_sub.add_parser("rmdir", help="Delete a folder, and everything inside it")
+    p.add_argument("folder_id")
+    p.set_defaults(func=cmd_drive_rmdir)
 
     admin = sub.add_parser("admin", help="Administrative commands (site_admin role required)")
     admin_sub = admin.add_subparsers(dest="admin_command", required=True)

@@ -67,10 +67,13 @@ sub startup ($self) {
 
     my $r = $self->routes;
     $r->get('/')               ->to('drive#index');
+    $r->get('/folders/:id')    ->to('drive#index');
     $r->get('/login')          ->to('drive#login_form');
     $r->get('/oauth/callback') ->to('drive#oauth_callback');
     $r->post('/logout')        ->to('drive#logout');
     $r->post('/upload')        ->to('drive#upload');
+    $r->post('/folders')            ->to('drive#create_folder');
+    $r->post('/folders/:id/delete') ->to('drive#delete_folder');
     $r->get('/files/:id/download')->to('drive#download');
     $r->post('/files/:id/delete') ->to('drive#delete_file');
 
@@ -82,6 +85,9 @@ sub startup ($self) {
     $r->post('/api/v1/files')       ->to('drive#api_upload');
     $r->get('/api/v1/files/:id')    ->to('drive#download');
     $r->delete('/api/v1/files/:id') ->to('drive#api_delete');
+    $r->get('/api/v1/folders')          ->to('drive#api_list_folders');
+    $r->post('/api/v1/folders')         ->to('drive#api_create_folder');
+    $r->delete('/api/v1/folders/:id')   ->to('drive#api_delete_folder');
 
     return;
 }
@@ -124,17 +130,72 @@ sub _current_email ($c) {
     return $result ? $result->{email} : undef;
 }
 
+# Walks the parent chain from the given folder up to the root,
+# returning an arrayref of {id, name} from root-most to current --
+# what the template renders as the clickable breadcrumb trail. Root
+# itself isn't a row (see migrations/002-folders.sql: NULL parent_folder_id
+# IS the root, no sentinel row needed), so it's never included here --
+# the template renders its own fixed "Home" link for that.
+sub _breadcrumb ($c, $email, $folder_id) {
+    my @trail;
+    while (defined $folder_id) {
+        my $folder = $c->app->pg->db->query(
+            'SELECT id, name, parent_folder_id FROM drive.folders WHERE id = ? AND user_email = ?',
+            $folder_id, $email,
+        )->hash;
+        last unless $folder;
+        unshift @trail, { id => $folder->{id}, name => $folder->{name} };
+        $folder_id = $folder->{parent_folder_id};
+    }
+    return \@trail;
+}
+
+# Backs both GET / (root) and GET /folders/:id (a specific folder) --
+# :id is simply absent for the root case, and drive.folders.parent_folder_id
+# IS NULL is what "root" means throughout this file (see
+# migrations/002-folders.sql). Shows this folder's own subfolders (the
+# "directories on the left" of the two-pane layout) and files (the main
+# pane) side by side -- deliberately only direct children, not a full
+# recursive tree view; see README.md's Folders section for why that's a
+# deliberate v1 scope choice, not an oversight.
 sub index ($c) {
     my $email = _current_email($c);
     return $c->redirect_to('/login') unless $email;
 
-    my $files = $c->app->pg->db->query(
-        'SELECT id, filename, size_bytes, mime_type, uploaded_at FROM drive.files
-         WHERE user_email = ? ORDER BY uploaded_at DESC',
-        $email,
+    my $folder_id = $c->param('id');
+
+    if (defined $folder_id) {
+        my $folder = $c->app->pg->db->query(
+            'SELECT id FROM drive.folders WHERE id = ? AND user_email = ?', $folder_id, $email,
+        )->hash;
+        return $c->render(text => 'folder not found', status => 404) unless $folder;
+    }
+
+    # drive.folders self-references via parent_folder_id; drive.files
+    # points at a folder via folder_id -- two different column names,
+    # deliberately NOT reused as one shared filter string here (that
+    # was a real bug once: querying drive.folders with a "folder_id ="
+    # filter, a column that table doesn't have at all).
+    my $subfolder_filter = defined $folder_id ? 'parent_folder_id = ?' : 'parent_folder_id IS NULL';
+    my $file_filter      = defined $folder_id ? 'folder_id = ?'        : 'folder_id IS NULL';
+    my @folder_bind       = defined $folder_id ? ($folder_id) : ();
+
+    my $subfolders = $c->app->pg->db->query(
+        "SELECT id, name FROM drive.folders WHERE user_email = ? AND $subfolder_filter ORDER BY name",
+        $email, @folder_bind,
     )->hashes;
 
-    return $c->render(template => 'index', email => $email, files => $files);
+    my $files = $c->app->pg->db->query(
+        "SELECT id, filename, size_bytes, mime_type, uploaded_at FROM drive.files
+         WHERE user_email = ? AND $file_filter ORDER BY uploaded_at DESC",
+        $email, @folder_bind,
+    )->hashes;
+
+    return $c->render(
+        template => 'index', email => $email, files => $files, folders => $subfolders,
+        current_folder_id => $folder_id, breadcrumb => _breadcrumb($c, $email, $folder_id),
+        error => $c->flash('error'),
+    );
 }
 
 sub _random_state {
@@ -209,15 +270,34 @@ sub logout ($c) {
     return $c->redirect_to($url);
 }
 
+# A folder_id param that's present-but-empty (an unset <select> in the
+# upload form, or an omitted JSON/query field) means the same thing as
+# absent entirely: root. Centralized here since every folder-aware
+# handler below needs this exact normalization.
+sub _normalize_folder_id ($raw) {
+    return (defined $raw && length $raw) ? $raw : undef;
+}
+
+# undef unless the given folder both exists AND belongs to $email --
+# used everywhere a caller-supplied folder_id needs validating before
+# it's trusted (uploading into it, listing it, nesting a new folder
+# under it).
+sub _owned_folder ($c, $email, $folder_id) {
+    return undef unless defined $folder_id;
+    return $c->app->pg->db->query(
+        'SELECT id FROM drive.folders WHERE id = ? AND user_email = ?', $folder_id, $email,
+    )->hash;
+}
+
 # Shared by the browser form (upload()) and the JSON API (api_upload())
 # below -- inserts the DB row and moves the uploaded file into storage,
 # returning the new row (id, filename, size_bytes, mime_type,
 # uploaded_at). Callers decide how to respond (redirect vs JSON).
-sub _save_upload ($c, $email, $upload) {
+sub _save_upload ($c, $email, $upload, $folder_id) {
     my $row = $c->app->pg->db->query(
-        q{INSERT INTO drive.files (user_email, filename, size_bytes, mime_type)
-          VALUES (?, ?, ?, ?) RETURNING id, filename, size_bytes, mime_type, uploaded_at, uuid},
-        $email, $upload->filename, $upload->size, $upload->headers->content_type,
+        q{INSERT INTO drive.files (user_email, filename, size_bytes, mime_type, folder_id)
+          VALUES (?, ?, ?, ?, ?) RETURNING id, filename, size_bytes, mime_type, uploaded_at, folder_id, uuid},
+        $email, $upload->filename, $upload->size, $upload->headers->content_type, $folder_id,
     )->hash;
 
     my $dest = $c->app->storage_path . '/' . $row->{uuid};
@@ -231,18 +311,28 @@ sub upload ($c) {
     my $email = _current_email($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
 
-    my $upload = $c->req->upload('file');
-    return $c->redirect_to('/') unless $upload;
+    my $folder_id = _normalize_folder_id($c->param('folder_id'));
+    my $back = $folder_id ? "/folders/$folder_id" : '/';
 
-    _save_upload($c, $email, $upload);
-    return $c->redirect_to('/');
+    my $upload = $c->req->upload('file');
+    return $c->redirect_to($back) unless $upload;
+
+    # A tampered/stale folder_id (deleted since the page was loaded, or
+    # someone else's id) silently falls back to root rather than 500ing
+    # or trusting an unowned folder -- same "fail to somewhere safe, not
+    # to an error page" spirit as this file's other browser-facing
+    # handlers.
+    $folder_id = undef unless _owned_folder($c, $email, $folder_id);
+
+    _save_upload($c, $email, $upload, $folder_id);
+    return $c->redirect_to($folder_id ? "/folders/$folder_id" : '/');
 }
 
-# POST /api/v1/files (multipart, field name "file") -- Bearer-authed
-# equivalent of the browser upload form above, for homelab-cli (`homelab-cli
-# drive upload`) or any third-party script (see ../../CLAUDE.md and this
-# package's own README on why a real JSON API matters here, not just the
-# browser UI).
+# POST /api/v1/files (multipart, field name "file", optional field
+# "folder_id") -- Bearer-authed equivalent of the browser upload form
+# above, for homelab-cli (`homelab-cli drive upload`) or any third-party
+# script (see ../../CLAUDE.md and this package's own README on why a
+# real JSON API matters here, not just the browser UI).
 sub api_upload ($c) {
     my $email = _current_email($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
@@ -251,22 +341,188 @@ sub api_upload ($c) {
     return $c->render(json => { error => 'no file provided (multipart field name must be "file")' }, status => 400)
         unless $upload;
 
-    my $row = _save_upload($c, $email, $upload);
+    my $folder_id = _normalize_folder_id($c->param('folder_id'));
+    if (defined $folder_id) {
+        return $c->render(json => { error => 'folder not found' }, status => 404)
+            unless _owned_folder($c, $email, $folder_id);
+    }
+
+    my $row = _save_upload($c, $email, $upload, $folder_id);
     return $c->render(json => $row, status => 201);
 }
 
-# GET /api/v1/files -- this user's own files, as JSON. Same query
-# index() already uses for the browser's own file listing.
+# GET /api/v1/files -- this user's own files, as JSON. Optional
+# ?folder_id=<id> query param scopes to one folder's direct contents,
+# same as index()'s own browser view; omitted means root, NOT "every
+# file everywhere" (see README.md's Folders section -- this is a
+# deliberate behavior change from before folders existed, but a
+# backward-compatible one: every file uploaded before this migration
+# has folder_id NULL, i.e. already "at the root").
 sub api_list ($c) {
     my $email = _current_email($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
 
+    my $folder_id = _normalize_folder_id($c->param('folder_id'));
+    if (defined $folder_id) {
+        return $c->render(json => { error => 'folder not found' }, status => 404)
+            unless _owned_folder($c, $email, $folder_id);
+    }
+    my $folder_filter = defined $folder_id ? 'folder_id = ?' : 'folder_id IS NULL';
+    my @folder_bind   = defined $folder_id ? ($folder_id) : ();
+
     my $files = $c->app->pg->db->query(
-        'SELECT id, filename, size_bytes, mime_type, uploaded_at FROM drive.files
-         WHERE user_email = ? ORDER BY uploaded_at DESC',
-        $email,
+        "SELECT id, filename, size_bytes, mime_type, uploaded_at, folder_id FROM drive.files
+         WHERE user_email = ? AND $folder_filter ORDER BY uploaded_at DESC",
+        $email, @folder_bind,
     )->hashes;
     return $c->render(json => $files);
+}
+
+# --- Folders -------------------------------------------------------
+
+# Shared by the browser form (create_folder()) and the JSON API
+# (api_create_folder()) below. Returns (row, undef) on success or
+# (undef, error_message) on failure -- a duplicate name in the same
+# parent, or a parent_folder_id that doesn't exist/isn't this user's.
+# No UNIQUE constraint backs the duplicate-name check (see
+# migrations/002-folders.sql for why NULL parent_folder_id made that
+# not work cleanly) -- this check-then-insert has the usual narrow
+# TOCTOU race under real concurrent requests, accepted here the same
+# way homelab-api's own register() accepts one for email uniqueness:
+# annoying on a collision, not a security or data-integrity problem
+# (worst case is two folders sharing a name, not silent data loss).
+sub _create_folder ($c, $email, $name, $parent_folder_id) {
+    if (defined $parent_folder_id) {
+        return (undef, 'parent folder not found') unless _owned_folder($c, $email, $parent_folder_id);
+    }
+
+    my $folder_filter = defined $parent_folder_id ? 'parent_folder_id = ?' : 'parent_folder_id IS NULL';
+    my @folder_bind   = defined $parent_folder_id ? ($parent_folder_id) : ();
+    my $existing = $c->app->pg->db->query(
+        "SELECT id FROM drive.folders WHERE user_email = ? AND name = ? AND $folder_filter",
+        $email, $name, @folder_bind,
+    )->hash;
+    return (undef, 'a folder with that name already exists here') if $existing;
+
+    my $row = $c->app->pg->db->query(
+        q{INSERT INTO drive.folders (user_email, name, parent_folder_id)
+          VALUES (?, ?, ?) RETURNING id, name, parent_folder_id},
+        $email, $name, $parent_folder_id,
+    )->hash;
+    return ($row, undef);
+}
+
+sub create_folder ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $parent_folder_id = _normalize_folder_id($c->param('parent_folder_id'));
+    my $back = $parent_folder_id ? "/folders/$parent_folder_id" : '/';
+    my $name = $c->param('name');
+
+    unless (defined $name && length $name) {
+        $c->flash(error => 'Folder name is required');
+        return $c->redirect_to($back);
+    }
+
+    my (undef, $error) = _create_folder($c, $email, $name, $parent_folder_id);
+    $c->flash(error => $error) if $error;
+    return $c->redirect_to($back);
+}
+
+# POST /api/v1/folders {name, parent_folder_id} (parent_folder_id
+# omitted/null means root) -- Bearer-authed equivalent of the browser
+# form above.
+sub api_create_folder ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $body = $c->req->json // {};
+    my $name = $body->{name};
+    return $c->render(json => { error => 'name is required' }, status => 400) unless defined $name && length $name;
+
+    my ($row, $error) = _create_folder($c, $email, $name, $body->{parent_folder_id});
+    return $c->render(json => { error => $error }, status => 409) if $error;
+    return $c->render(json => $row, status => 201);
+}
+
+# GET /api/v1/folders?parent_id=<id> -- this user's own subfolders of
+# the given parent (omitted means root), as JSON. Same query index()
+# uses for the browser's own sidebar.
+sub api_list_folders ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $parent_folder_id = _normalize_folder_id($c->param('parent_id'));
+    if (defined $parent_folder_id) {
+        return $c->render(json => { error => 'folder not found' }, status => 404)
+            unless _owned_folder($c, $email, $parent_folder_id);
+    }
+    my $folder_filter = defined $parent_folder_id ? 'parent_folder_id = ?' : 'parent_folder_id IS NULL';
+    my @folder_bind   = defined $parent_folder_id ? ($parent_folder_id) : ();
+
+    my $folders = $c->app->pg->db->query(
+        "SELECT id, name, parent_folder_id FROM drive.folders WHERE user_email = ? AND $folder_filter ORDER BY name",
+        $email, @folder_bind,
+    )->hashes;
+    return $c->render(json => $folders);
+}
+
+# Shared by the browser form (delete_folder()) and the JSON API
+# (api_delete_folder()) below. Deleting a folder deletes everything
+# inside it, recursively -- every subfolder and file, via the ON DELETE
+# CASCADE chains in migrations/002-folders.sql. The DB cascade only
+# removes rows, though; it has no idea these files also have real
+# on-disk blobs, so this walks the whole subtree FIRST (a recursive
+# CTE) to collect every uuid that's about to be orphaned, then unlinks
+# them from disk after the DB delete succeeds -- skipping this would
+# leak storage forever on every folder delete. Returns (1,
+# parent_folder_id_of_the_deleted_folder) on success, (0, undef) if
+# there was nothing to delete (nonexistent id, or someone else's --
+# deliberately indistinguishable, same reasoning as this file's other
+# "not found" checks).
+sub _delete_folder ($c, $email, $id) {
+    my $folder = $c->app->pg->db->query(
+        'SELECT parent_folder_id FROM drive.folders WHERE id = ? AND user_email = ?', $id, $email,
+    )->hash;
+    return (0, undef) unless $folder;
+
+    my $orphaned = $c->app->pg->db->query(
+        q{WITH RECURSIVE subtree AS (
+            SELECT id FROM drive.folders WHERE id = ?
+            UNION ALL
+            SELECT f.id FROM drive.folders f JOIN subtree s ON f.parent_folder_id = s.id
+          )
+          SELECT uuid FROM drive.files WHERE folder_id IN (SELECT id FROM subtree)},
+        $id,
+    )->hashes;
+
+    $c->app->pg->db->query('DELETE FROM drive.folders WHERE id = ?', $id);
+
+    for my $row (@$orphaned) {
+        my $path = $c->app->storage_path . '/' . $row->{uuid};
+        unlink($path) if -f $path;
+    }
+    return (1, $folder->{parent_folder_id});
+}
+
+sub delete_folder ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my (undef, $parent_folder_id) = _delete_folder($c, $email, $c->param('id'));
+    return $c->redirect_to($parent_folder_id ? "/folders/$parent_folder_id" : '/');
+}
+
+# DELETE /api/v1/folders/:id -- Bearer-authed equivalent of the browser
+# delete form above.
+sub api_delete_folder ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my ($deleted) = _delete_folder($c, $email, $c->param('id'));
+    return $c->render(json => { error => 'not found' }, status => 404) unless $deleted;
+    return $c->render(json => { ok => \1 });
 }
 
 sub download ($c) {
@@ -289,29 +545,30 @@ sub download ($c) {
 }
 
 # Shared by the browser form (delete_file()) and the JSON API
-# (api_delete()) below. Returns true if a matching file was found and
-# deleted, false if there was nothing to delete (nonexistent id, or one
-# belonging to a different user -- deliberately indistinguishable, same
-# as download()'s own "not found" for the same reason: a bare id in a
-# URL shouldn't confirm/deny another user's file exists).
+# (api_delete()) below. Returns (1, folder_id_the_file_was_in) if a
+# matching file was found and deleted, (0, undef) if there was nothing
+# to delete (nonexistent id, or one belonging to a different user --
+# deliberately indistinguishable, same as download()'s own "not found"
+# for the same reason: a bare id in a URL shouldn't confirm/deny
+# another user's file exists).
 sub _delete_file ($c, $email, $id) {
     my $file = $c->app->pg->db->query(
-        'SELECT uuid FROM drive.files WHERE id = ? AND user_email = ?', $id, $email,
+        'SELECT uuid, folder_id FROM drive.files WHERE id = ? AND user_email = ?', $id, $email,
     )->hash;
-    return 0 unless $file;
+    return (0, undef) unless $file;
 
     $c->app->pg->db->query('DELETE FROM drive.files WHERE id = ?', $id);
     my $path = $c->app->storage_path . '/' . $file->{uuid};
     unlink($path) if -f $path;
-    return 1;
+    return (1, $file->{folder_id});
 }
 
 sub delete_file ($c) {
     my $email = _current_email($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
 
-    _delete_file($c, $email, $c->param('id'));
-    return $c->redirect_to('/');
+    my (undef, $folder_id) = _delete_file($c, $email, $c->param('id'));
+    return $c->redirect_to($folder_id ? "/folders/$folder_id" : '/');
 }
 
 # DELETE /api/v1/files/:id -- Bearer-authed equivalent of the browser
@@ -320,7 +577,7 @@ sub api_delete ($c) {
     my $email = _current_email($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
 
-    my $deleted = _delete_file($c, $email, $c->param('id'));
+    my ($deleted) = _delete_file($c, $email, $c->param('id'));
     return $c->render(json => { error => 'not found' }, status => 404) unless $deleted;
     return $c->render(json => { ok => \1 });
 }

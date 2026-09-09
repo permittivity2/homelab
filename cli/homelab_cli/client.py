@@ -81,17 +81,19 @@ class DriveClient:
     def _headers(self, **extra):
         return {"Authorization": f"Bearer {self.token}", **extra}
 
-    def list_files(self):
-        resp = requests.get(f"{self.drive_base}/api/v1/files", headers=self._headers(), timeout=self.timeout)
+    def list_files(self, folder_id=None):
+        params = {"folder_id": folder_id} if folder_id else {}
+        resp = requests.get(f"{self.drive_base}/api/v1/files", headers=self._headers(), params=params, timeout=self.timeout)
         if not resp.ok:
             raise ApiError(resp.status_code, _error_message(resp))
         return resp.json()
 
-    def upload_file(self, path):
+    def upload_file(self, path, folder_id=None):
+        data = {"folder_id": folder_id} if folder_id else {}
         with open(path, "rb") as f:
             resp = requests.post(
                 f"{self.drive_base}/api/v1/files", headers=self._headers(),
-                files={"file": (path.name, f)}, timeout=self.timeout,
+                files={"file": (path.name, f)}, data=data, timeout=self.timeout,
             )
         if not resp.ok:
             raise ApiError(resp.status_code, _error_message(resp))
@@ -110,6 +112,28 @@ class DriveClient:
 
     def delete_file(self, file_id):
         resp = requests.delete(f"{self.drive_base}/api/v1/files/{file_id}", headers=self._headers(), timeout=self.timeout)
+        if not resp.ok:
+            raise ApiError(resp.status_code, _error_message(resp))
+        return resp.json()
+
+    def list_folders(self, parent_id=None):
+        params = {"parent_id": parent_id} if parent_id else {}
+        resp = requests.get(f"{self.drive_base}/api/v1/folders", headers=self._headers(), params=params, timeout=self.timeout)
+        if not resp.ok:
+            raise ApiError(resp.status_code, _error_message(resp))
+        return resp.json()
+
+    def create_folder(self, name, parent_folder_id=None):
+        body = {"name": name}
+        if parent_folder_id:
+            body["parent_folder_id"] = parent_folder_id
+        resp = requests.post(f"{self.drive_base}/api/v1/folders", headers=self._headers(), json=body, timeout=self.timeout)
+        if not resp.ok:
+            raise ApiError(resp.status_code, _error_message(resp))
+        return resp.json()
+
+    def delete_folder(self, folder_id):
+        resp = requests.delete(f"{self.drive_base}/api/v1/folders/{folder_id}", headers=self._headers(), timeout=self.timeout)
         if not resp.ok:
             raise ApiError(resp.status_code, _error_message(resp))
         return resp.json()
