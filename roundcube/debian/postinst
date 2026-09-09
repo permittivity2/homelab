@@ -1,0 +1,135 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+SHARE_DIR=/usr/share/homelab-roundcube
+CONFIG_FILE=/etc/roundcube/config.inc.php
+NGINX_VHOST=/etc/nginx/sites-available/homelab-roundcube-internal
+NGINX_VHOST_ENABLED=/etc/nginx/sites-enabled/homelab-roundcube-internal
+
+case "$1" in
+    configure)
+        echo "homelab-roundcube post-installation setup..."
+
+        PHP_VERSION="$(ls /etc/php/ 2>/dev/null | sort -V | tail -1)"
+        if [ -z "$PHP_VERSION" ]; then
+            echo "ERROR: no PHP version found under /etc/php/ -- is php-fpm installed?"
+            db_stop
+            exit 0
+        fi
+
+        db_get homelab-roundcube/db_host || true;        DB_HOST="${RET:-localhost}"
+        db_get homelab-roundcube/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
+        db_get homelab-roundcube/internal_port || true;  INTERNAL_PORT="${RET:-8080}"
+        db_get homelab-roundcube/product_name || true;   PRODUCT_NAME="${RET:-Homelab Webmail}"
+
+        # Real upstream incompatibility (see the script's own header
+        # comment and README.md for the full story): Ubuntu's
+        # roundcube-core 1.6.11 unconditionally redeclares array_first(),
+        # which PHP 8.5 now ships as a genuine builtin -- a hard,
+        # uncatchable PHP fatal on every page load without this. Run
+        # unconditionally, every postinst invocation (not gated behind
+        # the bootstrap-already-done marker below) -- idempotent, and a
+        # future roundcube-core package upgrade could reset the file to
+        # its unpatched vendor state at any time.
+        "$SHARE_DIR/script/homelab-roundcube-patch-php85-compat"
+
+        if [ ! -f "$CONFIG_FILE.bootstrapped" ]; then
+            echo "  bootstrapping split Postgres roles for 'homelab_roundcube' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_roundcube --schema roundcube --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success -- see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-roundcube' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            # Roundcube's own PHP code (like every other Roundcube
+            # install, not something this package can patch) issues
+            # entirely unqualified table names ("SELECT * FROM users",
+            # never "roundcube.users"), assuming its tables live wherever
+            # the connection's search_path resolves. Rather than fork
+            # Roundcube's queries, homelab-roundcube-apply-schema
+            # redirects resolution at the role level instead -- this is
+            # what actually keeps Roundcube's tables inside its own
+            # dedicated schema instead of landing in "public" (which
+            # every other homelab-* feature deliberately avoids
+            # sharing), then applies Roundcube's own vendor-shipped
+            # schema SQL directly (never vendored/duplicated here, same
+            # "reference live" precedent as homelab-dns's PowerDNS
+            # schema), idempotently.
+            "$SHARE_DIR/script/homelab-roundcube-apply-schema" --db-host "$DB_HOST" \
+                --runtime-role "$RUNTIME_ROLE" --migrate-role "$MIGRATE_ROLE" \
+                --migrate-password "$MIGRATE_PASSWORD"
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$RUNTIME_ROLE' by hand."
+
+            CIPHER_KEY="$(openssl rand -base64 32 | head -c 32)"
+
+            sed \
+                -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
+                -e "s#__DB_PORT__#6432#g" \
+                -e "s#__DB_NAME__#homelab#g" \
+                -e "s#__DB_USER__#$RUNTIME_ROLE#g" \
+                -e "s#__DB_PASS__#$RUNTIME_PASSWORD#g" \
+                -e "s#__PRODUCT_NAME__#$PRODUCT_NAME#g" \
+                -e "s#__CIPHER_KEY__#$CIPHER_KEY#g" \
+                "$SHARE_DIR/config/config.inc.php.template" > "$CONFIG_FILE"
+            chown root:www-data "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            touch "$CONFIG_FILE.bootstrapped"
+            echo "  wrote $CONFIG_FILE"
+        else
+            echo "  $CONFIG_FILE already bootstrapped -- leaving it and the roles untouched"
+            echo "  (dpkg-reconfigure homelab-roundcube to redo bootstrap, e.g. after a password rotation)"
+        fi
+
+        sed \
+            -e "s#__INTERNAL_PORT__#$INTERNAL_PORT#g" \
+            -e "s#__PHP_VERSION__#$PHP_VERSION#g" \
+            "$SHARE_DIR/config/nginx-internal.conf.template" > "$NGINX_VHOST"
+        ln -sf "$NGINX_VHOST" "$NGINX_VHOST_ENABLED"
+        echo "  wrote $NGINX_VHOST (listening on 127.0.0.1:$INTERNAL_PORT)"
+
+        systemctl enable "php$PHP_VERSION-fpm" >/dev/null 2>&1 || true
+        systemctl restart "php$PHP_VERSION-fpm" \
+            || echo "  WARNING: php$PHP_VERSION-fpm restart failed -- check 'systemctl status php$PHP_VERSION-fpm' by hand."
+
+        if nginx -t >/dev/null 2>&1; then
+            systemctl reload-or-restart nginx \
+                || echo "  WARNING: nginx reload/restart failed -- check 'systemctl status nginx' by hand."
+        else
+            echo "  WARNING: 'nginx -t' reports a config error -- NOT touching nginx."
+            echo "           Run 'nginx -t' by hand to see it; the previous running config (if any) is untouched."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-roundcube configured."
+        echo "config:   $CONFIG_FILE"
+        echo "internal: http://127.0.0.1:$INTERNAL_PORT/ (point homelab-webproxy's sites.yml at this)"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

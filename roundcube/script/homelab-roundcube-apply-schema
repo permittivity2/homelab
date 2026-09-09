@@ -1,0 +1,158 @@
+#!/usr/bin/perl
+# Bespoke, one-off database-setup step for homelab-roundcube -- not a
+# generalized tool because it does two things no other homelab-*
+# feature needs:
+#
+#   1. Points both the runtime and migrate roles' default search_path
+#      at the "roundcube" schema. Every other homelab-* feature's own
+#      Perl code always schema-qualifies its own queries explicitly
+#      (SELECT ... FROM drive.files, FROM api.users, ...), so
+#      homelab-bootstrap-app-role never needed to touch search_path at
+#      all. Roundcube is vendor PHP code this project doesn't control,
+#      and its queries are entirely unqualified ("SELECT * FROM
+#      users") -- verified empirically that without this, Roundcube's
+#      own vendor schema SQL creates every table in "public" instead of
+#      "roundcube", breaking this project's "each feature owns its own
+#      narrow schema" isolation principle.
+#   2. Applies Roundcube's own vendor-shipped schema SQL
+#      (/usr/share/dbconfig-common/data/roundcube/install/pgsql,
+#      installed by the roundcube-pgsql package) directly -- referenced
+#      live, never vendored/duplicated here, same precedent as
+#      homelab-dns applying PowerDNS's own upstream schema. Idempotent:
+#      only applied if the schema doesn't already have Roundcube's
+#      tables, so an upgrade never re-runs (and potentially conflicts
+#      with) the INITIAL install script.
+#
+# Same local/SSH/manual three-tier connection pattern as every other
+# bespoke script in this ecosystem (homelab-dovecot-bootstrap-role,
+# homelab-postfix-bootstrap-role) -- unlike those, this one doesn't
+# mint any role or secret itself (homelab-bootstrap-app-role already
+# did that); it only takes the migrate role/password it's handed and
+# uses them to finish Roundcube-specific setup.
+#
+# Usage: homelab-roundcube-apply-schema --db-host HOST \
+#            --runtime-role NAME --migrate-role NAME \
+#            --migrate-password PASSWORD [--db homelab] [--schema-file PATH]
+
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+use IPC::Open2 qw(open2);
+
+my $DB             = 'homelab';
+my $DB_HOST        = '';
+my $RUNTIME_ROLE   = '';
+my $MIGRATE_ROLE   = '';
+my $MIGRATE_PASS   = '';
+my $SCHEMA_NAME    = 'roundcube';
+my $SCHEMA_FILE    = '/usr/share/dbconfig-common/data/roundcube/install/pgsql';
+
+GetOptions(
+    'db-host=s'          => \$DB_HOST,
+    'runtime-role=s'     => \$RUNTIME_ROLE,
+    'migrate-role=s'     => \$MIGRATE_ROLE,
+    'migrate-password=s' => \$MIGRATE_PASS,
+    'db=s'                => \$DB,
+    'schema-file=s'       => \$SCHEMA_FILE,
+) or die usage();
+
+die usage() unless $DB_HOST && $RUNTIME_ROLE && $MIGRATE_ROLE && $MIGRATE_PASS;
+
+my @SSH_OPTS = ('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new');
+
+sub usage {
+    return "Usage: $0 --db-host HOST --runtime-role NAME --migrate-role NAME --migrate-password PASSWORD [--db homelab] [--schema-file PATH]\n";
+}
+
+sub log_msg  { print STDERR "[roundcube-apply-schema] @_\n" }
+sub die_msg  { print STDERR "[roundcube-apply-schema] ERROR: @_\n"; exit 1 }
+
+sub is_local_host {
+    my ($host) = @_;
+    return 1 if $host eq 'localhost' || $host eq '127.0.0.1' || $host eq '::1';
+    chomp(my $hostname = `hostname`);
+    return 1 if $host eq $hostname;
+    chomp(my $fqdn = `hostname -f 2>/dev/null`);
+    return 1 if $fqdn && $host eq $fqdn;
+    return 0;
+}
+
+# Runs $sql on @cmd's STDIN, discarding stdout, returns true on success.
+# List-form exec / stdin-piping throughout: no shell ever interprets
+# $sql or the migrate password, and SQL never gets reinterpreted by a
+# remote shell the way an ssh-joined argv would -- see
+# homelab-postfix-bootstrap-role's header comment for the concrete bug
+# this avoids.
+sub run_sql {
+    my ($sql, @cmd) = @_;
+    open(my $fh, '|-', @cmd) or die_msg("cannot exec @cmd: $!");
+    print $fh $sql;
+    close($fh);
+    return $? == 0;
+}
+
+sub run_query {
+    my ($sql, @cmd) = @_;
+    my ($out_fh, $in_fh);
+    my $pid = open2($out_fh, $in_fh, @cmd);
+    print $in_fh $sql;
+    close($in_fh);
+    my $out = do { local $/; <$out_fh> };
+    close($out_fh);
+    waitpid($pid, 0);
+    return undef unless $? == 0;
+    chomp($out) if defined $out;
+    return $out;
+}
+
+sub schema_already_applied {
+    my (@cmd) = @_;
+    my $out = run_query(sprintf(q{SELECT to_regclass('%s.users')}, $SCHEMA_NAME), @cmd);
+    return defined $out && length $out;
+}
+
+sub read_schema_file {
+    open(my $fh, '<', $SCHEMA_FILE) or die_msg("cannot read $SCHEMA_FILE: $!");
+    local $/ = undef;
+    my $content = <$fh>;
+    close($fh);
+    return $content;
+}
+
+sub search_path_sql {
+    return sprintf(
+        qq{ALTER ROLE "%s" SET search_path = %s, public;\nALTER ROLE "%s" SET search_path = %s, public;\n},
+        $RUNTIME_ROLE, $SCHEMA_NAME, $MIGRATE_ROLE, $SCHEMA_NAME,
+    );
+}
+
+sub main {
+    my @admin_prefix =
+        is_local_host($DB_HOST) ? ('sudo', '-u', 'postgres', 'psql')
+      :                           ('ssh', @SSH_OPTS, $DB_HOST, 'sudo -u postgres psql');
+    my @admin_cmd = (@admin_prefix, '-d', $DB, '-X', '-tA');
+
+    if (schema_already_applied(@admin_cmd)) {
+        log_msg("$SCHEMA_NAME.users already exists -- leaving existing data untouched");
+        return;
+    }
+
+    log_msg("setting search_path on '$RUNTIME_ROLE'/'$MIGRATE_ROLE' to '$SCHEMA_NAME'...");
+    my @admin_apply_cmd =
+        is_local_host($DB_HOST) ? ('sudo', '-u', 'postgres', 'psql', '-q', '-d', $DB, '-X', '-v', 'ON_ERROR_STOP=1')
+      :                           ('ssh', @SSH_OPTS, $DB_HOST, "sudo -u postgres psql -q -d $DB -X -v ON_ERROR_STOP=1");
+    run_sql(search_path_sql(), @admin_apply_cmd)
+        or die_msg('failed to set search_path -- see output above');
+
+    log_msg("applying Roundcube's own vendor schema ($SCHEMA_FILE)...");
+    my @migrate_cmd =
+        is_local_host($DB_HOST)
+            ? ('env', "PGPASSWORD=$MIGRATE_PASS", 'psql', '-h', $DB_HOST, '-p', '5432', '-U', $MIGRATE_ROLE, '-q', '-d', $DB, '-X', '-v', 'ON_ERROR_STOP=1')
+            : ('ssh', @SSH_OPTS, $DB_HOST, "PGPASSWORD=$MIGRATE_PASS psql -h 127.0.0.1 -p 5432 -U $MIGRATE_ROLE -q -d $DB -X -v ON_ERROR_STOP=1");
+    run_sql(read_schema_file(), @migrate_cmd)
+        or die_msg('failed to apply the vendor schema -- see output above');
+
+    log_msg('done');
+}
+
+main();

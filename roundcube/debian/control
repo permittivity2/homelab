@@ -1,0 +1,43 @@
+Source: homelab-roundcube
+Section: mail
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-roundcube
+Architecture: all
+Depends: ${misc:Depends}, roundcube-core, roundcube-pgsql, php-fpm, nginx, adduser, postgresql-client, homelab-dovecot, homelab-postfix
+Description: Roundcube webmail wired to the homelab-* shared identity
+ Roundcube webmail (Debian's own roundcube-core/roundcube-pgsql, not
+ vendored source), authenticating purely by attempting a real IMAP
+ LOGIN against homelab-dovecot with whatever the user types -- unlike
+ homelab-dovecot/homelab-postfix's narrow api.users Postgres grants,
+ this package never touches api.users at all. It proves the unified
+ cross-feature identity design described in CLAUDE.md from the
+ browser's side: the same Argon2id-hashed password that logs into
+ IMAP, SMTP submission, and homelab-drive's HTTP login also logs into
+ webmail, with zero additional credential plumbing.
+ .
+ Roundcube's own state (contacts, preferences, message cache -- never
+ mail itself, which stays entirely in Dovecot's Maildir storage) lives
+ in its own "roundcube" Postgres schema via the standard split runtime/
+ migrate role pair (script homelab-bootstrap-app-role, the same generic
+ tool homelab-api/homelab-drive use) -- unlike homelab-dovecot's and
+ homelab-postfix's bespoke single-role scripts, since Roundcube
+ genuinely owns tables and fits the standard two-role pattern. A
+ one-time search_path redirect (see script/homelab-roundcube-apply-
+ schema) works around Roundcube's vendor code issuing entirely
+ unqualified SQL, so its tables land in "roundcube" rather than
+ "public".
+ .
+ Ships its own internal-only nginx+PHP-FPM vhost (loopback only) so
+ homelab-webproxy's existing HTTP-upstream reverse-proxy model --
+ designed around already-HTTP-speaking backends like homelab-drive's
+ hypnotoad -- needs no changes to serve a PHP application.
+ .
+ Depends on homelab-dovecot and homelab-postfix as hard runtime
+ requirements, not just recommendations: without a working IMAP server
+ and SMTP submission service, Roundcube has nothing to log into or
+ send through.

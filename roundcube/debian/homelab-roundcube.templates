@@ -1,0 +1,31 @@
+Template: homelab-roundcube/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap the split runtime/migrate roles on:
+ Used once, at install time, to create the narrow homelab_roundcube_runtime/
+ homelab_roundcube_migrate role pair and its own "roundcube" schema (see
+ CLAUDE.md's split-role design). Needs direct Postgres access (peer auth
+ as the postgres OS user, locally or over SSH) — this is NOT the host
+ Roundcube connects to at runtime, see pgbouncer_host below.
+
+Template: homelab-roundcube/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host for Roundcube's own runtime database connection:
+ Roundcube's db_dsnw connects here at runtime (port 6432), never straight
+ to Postgres — see CLAUDE.md's split runtime/migrate role design. The
+ bootstrapped runtime role is also registered into this host's pgbouncer
+ userlist.txt.
+
+Template: homelab-roundcube/internal_port
+Type: string
+Default: 8080
+Description: Internal loopback port for Roundcube's own nginx+PHP-FPM vhost:
+ homelab-webproxy's own sites.yml reverse-proxies to this port — must
+ match whatever "upstream: 127.0.0.1:<port>" is configured there for
+ Roundcube's domain.
+
+Template: homelab-roundcube/product_name
+Type: string
+Default: Homelab Webmail
+Description: Product name shown on the login screen and window title:

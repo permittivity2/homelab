@@ -1,0 +1,33 @@
+# Managed by homelab-roundcube -- do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-roundcube). This is a SEPARATE,
+# internal-only nginx vhost, distinct from homelab-webproxy's own
+# managed sites -- it exists purely to bridge Roundcube's PHP-FPM
+# backend to plain HTTP on loopback, so homelab-webproxy's existing
+# `upstream: 127.0.0.1:PORT` reverse-proxy model (designed around
+# already-HTTP-speaking backends like homelab-drive's hypnotoad) works
+# for a PHP application too without needing homelab-webproxy itself to
+# learn a second, fastcgi-flavored upstream type. Listens on loopback
+# only -- homelab-webproxy is the only intended caller, terminating the
+# real public-facing TLS.
+server {
+    listen 127.0.0.1:__INTERNAL_PORT__;
+    server_name _;
+    root /var/lib/roundcube/public_html;
+    index index.php;
+
+    client_max_body_size 25m;
+
+    location / {
+        try_files $uri $uri/ /index.php$is_args$args;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php__PHP_VERSION__-fpm.sock;
+    }
+
+    # Never serve Roundcube's own config/logs/temp/.git etc.
+    location ~ /\.(?!well-known) {
+        deny all;
+    }
+}

@@ -1,0 +1,39 @@
+#!/bin/sh
+set -e
+
+CONFIG_FILE=/etc/roundcube/config.inc.php
+BOOTSTRAP_MARKER=/etc/roundcube/config.inc.php.bootstrapped
+NGINX_VHOST=/etc/nginx/sites-available/homelab-roundcube-internal
+NGINX_VHOST_ENABLED=/etc/nginx/sites-enabled/homelab-roundcube-internal
+
+case "$1" in
+    remove)
+        # Only remove what THIS package created -- never touch the
+        # homelab_roundcube_runtime/_migrate Postgres roles, their
+        # grants, or the "roundcube" schema/data (a deliberate, explicit
+        # admin action, same reasoning as every other package here).
+        rm -f "$CONFIG_FILE" "$BOOTSTRAP_MARKER"
+        rm -f "$NGINX_VHOST_ENABLED" "$NGINX_VHOST"
+
+        if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
+            systemctl reload-or-restart nginx 2>/dev/null || true
+        fi
+        ;;
+
+    purge)
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

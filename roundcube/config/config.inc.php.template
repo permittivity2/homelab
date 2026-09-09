@@ -1,0 +1,61 @@
+<?php
+// Managed by homelab-roundcube -- do not hand-edit, edit debconf answers
+// instead (dpkg-reconfigure homelab-roundcube). This REPLACES Debian's
+// own /etc/roundcube/config.inc.php entirely -- dbconfig-common was
+// declined at install time (roundcube-core/dbconfig-install=false) in
+// favor of the standard homelab-* split runtime/migrate role pattern
+// (see CLAUDE.md), so this file owns db_dsnw directly rather than
+// including Debian's own debian-db-roundcube.php.
+//
+// Runtime traffic goes through PgBouncer (default port 6432), never
+// straight to Postgres -- see CLAUDE.md's split-role design. This is
+// the "unified cross-feature identity" design in action from the
+// browser's side: whatever email/password a user types here is the
+// SAME Argon2id-hashed api.users row homelab-dovecot's IMAP passdb (and
+// homelab-drive's HTTP login) validate against -- Roundcube itself
+// never touches api.users at all; it authenticates purely by
+// attempting a real IMAP LOGIN against homelab-dovecot with whatever
+// the user typed, exactly like any other IMAP client would.
+$config = [];
+
+$config['db_dsnw'] = 'pgsql://__DB_USER__:__DB_PASS__@__DB_HOST__:__DB_PORT__/__DB_NAME__';
+
+// IMAP host chosen to perform the log-in -- homelab-dovecot, same host
+// (loopback), plain (non-TLS) connection: Dovecot allows plaintext AUTH
+// on loopback even with disable_plaintext_auth at its Debian default,
+// and TLS between two processes on the same host via 127.0.0.1 adds
+// packaging complexity (cert trust) without a real security benefit
+// here. Revisit if Roundcube and Dovecot are ever split across hosts.
+$config['imap_host'] = ['localhost:143'];
+
+// SMTP server (submission, not the inbound MX port) -- homelab-postfix,
+// same host. %u/%p: whatever the user just authenticated to IMAP with
+// is reused for SMTP AUTH too, so there's still only ever one password
+// prompt.
+$config['smtp_host'] = 'localhost:587';
+$config['smtp_user'] = '%u';
+$config['smtp_pass'] = '%p';
+
+$config['support_url'] = '';
+$config['product_name'] = '__PRODUCT_NAME__';
+
+// AES-256-CBC, not the default DES-EDE3-CBC (kept in Debian's own
+// shipped defaults.inc.php only for backward compatibility -- its own
+// comment recommends AES-256-CBC as "a better choice", so use it
+// outright rather than inheriting a weaker legacy default). Needs a
+// real 32-byte key, generated fresh per install by postinst -- never
+// the sample value from Debian's own default config.inc.php, which
+// would mean every homelab-roundcube install encrypting session IMAP
+// passwords with the SAME publicly-known key.
+$config['cipher_method'] = 'AES-256-CBC';
+$config['des_key'] = '__CIPHER_KEY__';
+
+// Deliberately minimal for the first pass, matching every other
+// homelab-* feature's own "prove the core path first" precedent (see
+// e.g. homelab-drive's README) -- no plugins enabled yet. archive/
+// managesieve/zipdownload etc. are straightforward to add later once
+// login + read + send is proven end-to-end.
+$config['plugins'] = [];
+
+$config['skin'] = 'elastic';
+$config['enable_spellcheck'] = false;

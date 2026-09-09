@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/config.inc.php.template \
+		debian/homelab-roundcube/usr/share/homelab-roundcube/config/config.inc.php.template
+	install -D -m 644 config/nginx-internal.conf.template \
+		debian/homelab-roundcube/usr/share/homelab-roundcube/config/nginx-internal.conf.template
+	install -D -m 755 script/homelab-roundcube-apply-schema \
+		debian/homelab-roundcube/usr/share/homelab-roundcube/script/homelab-roundcube-apply-schema
+	install -D -m 755 script/homelab-roundcube-patch-php85-compat \
+		debian/homelab-roundcube/usr/share/homelab-roundcube/script/homelab-roundcube-patch-php85-compat
+
+override_dh_auto_build:
+	# Nothing to compile
+
+override_dh_auto_test:
+	# No package-build-time tests (this package is templating + a small
+	# bespoke script; real coverage is tests/e2e/test_roundcube_login.py)

@@ -1,0 +1,68 @@
+#!/usr/bin/perl
+# Real upstream incompatibility, not a design choice this project made:
+# Roundcube 1.6.11 (as shipped by Ubuntu's roundcube-core, this
+# writing) unconditionally declares its own `array_first($array)`
+# helper in program/lib/Roundcube/bootstrap.php with NO
+# `function_exists()` guard -- but PHP 8.5 (as shipped by this same
+# Ubuntu release) added `array_first()` as a genuine core builtin.
+# Redeclaring an existing function is a hard PHP fatal error (not
+# catchable, not something `disable_functions` or any userland code can
+# work around), so EVERY page load 500s with "Cannot redeclare function
+# array_first()" until this is fixed. Confirmed no other function
+# Roundcube declares in that file collides the same way (checked
+# 2026-09-09 against the full list of top-level function declarations).
+#
+# This wraps ONLY that one function in a function_exists() guard,
+# in-place, on the file Ubuntu's roundcube-core package actually ships
+# -- never a vendored/forked copy of Roundcube itself. Idempotent (does
+# nothing if the guard is already present). Run every time
+# homelab-roundcube's own postinst runs (not gated behind any
+# bootstrap-already-done marker), since a `roundcube-core` package
+# upgrade could reset the file to its unpatched vendor state at any
+# time -- see README.md for what to watch for if that ever happens
+# between homelab-roundcube reconfigures.
+#
+# Usage: homelab-roundcube-patch-php85-compat [PATH]
+#   (PATH defaults to the real installed location)
+
+use strict;
+use warnings;
+
+my $PATH = shift @ARGV
+    // '/usr/share/roundcube/program/lib/Roundcube/bootstrap.php';
+
+sub log_msg { print STDERR "[roundcube-patch-php85-compat] @_\n" }
+sub die_msg { print STDERR "[roundcube-patch-php85-compat] ERROR: @_\n"; exit 1 }
+
+exit 0 unless -f $PATH;    # roundcube-core not installed (yet) -- nothing to patch
+
+open(my $fh, '<', $PATH) or die_msg("cannot read $PATH: $!");
+my $content = do { local $/; <$fh> };
+close($fh);
+
+if ($content =~ /function_exists\('array_first'\)/) {
+    log_msg('already patched -- nothing to do');
+    exit 0;
+}
+
+# Matches from the function's own signature through its own,
+# column-zero closing brace -- ^\}\n (anchored at true line-start, /m)
+# skips the nested, indented closing braces inside the function body
+# (the if/foreach blocks), which a plain non-greedy .*? alone would
+# incorrectly stop at first.
+my $pattern = qr/^function array_first\(\$array\)\n\{\n.*?\n\}\n/ms;
+
+unless ($content =~ $pattern) {
+    die_msg("array_first() function not found in the expected shape in $PATH -- "
+        . "roundcube-core may have changed; check by hand whether the redeclare "
+        . "fatal (\"Cannot redeclare function array_first()\") still happens, "
+        . "and update this script's pattern if so.");
+}
+
+$content =~ s/($pattern)/if (!function_exists('array_first')) {\n$1}\n/;
+
+open(my $out, '>', $PATH) or die_msg("cannot write $PATH: $!");
+print $out $content;
+close($out);
+
+log_msg("patched $PATH");
