@@ -1,0 +1,13 @@
+# Installed to /usr/share/bash-completion/completions/homelab-cli (see
+# debian/homelab-cli.install), where bash-completion's own dynamic
+# loader sources it automatically the first time a user tab-completes
+# `homelab-cli` in a new shell -- no ~/.bashrc edit needed. Filename
+# must exactly match the command name for that lazy loading to find it.
+#
+# register-python-argcomplete re-execs homelab-cli itself (with the
+# _ARGCOMPLETE env var set -- see homelab_cli/cli.py's
+# argcomplete.autocomplete(parser) call) to compute completions from
+# its real, live argparse structure on every tab press, rather than
+# from a separate pre-generated completion list that could drift out of
+# sync with the actual commands.
+eval "$(register-python-argcomplete homelab-cli)"

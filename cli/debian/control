@@ -9,7 +9,8 @@ X-Python3-Version: >= 3.10
 
 Package: homelab-cli
 Architecture: all
-Depends: ${misc:Depends}, ${python3:Depends}, python3-requests, python3-yaml
+Depends: ${misc:Depends}, ${python3:Depends}, python3-requests, python3-yaml, python3-argcomplete
+Recommends: bash-completion
 Description: Command-line client for the homelab-* ecosystem
  Register/login/whoami/logout against homelab-api's JSON REST API, look
  up a feature's address in the service registry, and (nearly all the

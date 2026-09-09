@@ -5,9 +5,21 @@ import getpass
 import sys
 from pathlib import Path
 
+import argcomplete
+
 from . import config as cfgmod
 from . import mail as mailmod
 from .client import ApiError, Client, DriveClient
+
+# Mirrors ../../api/migrations/003-rbac.sql's seed data -- api.roles is
+# the real, technical source of truth (grant/revoke-role still just
+# sends whatever string the server decides to accept), but a small,
+# hardcoded list here gives tab completion and up-front "did you typo
+# the role name" validation for free via argparse's own choices=
+# handling. Tradeoff: a role added directly via SQL later without also
+# updating this list would still work, just without completion/
+# validation for it -- worth it for how rarely the role set changes.
+KNOWN_ROLES = ["user", "site_admin"]
 
 
 def _client():
@@ -420,12 +432,12 @@ def build_parser():
 
     p = users_sub.add_parser("grant-role", help="Grant a role to a user")
     p.add_argument("user_id")
-    p.add_argument("role")
+    p.add_argument("role", choices=KNOWN_ROLES)
     p.set_defaults(func=cmd_admin_grant_role)
 
     p = users_sub.add_parser("revoke-role", help="Revoke a role from a user")
     p.add_argument("user_id")
-    p.add_argument("role")
+    p.add_argument("role", choices=KNOWN_ROLES)
     p.set_defaults(func=cmd_admin_revoke_role)
 
     return parser
@@ -433,6 +445,12 @@ def build_parser():
 
 def main(argv=None):
     parser = build_parser()
+    # A no-op unless the _ARGCOMPLETE env var is set (i.e. unless a shell
+    # completion script is actually asking "what comes next" -- see
+    # completions/homelab-cli.bash and README.md's Tab completion
+    # section) -- normal invocations fall straight through to
+    # parse_args() below exactly as before.
+    argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
     return args.func(args) or 0
 

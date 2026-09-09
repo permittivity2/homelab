@@ -7,7 +7,7 @@ name = "homelab-cli"
 version = "0.1.0"
 description = "Command-line client for the homelab-* ecosystem"
 requires-python = ">=3.10"
-dependencies = ["requests", "PyYAML"]
+dependencies = ["requests", "PyYAML", "argcomplete"]
 
 [project.scripts]
 homelab-cli = "homelab_cli.cli:main"
