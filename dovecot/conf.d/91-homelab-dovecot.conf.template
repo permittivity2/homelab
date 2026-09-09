@@ -66,3 +66,38 @@ mail_path = /var/mail/vhosts/%{user|domain}/%{user|username}
 # folder sharing the same conventional maildir root is to set
 # mail_inbox_path to the exact same value as mail_path, as below.
 mail_inbox_path = /var/mail/vhosts/%{user|domain}/%{user|username}
+
+# LMTP delivery (used by homelab-postfix's virtual_transport) over TCP,
+# not the vendor default unix_listener -- avoids coupling this package
+# to another package's chroot/socket-directory assumptions; the two
+# packages coordinate only through this fixed loopback port, nothing
+# filesystem-shaped. Bound to all interfaces because Dovecot 2.4's
+# inet_listener block has no working per-listener bind-address setting
+# found so far (`address = ...` errors as unknown; encoding it into the
+# block's positional name like the pgsql driver block silently produces
+# NO listener at all, found empirically) -- acceptable here only because
+# nft's default-drop INPUT policy on every host in this project already
+# has no allow rule for this port, so it's unreachable from outside
+# regardless. Revisit if a real bind-address setting turns up later.
+service lmtp {
+  inet_listener lmtp {
+    port = 24
+  }
+}
+
+# Debian's own dovecot-core ships a DEFAULT `auth_username_format =
+# %{user | username | lower}` for the lmtp protocol specifically (visible
+# in a stock `doveconf -n` even before this package touches anything) --
+# the `username` filter strips everything from the first `@` onward. That
+# default is a reasonable choice for single-domain/system-user setups
+# where Unix usernames never contain a domain, but it's wrong here: every
+# userdb/passdb lookup in this package is keyed by FULL email address.
+# Left unoverridden, EVERY LMTP delivery fails with "User doesn't exist"
+# for an account that logs in over IMAP just fine seconds earlier --
+# because LMTP's own userdb lookup silently queries just the local part
+# ("dovecot-test") while IMAP's lookup correctly uses the whole address.
+# `doveconf -n` shows nothing wrong either way; only caught by an actual
+# LMTP delivery attempt, not by a login test.
+protocol lmtp {
+  auth_username_format = %{user}
+}

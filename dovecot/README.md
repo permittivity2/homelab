@@ -76,10 +76,55 @@ that turn out to matter in practice. Specific traps hit along the way:
   correct syntax above. `doveconf -n` passing is necessary but not
   sufficient evidence a config is safe to load; a real `doveadm auth
   test` (or better, a real IMAP login) is what actually proves it.
+- **`inet_listener` blocks have no working per-listener bind-address
+  setting found so far.** `address = 127.0.0.1` inside one errors as an
+  unknown setting (same class of error as the SQL driver block above);
+  encoding it into the listener's positional name the way the `pgsql`
+  driver block uses its name as the host (`inet_listener 127.0.0.1:24
+  { }`) parses fine but silently produces **no listener at all** —
+  `doveconf -n` shows the block, `ss -tlnp` shows nothing bound. The
+  LMTP listener in this package's template binds all interfaces as a
+  result; that's fine only because nft's default-drop INPUT policy on
+  every host in this project has no allow rule for port 24, not because
+  Dovecot is restricting it.
+- **Debian's stock `dovecot-core` config ships a default
+  `auth_username_format = %{user | username | lower}` scoped to `protocol
+  lmtp { }`**, visible in `doveconf -n` even before this package touches
+  anything. The `username` filter strips everything from the first `@`
+  onward — a sensible default for single-domain/system-user setups where
+  Unix usernames never contain a domain, but wrong here, since every
+  passdb/userdb lookup in this package is keyed by the full email
+  address. Left unoverridden, IMAP login keeps working (IMAP doesn't
+  apply this transform) while **every LMTP delivery fails** with `550
+  5.1.1 User doesn't exist` for an account that just logged in over IMAP
+  seconds earlier — because LMTP's userdb lookup silently queries only
+  the local part (`dovecot-test`) instead of the full address. Fixed
+  with `protocol lmtp { auth_username_format = %{user} }`. Again: `doveconf
+  -n` shows nothing wrong either way; only a real LMTP delivery attempt
+  (not a login, not `doveadm auth test`) surfaces it.
 
 None of this is discoverable from `doveconf -n` alone — every one of
-these was only caught by actually running a real login against a real
-account. See `tests/e2e/test_dovecot_login.py`.
+these was only caught by actually running a real login or real delivery
+against a real account. See `tests/e2e/test_dovecot_login.py`.
+
+**Not fully root-caused, mitigated instead**: a dovecot process's very
+first SQL passdb/userdb query, immediately after this package's own
+fresh-install sequence (role bootstrap → pgbouncer registration →
+dovecot start), has been observed to fail with `permission denied for
+schema api` even though a direct `psql` check at that same moment shows
+the grant is already correct — and a plain `systemctl restart dovecot`
+moments later reliably clears it. Leading theory is a PgBouncer/Postgres
+connection-pool warm-up race (PgBouncer or Postgres caching something
+from a connection attempt that predates the grant), but this hasn't been
+confirmed against a genuinely virgin host — this project's own test host
+had been through many manual create/drop/grant/revoke cycles against
+this exact role name before the failure was ever observed, which could
+just as easily be the real explanation. `debian/postinst` mitigates it
+pragmatically: after starting dovecot, it probes with a throwaway
+`doveadm user` lookup and does one extra restart if the probe's error
+mentions "permission denied". If this resurfaces despite the mitigation,
+that's the place to start digging properly, ideally on a host that has
+never had this role name touched before.
 
 ## Testing
 

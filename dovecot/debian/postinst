@@ -86,6 +86,27 @@ case "$1" in
                 systemctl start dovecot \
                     || echo "  WARNING: dovecot failed to start -- check 'systemctl status dovecot' / 'journalctl -xeu dovecot' by hand."
             fi
+
+            # A dovecot process's FIRST SQL passdb/userdb query, right
+            # after this exact sequence (fresh role bootstrap -> fresh
+            # pgbouncer registration -> fresh dovecot start), has been
+            # observed to fail with "permission denied for schema api"
+            # even though the grant is already correct and confirmed via
+            # a direct psql check at that same moment -- a genuinely
+            # fresh `systemctl restart` moments later reliably clears it.
+            # Root cause not fully nailed down (a pgbouncer/Postgres
+            # connection-pool warm-up race is the leading theory, not
+            # confirmed) -- this probe+one-retry is a pragmatic
+            # mitigation so a fresh install doesn't hand back a broken
+            # first impression, not a substitute for understanding it
+            # properly if it recurs. See dovecot/README.md.
+            sleep 2
+            PROBE_ERR="$(doveadm user 'postinst-probe@invalid.example' 2>&1 >/dev/null || true)"
+            if echo "$PROBE_ERR" | grep -q 'permission denied'; then
+                echo "  first SQL passdb query hit a transient permission error -- restarting once to clear it"
+                systemctl restart dovecot \
+                    || echo "  WARNING: dovecot restart failed -- check 'systemctl status dovecot' by hand."
+            fi
         else
             echo "  WARNING: 'doveconf -n' reports a config error -- NOT touching dovecot."
             echo "           Run 'doveconf -n' by hand to see it; the previous running config (if any) is untouched."
