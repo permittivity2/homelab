@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	install -D -m 644 conf.d/91-homelab-dovecot.conf.template \
+		debian/homelab-dovecot/usr/share/homelab-dovecot/conf.d/91-homelab-dovecot.conf.template
+	install -D -m 755 script/homelab-dovecot-bootstrap-role \
+		debian/homelab-dovecot/usr/share/homelab-dovecot/script/homelab-dovecot-bootstrap-role
+
+override_dh_auto_build:
+	# Nothing to compile
+
+override_dh_auto_test:
+	# No package-build-time tests (t/dovecot-bootstrap-role.t needs a real
+	# Postgres with homelab-api already migrated — see its own header)

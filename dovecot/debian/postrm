@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+MARKER=/etc/dovecot/conf.d/91-homelab-dovecot.conf
+
+case "$1" in
+    remove)
+        # Only remove the drop-in THIS package created -- never touch any
+        # other conf.d file, never touch /var/mail/vhosts (real user
+        # mail), never touch the homelab_dovecot_runtime Postgres role or
+        # its grant (that's an explicit, deliberate admin action --
+        # dropping it here on a routine `apt remove` would be a surprise,
+        # same reasoning as every other package in this ecosystem).
+        rm -f "$MARKER"
+
+        if command -v doveconf >/dev/null 2>&1 && doveconf -n >/dev/null 2>&1; then
+            systemctl reload-or-restart dovecot 2>/dev/null || true
+        fi
+        ;;
+
+    purge)
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

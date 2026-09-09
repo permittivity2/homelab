@@ -1,0 +1,25 @@
+Template: homelab-dovecot/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap the runtime role on:
+ Used once, at install time, to create the narrow homelab_dovecot_runtime
+ role and grant it column-scoped SELECT on api.users (see
+ script/homelab-dovecot-bootstrap-role). Needs direct Postgres access
+ (peer auth as the postgres OS user, locally or over SSH) — this is NOT
+ the host Dovecot connects to at runtime, see pgbouncer_host below.
+
+Template: homelab-dovecot/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host for the runtime SQL passdb connection:
+ Dovecot's own SQL passdb connects here at runtime (port 6432), never
+ straight to Postgres — see CLAUDE.md's split runtime/migrate role
+ design. The bootstrapped role is also registered into this host's
+ pgbouncer userlist.txt.
+
+Template: homelab-dovecot/mail_domain
+Type: string
+Default:
+Description: Primary mail domain this server handles (optional):
+ Purely informational/logged — not enforced anywhere. Virtual users are
+ identified by their full email address regardless of this value.

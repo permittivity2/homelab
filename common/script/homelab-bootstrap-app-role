@@ -47,6 +47,7 @@ use strict;
 use warnings;
 use Getopt::Long qw(GetOptions);
 use File::Path qw(make_path);
+use IPC::Open2 qw(open2);
 
 my $DB      = 'homelab';
 my $FEATURE = '';
@@ -189,25 +190,58 @@ sub run_query_local_or_remote {
     return $out;
 }
 
+# Runs $sql on @cmd's STDIN (psql with no -c/-f, so it executes stdin as
+# a script) and returns its stdout — deliberately NOT passing SQL as a
+# -c/-tAc command-line ARGUMENT. When @cmd starts with 'ssh', OpenSSH
+# concatenates ALL of its own trailing arguments with plain spaces and
+# hands the joined string to the REMOTE shell for parsing (see ssh(1))
+# — any quote characters in a SQL string passed as a separate argv
+# element get reinterpreted (and mangled) by that remote shell before
+# psql ever sees them, rather than reaching it intact. Piping via stdin
+# sidesteps the remote shell's argument parsing entirely, the same way
+# run_sql_local_or_remote already does for the DDL-apply step. Caught
+# empirically (not by inspection): a previous argv-based version of this
+# passed every LOCAL test — list-form exec, no shell involved at all —
+# but could never have worked over SSH; t/bootstrap-role.t only ever
+# exercised the local path (--db-host was always this host's own
+# hostname), so the remote path's breakage was latent. See
+# t/dovecot-bootstrap-role.t in the dovecot package (which uses the same
+# stdin-piping fix) for a live SSH-path exercise — no local-only Postgres
+# test host makes a true remote-path regression test practical here yet.
+sub run_query_stdin_local_or_remote {
+    my ($sql, @cmd) = @_;
+    my ($out_fh, $in_fh);
+    my $pid = open2($out_fh, $in_fh, @cmd);
+    print $in_fh $sql;
+    close($in_fh);
+    my $out = do { local $/; <$out_fh> };
+    close($out_fh);
+    waitpid($pid, 0);
+    return undef unless $? == 0;
+    return $out;
+}
+
 # Fetches both roles' SCRAM secrets in one query, keyed by role name —
 # one round-trip instead of two, and avoids any ambiguity about which
-# secret belongs to which role.
+# secret belongs to which role. @cmd is the full psql invocation through
+# -tA (no -c) — callers differ only in whether it's a local argv or an
+# ssh-prefixed one; see run_query_stdin_local_or_remote for why the SQL
+# itself is never part of that argv.
 sub fetch_scram_secrets {
-    my (@psql_prefix) = @_;
+    my (@cmd) = @_;
     my $query = sprintf(
         q{SELECT rolname || '|' || rolpassword FROM pg_authid WHERE rolname IN ('%s', '%s')},
         sql_escape($RUNTIME_ROLE), sql_escape($MIGRATE_ROLE),
     );
-    open(my $fh, '-|', @psql_prefix, '-d', $DB, '-X', '-tAc', $query)
-        or die_msg("cannot exec @psql_prefix: $!");
+    my $out = run_query_stdin_local_or_remote($query, @cmd);
+    return () unless defined $out;
     my %secrets;
-    while (my $line = <$fh>) {
+    for my $line (split /\n/, $out) {
         chomp $line;
         next unless $line;
         my ($role, $secret) = split /\|/, $line, 2;
         $secrets{$role} = $secret;
     }
-    close($fh);
     return %secrets;
 }
 
@@ -217,7 +251,7 @@ sub run_local {
     my @psql_prefix = ('sudo', '-u', 'postgres', 'psql');
     run_sql_local_or_remote(build_sql(%opts), @psql_prefix, '-q', '-d', $DB, '-X', '-v', 'ON_ERROR_STOP=1')
         or return ();
-    return fetch_scram_secrets(@psql_prefix);
+    return fetch_scram_secrets(@psql_prefix, '-d', $DB, '-X', '-tA');
 }
 
 sub ssh_trust_works {
@@ -232,7 +266,7 @@ sub run_remote {
         build_sql(%opts), @remote_prefix,
         "sudo -u postgres psql -q -d $DB -X -v ON_ERROR_STOP=1",
     ) or return ();
-    return fetch_scram_secrets(@remote_prefix, 'sudo -u postgres psql');
+    return fetch_scram_secrets(@remote_prefix, "sudo -u postgres psql -d $DB -X -tA");
 }
 
 sub run_manual {
@@ -264,11 +298,11 @@ MSG
         return () if lc($reply) eq 's';
 
         if (is_local_host($DB_HOST)) {
-            my %secrets = fetch_scram_secrets('sudo', '-u', 'postgres', 'psql');
+            my %secrets = fetch_scram_secrets('sudo', '-u', 'postgres', 'psql', '-d', $DB, '-X', '-tA');
             return %secrets if %secrets;
         }
         elsif (ssh_trust_works()) {
-            my %secrets = fetch_scram_secrets('ssh', @SSH_OPTS, $DB_HOST, 'sudo -u postgres psql');
+            my %secrets = fetch_scram_secrets('ssh', @SSH_OPTS, $DB_HOST, "sudo -u postgres psql -d $DB -X -tA");
             return %secrets if %secrets;
         }
         else {

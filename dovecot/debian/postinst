@@ -1,0 +1,112 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+SHARE_DIR=/usr/share/homelab-dovecot
+CONF_D=/etc/dovecot/conf.d
+MARKER="$CONF_D/91-homelab-dovecot.conf"
+VMAIL_HOME=/var/mail/vhosts
+
+case "$1" in
+    configure)
+        echo "homelab-dovecot post-installation setup..."
+
+        # Fixed uid/gid (5000), NOT auto-allocated: `adduser --system
+        # --group` alone picks whatever's next in the system range, which
+        # can land BELOW Dovecot's first_valid_uid floor (default 500) --
+        # confirmed for real during this package's own bring-up, where an
+        # auto-allocated uid caused every login to fail with "Mail access
+        # for users with UID <n> not permitted" despite a fully correct
+        # passdb+userdb lookup. 5000 is also the conventional vmail uid/gid
+        # used across most real-world Postfix/Dovecot virtual-hosting
+        # setups, so it's a safe, recognizable, deliberately-chosen
+        # constant here, not an arbitrary one. See README.md and
+        # tests/e2e/test_dovecot_login.py::test_userdb_resolves_shared_vmail_uid.
+        addgroup --system --gid 5000 vmail 2>/dev/null || true
+        adduser --system --uid 5000 --gid 5000 --home "$VMAIL_HOME" \
+            --no-create-home --shell /usr/sbin/nologin vmail 2>/dev/null || true
+        mkdir -p "$VMAIL_HOME"
+        chown vmail:vmail "$VMAIL_HOME"
+        chmod 770 "$VMAIL_HOME"
+
+        if [ ! -f "$MARKER" ]; then
+            db_get homelab-dovecot/db_host || true;        DB_HOST="${RET:-localhost}"
+            db_get homelab-dovecot/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-dovecot/mail_domain || true;    MAIL_DOMAIN="$RET"
+
+            echo "  bootstrapping 'homelab_dovecot_runtime' on $DB_HOST..."
+            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-dovecot-bootstrap-role" --db-host "$DB_HOST")"
+
+            ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^ROLE=//p')"
+            PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^PASSWORD=//p')"
+            SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^SCRAM_SECRET=//p')"
+
+            if [ -z "$ROLE" ]; then
+                echo "ERROR: homelab-dovecot-bootstrap-role did not report success -- see output above."
+                echo "       Not writing $MARKER; re-run 'dpkg-reconfigure homelab-dovecot' once fixed"
+                echo "       (needs homelab-api already installed/migrated on $DB_HOST -- see README.md)."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$ROLE" \
+                --scram-secret "$SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$ROLE' by hand."
+
+            mkdir -p "$CONF_D"
+            sed \
+                -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
+                -e "s#__DB_PORT__#6432#g" \
+                -e "s#__DB_NAME__#homelab#g" \
+                -e "s#__DB_USER__#$ROLE#g" \
+                -e "s#__DB_PASS__#$PASSWORD#g" \
+                "$SHARE_DIR/conf.d/91-homelab-dovecot.conf.template" > "$MARKER"
+            chmod 640 "$MARKER"
+            chgrp dovecot "$MARKER" 2>/dev/null || true
+            echo "  wrote $MARKER"
+            [ -n "$MAIL_DOMAIN" ] && echo "  primary mail domain: $MAIL_DOMAIN (informational only, not enforced)"
+        else
+            echo "  $MARKER already exists -- leaving it and the bootstrapped role untouched"
+            echo "  (dpkg-reconfigure homelab-dovecot to redo bootstrap, e.g. after a password rotation)"
+        fi
+
+        # Validate before touching the service. Unlike PowerDNS, dovecot
+        # genuinely supports a reload (doveadm reload, confirmed via
+        # `systemctl show dovecot -p CanReload` against a live 2.4.2
+        # instance) -- prefer it over a restart when already running, so
+        # a routine config change doesn't drop active IMAP connections.
+        if doveconf -n >/dev/null 2>&1; then
+            systemctl enable dovecot >/dev/null 2>&1 || true
+            if systemctl is-active --quiet dovecot; then
+                systemctl reload-or-restart dovecot \
+                    || echo "  WARNING: dovecot reload/restart failed -- check 'systemctl status dovecot' by hand."
+            else
+                systemctl start dovecot \
+                    || echo "  WARNING: dovecot failed to start -- check 'systemctl status dovecot' / 'journalctl -xeu dovecot' by hand."
+            fi
+        else
+            echo "  WARNING: 'doveconf -n' reports a config error -- NOT touching dovecot."
+            echo "           Run 'doveconf -n' by hand to see it; the previous running config (if any) is untouched."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-dovecot configured."
+        echo "config: $MARKER"
+        echo "mail:   $VMAIL_HOME/<domain>/<user>/"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

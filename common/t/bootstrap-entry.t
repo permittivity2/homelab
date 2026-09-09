@@ -62,4 +62,26 @@ ok(run_bootstrap(role => 'homelab_drive_runtime', secret => 'SCRAM-SHA-256$rotat
     ok((grep { $_ eq q{"homelab_sso_runtime" "SCRAM-SHA-256$second-secret"} } @l), 'the other role is untouched by the rotation');
 }
 
+# Regression test for a real incident (2026-09-09, caught building
+# homelab-dovecot): `cp`ing a freshly-created tempfile over an existing
+# userlist.txt does NOT reliably preserve its group ownership on this
+# ecosystem's coreutils -- it silently resets to root:root, and
+# pgbouncer (running as OS user/group `postgres`) then loses read access
+# to the very file it needs to authenticate anyone. That doesn't fail
+# loudly: pgbouncer keeps using whatever it already had loaded in memory
+# right up until the next full restart, at which point EVERY role (not
+# just the one just registered) fails to authenticate at once. Only
+# meaningful with a real `postgres` system group and root (to chown to a
+# group we're not necessarily a member of) -- skip gracefully otherwise,
+# same gating style as homelab-database's t/bootstrap-role.t.
+SKIP: {
+    skip 'needs root + a real "postgres" system group to verify chown', 2
+        unless $> == 0 && getgrnam('postgres');
+
+    ok(run_bootstrap(role => 'homelab_chowntest_runtime', secret => 'SCRAM-SHA-256$chown-test'),
+        'registration succeeds when run as root');
+    my $gid = (stat($userlist))[5];
+    is($gid, scalar(getgrnam('postgres')), 'userlist.txt group is "postgres" after registration -- pgbouncer can still read it');
+}
+
 done_testing;

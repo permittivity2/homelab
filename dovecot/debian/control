@@ -1,0 +1,23 @@
+Source: homelab-dovecot
+Section: mail
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-dovecot
+Architecture: all
+Depends: ${misc:Depends}, dovecot-core, dovecot-imapd, dovecot-lmtpd, dovecot-pgsql, postgresql-client, adduser
+Description: IMAP/LMTP mail delivery wired to the homelab-* shared identity
+ Wires Dovecot's SQL passdb to the shared `homelab` Postgres database's
+ api.users table via a narrow, column-scoped cross-schema grant (email/
+ password_hash/active only -- see script/homelab-dovecot-bootstrap-role),
+ so ONE Argon2id password works for both HTTP login (homelab-drive) and
+ IMAP/SMTP login -- the unified cross-feature identity design described
+ in CLAUDE.md. Static userdb (shared `vmail` system uid/gid, Maildir++
+ storage under /var/mail/vhosts/<domain>/<user>) -- this package owns no
+ schema/tables of its own and therefore has no migrate role, unlike the
+ standard split runtime/migrate Postgres role pattern most other
+ homelab-* features use. That's an intentional, documented exception
+ (see README.md), not an oversight.

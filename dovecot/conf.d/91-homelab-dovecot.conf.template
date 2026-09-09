@@ -1,0 +1,68 @@
+# Managed by homelab-dovecot -- do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-dovecot). Purely additive: never
+# modifies any vendor-shipped conf.d file. See CLAUDE.md's "unified
+# cross-feature identity" design -- this SQL passdb queries homelab-api's
+# own api.users table via a narrow, column-scoped grant (see
+# script/homelab-dovecot-bootstrap-role), so the same Argon2id password
+# authenticates both HTTP (homelab-drive) and IMAP/SMTP login.
+#
+# Dovecot 2.4 rewrote its config language in a genuinely incompatible way
+# (Debian's own dovecot-core NEWS.Debian calls this out explicitly:
+# "introduces an incompatible configuration language"). Every setting
+# below was verified empirically against a live 2.4.2 instance (doveconf
+# -n, doveadm auth test, and a real IMAPS login/select/append/search) --
+# not copied from pre-2.4 documentation, which describes a syntax this
+# version no longer accepts. See README.md's Gotchas section before
+# changing anything here.
+sql_driver = pgsql
+
+# The connection block's positional name IS the host dovecot connects
+# to -- there is no separate `host = ` field for the pgsql driver
+# (unlike the classic 2.3-era dovecot-sql.conf.ext examples still
+# floating around, which don't apply to 2.4's syntax at all). Runtime
+# traffic goes through PgBouncer (default port 6432), never straight to
+# Postgres -- see CLAUDE.md.
+pgsql __DB_HOST__ {
+  parameters {
+    port = __DB_PORT__
+    dbname = __DB_NAME__
+    user = __DB_USER__
+    password = __DB_PASS__
+  }
+}
+
+passdb sql {
+  default_password_scheme = ARGON2ID
+  query = SELECT email AS user, password_hash AS password FROM api.users WHERE email = '%{user}' AND active = true
+}
+
+# Shared vmail system uid/gid (created by postinst before this file is
+# written), Maildir++ layout keyed by domain/user.
+userdb static {
+  fields {
+    uid = vmail
+    gid = vmail
+    home = /var/mail/vhosts/%{user|domain}/%{user|username}
+  }
+}
+
+mail_driver = maildir
+mail_path = /var/mail/vhosts/%{user|domain}/%{user|username}
+
+# Dovecot 2.4 split INBOX's location into its own setting
+# (mail_inbox_path), independent of mail_path, defaulting to the legacy
+# shared-spool convention /var/mail/%{user} (owned root:mail, not
+# writable by vmail) if left unset. That default breaks ONLY INBOX --
+# every other mailbox (Drafts/Sent/Junk/Trash) is unaffected, since
+# those use mail_path directly -- with "Failed to autocreate mailbox:
+# Permission denied", even though doveconf -n reports the config as
+# fully valid either way. Only caught by a real IMAP SELECT INBOX.
+#
+# Explicitly setting mail_inbox_path to EMPTY does NOT fall back to
+# mail_path either -- empirically, that resolves INBOX to a `.INBOX`
+# Maildir++ subfolder instead of the per-user maildir ROOT, a different
+# (also valid, but different and not what the rest of this ecosystem
+# assumes) on-disk layout. The only way to get INBOX and every other
+# folder sharing the same conventional maildir root is to set
+# mail_inbox_path to the exact same value as mail_path, as below.
+mail_inbox_path = /var/mail/vhosts/%{user|domain}/%{user|username}

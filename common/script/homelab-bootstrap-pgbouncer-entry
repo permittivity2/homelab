@@ -103,6 +103,28 @@ sub run_local {
     unlink($tmp_path);
     chmod(0640, $USERLIST);
 
+    # $tmp_path is a BRAND NEW file (File::Temp::tempfile, owned root:root
+    # under postinst) -- `cp`ing it over an existing $USERLIST does NOT
+    # reliably preserve that existing file's group, at least not on this
+    # ecosystem's coreutils (confirmed empirically: it silently resets to
+    # root:root here). pgbouncer itself runs as OS user/group `postgres`
+    # and needs group-read on this file (mode 640, root:postgres -- same
+    # convention homelab-pgbouncer's own postinst uses); losing the group
+    # doesn't fail loudly -- pgbouncer keeps serving whatever user list it
+    # already had loaded in memory, so EVERY existing role keeps working
+    # right up until the next full `systemctl restart pgbouncer` (not
+    # reload), at which point it fails to open the file at all and NO
+    # role can authenticate -- a real incident caught live building
+    # homelab-dovecot (2026-09-09): a plain re-registration on an
+    # otherwise-idle host silently broke pgbouncer auth for every
+    # already-deployed feature, not just the one being installed.
+    system('chown', 'root:postgres', $USERLIST) == 0
+        or warn_msg("chown root:postgres $USERLIST failed -- pgbouncer (running as user "
+            . "'postgres') may lose read access to this file. This will NOT fail loudly: "
+            . "existing connections keep working until the next full pgbouncer restart, "
+            . "at which point EVERY role fails to authenticate. Fix by hand: "
+            . "'chown root:postgres $USERLIST'.");
+
     system('systemctl', 'reload', 'pgbouncer') == 0
         or warn_msg("reload failed -- check 'systemctl status pgbouncer' by hand");
     return 1;
@@ -129,8 +151,13 @@ sub run_remote {
     }
     my $updated = updated_userlist_content($content, $ROLE, $SCRAM_SECRET);
 
+    # Same reasoning as run_local's chown -- `mv` onto an existing
+    # destination takes the SOURCE file's ownership (root:root, from the
+    # `cat >` above), not the destination's, so the group-read pgbouncer
+    # (user `postgres`) needs would silently disappear without this.
     open(my $wfh, '|-', 'ssh', @SSH_OPTS, $PGBOUNCER_HOST,
-        "cat > $USERLIST.tmp.$$ && chmod 640 $USERLIST.tmp.$$ && mv $USERLIST.tmp.$$ $USERLIST && systemctl reload pgbouncer")
+        "cat > $USERLIST.tmp.$$ && chmod 640 $USERLIST.tmp.$$ && mv $USERLIST.tmp.$$ $USERLIST "
+        . "&& chown root:postgres $USERLIST && systemctl reload pgbouncer")
         or die_msg("cannot exec ssh: $!");
     print $wfh $updated;
     close($wfh);
