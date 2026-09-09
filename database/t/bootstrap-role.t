@@ -16,10 +16,22 @@ my $feature = 'homelab_bootstraptest_' . $$;
 my $schema  = $feature;
 my $script  = 'script/homelab-bootstrap-app-role';
 
+# Perl compiles END blocks regardless of whether runtime execution ever
+# reaches them — the plan skip_all above exits before $feature/$schema
+# are assigned, but this block still ran on the way out, interpolating
+# undef into the DROP statements (dropping a role literally named
+# "_runtime"/"_migrate") and logging "uninitialized value" warnings.
+# Harmless against a real Postgres (IF EXISTS on a bogus name is a
+# no-op) but caused a hard failure in CI, where no local Postgres/socket
+# exists at all for `sudo -u postgres psql` to even reach — guard on the
+# same env var the skip_all check uses, so this is a true no-op when
+# skipped, not just usually-harmless.
 END {
-    system('sudo', '-u', 'postgres', 'psql', '-d', 'homelab', '-c', qq{DROP SCHEMA IF EXISTS "$schema" CASCADE});
-    system('sudo', '-u', 'postgres', 'psql', '-c', qq{DROP ROLE IF EXISTS "${feature}_runtime"});
-    system('sudo', '-u', 'postgres', 'psql', '-c', qq{DROP ROLE IF EXISTS "${feature}_migrate"});
+    if ($ENV{HOMELAB_DATABASE_TEST_LIVE_BOOTSTRAP}) {
+        system('sudo', '-u', 'postgres', 'psql', '-d', 'homelab', '-c', qq{DROP SCHEMA IF EXISTS "$schema" CASCADE});
+        system('sudo', '-u', 'postgres', 'psql', '-c', qq{DROP ROLE IF EXISTS "${feature}_runtime"});
+        system('sudo', '-u', 'postgres', 'psql', '-c', qq{DROP ROLE IF EXISTS "${feature}_migrate"});
+    }
 }
 
 chomp(my $hostname = `hostname`);

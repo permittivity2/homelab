@@ -35,7 +35,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libmojolicious-perl libyaml-libyaml-perl libmojo-pg-perl \
-            libdbi-perl libdbd-pg-perl libminion-perl
+            libdbi-perl libdbd-pg-perl libminion-perl postgresql-client
       - name: Run every package's t/*.t (skips packages with none)
         # Only requires t/ — several packages (pgbouncer, database) ship
         # a script/ + t/ with no lib/ at all (no Perl modules, just a
