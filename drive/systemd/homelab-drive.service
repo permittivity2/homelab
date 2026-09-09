@@ -1,0 +1,23 @@
+[Unit]
+Description=Homelab Drive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_DRIVE_CONFIG=/etc/homelab/drive/config.yml"
+Environment="HOMELAB_DRIVE_HOME=/usr/share/homelab-drive"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-drive
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-drive
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-drive
+
+[Install]
+WantedBy=multi-user.target

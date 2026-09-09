@@ -1,0 +1,25 @@
+Source: homelab-drive
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-drive
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common,
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         adduser
+Recommends: homelab-database, homelab-pgbouncer, homelab-api
+Description: File storage web UI for the homelab-* ecosystem
+ A BFF-style Mojolicious app: browsers talk only to this app, which
+ proxies login through to homelab-api (Homelab::Common::AuthClient) and
+ holds the resulting token in its own session cookie. Upload/list/
+ download/delete files, stored on local disk under
+ /var/lib/homelab/drive-storage, indexed in its own `drive` Postgres
+ schema (split runtime/migrate roles, see CLAUDE.md). Registers itself
+ in homelab-api's service registry on startup.

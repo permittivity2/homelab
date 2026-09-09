@@ -1,0 +1,47 @@
+# Homelab Drive Configuration
+#
+# A file-storage web UI (BFF pattern): browsers talk to this app, never
+# directly to homelab-api. Login is proxied through to homelab-api's
+# /api/v1/auth/login (Homelab::Common::AuthClient::login), and the
+# resulting token/refresh_token are held in this app's own signed
+# session cookie — the same shape homelab-sso will later use too.
+
+homelab_api:
+  base_url: https://login.test.mailmasker.org   # wherever homelab-api is actually reachable
+
+# RUNTIME connection — CRUD only, no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_drive_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection — direct to Postgres, bypassing pgbouncer. Only
+# used by homelab-drive-migrate at install/upgrade time.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_drive_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+# Session cookie signing secret — CHANGE THIS.
+session:
+  secret: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
+
+storage:
+  path: /var/lib/homelab/drive-storage
+
+# What this instance announces itself as in homelab-api's service
+# registry (Homelab::Common::Registry) — the address OTHER features
+# (and homelab-webproxy, eventually) would look it up by. Omit this
+# section entirely to skip registration.
+registry:
+  host: 127.0.0.1
+  port: 2501
+
+server:
+  listen: "http://0.0.0.0:2501"
+  workers: 2
+  pid_file: /var/lib/homelab/drive-hypnotoad.pid
