@@ -1,0 +1,31 @@
+Source: homelab-api
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-api
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common,
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         libcrypt-jwt-perl,
+         libcryptx-perl,
+         libcrypt-argon2-perl,
+         libcrypt-urandom-perl,
+         adduser
+Recommends: homelab-database, homelab-pgbouncer
+Description: Identity/auth/RBAC and service registry for the homelab-* ecosystem
+ A Mojolicious app providing account registration/login, JWT
+ issuance/introspection/refresh (rotating refresh tokens, Argon2id
+ password hashing), minimal role-based access control, and the
+ cross-feature service registry (POST/GET /api/v1/registry/...) that
+ every other homelab-* feature's Homelab::Common::Registry client talks
+ to. Owns its own `api` Postgres schema via the split runtime/migrate
+ role design (see CLAUDE.md) -- postinst bootstraps both roles via
+ homelab-bootstrap-app-role, registers the runtime role with pgbouncer,
+ and applies its own schema migrations on every install/upgrade.

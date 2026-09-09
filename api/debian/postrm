@@ -1,0 +1,30 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        # Stop the service; never touch config.yml (may be needed again on
+        # reinstall), the Postgres roles/schema, or the pgbouncer userlist
+        # entry -- those are out of scope for this package on removal, same
+        # precedent as homelab-pgbouncer never revoking a registered role.
+        systemctl stop homelab-api 2>/dev/null || true
+        ;;
+
+    purge)
+        rm -rf /etc/homelab/api
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -8,8 +8,8 @@ use Test::More;
 # `homelab` database to already exist (matches homelab-database's own
 # postinst having run). Gated behind an explicit opt-in since it's not
 # something arbitrary CI runners can do.
-unless ($ENV{HOMELAB_DATABASE_TEST_LIVE_BOOTSTRAP}) {
-    plan skip_all => 'Set HOMELAB_DATABASE_TEST_LIVE_BOOTSTRAP=1 to run this against a real local Postgres (needs passwordless sudo to postgres)';
+unless ($ENV{HOMELAB_COMMON_TEST_LIVE_BOOTSTRAP}) {
+    plan skip_all => 'Set HOMELAB_COMMON_TEST_LIVE_BOOTSTRAP=1 to run this against a real local Postgres (needs passwordless sudo to postgres)';
 }
 
 my $feature = 'homelab_bootstraptest_' . $$;
@@ -27,7 +27,7 @@ my $script  = 'script/homelab-bootstrap-app-role';
 # same env var the skip_all check uses, so this is a true no-op when
 # skipped, not just usually-harmless.
 END {
-    if ($ENV{HOMELAB_DATABASE_TEST_LIVE_BOOTSTRAP}) {
+    if ($ENV{HOMELAB_COMMON_TEST_LIVE_BOOTSTRAP}) {
         system('sudo', '-u', 'postgres', 'psql', '-d', 'homelab', '-c', qq{DROP SCHEMA IF EXISTS "$schema" CASCADE});
         system('sudo', '-u', 'postgres', 'psql', '-c', qq{DROP ROLE IF EXISTS "${feature}_runtime"});
         system('sudo', '-u', 'postgres', 'psql', '-c', qq{DROP ROLE IF EXISTS "${feature}_migrate"});

@@ -1,0 +1,26 @@
+#!/usr/bin/env perl
+# Applies homelab-api's own migrations/*.sql via the migrate role. Called
+# from postinst on every install/upgrade — safe to run repeatedly
+# (Homelab::Common::Migrate tracks what's already applied). This is the
+# template every other feature package's own -migrate script follows:
+# load config, connect with migrate_dbh, call run_migrations with your
+# own schema + migrations dir. Kept package-local (not itself part of
+# homelab-common) since the config path/schema/migrations dir are
+# different for every feature.
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(migrate_dbh);
+use Homelab::Common::Migrate qw(run_migrations);
+
+my $config = load_config('HOMELAB_API_CONFIG', '/etc/homelab/api/config.yml');
+my $dbh    = migrate_dbh(%{ $config->{database_migrate} });
+
+my $migrations_dir = $ENV{HOMELAB_API_MIGRATIONS_DIR} // '/usr/share/homelab-api/migrations';
+my $applied = run_migrations(dbh => $dbh, schema => 'api', migrations_dir => $migrations_dir);
+
+print "homelab-api: applied $applied migration(s)\n";

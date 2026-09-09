@@ -20,8 +20,13 @@ my $dbh = migrate_dbh(
 );
 
 # A throwaway schema per test run so repeated runs never collide.
+# run_migrations() deliberately does NOT create the schema itself (see
+# Migrate.pm) — that's homelab-bootstrap-app-role's job in real usage,
+# and requires a database-level privilege the migrate role doesn't
+# have. Create it here to match that contract, same as bootstrap would.
 my $schema = 'test_migrate_' . time . '_' . $$;
 $dbh->do(qq{DROP SCHEMA IF EXISTS "$schema" CASCADE});
+$dbh->do(qq{CREATE SCHEMA "$schema"});
 
 END {
     $dbh->do(qq{DROP SCHEMA IF EXISTS "$schema" CASCADE}) if $dbh;

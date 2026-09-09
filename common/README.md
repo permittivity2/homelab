@@ -34,6 +34,36 @@ architecture this implements.
   mounts a standard `GET /health` on a Mojolicious app, with an
   optional deeper `check` coderef.
 
+## Bootstrap scripts
+
+Two standalone CLI tools ship here too (not in `homelab-database`/
+`homelab-pgbouncer`) — every feature needs the *client* tool, but
+shouldn't need an entire local Postgres/pgbouncer server install just
+to get it:
+
+- **`homelab-bootstrap-app-role`** — creates a split pair of Postgres
+  roles (`<feature>_runtime`: CRUD only; `<feature>_migrate`: CRUD+DDL,
+  same schema only) + the schema itself, for one feature:
+  ```bash
+  homelab-bootstrap-app-role --feature homelab_drive --schema drive --db-host database01
+  ```
+  Prints `RUNTIME_ROLE=`/`RUNTIME_PASSWORD=`/`RUNTIME_SCRAM_SECRET=` and
+  `MIGRATE_ROLE=`/`MIGRATE_PASSWORD=`/`MIGRATE_SCRAM_SECRET=` on
+  success. Never a stored/network admin credential — OS-level peer auth
+  only (`sudo -u postgres`), local first, then SSH if trust already
+  works, then a printed-SQL manual fallback. **Critical detail verified
+  by `t/bootstrap-role.t`**: the runtime role's default-privileges
+  grant must say `ALTER DEFAULT PRIVILEGES FOR ROLE "<migrate_role>"
+  ...` — omitting `FOR ROLE` silently scopes it to whatever role ran
+  the bootstrap script itself (`postgres`), and the runtime role would
+  never get access to anything the migrate role creates afterward. This
+  was caught by testing against a real Postgres, not by inspection.
+- **`homelab-bootstrap-pgbouncer-entry`** — registers a feature's
+  `_runtime` role's SCRAM secret into pgbouncer's `userlist.txt`
+  (idempotent — rotation replaces in place). **Never register the
+  `_migrate` role** — it connects directly to Postgres, bypassing
+  pgbouncer on purpose. Same fallback tiering as above.
+
 ## Testing
 
 ```bash
@@ -44,5 +74,8 @@ prove -I lib t/
 `HOMELAB_COMMON_TEST_DB_HOST` (+ `_NAME`/`_USER`/`_PASSWORD`, and
 optionally `_PORT`) are set, pointed at a scratch Postgres database —
 `migrate.t` creates and drops its own throwaway schema, safe to run
-against a real instance. `t/registry.t` and `t/health.t` need no live
-infrastructure at all.
+against a real instance. `t/bootstrap-role.t` needs
+`HOMELAB_COMMON_TEST_DB_HOST` (+ `_NAME`/`_USER`/`_PASSWORD`) as well
+as `HOMELAB_COMMON_TEST_LIVE_BOOTSTRAP=1` and passwordless `sudo` to
+the `postgres` user. `t/registry.t`, `t/bootstrap-entry.t`, and
+`t/health.t` need no live infrastructure at all.

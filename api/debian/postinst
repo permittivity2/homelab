@@ -1,0 +1,89 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/api
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-api
+
+case "$1" in
+    configure)
+        echo "homelab-api post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-api/db_host || true;        DB_HOST="${RET:-localhost}"
+            db_get homelab-api/pgbouncer_host || true;  PGBOUNCER_HOST="${RET:-localhost}"
+
+            echo "  bootstrapping Postgres roles for 'homelab_api' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_api --schema api --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success — see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-api' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
+
+            JWT_SECRET="$(openssl rand -base64 32)"
+
+            sed \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_api_runtime#$RUNTIME_ROLE#g" \
+                -e "s#YOUR_POSTGRES_HOST#$DB_HOST#g" \
+                -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
+                -e "s#homelab_api_migrate#$MIGRATE_ROLE#g" \
+                -e "s#CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS#$JWT_SECRET#g" \
+                "$SHARE_DIR/config/api.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_API_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
+            HOMELAB_API_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-api-migrate
+
+        systemctl enable homelab-api >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-api; then
+            systemctl restart homelab-api || echo "WARNING: homelab-api restart failed -- check 'systemctl status homelab-api' by hand."
+        else
+            systemctl start homelab-api || echo "WARNING: homelab-api failed to start -- check 'systemctl status homelab-api' by hand."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-api configured."
+        echo "config: $CONFIG_FILE"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

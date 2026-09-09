@@ -21,7 +21,14 @@ WriteMakefile(
         'Test::More'  => '1.3',
         'Test::Mojo'  => '0.0',
     },
-    EXE_FILES    => [],
+    # Both bootstrap scripts live here (not in homelab-database/
+    # homelab-pgbouncer) so any feature can depend on the lightweight
+    # CLIENT tool without pulling in an entire local Postgres/pgbouncer
+    # server install — see CLAUDE.md.
+    EXE_FILES    => [
+        'script/homelab-bootstrap-app-role',
+        'script/homelab-bootstrap-pgbouncer-entry',
+    ],
     DIR          => [],
     dist         => { COMPRESS => 'gzip -9f', SUFFIX => '.gz' },
     clean        => { FILES    => 'Homelab-Common-* *.deb *.changes *.buildinfo' },

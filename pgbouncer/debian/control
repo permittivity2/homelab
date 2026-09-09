@@ -2,25 +2,22 @@ Source: homelab-pgbouncer
 Section: database
 Priority: optional
 Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
-Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.6.2
 Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-pgbouncer
 Architecture: all
-Depends: perl (>= 5.36), pgbouncer
+Depends: ${misc:Depends}, pgbouncer
 Recommends: homelab-database
 Description: PgBouncer connection pooler in front of the shared homelab database
  Configures PgBouncer (scram-sha-256 auth, a static userlist.txt) with a
  `homelab` database entry pointing at a homelab-database-managed Postgres
  backend, local or remote. Config is a single drop-in file activated via
  pgbouncer's own native %include directive -- never hand-edits
- pgbouncer.ini beyond that one line. Ships
- homelab-bootstrap-pgbouncer-entry, a reusable tool other homelab-*
- packages' installers call to register a feature's RUNTIME role's SCRAM
- secret (from homelab-database's homelab-bootstrap-app-role) into
- userlist.txt -- locally, over SSH to a remote pgbouncer host, or by
- printing the exact line for a human to add by hand -- never a
- stored/network admin credential. The migrate role from the split-role
- design is deliberately never registered here -- it connects directly to
- Postgres, bypassing the pooler, on purpose.
+ pgbouncer.ini beyond that one line. The tool other homelab-* packages'
+ installers call to register a feature's RUNTIME role's SCRAM secret
+ into userlist.txt (homelab-bootstrap-pgbouncer-entry) lives in
+ homelab-common instead of here, so any feature host can depend on the
+ lightweight client tool without this whole package (and a full local
+ pgbouncer server) coming along with it.

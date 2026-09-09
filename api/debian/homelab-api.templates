@@ -1,0 +1,17 @@
+Template: homelab-api/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Where homelab-database's shared `homelab` database lives. Used only
+ once, at first install, to run homelab-bootstrap-app-role (local
+ sudo -u postgres, or the same over SSH, or a manual fallback — never a
+ stored credential). Ignored on upgrade if already configured.
+
+Template: homelab-api/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Where homelab-pgbouncer runs. Used only once, at first install, to run
+ homelab-bootstrap-pgbouncer-entry. Ignored on upgrade if already
+ configured. This is also the value written into config.yml's
+ database.host, so the running service connects through the pooler.

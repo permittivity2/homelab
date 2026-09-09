@@ -1,0 +1,36 @@
+# Homelab API Configuration
+#
+# Identity/auth/RBAC + the service registry every other feature's
+# Homelab::Common::Registry client calls. See CLAUDE.md for the full
+# architecture.
+
+# RUNTIME connection — CRUD only, no DDL. Point this at pgbouncer
+# (default port 6432), not straight at Postgres.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_api_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection — CRUD+DDL, used only by postinst at install/upgrade
+# time via Homelab::Common::Migrate. Deliberately points DIRECTLY at
+# Postgres, bypassing pgbouncer — see CLAUDE.md's split-role design.
+# Not read by the running service at all outside of migrations.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_api_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+jwt:
+  secret: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
+  algorithm: HS256
+  expiry_seconds: 1800        # 30 minutes
+  refresh_expiry_days: 30
+
+server:
+  listen: "http://0.0.0.0:3000"
+  workers: 4
+  pid_file: /var/lib/homelab/api-hypnotoad.pid

@@ -15,6 +15,19 @@ our @EXPORT_OK = qw(run_migrations);
 # connection; it doesn't have the grants and will fail loudly, which is
 # the point (see CLAUDE.md's split-role design).
 #
+# The schema itself must already exist — homelab-bootstrap-app-role
+# always creates it before a feature's migrate role is ever handed out,
+# so this doesn't attempt `CREATE SCHEMA IF NOT EXISTS` itself. That's
+# deliberate, not an oversight: CREATE SCHEMA requires database-level
+# CREATE privilege in Postgres regardless of whether the schema already
+# exists (IF NOT EXISTS only skips the actual creation, not the
+# permission check) — granting that would widen the migrate role well
+# beyond "manage the one schema it already owns," which is exactly the
+# narrow scope the split-role design is trying to hold. Caught for real
+# against the actual bootstrapped role during homelab-api's first
+# install, not by the unit tests — those used an incidentally-superuser
+# test role that had the privilege anyway and never exercised this path.
+#
 # %opts: dbh, schema, migrations_dir
 # Returns the number of migrations actually applied this run (0 is the
 # normal, expected result on a package upgrade with no new migrations).
@@ -24,7 +37,6 @@ sub run_migrations {
     my $schema          = $opts{schema}          // die "run_migrations(): schema required\n";
     my $migrations_dir  = $opts{migrations_dir}  // die "run_migrations(): migrations_dir required\n";
 
-    $dbh->do(qq{CREATE SCHEMA IF NOT EXISTS "$schema"});
     $dbh->do(qq{
         CREATE TABLE IF NOT EXISTS "$schema".schema_migrations (
             version    INTEGER PRIMARY KEY,

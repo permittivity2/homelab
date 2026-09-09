@@ -1,9 +1,13 @@
 #!/usr/bin/make -f
 
 %:
-	dh $@ --buildsystem=perl_makemaker
+	dh $@
+
+override_dh_auto_build:
+	# Nothing to compile
 
 override_dh_auto_test:
+	# No package-build-time tests
 
 override_dh_install:
 	dh_install

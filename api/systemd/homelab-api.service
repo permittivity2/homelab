@@ -1,0 +1,22 @@
+[Unit]
+Description=Homelab API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_API_CONFIG=/etc/homelab/api/config.yml"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-api
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-api
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-api
+
+[Install]
+WantedBy=multi-user.target

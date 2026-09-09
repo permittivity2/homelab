@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 systemd/homelab-api.service \
+		debian/homelab-api/etc/systemd/system/homelab-api.service
+	install -D -m 644 config/api.example.yml \
+		debian/homelab-api/usr/share/homelab-api/config/api.example.yml
+	find migrations -type f -exec install -D -m 644 {} \
+		debian/homelab-api/usr/share/homelab-api/{} \;

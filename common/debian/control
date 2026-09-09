@@ -16,10 +16,17 @@ Depends: perl (>= 5.36),
          libdbd-pg-perl,
          libminion-perl,
          postgresql-client
+Breaks: homelab-database (<< 0.1.1), homelab-pgbouncer (<< 0.1.1)
+Replaces: homelab-database (<< 0.1.1), homelab-pgbouncer (<< 0.1.1)
 Description: Shared foundation library for every homelab-* feature package
  Config loading, database connections (both the narrow runtime role and
  the separate schema-migration role), a service-registry client, a
  Postgres-backed job-queue helper (Minion), a schema-migration runner,
  and a health-check-route helper. Every Mojolicious-based homelab-*
  feature depends on this instead of re-implementing the same plumbing —
- see the CLAUDE.md architecture notes in the source repository.
+ see the CLAUDE.md architecture notes in the source repository. Also
+ ships homelab-bootstrap-app-role and homelab-bootstrap-pgbouncer-entry
+ (the split-role DB/pgbouncer provisioning tools) here rather than in
+ homelab-database/homelab-pgbouncer, so any feature can depend on the
+ lightweight client tool without pulling in an entire local Postgres/
+ pgbouncer server install.
