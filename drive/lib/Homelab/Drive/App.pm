@@ -191,6 +191,15 @@ sub index ($c) {
         $email, @folder_bind,
     )->hashes;
 
+    # Postgres's own timestamptz text output includes fractional seconds
+    # (e.g. "2026-09-09 10:24:45.492803-05") -- real, but useless noise
+    # for a human reading a file listing. A separate _display field
+    # rather than trimming uploaded_at itself: this is a browser-UI-only
+    # presentation choice, not a change to the data -- the JSON API
+    # (api_list) deliberately keeps full precision, since a script
+    # consuming it might actually want it.
+    $_->{uploaded_at_display} = $_->{uploaded_at} =~ s/\.\d+(?=[+-]|\z)//r for @$files;
+
     return $c->render(
         template => 'index', email => $email, files => $files, folders => $subfolders,
         current_folder_id => $folder_id, breadcrumb => _breadcrumb($c, $email, $folder_id),

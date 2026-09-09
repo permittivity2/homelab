@@ -123,6 +123,32 @@ this project yet, and HTML5 drag-and-drop is notoriously hard to
 simulate reliably even with one) — a real browser check is worth doing
 after touching this code.
 
+### Column sorting
+
+Clicking a `<th>` in the file table (Name/Size/Type/Uploaded) sorts by
+that column, client-side, no page reload — a repeat click on the same
+column reverses direction (`▲`/`▼` shown on the active column). Plain
+JS reordering the existing `<tr>` elements under `<tbody>`; nothing
+server-side, since a folder's whole file list is already on the page at
+once (no pagination to fight with). Name/type sort case-insensitively
+(`data-name`/`data-type` are pre-lowercased by the template); size
+sorts on the raw byte count (`data-size`), not the rendered "123 bytes"
+text, which would sort lexicographically wrong; date sorts on the full-
+precision `uploaded_at` (not the seconds-trimmed display text — see
+below), so ordering among files uploaded within the same displayed
+second stays correct even though the display can't show that
+precision.
+
+Upload timestamps display without fractional seconds (Postgres's own
+`timestamptz` text output includes them, e.g.
+`2026-09-09 10:24:45.492803-05` — real precision, but noise for a human
+reading a file listing). This is a `uploaded_at_display` field computed
+in `index()` (a regex strip, not a re-query) — deliberately only in the
+browser-rendered view, not in the JSON API's own `uploaded_at`
+(`api_list`), since a script consuming the API might actually want full
+precision; presentation trimming belongs in the UI layer, not the API
+contract.
+
 ## Upload size limit
 
 `MOJO_MAX_MESSAGE_SIZE=104857600` (100MB) in `systemd/

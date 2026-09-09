@@ -96,7 +96,12 @@
   table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e3e5e9; border-radius: 8px; overflow: hidden; }
   th, td { text-align: left; padding: 0.6rem 0.9rem; font-size: 0.9rem; border-bottom: 1px solid #eef0f3; }
   th { color: #6b7280; font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; background: #fafbfc; }
-  tr:last-child td { border-bottom: none; }
+  th[data-sort] { cursor: pointer; user-select: none; white-space: nowrap; }
+  th[data-sort]:hover { color: #3562d4; }
+  th[data-sort]::after { content: ''; display: inline-block; width: 0.9em; }
+  th.sort-asc::after { content: '▲'; font-size: 0.7em; }
+  th.sort-desc::after { content: '▼'; font-size: 0.7em; }
+  tbody tr:last-child td { border-bottom: none; }
   td a { color: #1a1a1a; text-decoration: none; }
   td a:hover { color: #3562d4; text-decoration: underline; }
   .file-actions button {
@@ -180,14 +185,24 @@
 % if (!@$files && !@$folders) {
     <div class="empty-state">This folder is empty. Upload a file or create a folder to get started.</div>
 % } else {
-    <table>
-      <tr><th>Name</th><th>Size</th><th>Type</th><th>Uploaded</th><th></th></tr>
+    <table id="files-table">
+      <thead>
+        <tr>
+          <th data-sort="name">Name</th>
+          <th data-sort="size">Size</th>
+          <th data-sort="type">Type</th>
+          <th data-sort="date">Uploaded</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
 % for my $f (@$files) {
-      <tr>
+      <tr data-name="<%= lc($f->{filename}) %>" data-size="<%= $f->{size_bytes} %>"
+          data-type="<%= lc($f->{mime_type} // '') %>" data-date="<%= $f->{uploaded_at} %>">
         <td><a href="/files/<%= $f->{id} %>/download"><%= $f->{filename} %></a></td>
         <td><%= $f->{size_bytes} %> bytes</td>
         <td><%= $f->{mime_type} %></td>
-        <td><%= $f->{uploaded_at} %></td>
+        <td><%= $f->{uploaded_at_display} %></td>
         <td class="file-actions">
           <form method="post" action="/files/<%= $f->{id} %>/delete"
                 onsubmit="return confirm('Delete <%= $f->{filename} %>?')">
@@ -196,6 +211,7 @@
         </td>
       </tr>
 % }
+      </tbody>
     </table>
 % }
   </main>
@@ -404,6 +420,49 @@
   setupDropZone(main, function () { return main.dataset.folderId || null; });
   document.querySelectorAll('#folder-list li[data-folder-id]').forEach(function (li) {
     setupDropZone(li, function () { return li.dataset.folderId; });
+  });
+})();
+</script>
+
+<script>
+// Column sorting for the file table -- client-side, no page reload
+// (all of a folder's files are already on the page at once; there's no
+// pagination to fight with). size sorts numerically (raw bytes, off a
+// data-size attribute -- sorting the rendered "123 bytes" text would
+// put "999 bytes" before "1000000 bytes"); name/type sort
+// case-insensitively (data-name/data-type are already lowercased by
+// the template); date sorts on the raw, full-precision uploaded_at
+// (not the seconds-trimmed display text), so ordering stays exact even
+// though what's shown isn't.
+(function () {
+  'use strict';
+  var table = document.getElementById('files-table');
+  if (!table) return;
+  var tbody = table.querySelector('tbody');
+  var headers = Array.prototype.slice.call(table.querySelectorAll('th[data-sort]'));
+
+  var activeKey = null;
+  var activeDir = 1;
+
+  headers.forEach(function (th) {
+    th.addEventListener('click', function () {
+      var key = th.dataset.sort;
+      activeDir = (activeKey === key) ? -activeDir : 1;
+      activeKey = key;
+
+      headers.forEach(function (h) { h.classList.remove('sort-asc', 'sort-desc'); });
+      th.classList.add(activeDir === 1 ? 'sort-asc' : 'sort-desc');
+
+      var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+      rows.sort(function (rowA, rowB) {
+        var a = rowA.dataset[key], b = rowB.dataset[key];
+        if (key === 'size') { a = Number(a); b = Number(b); }
+        if (a < b) return -activeDir;
+        if (a > b) return activeDir;
+        return 0;
+      });
+      rows.forEach(function (row) { tbody.appendChild(row); });
+    });
   });
 })();
 </script>
