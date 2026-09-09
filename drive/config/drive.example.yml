@@ -47,6 +47,15 @@ session:
 storage:
   path: /var/lib/homelab/drive-storage
 
+# Thumbnail/slideshow-image generation for uploaded images (see
+# README.md's "Image thumbnails and slideshow" section). All optional --
+# every value below is this package's own built-in default if omitted.
+image:
+  thumbnail_geometry:  "200x200>"    # ImageMagick geometry; '>' = shrink only, never enlarge
+  thumbnail_quality:   80            # JPEG quality, 0-100
+  slideshow_geometry:  "1280x1280>"
+  slideshow_quality:   82
+
 # What this instance announces itself as in homelab-api's service
 # registry (Homelab::Common::Registry) — the address OTHER features
 # (and homelab-webproxy, eventually) would look it up by. Omit this

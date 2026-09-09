@@ -13,6 +13,8 @@ Depends: perl (>= 5.36),
          libmojolicious-perl,
          libyaml-libyaml-perl,
          libmojo-pg-perl,
+         libimage-magick-perl,
+         libfile-libmagic-perl,
          adduser
 Recommends: homelab-database, homelab-pgbouncer, homelab-api, homelab-sso
 Description: File storage web UI for the homelab-* ecosystem

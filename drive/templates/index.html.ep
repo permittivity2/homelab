@@ -122,6 +122,45 @@
   .file-actions button:hover { color: #d1453b; border-color: #d1453b; }
   .empty-state { padding: 2rem; text-align: center; color: #9aa0ab; font-size: 0.9rem; }
 
+  .file-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; vertical-align: middle; margin-right: 0.5rem; cursor: pointer; }
+
+  /* ── Image lightbox / slideshow ── */
+  .lightbox { position: fixed; inset: 0; z-index: 500; display: flex; align-items: center; justify-content: center; }
+  .lightbox.hidden { display: none !important; }
+  .lightbox-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.9); }
+  .lightbox-content { position: relative; z-index: 1; max-width: 92vw; max-height: 92vh; display: flex; align-items: center; justify-content: center; }
+  .lightbox-image { max-width: 92vw; max-height: 92vh; object-fit: contain; display: block; }
+
+  .lightbox-nav {
+    position: absolute; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,.4); color: #fff;
+    border: none; font-size: 32px; line-height: 1; width: 48px; height: 48px; border-radius: 50%;
+    cursor: pointer; opacity: 0; transition: opacity 0.15s;
+  }
+  .lightbox-content:hover .lightbox-nav, .lightbox-content.controls-visible .lightbox-nav { opacity: 1; }
+  .lightbox-prev { left: 12px; }
+  .lightbox-next { right: 12px; }
+  .lightbox-nav.hidden { display: none; }
+  .lightbox-nav:disabled { opacity: 0; pointer-events: none; }
+
+  .lightbox-controls {
+    position: absolute; bottom: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: linear-gradient(transparent, rgba(0,0,0,.7)); opacity: 0; transition: opacity 0.15s;
+  }
+  .lightbox-content:hover .lightbox-controls, .lightbox-content.controls-visible .lightbox-controls { opacity: 1; }
+  .lightbox-controls button, .lightbox-btn { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; padding: 4px 6px; }
+  .lightbox-controls button:hover, .lightbox-btn:hover { color: #ccc; }
+  .lightbox-controls button:disabled { color: #666; cursor: default; }
+  .lightbox-speed { display: flex; gap: 2px; }
+  .lightbox-speed button { font-size: 12px; padding: 2px 6px; border: 1px solid rgba(255,255,255,.4); border-radius: 4px; color: #fff; }
+  .lightbox-speed button.active { background: rgba(255,255,255,.25); }
+
+  .lightbox-info {
+    position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between;
+    padding: 10px 14px; background: linear-gradient(rgba(0,0,0,.7), transparent); color: #fff; font-size: 13px;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .lightbox-content:hover .lightbox-info, .lightbox-content.controls-visible .lightbox-info { opacity: 1; }
+
   @media (prefers-color-scheme: dark) {
     body { background: #16181d; color: #e6e8eb; }
     nav.breadcrumb, aside, .upload-bar, .upload-progress, table { background: #1e2128; border-color: #2c2f37; }
@@ -214,9 +253,18 @@
       </thead>
       <tbody>
 % for my $f (@$files) {
-      <tr data-name="<%= lc($f->{filename}) %>" data-size="<%= $f->{size_bytes} %>"
-          data-type="<%= lc($f->{mime_type} // '') %>" data-date="<%= $f->{uploaded_at} %>">
-        <td><a href="/files/<%= $f->{id} %>/download"><%= $f->{filename} %></a></td>
+%   my $is_image = ($f->{mime_type} // '') =~ m{^image/};
+      <tr data-id="<%= $f->{id} %>" data-name="<%= lc($f->{filename}) %>" data-filename="<%= $f->{filename} %>"
+          data-size="<%= $f->{size_bytes} %>" data-type="<%= lc($f->{mime_type} // '') %>" data-date="<%= $f->{uploaded_at} %>">
+        <td>
+% if ($is_image) {
+          <img src="/files/<%= $f->{id} %>/thumbnail" class="file-thumb" loading="lazy" alt=""
+               onerror="this.style.display='none'" onclick="return Lightbox.open(<%= $f->{id} %>, event)">
+          <a href="/files/<%= $f->{id} %>/download" onclick="return Lightbox.open(<%= $f->{id} %>, event)"><%= $f->{filename} %></a>
+% } else {
+          <a href="/files/<%= $f->{id} %>/download"><%= $f->{filename} %></a>
+% }
+        </td>
         <td class="file-size"><%= $f->{size_bytes} %> bytes</td>
         <td><%= $f->{mime_type} %></td>
         <td><%= $f->{uploaded_at_display} %></td>
@@ -232,6 +280,31 @@
     </table>
 % }
   </main>
+</div>
+
+<div id="lightbox" class="lightbox hidden">
+  <div class="lightbox-backdrop" onclick="Lightbox.close()"></div>
+  <div class="lightbox-content">
+    <button class="lightbox-nav lightbox-prev" onclick="Lightbox.prev()" aria-label="Previous">‹</button>
+    <img id="lightbox-image" class="lightbox-image" alt="">
+    <button class="lightbox-nav lightbox-next" onclick="Lightbox.next()" aria-label="Next">›</button>
+
+    <div class="lightbox-controls">
+      <button id="lightbox-play" onclick="Lightbox.toggleSlideshow()" title="Play/Pause">⏸</button>
+      <div class="lightbox-speed">
+        <button data-secs="2"  onclick="Lightbox.setSlideshowInterval(2)">2s</button>
+        <button data-secs="4"  onclick="Lightbox.setSlideshowInterval(4)" class="active">4s</button>
+        <button data-secs="10" onclick="Lightbox.setSlideshowInterval(10)">10s</button>
+      </div>
+      <a id="lightbox-download" class="lightbox-btn" download title="Download">⬇</a>
+      <button onclick="Lightbox.toggleFullscreen()" title="Fullscreen">⛶</button>
+      <button onclick="Lightbox.close()" title="Close">✕</button>
+    </div>
+    <div class="lightbox-info">
+      <span id="lightbox-counter"></span>
+      <span id="lightbox-caption"></span>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -532,6 +605,241 @@
     sessionStorage.setItem(STORAGE_KEY, newUnit);
     applyUnit(newUnit);
   });
+})();
+</script>
+
+<script>
+// Image lightbox + slideshow -- ported from the old homelab-drive-web-ui's
+// DriveUI lightbox (github-repos/homelab-api's drive-web-ui/public/app.js,
+// the still-running production Drive's implementation) to this app's
+// simpler single-page-per-folder model. There, thumbnails/slideshow images
+// were generated by a separate queue worker and served via nginx
+// X-Accel-Redirect from a shared NFS mount; here generation is synchronous
+// at upload time and serving is a plain Mojolicious file reply (see
+// App.pm's _generate_image_derivatives/_serve_derivative and README.md) --
+// but the CLIENT-side behavior (speed presets, prefetching, keyboard
+// shortcuts) is deliberately the same feature, since that's what was asked
+// for. Unlike the old htmx-driven app, this page does a full reload on any
+// mutation (upload/delete/rename), so there's no separate "file list
+// changed under me" event to listen for -- a reload naturally resets this
+// module's state too.
+var Lightbox = (function () {
+  'use strict';
+
+  var _images  = [];   // [{id, name}], rebuilt fresh every time the lightbox opens
+  var _index   = -1;
+  var _timer   = null; // slideshow setInterval handle
+  var _seconds = 4;    // current interval; 0 = off
+
+  function _currentFolderImages() {
+    return Array.prototype.slice.call(document.querySelectorAll('#files-table tbody tr'))
+      .filter(function (row) { return /^image\//.test(row.dataset.type || ''); })
+      .map(function (row) { return { id: Number(row.dataset.id), name: row.dataset.filename || '' }; });
+  }
+
+  // Session-scoped image cache: id -> objectURL. Map insertion order
+  // doubles as LRU order (re-inserting on access = MRU).
+  var CACHE_MAX = 15;
+  var _cache = new Map();
+  var _inflight = new Map();
+
+  function _cacheEvictOldest() {
+    while (_cache.size > CACHE_MAX) {
+      var oldestId = _cache.keys().next().value;
+      URL.revokeObjectURL(_cache.get(oldestId));
+      _cache.delete(oldestId);
+    }
+  }
+
+  function _prefetch(id) {
+    if (_cache.has(id) || _inflight.has(id)) return;
+    var p = fetch('/files/' + id + '/slideshow-image', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r : fetch('/files/' + id + '/download', { credentials: 'same-origin' }); })
+      .then(function (r) { return r.ok ? r.blob() : Promise.reject(); })
+      .then(function (blob) {
+        _cache.set(id, URL.createObjectURL(blob));
+        _cacheEvictOldest();
+      })
+      .catch(function () {})
+      .finally(function () { _inflight.delete(id); });
+    _inflight.set(id, p);
+  }
+
+  // Forward-browsing is the common case, so prefetch further ahead (next
+  // 2) than behind (previous 1).
+  function _prefetchNeighbors() {
+    if (_images.length <= 1) return;
+    [1, 2, -1].forEach(function (offset) {
+      var target = _images[(_index + offset + _images.length) % _images.length];
+      if (target) _prefetch(target.id);
+    });
+  }
+
+  function open(id, event) {
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    _images = _currentFolderImages();
+    _index = _images.findIndex(function (f) { return f.id === id; });
+    if (_index < 0) return false;
+    _show();
+    var lb = document.getElementById('lightbox');
+    if (lb) lb.classList.remove('hidden');
+    _start();
+    return false;
+  }
+
+  function _show() {
+    var img = _images[_index];
+    if (!img) return;
+    var slideUrl    = '/files/' + img.id + '/slideshow-image';
+    var downloadUrl = '/files/' + img.id + '/download';
+    var image    = document.getElementById('lightbox-image');
+    var download = document.getElementById('lightbox-download');
+    var caption  = document.getElementById('lightbox-caption');
+    var counter  = document.getElementById('lightbox-counter');
+
+    if (image) {
+      var cached = _cache.get(img.id);
+      if (cached) {
+        _cache.delete(img.id);
+        _cache.set(img.id, cached); // bump to most-recently-used
+        image.onerror = null;
+        image.src = cached;
+      } else {
+        // Slideshow-sized derivative first; fall back to the full-res
+        // original if it's missing (generation failed, or a non-image
+        // file somehow ended up in this list).
+        image.onerror = function () { image.onerror = null; image.src = downloadUrl; };
+        image.src = slideUrl;
+        _prefetch(img.id);
+      }
+    }
+    // Download link always hits the real endpoint, never a cached blob URL.
+    if (download) { download.href = downloadUrl; download.download = img.name; }
+    if (caption) caption.textContent = img.name;
+    if (counter) counter.textContent = (_index + 1) + ' / ' + _images.length;
+
+    var multi = _images.length > 1;
+    document.querySelectorAll('.lightbox-nav').forEach(function (b) { b.classList.toggle('hidden', !multi); });
+    var playBtn = document.getElementById('lightbox-play');
+    if (playBtn) playBtn.disabled = !multi;
+    document.querySelectorAll('.lightbox-speed button').forEach(function (b) { b.disabled = !multi; });
+
+    _prefetchNeighbors();
+  }
+
+  function close() {
+    _stop();
+    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen();
+    var lb = document.getElementById('lightbox');
+    if (lb) lb.classList.add('hidden');
+    var image = document.getElementById('lightbox-image');
+    if (image) image.src = '';
+  }
+
+  function next() {
+    if (!_images.length) return;
+    _index = (_index + 1) % _images.length;
+    _show();
+    _restartIfRunning();
+  }
+
+  function prev() {
+    if (!_images.length) return;
+    _index = (_index - 1 + _images.length) % _images.length;
+    _show();
+    _restartIfRunning();
+  }
+
+  function _updatePlayGlyph() {
+    var playBtn = document.getElementById('lightbox-play');
+    if (playBtn) playBtn.textContent = _timer ? '⏸' : '⏵';
+  }
+
+  function toggleSlideshow() {
+    if (_timer) _stop(); else _start();
+  }
+
+  function _start() {
+    if (_seconds <= 0 || _images.length <= 1) return;
+    _timer = setInterval(next, _seconds * 1000);
+    _updatePlayGlyph();
+  }
+
+  function _stop() {
+    clearInterval(_timer);
+    _timer = null;
+    _updatePlayGlyph();
+  }
+
+  function _restartIfRunning() {
+    if (_timer) { _stop(); _start(); }
+  }
+
+  // Quick-select buttons offer 2s/4s/10s; any digit key 1-9 sets that
+  // exact number of seconds instead (0 pauses) -- see the keydown handler
+  // below. Changing speed while playing restarts the timer immediately at
+  // the new interval rather than waiting out the old one.
+  function setSlideshowInterval(secs) {
+    _seconds = secs;
+    document.querySelectorAll('.lightbox-speed button').forEach(function (b) {
+      b.classList.toggle('active', Number(b.dataset.secs) === secs);
+    });
+    if (secs === 0) _stop(); else _restartIfRunning();
+  }
+
+  function downloadCurrent() {
+    var link = document.getElementById('lightbox-download');
+    if (link) link.click();
+  }
+
+  function toggleFullscreen() {
+    var el = document.querySelector('.lightbox-content');
+    if (!el) return;
+    if (!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen();
+    else if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen();
+  }
+
+  // Controls/nav/info overlays reveal on hover (see the CSS), which
+  // doesn't exist on touch devices -- tapping the image itself toggles
+  // them instead.
+  var lbImage = document.getElementById('lightbox-image');
+  if (lbImage) {
+    lbImage.addEventListener('click', function (e) {
+      if (!window.matchMedia('(hover: hover)').matches) {
+        var content = e.currentTarget.closest('.lightbox-content');
+        if (content) content.classList.toggle('controls-visible');
+      }
+    });
+  }
+
+  document.addEventListener('keydown', function (e) {
+    var lb = document.getElementById('lightbox');
+    if (!lb || lb.classList.contains('hidden')) return;
+    if (e.target.matches('input, textarea')) return;
+    switch (e.key) {
+      case 'Escape': close(); break;
+      case ' ': case 'p': case 'P': e.preventDefault(); toggleSlideshow(); break;
+      case 'd': case 'D': downloadCurrent(); break;
+      case 'ArrowLeft':  prev(); break;
+      case 'ArrowRight': next(); break;
+      case 'Home': _index = 0; _show(); _restartIfRunning(); break;
+      case 'End':  _index = _images.length - 1; _show(); _restartIfRunning(); break;
+      case 'f': case 'F': toggleFullscreen(); break;
+      default:
+        if (e.key >= '1' && e.key <= '9') setSlideshowInterval(Number(e.key));
+        else if (e.key === '0') setSlideshowInterval(0);
+    }
+  });
+
+  return {
+    open: open,
+    close: close,
+    prev: prev,
+    next: next,
+    toggleSlideshow: toggleSlideshow,
+    setSlideshowInterval: setSlideshowInterval,
+    toggleFullscreen: toggleFullscreen,
+  };
 })();
 </script>
 </body>

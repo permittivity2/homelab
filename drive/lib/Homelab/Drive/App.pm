@@ -17,6 +17,7 @@ has 'sso_base';
 has 'sso_client_id';
 has 'sso_client_secret';
 has 'sso_redirect_uri';
+has 'image_config';
 
 sub startup ($self) {
     # Installed via EXE_FILES to /usr/bin/homelab-drive, with no
@@ -42,6 +43,7 @@ sub startup ($self) {
     $self->api_base($config->{homelab_api}{base_url} // die "config: homelab_api.base_url is required\n");
     $self->storage_path($config->{storage}{path} // '/var/lib/homelab/drive-storage');
     make_path($self->storage_path);
+    $self->image_config($config->{image} // {});
 
     my $sso = $config->{sso} // die "config: sso.* is required (see config/drive.example.yml)\n";
     $self->sso_base($sso->{base_url} // die "config: sso.base_url is required\n");
@@ -76,6 +78,8 @@ sub startup ($self) {
     $r->post('/folders/:id/delete') ->to('drive#delete_folder');
     $r->get('/files/:id/download')->to('drive#download');
     $r->post('/files/:id/delete') ->to('drive#delete_file');
+    $r->get('/files/:id/thumbnail')      ->to('drive#thumbnail');
+    $r->get('/files/:id/slideshow-image')->to('drive#slideshow_image');
 
     # --- JSON API (Bearer-token authenticated, e.g. homelab-cli or any
     # third-party script -- see README.md and ../../CLAUDE.md). Not
@@ -104,9 +108,14 @@ use Mojo::Base 'Mojolicious::Controller', -signatures;
 # exercising the login path, not by anything that runs without a live
 # homelab-api to log in against.
 use File::Basename qw(basename);
+use File::LibMagic;
+use File::Path qw(make_path);
+use Image::Magick;
 use Mojo::URL;
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::Common::SSOClient qw(exchange_code);
+
+my $MAGIC = File::LibMagic->new;
 
 # Returns the logged-in user's email, or undef (and does NOT redirect —
 # callers decide what "not logged in" means for their own route).
@@ -317,8 +326,87 @@ sub _save_upload ($c, $email, $upload, $folder_id) {
     my $dest = $c->app->storage_path . '/' . $row->{uuid};
     $upload->move_to($dest);
 
+    # The client-declared Content-Type used in the INSERT above is never
+    # trustworthy (a browser/script can send anything, including a
+    # generic default) -- now that the real bytes are on disk, sniff
+    # them for real and correct the stored mime_type if it disagrees.
+    # This is also what decides whether image derivatives get generated
+    # below, so the "does this file get a thumbnail" decision and the
+    # "Type" column/sort-by-type feature (see README.md) both end up
+    # looking at the same real answer instead of two signals that can
+    # disagree -- a real, caught-by-its-own-test bug the first version
+    # of this had: a client that didn't send a proper image/* Content-
+    # Type still got real thumbnail/slideshow-image files generated
+    # (sniffed correctly) but the file row never showed them (the
+    # template trusted the client-declared type instead).
+    my $sniffed = $MAGIC->checktype_filename($dest);
+    if ($sniffed && $sniffed ne ($row->{mime_type} // '')) {
+        $c->app->pg->db->query('UPDATE drive.files SET mime_type = ? WHERE id = ?', $sniffed, $row->{id});
+        $row->{mime_type} = $sniffed;
+    }
+
+    _generate_image_derivatives($c, $dest, $row->{uuid}, $sniffed);
+
     delete $row->{uuid};    # internal storage detail, never exposed
     return $row;
+}
+
+# Best-effort: a thumbnail/slideshow-image failure must never fail the
+# upload itself -- the real file already landed on disk successfully,
+# only these two derivatives are at risk. $mime_type is the already-
+# sniffed (not client-declared) type from _save_upload above -- feeding
+# attacker-controlled bytes into Image::Magick under a spoofed image/*
+# Content-Type is exactly the kind of format-confusion ImageMagick has a
+# real CVE history around, so the decision to even attempt decoding
+# never rests on client input.
+#
+# Generated synchronously, inline with the upload request: this repo has
+# no background job queue yet (unlike the old homelab-drive-web-ui,
+# which offloaded this to homelab-api-backend-processor), and
+# ImageMagick thumbnailing typical photos is fast enough that this is
+# the simpler choice for now -- revisit with a real queue (see
+# ../../CLAUDE.md's Minion plans) if large/frequent image uploads ever
+# make upload latency a real problem.
+sub _generate_image_derivatives ($c, $path, $uuid, $mime_type) {
+    return unless ($mime_type // '') =~ m{^image/};
+
+    my $cfg = $c->app->image_config;
+    my %variant = (
+        thumbnails => [$cfg->{thumbnail_geometry} // '200x200>',   $cfg->{thumbnail_quality} // 80],
+        slideshow  => [$cfg->{slideshow_geometry}  // '1280x1280>', $cfg->{slideshow_quality} // 82],
+    );
+
+    for my $subdir (sort keys %variant) {
+        my ($geometry, $quality) = @{ $variant{$subdir} };
+        my $dest_dir = $c->app->storage_path . "/.$subdir";
+        make_path($dest_dir) unless -d $dest_dir;
+        my $dest = "$dest_dir/$uuid.jpg";
+
+        eval {
+            my $img = Image::Magick->new;
+            my $err = $img->Read($path);
+            die "$err\n" if $err;
+            $img->Thumbnail(geometry => $geometry);
+            $img->Set(quality => $quality);
+            $err = $img->Write("jpeg:$dest");
+            die "$err\n" if $err;
+        };
+        $c->app->log->warn("homelab-drive: $subdir generation failed for $uuid: $@") if $@;
+    }
+    return;
+}
+
+# Derivative files (thumbnail, slideshow-image) are looked up purely by
+# uuid, never queried for -- unlinked alongside the original here and in
+# _delete_folder()'s bulk cleanup below. A missing derivative (non-image
+# file, or generation failed/skipped) is silently a no-op, same as the
+# original file's own "unlink if -f" convention.
+sub _unlink_derivatives ($c, $uuid) {
+    for my $subdir (qw(thumbnails slideshow)) {
+        my $path = $c->app->storage_path . "/.$subdir/$uuid.jpg";
+        unlink($path) if -f $path;
+    }
+    return;
 }
 
 sub upload ($c) {
@@ -516,6 +604,7 @@ sub _delete_folder ($c, $email, $id) {
     for my $row (@$orphaned) {
         my $path = $c->app->storage_path . '/' . $row->{uuid};
         unlink($path) if -f $path;
+        _unlink_derivatives($c, $row->{uuid});
     }
     return (1, $folder->{parent_folder_id});
 }
@@ -558,6 +647,42 @@ sub download ($c) {
     return $c->reply->file($path);
 }
 
+# GET /files/:id/thumbnail and GET /files/:id/slideshow-image -- both
+# serve a pre-generated JPEG derivative (see _generate_image_derivatives
+# above), never the original file data, and never as an attachment (an
+# <img> tag/the lightbox need these inline, not downloaded). Same
+# ownership check and "someone else's id -> 404, not 403" reasoning as
+# download() above. 404 for a missing derivative is expected, not an
+# error -- a non-image file, a failed generation, or a file uploaded
+# before this feature existed all land here, and both callers (the file
+# row's thumbnail <img> and the lightbox image) have an onerror fallback
+# for exactly that -- see templates/index.html.ep.
+sub _serve_derivative ($c, $email, $subdir) {
+    my $id   = $c->param('id');
+    my $file = $c->app->pg->db->query(
+        'SELECT uuid FROM drive.files WHERE id = ? AND user_email = ?', $id, $email,
+    )->hash;
+    return $c->render(text => 'not found', status => 404) unless $file;
+
+    my $path = $c->app->storage_path . "/.$subdir/$file->{uuid}.jpg";
+    return $c->render(text => 'not found', status => 404) unless -f $path;
+
+    $c->res->headers->content_type('image/jpeg');
+    return $c->reply->file($path);
+}
+
+sub thumbnail ($c) {
+    my $email = _current_email($c);
+    return $c->render(text => 'not logged in', status => 401) unless $email;
+    return _serve_derivative($c, $email, 'thumbnails');
+}
+
+sub slideshow_image ($c) {
+    my $email = _current_email($c);
+    return $c->render(text => 'not logged in', status => 401) unless $email;
+    return _serve_derivative($c, $email, 'slideshow');
+}
+
 # Shared by the browser form (delete_file()) and the JSON API
 # (api_delete()) below. Returns (1, folder_id_the_file_was_in) if a
 # matching file was found and deleted, (0, undef) if there was nothing
@@ -574,6 +699,7 @@ sub _delete_file ($c, $email, $id) {
     $c->app->pg->db->query('DELETE FROM drive.files WHERE id = ?', $id);
     my $path = $c->app->storage_path . '/' . $file->{uuid};
     unlink($path) if -f $path;
+    _unlink_derivatives($c, $file->{uuid});
     return (1, $file->{folder_id});
 }
 

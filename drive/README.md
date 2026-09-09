@@ -194,6 +194,100 @@ cell's `file-size` class hook all render correctly (`t/basic.t`), but
 *not* by an actual click (no browser-automation tooling in this
 project) — worth a quick real-browser check after touching this code.
 
+## Image thumbnails and slideshow
+
+Ported from the old, still-running-in-production `homelab-drive-web-ui`
+(`github-repos/homelab-api`'s `drive-web-ui`/`processor` packages) at the
+user's request, after asking to look at how that app handles images
+first — same user-visible feature (thumbnails in the file list, a
+lightbox with a timed slideshow), reimplemented to fit this app's much
+simpler architecture rather than copied wholesale. Three deliberate
+architectural differences from the old implementation, all consequences
+of this being a single self-contained app instead of a BFF fronting a
+separate API + queue-worker system:
+
+- **Generation is synchronous, at upload time**, inside `_save_upload()`
+  — not queued for a background worker. This repo has no job queue yet
+  (the old app used a dedicated `homelab-api-backend-processor`); since
+  ImageMagick thumbnailing an ordinary photo is fast, synchronous is the
+  simpler choice for now. Revisit with a real queue (Minion, per
+  `../../CLAUDE.md`'s plans) if large/frequent image uploads ever make
+  upload latency a real problem — a best-effort `eval` around the
+  ImageMagick calls means a generation failure logs a warning and skips
+  the derivative, but never fails the upload itself.
+- **Serving is a plain `$c->reply->file(...)`**, same as `download()`,
+  not nginx `X-Accel-Redirect` — the old app's NFS-backed, multi-host
+  storage benefited from offloading byte-serving to nginx; this app's
+  local-disk storage doesn't need that indirection.
+- **Storage isn't user/uuid-sharded** — just `.thumbnails/<uuid>.jpg`
+  and `.slideshow/<uuid>.jpg` under `storage.path`, matching this app's
+  existing flat (non-sharded) convention for original files. The old
+  app's `.thumbnails/<user_id>/<h1>/<h2>/<uuid>.jpg` sharding exists to
+  keep any one directory from holding millions of files on a large
+  shared NFS mount — not a concern at this app's scale.
+
+Both derivatives are always re-encoded to JPEG regardless of the
+original format, using ImageMagick's `Thumbnail(geometry => ...)` (the
+`>` suffix means shrink-only, never enlarge a small image) — a 200×200
+thumbnail (quality 80) for the file-listing row, and a much larger
+1280×1280 "slideshow" image (quality 82) for the lightbox viewer, so
+opening the lightbox doesn't have to load the full original just to
+display it at screen size. Both geometries/qualities are configurable
+under `image:` in config.yml (see `config/drive.example.yml`) but
+default to the same values the old app used. The full original is only
+ever sent on explicit download.
+
+**A real bug caught by this feature's own test** (`t/thumbnails.t`):
+the first version generated derivatives off a *sniffed* mime type
+(`File::LibMagic`, deliberately not the client-declared upload
+Content-Type — see below) but the file-listing template's "does this
+row get a thumbnail" check still read the *stored*, client-declared
+mime_type column. A client that doesn't send a proper `image/*`
+Content-Type (Test::Mojo's own multipart upload helper doesn't, it
+turns out) got a real thumbnail generated on disk that the row never
+displayed — two signals that could disagree. Fixed by sniffing once,
+right after the file lands on disk in `_save_upload()`, and correcting
+the stored `mime_type` column to the sniffed value before anything else
+(generation, the file row, the Type column, sort-by-type) reads it —
+one trustworthy answer instead of two. Sniffing rather than trusting
+the client matters for a second reason too: feeding attacker-controlled
+bytes into ImageMagick under a spoofed `image/*` Content-Type is exactly
+the kind of format-confusion ImageMagick has a real CVE history around,
+so the decision to even attempt decoding never rests on client input.
+
+Deleting a file (or a folder full of them, via `_delete_folder()`'s
+recursive cleanup) unlinks its derivatives from disk too, not just the
+original — same "the DB cascade doesn't know about real files on disk"
+reasoning as the rest of this app's delete paths.
+
+The lightbox (click a thumbnail or an image file's name) shows the
+current folder's images only — built fresh from whatever rows are
+already in the file table (`#files-table tbody tr[data-type^="image/"]`
+— the same `data-type` attribute column sorting already uses, so no new
+per-row data was needed). Prev/next wrap around; Home/End jump to
+first/last; a play/pause button runs a timed auto-advance slideshow
+with quick-select 2s/4s/10s buttons, *and* any digit key 1-9 sets that
+exact number of seconds (0 pauses) — changing speed while playing
+restarts the timer immediately at the new interval. Neighboring images
+(next 2, previous 1) are prefetched into an in-memory, session-scoped
+LRU cache (max 15) as you browse, so forward/backward navigation feels
+instant instead of re-fetching every time. Fullscreen toggle, direct
+download, and full keyboard support (arrows, Home/End, Escape, F, D,
+Space/P) round out parity with the old app's lightbox.
+
+Not ported: the old app's separate video-play-button/modal handling
+(`.video-modal`, `playVideo()`) — a related but distinct feature the
+user didn't ask for this round; worth a look if video preview is wanted
+later.
+
+This is inherently a client-side, real-browser-interaction feature
+(clicking thumbnails, using the slideshow controls) — verified here by
+uploading a real generated image through the full app and asserting on
+the actual bytes/status codes/disk state the backend produces
+(`t/thumbnails.t`), and by careful review of the ported JS, but *not* by
+an actual click/keypress (no browser-automation tooling in this
+project) — worth a real browser check after touching this code.
+
 ## Upload size limit
 
 `MOJO_MAX_MESSAGE_SIZE=104857600` (100MB) in `systemd/
@@ -264,3 +358,9 @@ create/nest/navigate, duplicate-name and bad-parent rejection,
 cross-user isolation, and that a recursive folder delete actually
 unlinks every contained file from disk (counts real files in
 `storage.path` before/after, not just DB-row/API-visibility checks).
+`t/thumbnails.t` covers image thumbnail/slideshow-image generation: a
+real (self-generated, no external fixture needed) JPEG gets both
+derivatives on disk and served correctly, a non-image upload gets
+neither (and isn't itself broken by the attempt), cross-user isolation
+on the two new routes, and that deleting a file also unlinks its
+derivatives, not just the original.
