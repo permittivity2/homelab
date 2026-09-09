@@ -1,0 +1,39 @@
+Template: homelab-pgbouncer/listen_addr
+Type: string
+Default: *
+Description: Address for pgbouncer to listen on:
+ '*' for all interfaces, or a specific IP.
+
+Template: homelab-pgbouncer/listen_port
+Type: string
+Default: 6432
+Description: Port for pgbouncer to listen on:
+
+Template: homelab-pgbouncer/pool_mode
+Type: select
+Choices: session, transaction, statement
+Default: session
+Description: Pooling mode:
+ session is the safest default for clients using long-lived connections
+ and/or server-side prepared statements (e.g. Perl DBD::Pg, most ORMs).
+ transaction/statement pool more aggressively but break those clients --
+ only choose them if every connecting app is known to be compatible.
+
+Template: homelab-pgbouncer/postgres_host
+Type: string
+Default:
+Description: Postgres host backing the shared 'homelab' database:
+ Address of the homelab-database host this pgbouncer will front.
+ Required -- config generation is skipped until this is set.
+
+Template: homelab-pgbouncer/postgres_port
+Type: string
+Default: 5432
+Description: Postgres port backing the shared 'homelab' database:
+
+Template: homelab-pgbouncer/admin_users
+Type: string
+Default:
+Description: Comma-separated pgbouncer admin users (optional):
+ Users allowed to connect to pgbouncer's special "pgbouncer" admin
+ database (SHOW POOLS, RELOAD, etc). Leave blank to skip.

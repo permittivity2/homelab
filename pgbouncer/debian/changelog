@@ -1,0 +1,11 @@
+homelab-pgbouncer (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 00:49:19 -0500
+
+homelab-pgbouncer (0.0.0) unstable; urgency=medium
+
+  * Placeholder seed entry — build-package.sh prepends real entries above this.
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 00:49:05 -0500

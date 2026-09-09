@@ -1,0 +1,5 @@
+# Read by homelab-borg-service-backup-client's homelab_only mode.
+# Includes userlist.txt (per explicit decision -- simpler full-config
+# restore, accepting the backup archive itself becomes a credential
+# store worth protecting accordingly).
+/etc/pgbouncer

@@ -1,0 +1,140 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONF_D=/etc/pgbouncer/conf.d
+MARKER="$CONF_D/90-homelab-pgbouncer.ini"
+PGBOUNCER_INI=/etc/pgbouncer/pgbouncer.ini
+USERLIST=/etc/pgbouncer/userlist.txt
+
+case "$1" in
+    configure)
+        echo "homelab-pgbouncer post-installation setup..."
+
+        db_get homelab-pgbouncer/listen_addr || true;   LISTEN_ADDR="${RET:-*}"
+        db_get homelab-pgbouncer/listen_port || true;   LISTEN_PORT="${RET:-6432}"
+        db_get homelab-pgbouncer/pool_mode || true;     POOL_MODE="${RET:-session}"
+        db_get homelab-pgbouncer/postgres_host || true; POSTGRES_HOST="$RET"
+        db_get homelab-pgbouncer/postgres_port || true; POSTGRES_PORT="${RET:-5432}"
+        db_get homelab-pgbouncer/admin_users || true;   ADMIN_USERS="$RET"
+
+        if [ -z "$POSTGRES_HOST" ]; then
+            echo "WARNING: no postgres_host configured -- skipping config generation."
+            echo "         Run 'sudo dpkg-reconfigure homelab-pgbouncer' once you have one."
+            db_stop
+            exit 0
+        fi
+
+        # listen_addr/listen_port only take effect on a full restart, not
+        # a reload (confirmed empirically -- SIGHUP re-reads config but
+        # never rebinds the listening socket). Snapshot the previously
+        # active values (if any) before overwriting $MARKER, so we know
+        # below whether this run actually changed either one.
+        PREV_LISTEN_ADDR=""
+        PREV_LISTEN_PORT=""
+        if [ -f "$MARKER" ]; then
+            PREV_LISTEN_ADDR="$(sed -n 's/^listen_addr = //p' "$MARKER")"
+            PREV_LISTEN_PORT="$(sed -n 's/^listen_port = //p' "$MARKER")"
+        fi
+
+        mkdir -p "$CONF_D"
+        {
+            echo "# Managed by homelab-pgbouncer -- do not hand-edit, edit debconf"
+            echo "# answers instead (dpkg-reconfigure homelab-pgbouncer)."
+            echo ""
+            echo "[databases]"
+            echo "homelab = host=$POSTGRES_HOST port=$POSTGRES_PORT dbname=homelab"
+            echo ""
+            echo "[pgbouncer]"
+            echo "listen_addr = $LISTEN_ADDR"
+            echo "listen_port = $LISTEN_PORT"
+            echo "auth_type = scram-sha-256"
+            echo "auth_file = $USERLIST"
+            echo "pool_mode = $POOL_MODE"
+            echo "max_client_conn = 100"
+            echo "default_pool_size = 20"
+            echo "min_pool_size = 2"
+            echo "log_connections = 1"
+            echo "log_disconnections = 1"
+            echo "log_pooler_errors = 1"
+            if [ -n "$ADMIN_USERS" ]; then
+                echo "admin_users = $ADMIN_USERS"
+            fi
+        } > "$MARKER"
+        chown postgres:postgres "$MARKER" 2>/dev/null || true
+        chmod 640 "$MARKER"
+        echo "  wrote $MARKER"
+
+        # Idempotently activate our drop-in via pgbouncer's native
+        # %include directive (single-file, not a glob -- confirmed via
+        # `man 5 pgbouncer`), appended at the END of pgbouncer.ini so our
+        # settings win over any of the vendor's own defaults earlier in
+        # the file. Same reasoning as homelab-database's include_dir
+        # activation in postgresql.conf; never touches anything else in
+        # this file.
+        if [ -f "$PGBOUNCER_INI" ] && ! grep -qF "%include $MARKER" "$PGBOUNCER_INI" 2>/dev/null; then
+            {
+                echo ""
+                echo "# BEGIN homelab-pgbouncer managed include"
+                echo "%include $MARKER"
+                echo "# END homelab-pgbouncer managed include"
+            } >> "$PGBOUNCER_INI"
+            echo "  activated %include in $PGBOUNCER_INI"
+        fi
+
+        # userlist.txt: create if missing (mode 640, root:postgres --
+        # matches pgbouncer running as the postgres user). Never truncate
+        # an existing one -- that would drop every already-registered
+        # role, breaking every app currently connecting through it.
+        if [ ! -f "$USERLIST" ]; then
+            : > "$USERLIST"
+            chown root:postgres "$USERLIST"
+            chmod 640 "$USERLIST"
+            echo "  created empty $USERLIST"
+        fi
+
+        # pgbouncer has no config-check-only flag (unlike haproxy -c).
+        # RELOAD (SIGHUP) reloads everything EXCEPT listen_addr/
+        # listen_port, which per pgbouncer's own documentation only take
+        # effect on a full restart (confirmed empirically). Restart only
+        # when listen_addr/listen_port actually changed from what was
+        # previously active (or on first activation); reload otherwise,
+        # to avoid needlessly dropping pooled connections on every
+        # unrelated reconfigure (e.g. adding an admin_user).
+        if systemctl is-active --quiet pgbouncer; then
+            if [ -z "$PREV_LISTEN_ADDR" ] || [ "$PREV_LISTEN_ADDR" != "$LISTEN_ADDR" ] || [ "$PREV_LISTEN_PORT" != "$LISTEN_PORT" ]; then
+                echo "  listen_addr/listen_port changed (or first activation) -- restarting"
+                systemctl restart pgbouncer || echo "WARNING: pgbouncer restart failed -- check 'systemctl status pgbouncer' by hand."
+            else
+                systemctl reload pgbouncer || true
+            fi
+        else
+            systemctl enable pgbouncer >/dev/null 2>&1 || true
+            systemctl start pgbouncer || echo "WARNING: pgbouncer failed to start -- check 'systemctl status pgbouncer' by hand."
+        fi
+        if ! systemctl is-active --quiet pgbouncer; then
+            echo "WARNING: pgbouncer is not running after configure -- check"
+            echo "         'journalctl -xeu pgbouncer' and $MARKER by hand."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-pgbouncer configured."
+        echo "conf.d:         $MARKER"
+        echo "userlist:       $USERLIST"
+        echo "bootstrap tool: homelab-bootstrap-pgbouncer-entry (on PATH)"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

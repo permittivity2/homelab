@@ -1,0 +1,43 @@
+#!/bin/sh
+set -e
+
+CONF_D=/etc/pgbouncer/conf.d
+MARKER="$CONF_D/90-homelab-pgbouncer.ini"
+PGBOUNCER_INI=/etc/pgbouncer/pgbouncer.ini
+
+case "$1" in
+    remove)
+        # Stop/undo only what THIS package created. Never touch the
+        # pgbouncer service's own vendor config, or userlist.txt (removing
+        # it would revoke every already-registered app's ability to
+        # connect, and it may contain roles this package never created).
+        rm -f "$MARKER"
+
+        if [ -f "$PGBOUNCER_INI" ]; then
+            sed -i '/# BEGIN homelab-pgbouncer managed include/,/# END homelab-pgbouncer managed include/d' "$PGBOUNCER_INI"
+        fi
+
+        systemctl reload pgbouncer 2>/dev/null || true
+
+        # Debconf answers themselves are left in place on remove (not
+        # purge) per standard Debian convention, so a subsequent reinstall
+        # doesn't need to re-prompt.
+        ;;
+
+    purge)
+        if [ -x /usr/share/debconf/confmodule ] || [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

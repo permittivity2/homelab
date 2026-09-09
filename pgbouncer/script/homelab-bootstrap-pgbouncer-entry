@@ -1,0 +1,176 @@
+#!/usr/bin/perl
+# Registers one role's SCRAM secret (from homelab-database's
+# homelab-bootstrap-app-role) into pgbouncer's userlist.txt, so it can
+# authenticate through the pooler.
+#
+# IMPORTANT (see CLAUDE.md's split-role design): only ever register a
+# feature's RUNTIME role here — never its migrate role. The migrate
+# role connects directly to Postgres, bypassing pgbouncer entirely, on
+# purpose (a short-lived, infrequent connection with no pooling benefit
+# to gain, and it sidesteps pool-mode edge cases with DDL). This script
+# doesn't enforce that distinction itself (it just takes whatever role
+# name/secret it's given) — it's a convention every caller must follow.
+#
+# Never uses a stored/network admin credential — always root/OS-level
+# auth, local or over SSH:
+#
+#   1. Local (--pgbouncer-host is this host): edit userlist.txt + reload
+#      directly, as root.
+#   2. Remote + SSH trust works: the identical action, piped through
+#      `ssh <pgbouncer-host> ...` instead of a local shell.
+#   3. Neither works: the exact userlist.txt line and reload command are
+#      printed for a human to run by hand.
+#
+# Usage: homelab-bootstrap-pgbouncer-entry --role NAME --scram-secret SECRET \
+#            --pgbouncer-host HOST [--userlist PATH]
+
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+use File::Temp qw(tempfile);
+
+my $ROLE           = '';
+my $SCRAM_SECRET   = '';
+my $PGBOUNCER_HOST = '';
+my $USERLIST       = '/etc/pgbouncer/userlist.txt';
+
+GetOptions(
+    'role=s'           => \$ROLE,
+    'scram-secret=s'   => \$SCRAM_SECRET,
+    'pgbouncer-host=s' => \$PGBOUNCER_HOST,
+    'userlist=s'       => \$USERLIST,
+) or die usage();
+
+die usage() unless $ROLE && $SCRAM_SECRET && $PGBOUNCER_HOST;
+
+my @SSH_OPTS = ('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new');
+
+sub usage {
+    return "Usage: $0 --role NAME --scram-secret SECRET --pgbouncer-host HOST [--userlist PATH]\n";
+}
+
+sub log_msg  { print STDERR "[bootstrap-pgbouncer-entry] @_\n" }
+sub warn_msg { print STDERR "[bootstrap-pgbouncer-entry] WARNING: @_\n" }
+sub die_msg  { print STDERR "[bootstrap-pgbouncer-entry] ERROR: @_\n"; exit 1 }
+
+sub is_local_host {
+    my ($host) = @_;
+    return 1 if $host eq 'localhost' || $host eq '127.0.0.1' || $host eq '::1';
+    chomp(my $hostname = `hostname`);
+    return 1 if $host eq $hostname;
+    chomp(my $fqdn = `hostname -f 2>/dev/null`);
+    return 1 if $fqdn && $host eq $fqdn;
+    return 0;
+}
+
+# Idempotently add-or-replace the "role" "secret" line for $role in the
+# userlist content given as a single string, returning the updated
+# content. Pure string logic, reused identically for both the local and
+# remote paths.
+sub updated_userlist_content {
+    my ($content, $role, $secret) = @_;
+    my $new_line = qq{"$role" "$secret"};
+    my @out;
+    my $found = 0;
+    for my $line (split /\n/, $content) {
+        if ($line =~ /^"\Q$role\E"\s/) {
+            push @out, $new_line;
+            $found = 1;
+        }
+        else {
+            push @out, $line;
+        }
+    }
+    push @out, $new_line unless $found;
+    return join("\n", @out) . "\n";
+}
+
+sub run_local {
+    log_msg("registering '$ROLE' locally in $USERLIST");
+    my $content = '';
+    if (-f $USERLIST) {
+        open(my $fh, '<', $USERLIST) or die_msg("cannot read $USERLIST: $!");
+        local $/ = undef;
+        $content = <$fh>;
+        close($fh);
+    }
+    my $updated = updated_userlist_content($content, $ROLE, $SCRAM_SECRET);
+
+    my ($tmp_fh, $tmp_path) = tempfile();
+    print $tmp_fh $updated;
+    close($tmp_fh);
+    system('cp', $tmp_path, $USERLIST) == 0 or die_msg("cannot write $USERLIST: $!");
+    unlink($tmp_path);
+    chmod(0640, $USERLIST);
+
+    system('systemctl', 'reload', 'pgbouncer') == 0
+        or warn_msg("reload failed -- check 'systemctl status pgbouncer' by hand");
+    return 1;
+}
+
+sub ssh_trust_works {
+    system('ssh', @SSH_OPTS, $PGBOUNCER_HOST, 'true') == 0;
+}
+
+# Remote update logic identical to run_local's, just with the userlist
+# read/written over SSH instead of local files — same
+# updated_userlist_content() function, so there's exactly one place the
+# actual add-or-replace logic lives.
+sub run_remote {
+    log_msg("registering '$ROLE' on $PGBOUNCER_HOST via SSH");
+
+    my $content = '';
+    {
+        open(my $fh, '-|', 'ssh', @SSH_OPTS, $PGBOUNCER_HOST, "cat $USERLIST 2>/dev/null || true")
+            or die_msg("cannot exec ssh: $!");
+        local $/ = undef;
+        $content = <$fh> // '';
+        close($fh);
+    }
+    my $updated = updated_userlist_content($content, $ROLE, $SCRAM_SECRET);
+
+    open(my $wfh, '|-', 'ssh', @SSH_OPTS, $PGBOUNCER_HOST,
+        "cat > $USERLIST.tmp.$$ && chmod 640 $USERLIST.tmp.$$ && mv $USERLIST.tmp.$$ $USERLIST && systemctl reload pgbouncer")
+        or die_msg("cannot exec ssh: $!");
+    print $wfh $updated;
+    close($wfh);
+    return $? == 0;
+}
+
+sub run_manual {
+    warn_msg("cannot register '$ROLE' automatically (not local, and no SSH trust to $PGBOUNCER_HOST)");
+    print STDERR <<MSG;
+
+  On $PGBOUNCER_HOST, have an administrator add this line to $USERLIST
+  (replacing any existing line for the same role), then reload:
+
+    "$ROLE" "$SCRAM_SECRET"
+
+    sudo systemctl reload pgbouncer
+
+MSG
+
+    while (1) {
+        print STDERR "Press Enter once that's been done (or 's' to skip): ";
+        my $reply = <STDIN>;
+        unless (defined $reply) {
+            warn_msg('no input available; skipping');
+            return 0;
+        }
+        chomp $reply;
+        return 0 if lc($reply) eq 's';
+        return 1;
+    }
+}
+
+sub main {
+    my $ok =
+        is_local_host($PGBOUNCER_HOST) ? run_local()
+      : ssh_trust_works()              ? run_remote()
+      :                                  run_manual();
+
+    die_msg('registration failed or was skipped') unless $ok;
+    log_msg('done');
+}
+
+main();
