@@ -25,16 +25,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Perl test dependencies
+        # Test::Mojo ships bundled inside libmojolicious-perl (confirmed —
+        # no separate package/cpanm needed). Minion::Backend::Pg ships
+        # bundled inside libminion-perl the same way. Match each real
+        # package's own debian/control Depends: here rather than
+        # guessing/cpanm-installing from CPAN, which is slower and can
+        # silently pull a different version than what's actually shipped.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libmojolicious-perl cpanminus
-          sudo cpanm --notest Test::Mojo Minion::Backend::Pg || true
+          sudo apt-get install -y \
+            libmojolicious-perl libyaml-libyaml-perl libmojo-pg-perl \
+            libdbi-perl libdbd-pg-perl libminion-perl
       - name: Run every package's t/*.t (skips packages with none)
+        # Only requires t/ — several packages (pgbouncer, database) ship
+        # a script/ + t/ with no lib/ at all (no Perl modules, just a
+        # standalone tool); `-I lib` is harmless when lib/ doesn't exist.
+        # An earlier version of this loop required both t/ AND lib/,
+        # which silently excluded those packages' tests from CI entirely.
         run: |
           set -e
           shopt -s nullglob
           for pkg in */; do
-            if [ -d "${pkg}t" ] && [ -d "${pkg}lib" ]; then
+            if [ -d "${pkg}t" ]; then
               echo "::group::prove: $pkg"
               (cd "$pkg" && prove -I lib -r t) || exit 1
               echo "::endgroup::"
@@ -73,5 +85,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest
+      - run: pip install -r tests/e2e/requirements.txt
       - run: python -m pytest tests/e2e/ --collect-only
