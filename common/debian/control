@@ -1,0 +1,25 @@
+Source: homelab-common
+Section: perl
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-common
+Architecture: all
+Depends: perl (>= 5.36),
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         libdbi-perl,
+         libdbd-pg-perl,
+         libminion-perl,
+         postgresql-client
+Description: Shared foundation library for every homelab-* feature package
+ Config loading, database connections (both the narrow runtime role and
+ the separate schema-migration role), a service-registry client, a
+ Postgres-backed job-queue helper (Minion), a schema-migration runner,
+ and a health-check-route helper. Every Mojolicious-based homelab-*
+ feature depends on this instead of re-implementing the same plumbing —
+ see the CLAUDE.md architecture notes in the source repository.
