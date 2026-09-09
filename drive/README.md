@@ -74,6 +74,39 @@ both). The check is a deliberate application-level check-then-insert in
 under real concurrent requests as `homelab-api`'s own `register()` has
 for email uniqueness.
 
+### Drag-and-drop upload
+
+Dropping files (or whole folders, dragged straight from the OS file
+manager — this is upload, not a move-within-Drive feature; see
+"deliberately no move" above) onto the main pane uploads into the
+folder currently being viewed; dropping onto a folder row in the
+sidebar uploads into *that* folder directly, regardless of which one is
+open. Plain vanilla JS (`templates/index.html.ep`'s own `<script>`
+block, no framework, no build step) — it just calls the same
+`/api/v1/files`/`/api/v1/folders` JSON API `homelab-cli` uses, via
+`fetch()` with `credentials: 'same-origin'` so this page's own session
+cookie authenticates it.
+
+Dragging a whole folder requires recursively walking it
+(`webkitGetAsEntry()`/`FileSystemDirectoryReader` — non-standard in
+name only, supported in every current browser; falls back to flat
+per-file drops if it's ever unavailable) and creating matching Drive
+folders as it goes, reusing a folder that already exists (a 409 from
+`POST /api/v1/folders`) rather than failing the whole drop — this is
+what makes dragging the same folder twice (e.g. after adding a file to
+it locally) a no-op merge instead of an error. Uploads are processed
+one at a time, not in parallel — simpler, and avoids two branches of
+the same drop racing to create the same not-yet-existing folder.
+
+This is inherently a client-side, real-browser-gesture feature —
+verified here by directly replicating the exact API call sequence the
+script makes (create → 409 → look-up-and-reuse → upload-with-folder_id)
+over curl, and by careful manual review of the script itself, but *not*
+by an actual automated drag gesture (no browser-automation tooling in
+this project yet, and HTML5 drag-and-drop is notoriously hard to
+simulate reliably even with one) — a real browser check is worth doing
+after touching this code.
+
 ## Upload size limit
 
 `MOJO_MAX_MESSAGE_SIZE=104857600` (100MB) in `systemd/

@@ -32,9 +32,10 @@
   .folder-list { list-style: none; margin: 0 0 1rem; padding: 0; }
   .folder-list li {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0.4rem 0.5rem; border-radius: 5px;
+    padding: 0.4rem 0.5rem; border-radius: 5px; border: 1px dashed transparent;
   }
   .folder-list li:hover { background: #f0f2f5; }
+  .folder-list li.drag-over { background: #e8f0fe; border-color: #3562d4; }
   .folder-list a { color: #1a1a1a; text-decoration: none; flex: 1; display: flex; align-items: center; gap: 0.4rem; }
   .folder-list a:hover { color: #3562d4; }
   .folder-list form { margin: 0; }
@@ -52,7 +53,28 @@
   }
   form.new-folder button:hover { background: #2a4fb0; }
 
-  main { flex: 1; min-width: 0; }
+  main {
+    flex: 1; min-width: 0; position: relative; border-radius: 8px;
+    border: 2px dashed transparent; transition: background-color 0.15s, border-color 0.15s;
+  }
+  main.drag-over { background: #e8f0fe; border-color: #3562d4; }
+  .drop-hint {
+    display: none; position: sticky; top: 0; z-index: 5; text-align: center;
+    padding: 0.6rem; margin-bottom: 1rem; border-radius: 6px;
+    background: #3562d4; color: #fff; font-size: 0.85rem; font-weight: 600;
+  }
+  main.drag-over .drop-hint { display: block; }
+  .upload-progress {
+    display: none; align-items: center; gap: 0.5rem; background: #fff; border: 1px solid #e3e5e9;
+    border-radius: 8px; padding: 0.7rem 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; color: #4b5160;
+  }
+  .upload-progress.active { display: flex; }
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid #d5d8dd; border-top-color: #3562d4;
+    border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   .error-banner {
     background: #fdeceb; border: 1px solid #f3b7b2; color: #8a2c25;
     padding: 0.6rem 0.9rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem;
@@ -69,6 +91,7 @@
   .upload-bar button:hover { background: #187c43; }
   .upload-bar button:disabled { background: #9aa0ab; cursor: default; }
   .upload-status { font-size: 0.85rem; color: #6b7280; }
+  .drop-tip { font-size: 0.8rem; color: #9aa0ab; margin-left: auto; }
 
   table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e3e5e9; border-radius: 8px; overflow: hidden; }
   th, td { text-align: left; padding: 0.6rem 0.9rem; font-size: 0.9rem; border-bottom: 1px solid #eef0f3; }
@@ -85,11 +108,12 @@
 
   @media (prefers-color-scheme: dark) {
     body { background: #16181d; color: #e6e8eb; }
-    nav.breadcrumb, aside, .upload-bar, table { background: #1e2128; border-color: #2c2f37; }
+    nav.breadcrumb, aside, .upload-bar, .upload-progress, table { background: #1e2128; border-color: #2c2f37; }
     th { background: #23262d; color: #9aa0ab; }
     th, td { border-color: #2c2f37; }
     td a, .folder-list a { color: #e6e8eb; }
     form.new-folder input[type=text] { background: #16181d; border-color: #2c2f37; color: #e6e8eb; }
+    .folder-list li.drag-over, main.drag-over { background: rgba(53, 98, 212, 0.15); }
   }
 </style>
 </head>
@@ -112,12 +136,12 @@
 <div class="layout">
   <aside>
     <h2>Folders</h2>
-    <ul class="folder-list">
+    <ul class="folder-list" id="folder-list">
 % if (!@$folders) {
       <li class="empty-hint">No folders yet</li>
 % }
 % for my $f (@$folders) {
-      <li>
+      <li data-folder-id="<%= $f->{id} %>">
         <a href="/folders/<%= $f->{id} %>">📁 <%= $f->{name} %></a>
         <form method="post" action="/folders/<%= $f->{id} %>/delete"
               onsubmit="return confirm('Delete \'<%= $f->{name} %>\' and everything inside it?')">
@@ -133,10 +157,16 @@
     </form>
   </aside>
 
-  <main>
+  <main id="drop-main" data-folder-id="<%= $current_folder_id // '' %>">
+    <div class="drop-hint">Drop to upload here</div>
 % if ($error) {
     <div class="error-banner"><%= $error %></div>
 % }
+
+    <div class="upload-progress" id="upload-progress">
+      <span class="spinner"></span>
+      <span id="upload-progress-text">Uploading…</span>
+    </div>
 
     <form class="upload-bar" method="post" action="/upload" enctype="multipart/form-data"
           onsubmit="this.querySelector('button').disabled = true; this.querySelector('.upload-status').textContent = 'Uploading\x{2026}';">
@@ -144,6 +174,7 @@
       <input type="file" name="file" required>
       <button type="submit">Upload</button>
       <span class="upload-status"></span>
+      <span class="drop-tip">or drag files/folders here or onto a folder</span>
     </form>
 
 % if (!@$files && !@$folders) {
@@ -169,5 +200,180 @@
 % }
   </main>
 </div>
+
+<script>
+// Drag-and-drop upload: drop files (or whole folders, from the OS file
+// manager -- NOT a move-within-Drive feature) onto the main area to
+// upload into the folder currently being viewed, or directly onto a
+// folder row in the sidebar to upload into THAT folder regardless of
+// which one is open. Talks to the same /api/v1/files and /api/v1/folders
+// JSON API homelab-cli uses (see README.md) -- fetch()'s same-origin
+// credentials carry this page's own session cookie, so _current_email()
+// authenticates via its existing cookie fallback, no separate token
+// needed here.
+(function () {
+  'use strict';
+
+  function setupDropZone(el, getFolderId) {
+    // A plain dragenter/dragleave pair flickers on any element with
+    // child nodes (Chrome fires dragleave when the pointer crosses from
+    // a child onto its parent, even while still inside the same drop
+    // zone) -- a depth counter avoids that instead of trying to filter
+    // relatedTarget, which behaves inconsistently across browsers here.
+    let depth = 0;
+    el.addEventListener('dragenter', function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth++;
+      el.classList.add('drag-over');
+    });
+    el.addEventListener('dragover', function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault(); // required, or the browser refuses the drop entirely
+    });
+    el.addEventListener('dragleave', function () {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) el.classList.remove('drag-over');
+    });
+    el.addEventListener('drop', function (e) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation(); // harmless defensively even though aside/main are siblings today, not nested
+      depth = 0;
+      el.classList.remove('drag-over');
+      handleDrop(e.dataTransfer.items, getFolderId());
+    });
+  }
+
+  function hasFiles(e) {
+    return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') !== -1;
+  }
+
+  async function handleDrop(items, targetFolderId) {
+    var entries = [];
+    for (var i = 0; i < items.length; i++) {
+      // webkitGetAsEntry is non-standard in name only -- supported in
+      // every current browser -- and is what makes recursing into a
+      // dropped folder possible at all. Fall back to a flat File if
+      // it's ever unavailable, so plain file drops still work.
+      var entry = items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null;
+      if (entry) {
+        entries.push(entry);
+      } else if (items[i].getAsFile) {
+        var file = items[i].getAsFile();
+        if (file) entries.push({ isFile: true, isDirectory: false, name: file.name, file: function (cb) { cb(file); } });
+      }
+    }
+    if (!entries.length) return;
+
+    var progress = document.getElementById('upload-progress');
+    var progressText = document.getElementById('upload-progress-text');
+    progress.classList.add('active');
+
+    var counts = { uploaded: 0, failed: 0 };
+    var folderCache = new Map();
+    for (var j = 0; j < entries.length; j++) {
+      progressText.textContent = 'Uploading… (' + counts.uploaded + ' done)';
+      await processEntry(entries[j], targetFolderId, folderCache, counts, progressText);
+    }
+
+    progress.classList.remove('active');
+    if (counts.failed) {
+      alert(counts.failed + ' file(s) failed to upload' + (counts.uploaded ? ' (' + counts.uploaded + ' succeeded).' : '.'));
+    }
+    if (counts.uploaded) location.reload();
+  }
+
+  function processEntry(entry, targetFolderId, folderCache, counts, progressText) {
+    if (entry.isFile) {
+      return new Promise(function (resolve) {
+        entry.file(async function (file) {
+          var ok = await uploadFile(file, targetFolderId);
+          if (ok) counts.uploaded++; else counts.failed++;
+          progressText.textContent = 'Uploading… (' + counts.uploaded + ' done)';
+          resolve();
+        }, function () { counts.failed++; resolve(); });
+      });
+    }
+    if (entry.isDirectory) {
+      return ensureFolder(entry.name, targetFolderId, folderCache).then(function (folderId) {
+        if (!folderId) { counts.failed++; return; }
+        return readAllEntries(entry).then(function (children) {
+          var chain = Promise.resolve();
+          children.forEach(function (child) {
+            chain = chain.then(function () { return processEntry(child, folderId, folderCache, counts, progressText); });
+          });
+          return chain;
+        });
+      });
+    }
+    return Promise.resolve();
+  }
+
+  // DirectoryReader.readEntries() only returns a batch at a time and
+  // MUST be called repeatedly until it returns an empty array -- a
+  // single call is not guaranteed to return every entry, even for a
+  // small directory (documented browser behavior, not a defensive
+  // extra here).
+  function readAllEntries(dirEntry) {
+    var reader = dirEntry.createReader();
+    var all = [];
+    return new Promise(function (resolve, reject) {
+      (function readBatch() {
+        reader.readEntries(function (batch) {
+          if (!batch.length) { resolve(all); return; }
+          all.push.apply(all, batch);
+          readBatch();
+        }, reject);
+      })();
+    });
+  }
+
+  async function ensureFolder(name, parentId, cache) {
+    var key = (parentId || 'root') + '/' + name;
+    if (cache.has(key)) return cache.get(key);
+    var body = { name: name };
+    if (parentId) body.parent_folder_id = parentId;
+
+    var resp = await fetch('/api/v1/folders', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+    var folderId = null;
+    if (resp.status === 201) {
+      folderId = (await resp.json()).id;
+    } else if (resp.status === 409) {
+      // Already exists (e.g. dragging the same folder again to add one
+      // more file to it) -- reuse it instead of failing everything
+      // inside it.
+      var listResp = await fetch('/api/v1/folders' + (parentId ? '?parent_id=' + encodeURIComponent(parentId) : ''), { credentials: 'same-origin' });
+      var list = await listResp.json();
+      var existing = list.find(function (f) { return f.name === name; });
+      if (existing) folderId = existing.id;
+    }
+    cache.set(key, folderId);
+    return folderId;
+  }
+
+  async function uploadFile(file, folderId) {
+    var form = new FormData();
+    form.append('file', file, file.name);
+    if (folderId) form.append('folder_id', folderId);
+    try {
+      var resp = await fetch('/api/v1/files', { method: 'POST', credentials: 'same-origin', body: form });
+      return resp.ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  var main = document.getElementById('drop-main');
+  setupDropZone(main, function () { return main.dataset.folderId || null; });
+  document.querySelectorAll('#folder-list li[data-folder-id]').forEach(function (li) {
+    setupDropZone(li, function () { return li.dataset.folderId; });
+  });
+})();
+</script>
 </body>
 </html>
