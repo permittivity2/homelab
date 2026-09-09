@@ -3,7 +3,7 @@ use Mojo::Base -strict;
 use Mojo::UserAgent;
 use Exporter 'import';
 
-our @EXPORT_OK = qw(introspect login);
+our @EXPORT_OK = qw(introspect login refresh revoke);
 
 # Verifies a bearer JWT against homelab-api's /api/v1/auth/introspect —
 # the one place identity actually lives (see CLAUDE.md). Every feature
@@ -49,6 +49,44 @@ sub login {
     $body->{_status} = $res->code;
     $body->{success} = ($res->code == 200) ? 1 : 0;
     return $body;
+}
+
+# Exchanges a refresh_token for a new token/refresh_token pair via
+# homelab-api's /api/v1/auth/refresh — used by homelab-sso's silent-
+# session-resume path (an IdP session whose cached JWT has expired but
+# whose refresh_token hasn't) and by any BFF-style app that wants the
+# same "don't force a re-login just because the short-lived access
+# token expired" behavior. Same success/_status shape as login().
+sub refresh {
+    my ($refresh_token, %opts) = @_;
+    my $api_base = $opts{api_base} // die "refresh(): api_base required\n";
+
+    my $tx  = $UA->post("$api_base/api/v1/auth/refresh", json => { refresh_token => $refresh_token });
+    my $err = $tx->error;
+    return { success => 0, error => $err->{message} // 'connection error', _status => 0 }
+        if $err && !$err->{code};
+
+    my $res  = $tx->result;
+    my $body = eval { $res->json } // {};
+    $body->{_status} = $res->code;
+    $body->{success} = ($res->code == 200) ? 1 : 0;
+    return $body;
+}
+
+# Revokes a refresh_token (and, since homelab-api 0.1.2's session
+# tracking, the access token/jti it's associated with too — see
+# api/migrations/005-sessions.sql) via /api/v1/auth/logout.
+# Best-effort by design: callers (homelab-sso's own /logout) should
+# clear their local session regardless of whether this succeeds, not
+# block logout on it.
+sub revoke {
+    my ($refresh_token, %opts) = @_;
+    my $api_base = $opts{api_base} // die "revoke(): api_base required\n";
+
+    my $tx = $UA->post("$api_base/api/v1/auth/logout", json => { refresh_token => $refresh_token });
+    my $err = $tx->error;
+    return 0 if $err && !$err->{code};
+    return $tx->result->code == 200 ? 1 : 0;
 }
 
 1;

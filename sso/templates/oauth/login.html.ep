@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><title>Homelab SSO — Log in</title></head>
+<body>
+<h1>Homelab SSO</h1>
+% if ($error) {
+<p style="color:red;"><%= $error %></p>
+% }
+<form method="post" action="/oauth/authorize">
+  <input type="hidden" name="client_id" value="<%= $client_id %>">
+  <input type="hidden" name="redirect_uri" value="<%= $redirect_uri %>">
+  <input type="hidden" name="state" value="<%= $state %>">
+  <input type="hidden" name="scope" value="<%= $scope %>">
+  <label>Email: <input type="email" name="email" required></label><br>
+  <label>Password: <input type="password" name="password" required></label><br>
+  <button type="submit">Log in</button>
+</form>
+</body>
+</html>

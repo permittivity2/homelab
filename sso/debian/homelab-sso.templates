@@ -1,0 +1,56 @@
+Template: homelab-sso/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-sso/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
+Template: homelab-sso/homelab_api_base_url
+Type: string
+Default: http://127.0.0.1:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url -- every login,
+ introspect, refresh, and revoke this app does proxies through here.
+
+Template: homelab-sso/listen_port
+Type: string
+Default: 2502
+Description: Port for homelab-sso to listen on:
+
+Template: homelab-sso/drive_redirect_uri
+Type: string
+Default: https://drive.test.mailmasker.org/oauth/callback
+Description: homelab-drive's OAuth callback URL:
+ Registered as this deployment's "drive" OAuth client redirect_uri --
+ must match exactly what homelab-drive itself is configured to use.
+
+Template: homelab-sso/drive_client_secret
+Type: password
+Description: Shared secret for the "drive" OAuth client (blank = generate one):
+ Leave blank on a first install to auto-generate a random secret (it
+ will be printed at the end of this install for you to copy into
+ homelab-drive's own config). Set it explicitly on a reinstall/rotation
+ to match a secret homelab-drive is already configured with.
+
+Template: homelab-sso/roundcube_redirect_uri
+Type: string
+Default: https://mail.test.mailmasker.org/index.php/login/oauth
+Description: homelab-roundcube's OAuth callback URL:
+ Registered as this deployment's "roundcube" OAuth client redirect_uri
+ -- must match exactly what homelab-roundcube itself is configured to
+ use.
+
+Template: homelab-sso/roundcube_client_secret
+Type: password
+Description: Shared secret for the "roundcube" OAuth client (blank = generate one):
+ Leave blank on a first install to auto-generate a random secret (it
+ will be printed at the end of this install for you to copy into
+ homelab-roundcube's own config). Set it explicitly on a reinstall/
+ rotation to match a secret homelab-roundcube is already configured
+ with.

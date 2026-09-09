@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 systemd/homelab-sso.service \
+		debian/homelab-sso/etc/systemd/system/homelab-sso.service
+	install -D -m 644 config/sso.example.yml \
+		debian/homelab-sso/usr/share/homelab-sso/config/sso.example.yml
+	find migrations -type f -exec install -D -m 644 {} \
+		debian/homelab-sso/usr/share/homelab-sso/{} \;
+	find templates -type f -exec install -D -m 644 {} \
+		debian/homelab-sso/usr/share/homelab-sso/{} \;

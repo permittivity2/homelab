@@ -1,0 +1,51 @@
+# Copy to /etc/homelab/sso/config.yml and edit for real values —
+# postinst does this automatically at install time via the standard
+# split-role bootstrap (see CLAUDE.md); this file exists as the
+# reference/fallback for a manual install.
+
+database:
+  host: pgbouncer.example.com
+  port: 6432
+  name: homelab
+  user: homelab_sso_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_sso_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+# homelab-api's own base URL -- server-to-server, from this host, not
+# necessarily the same public address a browser would use.
+homelab_api:
+  base_url: http://127.0.0.1:3000
+
+server:
+  listen: http://0.0.0.0:2502
+  workers: 2
+
+session:
+  # MUST be identical across all homelab-sso instances if ever run with
+  # more than one — this is what lets any worker/instance decrypt a
+  # session cookie another one issued.
+  secret: CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS
+  expiry: 2592000   # 30 days
+  secure: true
+
+registry:
+  host: 127.0.0.1
+  port: 2502
+
+# Every relying party this deployment trusts. client_secret is a shared
+# secret only the RP and this service know — never sent to the browser
+# (unlike client_id/redirect_uri, which appear in the /oauth/authorize
+# URL by design).
+clients:
+  - client_id: drive
+    client_secret: YOUR_DRIVE_CLIENT_SECRET_HERE
+    redirect_uri: https://drive.test.mailmasker.org/oauth/callback
+  - client_id: roundcube
+    client_secret: YOUR_ROUNDCUBE_CLIENT_SECRET_HERE
+    redirect_uri: https://mail.test.mailmasker.org/index.php/login/oauth

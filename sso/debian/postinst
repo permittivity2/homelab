@@ -1,0 +1,121 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+SHARE_DIR=/usr/share/homelab-sso
+CONFIG_DIR=/etc/homelab/sso
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+
+case "$1" in
+    configure)
+        echo "homelab-sso post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-sso/db_host || true;             DB_HOST="${RET:-localhost}"
+            db_get homelab-sso/pgbouncer_host || true;       PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-sso/homelab_api_base_url || true; API_BASE="${RET:-http://127.0.0.1:3000}"
+            db_get homelab-sso/listen_port || true;          LISTEN_PORT="${RET:-2502}"
+            db_get homelab-sso/drive_redirect_uri || true;      DRIVE_REDIRECT_URI="$RET"
+            db_get homelab-sso/drive_client_secret || true;     DRIVE_SECRET="$RET"
+            db_get homelab-sso/roundcube_redirect_uri || true;  ROUNDCUBE_REDIRECT_URI="$RET"
+            db_get homelab-sso/roundcube_client_secret || true; ROUNDCUBE_SECRET="$RET"
+
+            echo "  bootstrapping split Postgres roles for 'homelab_sso' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_sso --schema sso --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success -- see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-sso' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$RUNTIME_ROLE' by hand."
+
+            SESSION_SECRET="$(openssl rand -base64 32)"
+            # Only auto-generate a client secret when the admin left the
+            # debconf field blank -- a real redeploy/rotation should be
+            # able to set an EXISTING secret here to match what's
+            # already configured on the relying party's own side,
+            # rather than always being handed a fresh one it would then
+            # have to go update elsewhere too.
+            [ -z "$DRIVE_SECRET" ] && DRIVE_SECRET="$(openssl rand -base64 24)"
+            [ -z "$ROUNDCUBE_SECRET" ] && ROUNDCUBE_SECRET="$(openssl rand -base64 24)"
+
+            sed \
+                -e "s#YOUR_POSTGRES_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#pgbouncer.example.com#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_sso_runtime#$RUNTIME_ROLE#g" \
+                -e "s#YOUR_POSTGRES_HOST#$DB_HOST#g" \
+                -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
+                -e "s#homelab_sso_migrate#$MIGRATE_ROLE#g" \
+                -e "s#http://127\.0\.0\.1:3000#$API_BASE#g" \
+                -e "s#0\.0\.0\.0:2502#0.0.0.0:$LISTEN_PORT#g" \
+                -e "s#CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS#$SESSION_SECRET#g" \
+                -e "s#https://drive.test.mailmasker.org/oauth/callback#$DRIVE_REDIRECT_URI#g" \
+                -e "s#YOUR_DRIVE_CLIENT_SECRET_HERE#$DRIVE_SECRET#g" \
+                -e "s#https://mail.test.mailmasker.org/index.php/login/oauth#$ROUNDCUBE_REDIRECT_URI#g" \
+                -e "s#YOUR_ROUNDCUBE_CLIENT_SECRET_HERE#$ROUNDCUBE_SECRET#g" \
+                "$SHARE_DIR/config/sso.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+            echo ""
+            echo "  ============================================================"
+            echo "  Client secrets (copy these into homelab-drive's and"
+            echo "  homelab-roundcube's own config -- they must match exactly):"
+            echo "    drive client_secret:      $DRIVE_SECRET"
+            echo "    roundcube client_secret:  $ROUNDCUBE_SECRET"
+            echo "  ============================================================"
+            echo ""
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it and the bootstrapped role untouched"
+            echo "  (dpkg-reconfigure homelab-sso to redo bootstrap, e.g. after a password rotation)"
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_SSO_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
+            HOMELAB_SSO_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-sso-migrate
+
+        systemctl enable homelab-sso >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-sso; then
+            systemctl restart homelab-sso || echo "WARNING: homelab-sso restart failed -- check 'systemctl status homelab-sso' by hand."
+        else
+            systemctl start homelab-sso || echo "WARNING: homelab-sso failed to start -- check 'systemctl status homelab-sso' by hand."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-sso configured."
+        echo "config: $CONFIG_FILE"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,11 @@
+homelab-sso (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 08:08:11 -0500
+
+homelab-sso (0.0.0) unstable; urgency=medium
+
+  * Placeholder seed entry — build-package.sh prepends real entries above this.
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 07:45:00 -0500

@@ -1,3 +1,9 @@
+homelab-common (0.1.8) unstable; urgency=medium
+
+  * Release v0.1.8
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 07:26:55 -0500
+
 homelab-common (0.1.7) unstable; urgency=medium
 
   * Release v0.1.7

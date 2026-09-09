@@ -1,0 +1,20 @@
+#!/usr/bin/env perl
+# Applies homelab-sso's own migrations/*.sql via the migrate role.
+# Same template as homelab-drive-migrate/homelab-api-migrate.
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(migrate_dbh);
+use Homelab::Common::Migrate qw(run_migrations);
+
+my $config = load_config('HOMELAB_SSO_CONFIG', '/etc/homelab/sso/config.yml');
+my $dbh    = migrate_dbh(%{ $config->{database_migrate} });
+
+my $migrations_dir = $ENV{HOMELAB_SSO_MIGRATIONS_DIR} // '/usr/share/homelab-sso/migrations';
+my $applied = run_migrations(dbh => $dbh, schema => 'sso', migrations_dir => $migrations_dir);
+
+print "homelab-sso: applied $applied migration(s)\n";

@@ -5,7 +5,7 @@ use Mojo::UserAgent;
 use File::Temp qw(tempfile);
 
 use lib 'lib';
-use Homelab::Common::AuthClient qw(introspect login);
+use Homelab::Common::AuthClient qw(introspect login refresh revoke);
 
 # Same subprocess-fake-API pattern as t/registry.t — see that file for
 # why (same-process Mojo::Server::Daemon + blocking UA doesn't reliably
@@ -31,6 +31,20 @@ $app->routes->post('/api/v1/auth/login' => sub {
         return $c->render(json => { token => 'valid-token', refresh_token => 'rt', expires_in => 900 });
     }
     return $c->render(json => { error => 'invalid email or password' }, status => 401);
+});
+$app->routes->post('/api/v1/auth/refresh' => sub {
+    my $c    = shift;
+    my $body = $c->req->json // {};
+    if (($body->{refresh_token} // '') eq 'rt') {
+        return $c->render(json => { token => 'refreshed-token', refresh_token => 'rt2', expires_in => 900 });
+    }
+    return $c->render(json => { error => 'invalid or expired refresh_token' }, status => 401);
+});
+$app->routes->post('/api/v1/auth/logout' => sub {
+    my $c    = shift;
+    my $body = $c->req->json // {};
+    return $c->render(json => { success => \1 }) if ($body->{refresh_token} // '') eq 'rt';
+    return $c->render(json => { error => 'unknown token' }, status => 400);
 });
 my $daemon = Mojo::Server::Daemon->new(app => $app, listen => ['http://127.0.0.1:18791']);
 $daemon->start;
@@ -75,6 +89,20 @@ is($login_bad->{_status}, 401, 'login() surfaces the real HTTP status');
 
 my $login_unreachable = login('user@test.mailmasker.org', 'correct-password', api_base => 'http://127.0.0.1:1');
 ok(!$login_unreachable->{success}, 'login() reports failure (not dies) on a transport failure');
+
+my $refresh_ok = refresh('rt', api_base => $api_base);
+ok($refresh_ok->{success}, 'refresh() reports success for a valid refresh_token');
+is($refresh_ok->{token}, 'refreshed-token', 'refresh() returns the new token');
+
+my $refresh_bad = refresh('not-a-real-refresh-token', api_base => $api_base);
+ok(!$refresh_bad->{success}, 'refresh() reports failure for an invalid refresh_token, not dying');
+is($refresh_bad->{_status}, 401, 'refresh() surfaces the real HTTP status');
+
+ok(!refresh('rt', api_base => 'http://127.0.0.1:1')->{success}, 'refresh() reports failure (not dies) on a transport failure');
+
+ok(revoke('rt', api_base => $api_base), 'revoke() returns true for a token the fake API accepts');
+ok(!revoke('not-a-real-refresh-token', api_base => $api_base), 'revoke() returns false for a rejected token, not dying');
+ok(!revoke('rt', api_base => 'http://127.0.0.1:1'), 'revoke() returns false (not dies) on a transport failure');
 
 kill('TERM', $pid);
 waitpid($pid, 0);

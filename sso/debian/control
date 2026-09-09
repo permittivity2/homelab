@@ -1,0 +1,31 @@
+Source: homelab-sso
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-sso
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common,
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         adduser
+Recommends: homelab-database, homelab-pgbouncer, homelab-api
+Description: OIDC-style SSO provider for the homelab-* ecosystem
+ A Mojolicious app implementing an OAuth2/OIDC-style authorization-code
+ flow (GET/POST /oauth/authorize, POST /oauth/token, GET /oauth/userinfo,
+ GET /logout) so browser apps (homelab-drive, homelab-roundcube) can
+ share one login: a live IdP session cookie here lets a second app's
+ /oauth/authorize skip the login form entirely ("login once, login
+ everywhere"), and /logout revokes the underlying homelab-api session
+ centrally so every relying party's next introspect() call sees it die
+ too ("logout once, logout everywhere") -- with no shared cross-app
+ cookie and no id_token/JWKS to manage. Identity and credential
+ verification are entirely delegated to homelab-api
+ (Homelab::Common::AuthClient); this app owns only its own one-time
+ authorization codes (`sso.oauth_codes`, split runtime/migrate roles,
+ see CLAUDE.md).
