@@ -16,6 +16,12 @@ architecture this implements.
   returns a plain `DBI` handle for the `<feature>_migrate` role (direct
   to Postgres, bypassing pgbouncer — see `CLAUDE.md`'s split-role
   design).
+- **`Homelab::Common::AuthClient`** — `introspect($jwt, api_base => ...)`
+  verifies a bearer token against `homelab-api`'s
+  `/api/v1/auth/introspect`, returning `{email, exp}` or `undef` (never
+  dies, including on a transport failure — an unreachable `homelab-api`
+  must not crash the caller). Every feature that needs "who is this
+  request from" calls this rather than verifying JWTs itself.
 - **`Homelab::Common::Registry`** — `register(%opts)` /
   `lookup($feature, %opts)`. The service registry itself lives inside
   `homelab-api`'s own schema; every other feature reaches it over HTTP
