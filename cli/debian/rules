@@ -1,0 +1,9 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=pybuild
+
+override_dh_auto_test:
+	# No package-build-time tests (pytest isn't a runtime dep, and the
+	# suite doesn't need any live infrastructure — run it directly via
+	# `python3 -m pytest tests/` during development instead).

@@ -1,0 +1,20 @@
+Source: homelab-cli
+Section: python
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), dh-python, python3-all, python3-setuptools, pybuild-plugin-pyproject
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+X-Python3-Version: >= 3.10
+
+Package: homelab-cli
+Architecture: all
+Depends: ${misc:Depends}, ${python3:Depends}, python3-requests, python3-yaml
+Description: Command-line client for homelab-api
+ Register/login/whoami/logout against homelab-api's JSON REST API, and
+ look up a feature's address in the service registry. Session
+ (token/refresh_token) is stored 0600 in ~/.config/homelab-cli/session.yml,
+ separate from the non-secret api_base config. The one shipped package
+ in this ecosystem deliberately allowed to be Python rather than Perl
+ (see CLAUDE.md's Language section) — a good fit for a pure CLI tool
+ that's mostly argument parsing and HTTP calls.
