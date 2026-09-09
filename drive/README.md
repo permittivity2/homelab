@@ -288,6 +288,69 @@ the actual bytes/status codes/disk state the backend produces
 an actual click/keypress (no browser-automation tooling in this
 project) — worth a real browser check after touching this code.
 
+## Mobile layout
+
+Built desktop-first, with no responsive handling at all until a user
+actually tried it on a phone and it showed: no `<meta name="viewport">`
+(mobile browsers render at a virtual desktop width and shrink the
+result, making everything tiny until you pinch-zoom), a fixed-240px
+sidebar permanently competing with the file list for a phone's width,
+an unbounded multi-column table with nothing to keep it from forcing
+the whole page wider than the screen, and several tap targets (the
+folder delete `✕` in particular) sized for a mouse cursor.
+
+Fixed with a single CSS-only breakpoint (`max-width: 720px`) rather
+than the old `homelab-drive-web-ui`'s server-side User-Agent detection
+(`mobile`/`tablet`/`desktop` body classes, documented in that repo's
+`DEVELOPMENT.md`) — this app has no per-request device branching
+anywhere else, and a plain media query gets the same visual result
+without adding any:
+
+- **Viewport meta tag**, the actual prerequisite for any of the rest of
+  this to matter.
+- **Folder sidebar becomes a slide-in drawer** below the breakpoint
+  (`position: fixed`, off-screen by default, toggled by a `☰ Folders`
+  button in the breadcrumb bar) instead of a permanent column — there
+  simply isn't room for both a sidebar and a usable file list at phone
+  width. A `#sidebar-backdrop` overlay closes it on tap-outside. Above
+  the breakpoint both the toggle button and backdrop are `display:
+  none` (removed from layout entirely, not just hidden) — inert on
+  desktop by construction, not by relying on the media query alone.
+- **The file table scrolls horizontally inside its own
+  `.table-scroll` wrapper** rather than widening the page — deliberately
+  *not* reshaped into a stacked-card layout: the table markup, its
+  `data-*` attributes, and the column-sorting JS are completely
+  untouched, so sorting works identically on mobile without a second,
+  parallel sort control to build and keep in sync. A wider phone-native
+  "card" redesign is a reasonable further step if a horizontal scroll
+  ever feels insufficient, not something this pass committed to.
+- **Touch targets** (folder delete, new-folder submit, upload submit,
+  per-row delete, sidebar toggle, lightbox controls) bumped to roughly
+  44px, the standard minimum — a `padding: 0.15rem` icon button that
+  reads fine with a mouse cursor is a real miss target with a finger.
+- **Header decluttering**: the size-unit toggle's "Bytes"/"Human
+  Readable" text labels and the logged-in email address both hide below
+  the breakpoint (the switch itself keeps its `title=` tooltip; Log out
+  stays) — there isn't room for a title, a labeled toggle, an email
+  address, and a logout button on one line at phone width, and neither
+  omission loses real functionality.
+- The drag-and-drop `.drop-tip` hint is hidden on mobile — it points at
+  a gesture (HTML5 drag-and-drop) that doesn't exist on touch; the
+  plain `<input type=file>` above it still works exactly as before
+  (opens the OS file picker/camera on tap).
+
+Not ported from the old app: real server-side device detection, or a
+`tablet` tier distinct from `mobile` — out of scope for a single "make
+it usable on a phone" pass; revisit if a genuinely different tablet
+layout is ever wanted.
+
+Same honest caveat as every other layout/interaction change in this
+README: verified by fetching the rendered page and confirming every
+new element/class/rule is actually present (and that the full test
+suite still passes — the table wrapping and markup changes here don't
+touch anything the existing tests assert on), but a real phone/narrow-
+viewport check is the only way to confirm it actually *feels* right.
+
 ## Upload size limit
 
 `MOJO_MAX_MESSAGE_SIZE=104857600` (100MB) in `systemd/

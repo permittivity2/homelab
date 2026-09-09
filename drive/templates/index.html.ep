@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Homelab Drive</title>
 <style>
   :root { color-scheme: light dark; }
@@ -33,6 +34,13 @@
   nav.breadcrumb a { color: #3562d4; text-decoration: none; }
   nav.breadcrumb a:hover { text-decoration: underline; }
   nav.breadcrumb .sep { color: #9aa0ab; margin: 0 0.35rem; }
+
+  /* Folder drawer toggle + backdrop -- inert on desktop (see the
+     max-width media query below for the actual mobile behavior), kept
+     out of layout entirely rather than just visually hidden so there's
+     no chance of an invisible-but-clickable element on wide screens. */
+  .sidebar-toggle { display: none; }
+  #sidebar-backdrop { display: none; }
 
   .layout { display: flex; align-items: flex-start; gap: 1.25rem; padding: 1.25rem; }
   aside {
@@ -170,6 +178,73 @@
     form.new-folder input[type=text] { background: #16181d; border-color: #2c2f37; color: #e6e8eb; }
     .folder-list li.drag-over, main.drag-over { background: rgba(53, 98, 212, 0.15); }
   }
+
+  /* ── Mobile (phone/small-tablet) layout ──
+     Single breakpoint, CSS-only -- no server-side device detection like
+     the old homelab-drive-web-ui had (see DEVELOPMENT.md there); this
+     app has no per-request UA branching at all, and a pure media query
+     gets the same visual result without adding any. Three structural
+     changes: the folder sidebar becomes a slide-in drawer instead of a
+     permanent column (there's no room for both it and the file list
+     side by side), the file table scrolls horizontally in its own
+     container instead of blowing out the whole page's width (keeps
+     every column, including sorting, working exactly as on desktop --
+     no parallel mobile-only sort UI needed), and interactive elements
+     get bumped to a real touch target size (~44px, the standard
+     minimum) since a mouse-era 0.85rem icon button is genuinely hard to
+     tap accurately. */
+  @media (max-width: 720px) {
+    header { flex-wrap: wrap; row-gap: 0.5rem; padding: 0.6rem 0.9rem; }
+    header h1 { font-size: 1rem; }
+    /* "Bytes"/"Human Readable" text labels are the widest thing in the
+       header after the title -- the switch itself (plus its title=
+       tooltip) is enough once space is tight. */
+    .size-toggle span { display: none; }
+    /* The email address is the second-widest header item and the least
+       essential to see at a glance on a phone -- Log out stays. */
+    .who-email { display: none; }
+
+    .layout { padding: 0.75rem; gap: 0.75rem; }
+
+    .sidebar-toggle {
+      display: inline-flex; align-items: center; gap: 0.35rem; background: #fff; border: 1px solid #d5d8dd;
+      border-radius: 6px; padding: 0.5rem 0.8rem; font-size: 0.85rem; color: #1a1a1a; cursor: pointer;
+      min-height: 44px;
+    }
+    aside {
+      position: fixed; top: 0; left: 0; bottom: 0; width: 82vw; max-width: 300px; z-index: 300;
+      margin: 0; border-radius: 0; overflow-y: auto;
+      transform: translateX(-100%); transition: transform 0.2s ease;
+    }
+    aside.open { transform: translateX(0); box-shadow: 2px 0 16px rgba(0,0,0,.25); }
+    #sidebar-backdrop.open {
+      display: block; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 290;
+    }
+    .folder-list li { padding: 0.6rem 0.5rem; }
+    .icon-btn { min-width: 40px; min-height: 40px; font-size: 1.05rem; }
+    form.new-folder { flex-wrap: wrap; }
+    form.new-folder input[type=text] { flex: 1 1 100%; }
+    form.new-folder button { flex: 1 1 100%; min-height: 44px; }
+
+    .upload-bar { flex-wrap: wrap; }
+    .upload-bar input[type=file] { flex: 1 1 100%; }
+    .upload-bar button { min-height: 44px; }
+    /* Drag-and-drop doesn't exist on touch -- the hint pointing at a
+       gesture that can't happen here is just noise; the plain
+       <input type=file> above it still works fine (opens the OS file
+       picker/camera on tap). */
+    .drop-tip { display: none; }
+
+    /* The table itself is untouched (same markup, same sort JS) -- it
+       just scrolls sideways inside this wrapper instead of forcing the
+       whole page wider than the viewport. */
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    #files-table { min-width: 560px; }
+    .file-actions button { min-height: 40px; padding: 0.4rem 0.7rem; }
+
+    .lightbox-controls button, .lightbox-btn { font-size: 22px; padding: 8px 10px; }
+    .lightbox-nav { width: 42px; height: 42px; font-size: 26px; }
+  }
 </style>
 </head>
 <body>
@@ -182,12 +257,13 @@
     <span>Human Readable</span>
   </label>
   <div class="who">
-    <%= $email %>
+    <span class="who-email"><%= $email %></span>
     <form method="post" action="/logout"><button type="submit">Log out</button></form>
   </div>
 </header>
 
 <nav class="breadcrumb">
+  <button type="button" class="sidebar-toggle" id="sidebar-toggle">☰ Folders</button>
   <a href="/">Home</a>
 % for my $crumb (@$breadcrumb) {
   <span class="sep">/</span><a href="/folders/<%= $crumb->{id} %>"><%= $crumb->{name} %></a>
@@ -195,6 +271,7 @@
 </nav>
 
 <div class="layout">
+  <div id="sidebar-backdrop"></div>
   <aside>
     <h2>Folders</h2>
     <ul class="folder-list" id="folder-list">
@@ -241,6 +318,7 @@
 % if (!@$files && !@$folders) {
     <div class="empty-state">This folder is empty. Upload a file or create a folder to get started.</div>
 % } else {
+    <div class="table-scroll">
     <table id="files-table">
       <thead>
         <tr>
@@ -278,6 +356,7 @@
 % }
       </tbody>
     </table>
+    </div>
 % }
   </main>
 </div>
@@ -840,6 +919,28 @@ var Lightbox = (function () {
     setSlideshowInterval: setSlideshowInterval,
     toggleFullscreen: toggleFullscreen,
   };
+})();
+</script>
+
+<script>
+// Mobile folder drawer: the toggle button and backdrop are both inert
+// (display:none, out of the flex layout) above the mobile breakpoint
+// (see the CSS), so this wiring is harmless dead weight on desktop
+// rather than something that needs its own screen-width check.
+(function () {
+  'use strict';
+  var toggleBtn = document.getElementById('sidebar-toggle');
+  var aside     = document.querySelector('aside');
+  var backdrop  = document.getElementById('sidebar-backdrop');
+  if (!toggleBtn || !aside || !backdrop) return;
+
+  function openDrawer()  { aside.classList.add('open');    backdrop.classList.add('open'); }
+  function closeDrawer() { aside.classList.remove('open'); backdrop.classList.remove('open'); }
+
+  toggleBtn.addEventListener('click', function () {
+    aside.classList.contains('open') ? closeDrawer() : openDrawer();
+  });
+  backdrop.addEventListener('click', closeDrawer);
 })();
 </script>
 </body>
