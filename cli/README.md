@@ -17,6 +17,7 @@ homelab-cli configure --api-base https://api.test.mailmasker.org
 homelab-cli register you@test.mailmasker.org
 homelab-cli login you@test.mailmasker.org
 homelab-cli whoami
+homelab-cli registry list
 homelab-cli registry lookup homelab-drive
 homelab-cli logout
 ```

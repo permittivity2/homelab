@@ -151,4 +151,16 @@ $t->get_ok('/api/v1/registry/homelab-test-feature')
   ->json_is('/host', '10.10.0.100')
   ->json_is('/port', 4343);
 
+# GET /api/v1/registry -- lists every registered feature, so a client
+# can discover valid feature_name values rather than guessing them (the
+# actual gap a real user hit: guessing "homelab-mail"/"homelab-dovecot"
+# against /api/v1/registry/:feature and getting 404 every time).
+my $listed = $t->get_ok('/api/v1/registry')
+  ->status_is(200)
+  ->tx->res->json;
+ok((grep { $_->{feature_name} eq 'homelab-test-feature' } @$listed), 'list includes the feature registered above')
+    or diag explain $listed;
+
+$t->app->pg->db->query('DELETE FROM api.service_registry WHERE feature_name = ?', 'homelab-test-feature');
+
 done_testing;

@@ -58,6 +58,9 @@ class Client:
     def registry_lookup(self, feature_name):
         return self._request("GET", f"/api/v1/registry/{feature_name}")
 
+    def registry_list(self):
+        return self._request("GET", "/api/v1/registry")
+
     # --- Admin (site_admin role required server-side — see
     # api/README.md's "Admin endpoints" section) ---
     def admin_list_users(self, token):

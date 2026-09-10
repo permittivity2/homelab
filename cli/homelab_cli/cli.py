@@ -115,6 +115,20 @@ def cmd_registry_lookup(args):
     return 0
 
 
+def cmd_registry_list(args):
+    try:
+        results = _client().registry_list()
+    except ApiError as e:
+        print(f"List failed: {e.message}", file=sys.stderr)
+        return 1
+    if not results:
+        print("(no features registered)")
+        return 0
+    for entry in results:
+        print(f"{entry['feature_name']}: {entry['host']}:{entry['port']}")
+    return 0
+
+
 # --- mail: homelab-api's /api/v1/mail/* gateway -> homelab-mailbridge
 # (see ../../mailbridge/README.md). No IMAP/SMTP client code here at
 # all any more -- just HTTP, same as every other command. ---------------
@@ -344,7 +358,9 @@ def build_parser():
 
     registry = sub.add_parser("registry", help="Service registry commands")
     registry_sub = registry.add_subparsers(dest="registry_command", required=True)
-    p = registry_sub.add_parser("lookup", help="Look up a feature's address")
+    p = registry_sub.add_parser("list", help="List every registered feature and its address")
+    p.set_defaults(func=cmd_registry_list)
+    p = registry_sub.add_parser("lookup", help="Look up a feature's address (see 'registry list' for valid names)")
     p.add_argument("feature_name")
     p.set_defaults(func=cmd_registry_lookup)
 

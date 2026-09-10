@@ -64,6 +64,14 @@ def test_registry_lookup_builds_correct_path(client):
     assert m.call_args.args[1] == "http://localhost:3000/api/v1/registry/homelab-sso"
 
 
+def test_registry_list_builds_correct_path_and_returns_list(client):
+    payload = [{"feature_name": "homelab-drive", "host": "h", "port": 1}]
+    with patch("requests.request", return_value=_mock_response(200, payload)) as m:
+        result = client.registry_list()
+    assert m.call_args.args[1] == "http://localhost:3000/api/v1/registry"
+    assert result == payload
+
+
 def test_api_base_trailing_slash_is_stripped():
     c = Client("http://localhost:3000/")
     with patch("requests.request", return_value=_mock_response(200, {})) as m:

@@ -22,4 +22,10 @@ sub lookup ($self, $feature_name) {
     )->hash;
 }
 
+sub list_all ($self) {
+    return $self->pg->db->query(
+        'SELECT feature_name, host, port, health_check_url FROM api.service_registry ORDER BY feature_name',
+    )->hashes->to_array;
+}
+
 1;

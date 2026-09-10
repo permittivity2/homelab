@@ -42,6 +42,7 @@ sub startup ($self) {
     # --- Service registry (see Homelab::Common::Registry — this is what
     # every OTHER feature's register()/lookup() calls hit) ------------
     $r->post('/api/v1/registry/register' => sub ($c) { $self->_registry_register($c) });
+    $r->get('/api/v1/registry'           => sub ($c) { $self->_registry_list($c) });
     $r->get('/api/v1/registry/:feature'  => sub ($c) { $self->_registry_lookup($c) });
 
     # --- Admin (site_admin role required — see migrations/003-rbac.sql's
@@ -317,6 +318,14 @@ sub _registry_lookup ($self, $c) {
     my $entry   = $self->registry->lookup($feature);
     return $c->render(json => { error => 'not found' }, status => 404) unless $entry;
     return $c->render(json => $entry);
+}
+
+# GET /api/v1/registry -- every currently-registered feature, so a
+# client can discover valid feature_name values instead of guessing
+# (e.g. "homelab-mailbridge" isn't guessable from the CLI's own `mail`
+# subcommand name alone).
+sub _registry_list ($self, $c) {
+    return $c->render(json => $self->registry->list_all);
 }
 
 # Verifies a bearer JWT (signature+expiry+not-revoked -- the same three
