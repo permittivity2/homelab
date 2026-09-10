@@ -39,6 +39,18 @@ architecture this implements.
 - **`Homelab::Common::Health`** — `mount_health_route($app, %opts)`
   mounts a standard `GET /health` on a Mojolicious app, with an
   optional deeper `check` coderef.
+- **`Homelab::Common::Proxy`** — `forward($c, feature_name => ...,
+  api_base => ...|host => ..., port => ..., strip_prefix => '',
+  backend_prefix => '')`. What makes `homelab-api` usable as the single
+  client-facing gateway (see `../api/README.md`): resolves
+  `feature_name`'s address via `Registry::lookup` (or skips straight to
+  a given `host`/`port`, for a caller like `homelab-api` itself that
+  already has direct DB access to the registry and would otherwise be
+  round-tripping over HTTP to itself), forwards the request
+  (method/path/query/`Authorization`/body — a real multipart upload
+  included, via `$c->req->content`, not a re-derived body string) to
+  it, and relays the response back. Renders a clean 502/504 itself on a
+  registry miss or unreachable backend, never a raw exception page.
 
 ## Bootstrap scripts
 

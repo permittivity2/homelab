@@ -1,0 +1,30 @@
+# Homelab Mail Bridge Configuration
+#
+# Internal-only relay between homelab-api's /api/v1/mail/* gateway
+# routes and dovecot/postfix's real IMAP/SMTP ports -- never reached
+# directly by a client (no public_base_url, not fronted by
+# homelab-webproxy). See README.md.
+
+homelab_api:
+  base_url: https://api.test.mailmasker.org
+
+# The real IMAP/SMTP addresses -- this is the ONE place these need to
+# be configured now; homelab-cli no longer needs to know them at all.
+mail:
+  imap_host: mail.test.mailmasker.org
+  imap_port: 993
+  smtp_host: mail.test.mailmasker.org
+  smtp_port: 587
+
+# What this instance announces itself as in homelab-api's service
+# registry -- host/port only, deliberately no public_base_url (see
+# root CLAUDE.md's registry design notes): nothing external ever
+# connects to this directly.
+registry:
+  host: 127.0.0.1
+  port: 2510
+
+server:
+  listen: "http://127.0.0.1:2510"
+  workers: 2
+  pid_file: /var/lib/homelab/mailbridge-hypnotoad.pid

@@ -1,4 +1,10 @@
-"""Thin HTTP client for homelab-api."""
+"""Thin HTTP client for homelab-api -- the ONE address homelab-cli ever
+needs (see ../README.md). Drive and mail used to be separate upstream
+services with their own base URLs (a separate DriveClient class, and
+imaplib/smtplib calls straight to dovecot/postfix); both now go through
+homelab-api's own /api/v1/drive/* and /api/v1/mail/* gateway routes
+instead, which resolve the real backend via the service registry
+server-side -- so there's only ever one class, one base URL, here."""
 
 import requests
 
@@ -15,9 +21,9 @@ class Client:
         self.api_base = api_base.rstrip("/")
         self.timeout = timeout
 
-    def _request(self, method, path, **kwargs):
+    def _request(self, method, path, timeout=None, **kwargs):
         try:
-            resp = requests.request(method, f"{self.api_base}{path}", timeout=self.timeout, **kwargs)
+            resp = requests.request(method, f"{self.api_base}{path}", timeout=timeout or self.timeout, **kwargs)
         except requests.exceptions.RequestException as e:
             raise ApiError(0, str(e)) from e
 
@@ -30,6 +36,10 @@ class Client:
             raise ApiError(resp.status_code, body.get("error", resp.text))
         return body
 
+    def _auth(self, token, **extra):
+        return {"Authorization": f"Bearer {token}", **extra}
+
+    # --- Auth -----------------------------------------------------------
     def register(self, email, password):
         return self._request("POST", "/api/v1/auth/register", json={"email": email, "password": password})
 
@@ -37,7 +47,7 @@ class Client:
         return self._request("POST", "/api/v1/auth/login", json={"email": email, "password": password})
 
     def introspect(self, token):
-        return self._request("GET", "/api/v1/auth/introspect", headers={"Authorization": f"Bearer {token}"})
+        return self._request("GET", "/api/v1/auth/introspect", headers=self._auth(token))
 
     def refresh(self, refresh_token):
         return self._request("POST", "/api/v1/auth/refresh", json={"refresh_token": refresh_token})
@@ -51,92 +61,78 @@ class Client:
     # --- Admin (site_admin role required server-side — see
     # api/README.md's "Admin endpoints" section) ---
     def admin_list_users(self, token):
-        return self._request("GET", "/api/v1/admin/users", headers={"Authorization": f"Bearer {token}"})
+        return self._request("GET", "/api/v1/admin/users", headers=self._auth(token))
 
     def admin_grant_role(self, token, user_id, role):
-        return self._request(
-            "POST", f"/api/v1/admin/users/{user_id}/roles",
-            headers={"Authorization": f"Bearer {token}"}, json={"role": role},
-        )
+        return self._request("POST", f"/api/v1/admin/users/{user_id}/roles", headers=self._auth(token), json={"role": role})
 
     def admin_revoke_role(self, token, user_id, role):
-        return self._request(
-            "DELETE", f"/api/v1/admin/users/{user_id}/roles/{role}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        return self._request("DELETE", f"/api/v1/admin/users/{user_id}/roles/{role}", headers=self._auth(token))
 
-
-class DriveClient:
-    """Thin HTTP client for homelab-drive's Bearer-token-authenticated
-    JSON API (see drive/README.md's "JSON API" section) — a separate
-    class from Client above since it's a genuinely different upstream
-    service with its own base URL, same one-client-per-service shape as
-    homelab-common's Perl AuthClient/SSOClient split."""
-
-    def __init__(self, drive_base, token, timeout=15):
-        self.drive_base = drive_base.rstrip("/")
-        self.token = token
-        self.timeout = timeout
-
-    def _headers(self, **extra):
-        return {"Authorization": f"Bearer {self.token}", **extra}
-
-    def list_files(self, folder_id=None):
+    # --- Drive, via homelab-api's /api/v1/drive/* gateway (see
+    # ../../drive/README.md's own /api/v1/files/folders shape -- these
+    # paths are that same API with a /drive/ prefix added by the
+    # gateway). Uploads/downloads get a longer timeout than the default;
+    # everything else here is a quick JSON call. ---
+    def drive_list_files(self, token, folder_id=None):
         params = {"folder_id": folder_id} if folder_id else {}
-        resp = requests.get(f"{self.drive_base}/api/v1/files", headers=self._headers(), params=params, timeout=self.timeout)
-        if not resp.ok:
-            raise ApiError(resp.status_code, _error_message(resp))
-        return resp.json()
+        return self._request("GET", "/api/v1/drive/files", headers=self._auth(token), params=params)
 
-    def upload_file(self, path, folder_id=None):
+    def drive_upload_file(self, token, path, folder_id=None):
         data = {"folder_id": folder_id} if folder_id else {}
         with open(path, "rb") as f:
-            resp = requests.post(
-                f"{self.drive_base}/api/v1/files", headers=self._headers(),
-                files={"file": (path.name, f)}, data=data, timeout=self.timeout,
+            return self._request(
+                "POST", "/api/v1/drive/files", headers=self._auth(token),
+                files={"file": (path.name, f)}, data=data, timeout=60,
             )
-        if not resp.ok:
-            raise ApiError(resp.status_code, _error_message(resp))
-        return resp.json()
 
-    def download_file(self, file_id, dest_path):
-        resp = requests.get(
-            f"{self.drive_base}/api/v1/files/{file_id}", headers=self._headers(),
-            timeout=self.timeout, stream=True,
-        )
+    def drive_download_file(self, token, file_id, dest_path):
+        try:
+            resp = requests.get(
+                f"{self.api_base}/api/v1/drive/files/{file_id}", headers=self._auth(token),
+                timeout=60, stream=True,
+            )
+        except requests.exceptions.RequestException as e:
+            raise ApiError(0, str(e)) from e
         if not resp.ok:
             raise ApiError(resp.status_code, _error_message(resp))
         with open(dest_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
 
-    def delete_file(self, file_id):
-        resp = requests.delete(f"{self.drive_base}/api/v1/files/{file_id}", headers=self._headers(), timeout=self.timeout)
-        if not resp.ok:
-            raise ApiError(resp.status_code, _error_message(resp))
-        return resp.json()
+    def drive_delete_file(self, token, file_id):
+        return self._request("DELETE", f"/api/v1/drive/files/{file_id}", headers=self._auth(token))
 
-    def list_folders(self, parent_id=None):
+    def drive_list_folders(self, token, parent_id=None):
         params = {"parent_id": parent_id} if parent_id else {}
-        resp = requests.get(f"{self.drive_base}/api/v1/folders", headers=self._headers(), params=params, timeout=self.timeout)
-        if not resp.ok:
-            raise ApiError(resp.status_code, _error_message(resp))
-        return resp.json()
+        return self._request("GET", "/api/v1/drive/folders", headers=self._auth(token), params=params)
 
-    def create_folder(self, name, parent_folder_id=None):
+    def drive_create_folder(self, token, name, parent_folder_id=None):
         body = {"name": name}
         if parent_folder_id:
             body["parent_folder_id"] = parent_folder_id
-        resp = requests.post(f"{self.drive_base}/api/v1/folders", headers=self._headers(), json=body, timeout=self.timeout)
-        if not resp.ok:
-            raise ApiError(resp.status_code, _error_message(resp))
-        return resp.json()
+        return self._request("POST", "/api/v1/drive/folders", headers=self._auth(token), json=body)
 
-    def delete_folder(self, folder_id):
-        resp = requests.delete(f"{self.drive_base}/api/v1/folders/{folder_id}", headers=self._headers(), timeout=self.timeout)
-        if not resp.ok:
-            raise ApiError(resp.status_code, _error_message(resp))
-        return resp.json()
+    def drive_delete_folder(self, token, folder_id):
+        return self._request("DELETE", f"/api/v1/drive/folders/{folder_id}", headers=self._auth(token))
+
+    # --- Mail, via homelab-api's /api/v1/mail/* gateway ->
+    # homelab-mailbridge (see ../../mailbridge/README.md). No more
+    # imaplib/smtplib here at all -- these are plain HTTP calls, same
+    # shape as every other method on this class. ---
+    def mail_list(self, token, mailbox="INBOX", limit=20):
+        return self._request("GET", "/api/v1/mail/messages", headers=self._auth(token), params={"mailbox": mailbox, "limit": limit})
+
+    def mail_read(self, token, uid, mailbox="INBOX"):
+        try:
+            return self._request("GET", f"/api/v1/mail/messages/{uid}", headers=self._auth(token), params={"mailbox": mailbox})
+        except ApiError as e:
+            if e.status_code == 404:
+                return None
+            raise
+
+    def mail_send(self, token, to, subject, body):
+        return self._request("POST", "/api/v1/mail/send", headers=self._auth(token), json={"to": to, "subject": subject, "body": body})
 
 
 def _error_message(resp):

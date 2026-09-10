@@ -13,10 +13,7 @@ the same APIs this one calls; nothing here is a special, privileged
 client.
 
 ```bash
-homelab-cli configure --api-base https://api.test.mailmasker.org \
-    --drive-base https://drive.test.mailmasker.org \
-    --imap-host mail.test.mailmasker.org --imap-port 993 \
-    --smtp-host mail.test.mailmasker.org --smtp-port 587
+homelab-cli configure --api-base https://api.test.mailmasker.org
 homelab-cli register you@test.mailmasker.org
 homelab-cli login you@test.mailmasker.org
 homelab-cli whoami
@@ -24,14 +21,27 @@ homelab-cli registry lookup homelab-drive
 homelab-cli logout
 ```
 
+**`--api-base` is the only thing this CLI ever needs to know about.**
+It didn't used to be — earlier, `configure` also needed
+`--drive-base`/`--imap-host`/`--imap-port`/`--smtp-host`/`--smtp-port`,
+one address per feature, which only gets worse as more features
+(chat, ...) show up. Fixed by making `homelab-api` itself the single
+client-facing gateway (see `../api/README.md`): `/api/v1/drive/*` and
+`/api/v1/mail/*` forward to homelab-drive and homelab-mailbridge
+respectively, resolved server-side via the service registry, the same
+"one API, like Shopify's or GitHub's SSH interface" reasoning
+documented in the root `CLAUDE.md`'s registry design notes. Every
+`drive`/`mail` command below already reflects this — there's nothing
+extra to configure for them.
+
 `configure` with no flags at all just prints the current configuration.
 
 Session (`token`/`refresh_token`) is stored `0600` in
 `~/.config/homelab-cli/session.yml`, separate from the non-secret
-config (API/drive base URLs, IMAP/SMTP host/port) in `config.yml` in the
-same directory — same "local CLI config, same trust model as `gh`/`aws`/
-`kubectl`" reasoning as `../api/README.md`'s "Two different clients, two
-different trust models" section.
+`api_base` in `config.yml` in the same directory — same "local CLI
+config, same trust model as `gh`/`aws`/`kubectl`" reasoning as
+`../api/README.md`'s "Two different clients, two different trust
+models" section.
 
 ## Email (`mail`)
 
@@ -41,17 +51,14 @@ homelab-cli mail read <uid> [--mailbox INBOX]
 homelab-cli mail send --to you@example.com --subject "Hi" --body "..."
 ```
 
-No separate "mail login" step, and no new server-side API — this talks
-directly to homelab-dovecot (IMAP) and homelab-postfix (SMTP submission)
-using the already-saved homelab-api JWT as an XOAUTH2 bearer token, the
-exact same mechanism homelab-roundcube's SSO login uses for real IMAP
-auth (see `../dovecot/README.md` and `../sso/README.md`). See
-`homelab_cli/mail.py`'s own module docstring for a known, tracked gap:
-homelab-dovecot/homelab-postfix currently still serve their default
-self-signed TLS certificate on the real IMAP/SMTP ports (unlike the
-HTTPS domains), so certificate verification is deliberately relaxed for
-now — the connection is still encrypted, just not verified against a
-CA.
+Plain HTTP calls to `homelab-api`'s `/api/v1/mail/*` gateway now — no
+IMAP/SMTP client code lives here at all any more. That logic (XOAUTH2
+against dovecot/postfix, using the same JWT this CLI already holds)
+moved server-side into `homelab-mailbridge` when the gateway was
+built; see `../mailbridge/README.md` for the protocol-level details
+(and the still-relevant known gap: dovecot/postfix serve a self-signed
+cert on the real IMAP/SMTP ports, so TLS verification is relaxed
+there, same as before — just enforced in Perl now, not Python).
 
 ## File storage (`drive`)
 
@@ -70,9 +77,10 @@ cascade as the web UI's own folder delete (see `../drive/README.md`'s
 Folders section).
 
 Talks to homelab-drive's Bearer-token-authenticated JSON API (see
-`../drive/README.md`'s "JSON API" section) — a CLI never goes through
-the browser-facing SSO redirect flow at all; it already holds its own
-JWT directly.
+`../drive/README.md`'s "JSON API" section) through `homelab-api`'s
+`/api/v1/drive/*` gateway — a CLI never goes through the browser-facing
+SSO redirect flow at all; it already holds its own JWT directly, and
+now never needs to know drive's own address either.
 
 ## Administration (`admin`)
 
@@ -155,11 +163,9 @@ python3 -m pytest tests/
 ```
 
 No live infrastructure needed — `test_client.py` mocks the HTTP layer
-(both homelab-api's `Client` and homelab-drive's `DriveClient`),
-`test_mail.py` mocks `imaplib`/`smtplib` (including a regression check
-for a real bug found while testing this live: `email.message.EmailMessage`
-does not add a `Date` header on its own — a sent-then-read-back message
-once came back with a completely empty one), `test_config.py` uses
+for every `Client` method, including `drive_*`/`mail_*` (both now go
+through `homelab-api`'s gateway, so there's only ever the one client
+class to test; see "Only `--api-base`" above), `test_config.py` uses
 `tmp_path`/`monkeypatch` for the config/session files (including
 verifying `session.yml` is actually written `0600`, not just intended to
 be), and `test_completion.py` covers tab completion (see its own

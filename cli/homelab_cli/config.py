@@ -15,13 +15,13 @@ CONFIG_DIR = Path(os.environ.get("HOMELAB_CLI_CONFIG_DIR", Path.home() / ".confi
 CONFIG_FILE = CONFIG_DIR / "config.yml"
 SESSION_FILE = CONFIG_DIR / "session.yml"
 
+# homelab-api is the ONLY address homelab-cli needs (see ../README.md):
+# drive and mail both go through its own /api/v1/drive/* and
+# /api/v1/mail/* gateway routes now, which resolve the real backend
+# via the service registry server-side. This file used to also need
+# drive_base/imap_host/imap_port/smtp_host/smtp_port.
 DEFAULT_CONFIG = {
     "api_base": "http://localhost:3000",
-    "drive_base": "http://localhost:2501",
-    "imap_host": "localhost",
-    "imap_port": 993,
-    "smtp_host": "localhost",
-    "smtp_port": 587,
 }
 
 

@@ -6,6 +6,7 @@ use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
 use Homelab::API::Auth qw(hash_password verify_password generate_jwt verify_jwt generate_jti generate_refresh_token);
 use Homelab::API::Registry;
+use Homelab::Common::Proxy qw(forward);
 
 has 'pg';
 has 'registry';
@@ -52,7 +53,46 @@ sub startup ($self) {
     $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
     $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
 
+    # --- Gateway: the ONLY address a client (homelab-cli, or any
+    # third-party script) should ever need -- see ../../CLAUDE.md's "one
+    # API" design notes and Homelab::Common::Proxy's own docs. Auth is
+    # NOT re-checked here: the Authorization header forwards through
+    # unchanged, and each backend (homelab-drive, homelab-mailbridge)
+    # already re-verifies it independently via its own introspect()
+    # call -- same "verify at every hop" convention used everywhere else
+    # in this codebase, not a gap. Uses $self->registry directly (this
+    # app's own in-process DB access -- see Homelab::API::Registry)
+    # rather than round-tripping over its own HTTP API just to read its
+    # own database.
+    #
+    # *capture (not *path) -- "path" is a reserved Mojolicious stash key
+    # and silently breaks route registration if used as a placeholder
+    # name (caught by t/gateway.t, not by inspection).
+    #
+    # homelab-drive keeps its own /api/v1/files etc. paths (that's its
+    # real, standalone API) -- /drive/ exists only in the gateway's
+    # own client-facing namespace, sitting where /api/v1 already was,
+    # so a client path of /api/v1/drive/files needs strip_prefix
+    # (removes "/api/v1/drive") *and* backend_prefix (adds "/api/v1"
+    # back) to land on drive's real /api/v1/files -- not a plain
+    # prefix strip alone (a real bug caught by an actual `homelab-cli
+    # drive list` call, not by common/t/proxy.t's simpler fake
+    # backend paths -- see Homelab::Common::Proxy's own docs).
+    # homelab-mailbridge's routes are deliberately already
+    # /api/v1/mail/... themselves (it only exists to back this
+    # gateway), so nothing needs rewriting for that one.
+    $r->any('/api/v1/drive/*capture' => sub ($c) { $self->_gateway($c, 'homelab-drive', strip_prefix => '/api/v1/drive', backend_prefix => '/api/v1') });
+    $r->any('/api/v1/mail/*capture'  => sub ($c) { $self->_gateway($c, 'homelab-mailbridge') });
+
     return;
+}
+
+sub _gateway ($self, $c, $feature_name, %opts) {
+    my $entry = $self->registry->lookup($feature_name);
+    unless ($entry && $entry->{host} && $entry->{port}) {
+        return $c->render(json => { error => "$feature_name is not currently available" }, status => 502);
+    }
+    return forward($c, feature_name => $feature_name, host => $entry->{host}, port => $entry->{port}, %opts);
 }
 
 # Rate limiting + a structured, queryable log of every auth attempt --

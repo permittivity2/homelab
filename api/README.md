@@ -71,17 +71,68 @@ self-service "become the first admin" endpoint by design — the first
 same as `test-admin@test.mailmasker.org` was granted. This is what
 `homelab-cli admin` talks to.
 
+## Client-facing gateway (`/api/v1/drive/*`, `/api/v1/mail/*`)
+
+**This app is the only address a client (`homelab-cli`, or any
+third-party script) ever needs** — like Shopify's API or GitHub's SSH
+interface, not a "know every feature's own address" design. Added
+2026-09-09 after exactly that complaint: the CLI briefly needed 6
+separate addresses (one per feature) before this existed.
+
+`/api/v1/drive/*` and `/api/v1/mail/*` forward the request (method,
+path, query, `Authorization` header, body — including real multipart
+file uploads) to `homelab-drive` and a new internal-only
+`homelab-mailbridge` service respectively, resolving each one's
+*internal* address via the service registry server-side
+(`$self->registry->lookup(...)` — direct in-process DB access, not an
+HTTP round trip to itself) and relaying the response straight back.
+The shared forwarding logic is `Homelab::Common::Proxy::forward()` (see
+`../common/README.md`) — auth is **not** re-checked at this layer; the
+`Authorization` header passes through unchanged and each backend
+independently re-verifies it via its own `introspect()` call, same
+"verify at every hop" convention used everywhere else in this codebase.
+
+This is deliberately *not* a "proxy every backend's raw protocol"
+design: mail specifically is IMAP/SMTP, not HTTP, so there's no
+tunneling involved — `homelab-mailbridge` is a real Mojolicious service
+with its own JSON API that happens to be implemented using IMAP/SMTP
+calls internally (see `../mailbridge/README.md`). And it's not a
+"route every internal call through here either" design — features that
+talk to each other directly (or to Postgres directly on a hot path)
+keep doing that; this gateway is specifically about what an *external*
+client needs.
+
+`homelab-drive`'s real paths have no `/drive/` prefix of their own
+(`/api/v1/files`, not `/api/v1/drive/files`) — that prefix only exists
+in this gateway's client-facing namespace, sitting where `/api/v1`
+already was on drive's side. So its route strips `/api/v1/drive` *and*
+re-prepends `/api/v1` (`Homelab::Common::Proxy::forward`'s
+`backend_prefix` option) — a plain prefix strip alone lands on `/files`,
+which 404s. `homelab-mailbridge`'s own routes are deliberately already
+`/api/v1/mail/...` themselves (it exists only to back this gateway), so
+nothing needs rewriting for that one.
+
 ## Testing
 
 `t/auth.t` (unit, no DB), `t/basic.t` (real Postgres, real HTTP — set
-`HOMELAB_API_CONFIG`), and `t/admin.t` (same, covering the admin
+`HOMELAB_API_CONFIG`), `t/admin.t` (same, covering the admin
 endpoints specifically: 401 with no token, 403 with a valid token but no
 site_admin role, unknown-role/nonexistent-user rejection, and that both
 granting and revoking are idempotent rather than erroring on a repeat
-call) cover registration, login/introspect/refresh/logout, the session-
+call), and `t/gateway.t` (same, real `homelab-drive`/`homelab-mailbridge`
+must actually be running and registered — a real file upload through
+the gateway, not just JSON GETs, and confirming a missing
+`Authorization` header 401s through the gateway same as any other
+route) cover registration, login/introspect/refresh/logout, the session-
 revocation property specifically (a JWT rejected immediately after
 logout despite being nowhere near its own expiry), rate limiting (loops
 until a real 429 shows up, then cleans up its own rows so repeated test
 runs don't self-interfere via the shared per-IP counter), and the
-service registry. Live coverage of the public HTTPS path is
-`tests/e2e/test_api_public.py`.
+service registry. `Homelab::Common::Proxy::forward()`'s own forwarding
+logic (path rewriting, multipart body passthrough, the 502/504 error
+cases) is unit-tested in isolation with fakes in
+`../common/t/proxy.t` — `t/gateway.t` proves the real wiring on top of
+that, not the forwarding mechanism itself again. Live coverage of the
+public HTTPS path is `tests/e2e/test_api_public.py`; live coverage of
+the whole CLI-only-needs-`--api-base` story is
+`tests/e2e/test_cli_features.py`.

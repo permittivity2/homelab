@@ -8,8 +8,7 @@ from pathlib import Path
 import argcomplete
 
 from . import config as cfgmod
-from . import mail as mailmod
-from .client import ApiError, Client, DriveClient
+from .client import ApiError, Client
 
 # Mirrors ../../api/migrations/003-rbac.sql's seed data -- api.roles is
 # the real, technical source of truth (grant/revoke-role still just
@@ -41,16 +40,11 @@ def _require_session():
 
 def cmd_configure(args):
     config = cfgmod.load_config()
-    changed = False
-    for key in ("api_base", "drive_base", "imap_host", "imap_port", "smtp_host", "smtp_port"):
-        value = getattr(args, key)
-        if value is not None:
-            config[key] = value
-            changed = True
-    if not changed:
+    if args.api_base is None:
         for key, value in config.items():
             print(f"{key} = {value}")
         return 0
+    config["api_base"] = args.api_base
     cfgmod.save_config(config)
     print("Configuration updated.")
     return 0
@@ -121,22 +115,18 @@ def cmd_registry_lookup(args):
     return 0
 
 
-# --- mail: direct IMAP/SMTP, XOAUTH2 with the CLI's own stored JWT as
-# the bearer token — see homelab_cli/mail.py's own module docstring for
-# why this needs no separate "mail login" step at all. ------------------
+# --- mail: homelab-api's /api/v1/mail/* gateway -> homelab-mailbridge
+# (see ../../mailbridge/README.md). No IMAP/SMTP client code here at
+# all any more -- just HTTP, same as every other command. ---------------
 
 def cmd_mail_list(args):
     session = _require_session()
     if not session:
         return 1
-    config = cfgmod.load_config()
     try:
-        messages = mailmod.list_messages(
-            config["imap_host"], config["imap_port"], session["email"], session["token"],
-            mailbox=args.mailbox, limit=args.limit,
-        )
-    except Exception as e:
-        print(f"Could not list messages: {e}", file=sys.stderr)
+        messages = _client().mail_list(session["token"], mailbox=args.mailbox, limit=args.limit)
+    except ApiError as e:
+        print(f"Could not list messages: {e.message}", file=sys.stderr)
         return 1
     if not messages:
         print("(no messages)")
@@ -150,14 +140,10 @@ def cmd_mail_read(args):
     session = _require_session()
     if not session:
         return 1
-    config = cfgmod.load_config()
     try:
-        message = mailmod.read_message(
-            config["imap_host"], config["imap_port"], session["email"], session["token"],
-            args.uid, mailbox=args.mailbox,
-        )
-    except Exception as e:
-        print(f"Could not read message: {e}", file=sys.stderr)
+        message = _client().mail_read(session["token"], args.uid, mailbox=args.mailbox)
+    except ApiError as e:
+        print(f"Could not read message: {e.message}", file=sys.stderr)
         return 1
     if not message:
         print(f"No message with uid {args.uid}", file=sys.stderr)
@@ -179,34 +165,26 @@ def cmd_mail_send(args):
         body = Path(args.body_file).read_text()
     if body is None:
         body = sys.stdin.read()
-    config = cfgmod.load_config()
     try:
-        mailmod.send_message(
-            config["smtp_host"], config["smtp_port"], session["email"], session["token"],
-            args.to, args.subject, body,
-        )
-    except Exception as e:
-        print(f"Could not send message: {e}", file=sys.stderr)
+        _client().mail_send(session["token"], args.to, args.subject, body)
+    except ApiError as e:
+        print(f"Could not send message: {e.message}", file=sys.stderr)
         return 1
     print(f"Sent to {args.to}")
     return 0
 
 
-# --- drive: homelab-drive's Bearer-token JSON API (drive/README.md's
-# "JSON API" section) ----------------------------------------------------
-
-def _drive_client(session):
-    return DriveClient(cfgmod.load_config()["drive_base"], session["token"])
-
+# --- drive: homelab-api's /api/v1/drive/* gateway -> homelab-drive's
+# own JSON API (see ../../drive/README.md's "JSON API" section). -------
 
 def cmd_drive_list(args):
     session = _require_session()
     if not session:
         return 1
-    client = _drive_client(session)
+    client = _client()
     try:
-        folders = client.list_folders(parent_id=args.folder)
-        files = client.list_files(folder_id=args.folder)
+        folders = client.drive_list_folders(session["token"], parent_id=args.folder)
+        files = client.drive_list_files(session["token"], folder_id=args.folder)
     except ApiError as e:
         print(f"Could not list: {e.message}", file=sys.stderr)
         return 1
@@ -225,7 +203,7 @@ def cmd_drive_mkdir(args):
     if not session:
         return 1
     try:
-        result = _drive_client(session).create_folder(args.name, parent_folder_id=args.parent)
+        result = _client().drive_create_folder(session["token"], args.name, parent_folder_id=args.parent)
     except ApiError as e:
         print(f"Could not create folder: {e.message}", file=sys.stderr)
         return 1
@@ -238,7 +216,7 @@ def cmd_drive_rmdir(args):
     if not session:
         return 1
     try:
-        _drive_client(session).delete_folder(args.folder_id)
+        _client().drive_delete_folder(session["token"], args.folder_id)
     except ApiError as e:
         print(f"Could not delete folder: {e.message}", file=sys.stderr)
         return 1
@@ -255,7 +233,7 @@ def cmd_drive_upload(args):
         print(f"No such file: {path}", file=sys.stderr)
         return 1
     try:
-        result = _drive_client(session).upload_file(path, folder_id=args.folder)
+        result = _client().drive_upload_file(session["token"], path, folder_id=args.folder)
     except ApiError as e:
         print(f"Upload failed: {e.message}", file=sys.stderr)
         return 1
@@ -269,7 +247,7 @@ def cmd_drive_download(args):
         return 1
     dest = args.output or args.file_id
     try:
-        _drive_client(session).download_file(args.file_id, dest)
+        _client().drive_download_file(session["token"], args.file_id, dest)
     except ApiError as e:
         print(f"Download failed: {e.message}", file=sys.stderr)
         return 1
@@ -282,7 +260,7 @@ def cmd_drive_delete(args):
     if not session:
         return 1
     try:
-        _drive_client(session).delete_file(args.file_id)
+        _client().drive_delete_file(session["token"], args.file_id)
     except ApiError as e:
         print(f"Delete failed: {e.message}", file=sys.stderr)
         return 1
@@ -341,13 +319,11 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="homelab-cli", description="Command-line client for the homelab-* ecosystem")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("configure", help="Set (or show) this CLI's configuration")
+    # homelab-api is the ONLY address this CLI ever needs -- drive and
+    # mail both go through its own gateway routes now (see
+    # ../README.md), resolved server-side via the service registry.
+    p = sub.add_parser("configure", help="Set (or show) homelab-api's base URL")
     p.add_argument("--api-base", dest="api_base", help="homelab-api base URL")
-    p.add_argument("--drive-base", dest="drive_base", help="homelab-drive base URL")
-    p.add_argument("--imap-host", dest="imap_host", help="IMAP host (implicit TLS)")
-    p.add_argument("--imap-port", dest="imap_port", type=int, help="IMAP port")
-    p.add_argument("--smtp-host", dest="smtp_host", help="SMTP submission host (STARTTLS)")
-    p.add_argument("--smtp-port", dest="smtp_port", type=int, help="SMTP submission port")
     p.set_defaults(func=cmd_configure)
 
     p = sub.add_parser("register", help="Create a new account")
@@ -372,7 +348,7 @@ def build_parser():
     p.add_argument("feature_name")
     p.set_defaults(func=cmd_registry_lookup)
 
-    mail = sub.add_parser("mail", help="Email — direct IMAP/SMTP via XOAUTH2")
+    mail = sub.add_parser("mail", help="Email, via homelab-api's mail gateway")
     mail_sub = mail.add_subparsers(dest="mail_command", required=True)
 
     p = mail_sub.add_parser("list", help="List recent messages")
@@ -392,7 +368,7 @@ def build_parser():
     p.add_argument("--body-file", help="Read the message body from this file")
     p.set_defaults(func=cmd_mail_send)
 
-    drive = sub.add_parser("drive", help="File storage — homelab-drive's JSON API")
+    drive = sub.add_parser("drive", help="File storage, via homelab-api's drive gateway")
     drive_sub = drive.add_subparsers(dest="drive_command", required=True)
 
     p = drive_sub.add_parser("list", help="List folders and files (root, or one folder with --folder)")

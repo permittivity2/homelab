@@ -1,0 +1,26 @@
+[Unit]
+Description=Homelab Mail Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_MAILBRIDGE_CONFIG=/etc/homelab/mailbridge/config.yml"
+# Never fronted by homelab-webproxy and never reached by a browser --
+# only homelab-api's own gateway routes call this, over plain internal
+# HTTP (see README.md). No MOJO_REVERSE_PROXY needed for the same
+# reason drive/sso need it: there is no proxy in front of this one.
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-mailbridge
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-mailbridge
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-mailbridge
+
+[Install]
+WantedBy=multi-user.target

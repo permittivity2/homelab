@@ -1,3 +1,9 @@
+homelab-cli (0.3.3) unstable; urgency=medium
+
+  * Release v0.3.3
+
+ -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 21:21:05 -0500
+
 homelab-cli (0.3.2) unstable; urgency=medium
 
   * Release v0.3.2

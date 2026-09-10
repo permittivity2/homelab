@@ -1,0 +1,31 @@
+Template: homelab-mailbridge/homelab_api_base_url
+Type: string
+Default: http://127.0.0.1:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url -- every request this
+ app handles is authenticated by introspecting the caller's JWT here.
+
+Template: homelab-mailbridge/imap_host
+Type: string
+Default: mail.test.mailmasker.org
+Description: IMAP host (homelab-dovecot):
+
+Template: homelab-mailbridge/imap_port
+Type: string
+Default: 993
+Description: IMAP port:
+
+Template: homelab-mailbridge/smtp_host
+Type: string
+Default: mail.test.mailmasker.org
+Description: SMTP submission host (homelab-postfix):
+
+Template: homelab-mailbridge/smtp_port
+Type: string
+Default: 587
+Description: SMTP submission port:
+
+Template: homelab-mailbridge/listen_port
+Type: string
+Default: 2510
+Description: Port for homelab-mailbridge to listen on:

@@ -1,0 +1,13 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 systemd/homelab-mailbridge.service \
+		debian/homelab-mailbridge/etc/systemd/system/homelab-mailbridge.service
+	install -D -m 644 config/mailbridge.example.yml \
+		debian/homelab-mailbridge/usr/share/homelab-mailbridge/config/mailbridge.example.yml

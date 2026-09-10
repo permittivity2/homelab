@@ -2,10 +2,22 @@
 cli/README.md) — runs the REAL, packaged `homelab-cli` binary on the
 target host over SSH (not `python3 -m homelab_cli.cli` from a source
 checkout), the same way an actual user would invoke it after `apt
-install homelab-cli`. Package-local unit tests
-(cli/tests/test_client.py, test_mail.py) already cover the HTTP/IMAP/
-SMTP logic in isolation with everything mocked; this is what proves the
-installed CLI actually reaches the real, live services end-to-end.
+install homelab-cli`. Package-local unit tests (cli/tests/test_client.py)
+already cover the HTTP logic in isolation with everything mocked; this
+is what proves the installed CLI actually reaches the real, live
+services end-to-end.
+
+`cli_account`'s `configure` call below is also the acceptance test for
+the "homelab-cli only needs login + the api FQDN" redesign: `--api-base`
+is the only flag it passes now (it used to also need `--drive-base`/
+`--imap-host`/`--imap-port`/`--smtp-host`/`--smtp-port` — one address
+per feature). Drive and mail both go through homelab-api's own
+`/api/v1/drive/*`/`/api/v1/mail/*` gateway routes now (resolved
+server-side via the service registry, `/api/v1/mail/*` forwarding on to
+the new homelab-mailbridge) — every `drive`/`mail` command below is
+unchanged from the CLI's own perspective, proving the redesign is a
+pure internal-wiring change, not a behavior change a user would notice
+beyond the simpler `configure` step.
 
 Uses a throwaway HOMELAB_CLI_CONFIG_DIR per test run so this never
 touches whatever config a real user of the target host already has.
@@ -44,11 +56,7 @@ def cli_account(ssh_host):
     email = f"e2e-cli-{int(time.time() * 1000)}@test.mailmasker.org"
     password = "E2eCliTest1Aa!!"
 
-    _run_cli(ssh_host, "configure",
-        "--api-base", "https://api.test.mailmasker.org",
-        "--drive-base", "https://drive.test.mailmasker.org",
-        "--imap-host", "mail.test.mailmasker.org", "--imap-port", "993",
-        "--smtp-host", "mail.test.mailmasker.org", "--smtp-port", "587")
+    _run_cli(ssh_host, "configure", "--api-base", "https://api.test.mailmasker.org")
     _run_cli(ssh_host, "register", email, "--password", password)
     _run_cli(ssh_host, "login", email, "--password", password)
 

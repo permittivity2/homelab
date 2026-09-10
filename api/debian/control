@@ -18,7 +18,7 @@ Depends: perl (>= 5.36),
          libcrypt-argon2-perl,
          libcrypt-urandom-perl,
          adduser
-Recommends: homelab-database, homelab-pgbouncer
+Recommends: homelab-database, homelab-pgbouncer, homelab-drive, homelab-mailbridge
 Description: Identity/auth/RBAC and service registry for the homelab-* ecosystem
  A Mojolicious app providing account registration/login, JWT
  issuance/introspection/refresh (rotating refresh tokens, Argon2id
@@ -29,3 +29,9 @@ Description: Identity/auth/RBAC and service registry for the homelab-* ecosystem
  role design (see CLAUDE.md) -- postinst bootstraps both roles via
  homelab-bootstrap-app-role, registers the runtime role with pgbouncer,
  and applies its own schema migrations on every install/upgrade.
+ .
+ Also the single client-facing gateway for the whole ecosystem:
+ /api/v1/drive/* and /api/v1/mail/* forward (via the service registry)
+ to homelab-drive and homelab-mailbridge respectively, so a client
+ (homelab-cli, or any third-party script) only ever needs to know this
+ app's own address -- see README.md.
