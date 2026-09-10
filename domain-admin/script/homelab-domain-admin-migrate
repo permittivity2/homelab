@@ -1,0 +1,21 @@
+#!/usr/bin/env perl
+# Applies homelab-domain-admin's own migrations/*.sql via the migrate
+# role. Same template as homelab-drive-migrate -- see that file's
+# comment.
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(migrate_dbh);
+use Homelab::Common::Migrate qw(run_migrations);
+
+my $config = load_config('HOMELAB_DOMAIN_ADMIN_CONFIG', '/etc/homelab/domain-admin/config.yml');
+my $dbh    = migrate_dbh(%{ $config->{database_migrate} });
+
+my $migrations_dir = $ENV{HOMELAB_DOMAIN_ADMIN_MIGRATIONS_DIR} // '/usr/share/homelab-domain-admin/migrations';
+my $applied = run_migrations(dbh => $dbh, schema => 'domainadmin', migrations_dir => $migrations_dir);
+
+print "homelab-domain-admin: applied $applied migration(s)\n";

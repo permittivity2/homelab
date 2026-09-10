@@ -1,0 +1,33 @@
+Source: homelab-domain-admin
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-domain-admin
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common,
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         adduser,
+         openssl,
+         sudo
+Recommends: homelab-dns, homelab-postfix, homelab-api
+Description: DNS + mail-domain administration for the homelab-* ecosystem
+ Owns "what domains are we authoritative for, and what is their DKIM/
+ mail-routing state" as one cohesive concern, fronted by homelab-api's
+ /api/v1/domains/* gateway route (see ../api/README.md) the same way
+ homelab-mailbridge backs /api/v1/mail/*. Talks to PowerDNS via its own
+ built-in HTTP API (not a direct grant on PowerDNS's separate database,
+ not pdnsutil) for zone/record CRUD, and keeps homelab-postfix's notion
+ of valid mail domains in sync via a shared `domainadmin` schema in the
+ one shared `homelab` database (split runtime/migrate roles, see
+ CLAUDE.md). A later release adds DKIM key generation/rotation
+ (deliberately never storing private key material in Postgres -- see
+ README.md) and per-recipient mail allow/block. Must be installed on
+ the SAME host as homelab-postfix/OpenDKIM -- see README.md's
+ "Deployment topology" section.

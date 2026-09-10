@@ -1,0 +1,17 @@
+# Managed by homelab-domain-admin -- do not hand-edit, edit debconf
+# answers instead (dpkg-reconfigure homelab-domain-admin). Additive
+# drop-in into the SAME /etc/powerdns/pdns.d directory homelab-dns
+# already owns (that package wires the gpgsql backend; this one only
+# adds the API on top) -- same class of cross-package-but-same-directory
+# write homelab-postfix already does into Dovecot's conf.d/.
+#
+# Enables PowerDNS's own built-in HTTP API, which this package uses for
+# all zone/record CRUD instead of a direct grant on the separate
+# `powerdns` database or shelling out to pdnsutil (see README.md's
+# "Talking to PowerDNS" section). Bound to loopback only.
+webserver=yes
+webserver-address=127.0.0.1
+webserver-port=8081
+webserver-allow-from=127.0.0.1
+api=yes
+api-key=__PDNS_API_KEY__

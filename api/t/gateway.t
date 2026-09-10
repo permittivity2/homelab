@@ -4,16 +4,17 @@ use Test::More;
 use Test::Mojo;
 use File::Temp qw(tempfile);
 
-# Full end-to-end integration test -- needs a real config.yml AND a
-# real, already-running homelab-drive and homelab-mailbridge that have
-# both actually registered themselves (see their own README.md files).
-# The forwarding LOGIC itself (path stripping, header/body passthrough,
-# 502 on an unregistered feature) is unit-tested in isolation in
-# common/t/proxy.t with fakes -- this test exists specifically to prove
-# the real wiring: that homelab-api's hardcoded 'homelab-drive'/
-# 'homelab-mailbridge' feature names actually resolve to real services
-# and real data comes back through the gateway, not just that the
-# forwarding mechanism is theoretically correct.
+# Full end-to-end integration test -- needs a real config.yml AND real,
+# already-running homelab-drive, homelab-mailbridge, and
+# homelab-domain-admin that have all actually registered themselves
+# (see their own README.md files). The forwarding LOGIC itself (path
+# stripping, header/body passthrough, 502 on an unregistered feature)
+# is unit-tested in isolation in common/t/proxy.t with fakes -- this
+# test exists specifically to prove the real wiring: that homelab-api's
+# hardcoded 'homelab-drive'/'homelab-mailbridge'/'homelab-domain-admin'
+# feature names actually resolve to real services and real data comes
+# back through the gateway, not just that the forwarding mechanism is
+# theoretically correct.
 unless ($ENV{HOMELAB_API_CONFIG}) {
     plan skip_all => 'Set HOMELAB_API_CONFIG to a real config.yml to run integration tests';
 }
@@ -61,5 +62,23 @@ $t->get_ok('/api/v1/drive/files')->status_is(401, 'no Authorization header -> 40
 # throwaway account's (empty, but real) inbox proves just as well.
 $t->get_ok('/api/v1/mail/messages' => $auth)
   ->status_is(200, 'gateway resolved homelab-mailbridge via the registry and forwarded successfully');
+
+# --- Domains gateway: /api/v1/domains/* -> homelab-domain-admin's own
+# /internal/v1/* (strip_prefix + backend_prefix, same shape as drive's
+# route, different reason -- see api/README.md). A throwaway,
+# mail-only, dns_managed=false domain avoids touching real PowerDNS
+# state from this test.
+my $domain = 'e2e-api-gateway-domain-' . time . '-' . $$ . '.invalid';
+$t->post_ok('/api/v1/domains' => $auth => json => { domain_name => $domain, dns_managed => \0 })
+  ->status_is(201, 'gateway resolved homelab-domain-admin via the registry and forwarded successfully')
+  ->json_is('/domain_name', $domain);
+
+$t->get_ok('/api/v1/domains' => $auth)
+  ->status_is(200)
+  ->json_has('/0', 'the domain shows up in a subsequent gateway call');
+
+$t->delete_ok("/api/v1/domains/$domain" => $auth)->status_is(200);
+
+$t->get_ok('/api/v1/domains')->status_is(401, 'no Authorization header -> 401, not a forwarded 200');
 
 done_testing;

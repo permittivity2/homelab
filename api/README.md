@@ -71,7 +71,7 @@ self-service "become the first admin" endpoint by design — the first
 same as `test-admin@test.mailmasker.org` was granted. This is what
 `homelab-cli admin` talks to.
 
-## Client-facing gateway (`/api/v1/drive/*`, `/api/v1/mail/*`)
+## Client-facing gateway (`/api/v1/drive/*`, `/api/v1/mail/*`, `/api/v1/domains/*`)
 
 **This app is the only address a client (`homelab-cli`, or any
 third-party script) ever needs** — like Shopify's API or GitHub's SSH
@@ -79,10 +79,10 @@ interface, not a "know every feature's own address" design. Added
 2026-09-09 after exactly that complaint: the CLI briefly needed 6
 separate addresses (one per feature) before this existed.
 
-`/api/v1/drive/*` and `/api/v1/mail/*` forward the request (method,
-path, query, `Authorization` header, body — including real multipart
-file uploads) to `homelab-drive` and a new internal-only
-`homelab-mailbridge` service respectively, resolving each one's
+`/api/v1/drive/*`, `/api/v1/mail/*`, and `/api/v1/domains/*` forward the
+request (method, path, query, `Authorization` header, body — including
+real multipart file uploads) to `homelab-drive`, `homelab-mailbridge`,
+and `homelab-domain-admin` respectively, resolving each one's
 *internal* address via the service registry server-side
 (`$self->registry->lookup(...)` — direct in-process DB access, not an
 HTTP round trip to itself) and relaying the response straight back.
@@ -110,7 +110,21 @@ re-prepends `/api/v1` (`Homelab::Common::Proxy::forward`'s
 `backend_prefix` option) — a plain prefix strip alone lands on `/files`,
 which 404s. `homelab-mailbridge`'s own routes are deliberately already
 `/api/v1/mail/...` themselves (it exists only to back this gateway), so
-nothing needs rewriting for that one.
+nothing needs rewriting for that one. `homelab-domain-admin`'s own
+routes are `/internal/v1/domains/...` (a namespace deliberately
+distinct from this gateway's `/api/v1/domains/...`, since that
+service's API might reasonably be called by something other than this
+gateway later — see `../domain-admin/README.md`) — note they *keep*
+the `domains` segment, unlike drive. So its route strips only
+`/api/v1` (not `/api/v1/domains`, which would drop `domains` entirely
+and land on the wrong backend path — a real bug caught by an actual
+`homelab-cli dns domains list` call) and re-prepends `/internal/v1`.
+Also unlike drive/mail, it needs *two* route registrations, not one: a
+`*capture` wildcard placeholder requires at least one captured
+character after its own leading `/`, so it never matches the bare
+`/api/v1/domains` (list/create) — only `/api/v1/domains/<something>`.
+Drive/mail never hit this because they have no bare top-level resource
+with nothing after the prefix.
 
 ## Testing
 

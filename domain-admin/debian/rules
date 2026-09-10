@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 systemd/homelab-domain-admin.service \
+		debian/homelab-domain-admin/etc/systemd/system/homelab-domain-admin.service
+	install -D -m 644 config/domain-admin.example.yml \
+		debian/homelab-domain-admin/usr/share/homelab-domain-admin/config/domain-admin.example.yml
+	install -D -m 644 pdns.d/95-homelab-domain-admin-api.conf.template \
+		debian/homelab-domain-admin/usr/share/homelab-domain-admin/pdns.d/95-homelab-domain-admin-api.conf.template
+	find migrations -type f -exec install -D -m 644 {} \
+		debian/homelab-domain-admin/usr/share/homelab-domain-admin/{} \;

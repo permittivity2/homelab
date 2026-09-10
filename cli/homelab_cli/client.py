@@ -119,6 +119,39 @@ class Client:
     def drive_delete_folder(self, token, folder_id):
         return self._request("DELETE", f"/api/v1/drive/folders/{folder_id}", headers=self._auth(token))
 
+    # --- DNS + mail-domain admin, via homelab-api's /api/v1/domains/*
+    # gateway -> homelab-domain-admin (see ../../domain-admin/README.md).
+    # site_admin role required server-side. ---
+    def dns_list_domains(self, token):
+        return self._request("GET", "/api/v1/domains", headers=self._auth(token))
+
+    def dns_add_domain(self, token, domain_name, mail_enabled=True, dns_managed=True, nameservers=None):
+        body = {"domain_name": domain_name, "mail_enabled": mail_enabled, "dns_managed": dns_managed}
+        if nameservers:
+            body["nameservers"] = nameservers
+        return self._request("POST", "/api/v1/domains", headers=self._auth(token), json=body)
+
+    def dns_get_domain(self, token, domain_name):
+        return self._request("GET", f"/api/v1/domains/{domain_name}", headers=self._auth(token))
+
+    def dns_set_domain_enabled(self, token, domain_name, mail_enabled):
+        return self._request("PATCH", f"/api/v1/domains/{domain_name}", headers=self._auth(token), json={"mail_enabled": mail_enabled})
+
+    def dns_list_records(self, token, domain_name):
+        return self._request("GET", f"/api/v1/domains/{domain_name}/dns/records", headers=self._auth(token))
+
+    def dns_add_record(self, token, domain_name, name, type_, values, ttl=3600):
+        return self._request(
+            "POST", f"/api/v1/domains/{domain_name}/dns/records", headers=self._auth(token),
+            json={"name": name, "type": type_, "content": values, "ttl": ttl},
+        )
+
+    def dns_delete_record(self, token, domain_name, name, type_):
+        return self._request(
+            "DELETE", f"/api/v1/domains/{domain_name}/dns/records", headers=self._auth(token),
+            json={"name": name, "type": type_},
+        )
+
     # --- Mail, via homelab-api's /api/v1/mail/* gateway ->
     # homelab-mailbridge (see ../../mailbridge/README.md). No more
     # imaplib/smtplib here at all -- these are plain HTTP calls, same

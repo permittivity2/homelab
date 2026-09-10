@@ -1,0 +1,29 @@
+homelab-domain-admin (0.1.3) unstable; urgency=medium
+
+  * Release v0.1.3
+
+ -- Gardner <gardner@homelab>  Thu, 10 Sep 2026 18:33:44 -0500
+
+homelab-domain-admin (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Thu, 10 Sep 2026 06:40:02 -0500
+
+homelab-domain-admin (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Thu, 10 Sep 2026 06:37:20 -0500
+
+homelab-domain-admin (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Thu, 10 Sep 2026 06:26:49 -0500
+
+homelab-domain-admin (0.0.0) unstable; urgency=medium
+
+  * Placeholder seed entry — build-package.sh prepends real entries above this.
+
+ -- Gardner <gardner@homelab>  Thu, 10 Sep 2026 06:00:00 -0500

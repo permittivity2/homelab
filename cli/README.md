@@ -83,6 +83,28 @@ Talks to homelab-drive's Bearer-token-authenticated JSON API (see
 SSO redirect flow at all; it already holds its own JWT directly, and
 now never needs to know drive's own address either.
 
+## DNS + mail-domain administration (`dns`)
+
+```bash
+homelab-cli dns domains list
+homelab-cli dns domains add example.org
+homelab-cli dns domains add mail-only.example.org --no-dns
+homelab-cli dns domains show example.org
+homelab-cli dns domains enable example.org
+homelab-cli dns domains disable example.org
+
+homelab-cli dns records list example.org
+homelab-cli dns records add example.org --name example.org --type A --value 203.0.113.10
+homelab-cli dns records delete example.org --name example.org --type A
+```
+
+`site_admin` role required server-side (same "just attempt the call and
+surface whatever the server decides" approach as `admin`, below).
+Backed by `homelab-domain-admin` through `homelab-api`'s
+`/api/v1/domains/*` gateway — see `../domain-admin/README.md`, which
+also covers DKIM rotation and per-recipient mail allow/block once those
+land (their `dns` subcommands don't exist yet).
+
 ## Administration (`admin`)
 
 ```bash

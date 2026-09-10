@@ -84,6 +84,27 @@ sub startup ($self) {
     # gateway), so nothing needs rewriting for that one.
     $r->any('/api/v1/drive/*capture' => sub ($c) { $self->_gateway($c, 'homelab-drive', strip_prefix => '/api/v1/drive', backend_prefix => '/api/v1') });
     $r->any('/api/v1/mail/*capture'  => sub ($c) { $self->_gateway($c, 'homelab-mailbridge') });
+    # homelab-domain-admin's own routes are already /internal/v1/domains/...
+    # -- note they KEEP the "domains" segment, unlike drive (whose
+    # client-facing "/drive" marker disappears entirely on the backend
+    # side, landing on plain /api/v1/files). So the right transform
+    # strips only "/api/v1" (not "/api/v1/domains") and re-adds
+    # "/internal/v1" -- e.g. client /api/v1/domains/x/dns/records ->
+    # backend /internal/v1/domains/x/dns/records, "domains" intact both
+    # sides. Getting this wrong (stripping "/api/v1/domains" the way
+    # drive strips "/api/v1/drive") silently drops "domains" and lands
+    # on the wrong backend path -- caught by an actual `homelab-cli dns
+    # domains list` call, not by inspection.
+    #
+    # TWO routes, not one: a *wildcard placeholder requires at least one
+    # captured character after its own leading "/", so
+    # "/api/v1/domains/*capture" alone never matches the bare
+    # "/api/v1/domains" (list/create) -- unlike drive/mail, which never
+    # have a bare top-level resource with nothing after the prefix.
+    # Caught the same way (a raw Mojolicious 404, not even reaching
+    # _gateway) -- see t/gateway.t.
+    $r->any('/api/v1/domains' => sub ($c) { $self->_gateway($c, 'homelab-domain-admin', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+    $r->any('/api/v1/domains/*capture' => sub ($c) { $self->_gateway($c, 'homelab-domain-admin', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
 
     return;
 }

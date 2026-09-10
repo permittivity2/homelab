@@ -1,0 +1,28 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        systemctl stop homelab-domain-admin 2>/dev/null || true
+        ;;
+
+    purge)
+        rm -rf /etc/homelab/domain-admin
+        rm -f /etc/powerdns/pdns.d/95-homelab-domain-admin-api.conf
+        rm -f /etc/sudoers.d/homelab-domain-admin
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

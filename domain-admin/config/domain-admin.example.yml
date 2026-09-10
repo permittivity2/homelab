@@ -1,0 +1,52 @@
+# Homelab Domain Admin Configuration
+#
+# DNS zone/record CRUD + (in a later phase) DKIM key rotation and
+# per-recipient mail allow/block -- see README.md. Internal-only: never
+# fronted by homelab-webproxy, reached only through homelab-api's
+# /api/v1/domains/* gateway route. Must run on the SAME host as
+# homelab-postfix/OpenDKIM (see README.md's "Deployment topology"
+# section) -- DKIM private key material never crosses a network.
+
+homelab_api:
+  base_url: https://api.test.mailmasker.org
+
+# RUNTIME connection -- CRUD only, no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_domain_admin_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection -- direct to Postgres, bypassing pgbouncer. Only
+# used by homelab-domain-admin-migrate at install/upgrade time.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_domain_admin_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+# PowerDNS's own built-in HTTP API (see README.md's "Talking to
+# PowerDNS" section) -- not a direct grant on the separate `powerdns`
+# database. Bound to loopback only by the pdns.d drop-in this package's
+# own postinst writes.
+powerdns:
+  api_base_url: http://127.0.0.1:8081
+  api_key: YOUR_PDNS_API_KEY_HERE
+
+# DKIM rotation defaults -- read starting in a later phase.
+dkim:
+  retirement_days: 7
+
+# What this instance announces itself as in homelab-api's service
+# registry -- host/port only, deliberately no public_base_url: nothing
+# external ever connects to this directly.
+registry:
+  host: 127.0.0.1
+  port: 2511
+
+server:
+  listen: "http://127.0.0.1:2511"
+  workers: 2
+  pid_file: /var/lib/homelab/domain-admin-hypnotoad.pid

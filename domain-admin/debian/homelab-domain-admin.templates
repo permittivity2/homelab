@@ -1,0 +1,37 @@
+Template: homelab-domain-admin/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-domain-admin/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
+Template: homelab-domain-admin/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url — every request this
+ app handles is authenticated by introspecting the caller's JWT here.
+
+Template: homelab-domain-admin/listen_port
+Type: string
+Default: 2511
+Description: Port for homelab-domain-admin to listen on:
+
+Template: homelab-domain-admin/pdns_api_host
+Type: string
+Default: 127.0.0.1
+Description: Host where PowerDNS's own HTTP API is (or will be) reachable:
+ Written into config.yml's powerdns.api_base_url. This package enables
+ that API itself (see README.md) if PowerDNS is installed locally —
+ only change this from 127.0.0.1 if PowerDNS runs on a different host.
+
+Template: homelab-domain-admin/pdns_api_port
+Type: string
+Default: 8081
+Description: Port for PowerDNS's own HTTP API:

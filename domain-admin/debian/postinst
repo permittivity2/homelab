@@ -1,0 +1,155 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/domain-admin
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-domain-admin
+PDNS_D=/etc/powerdns/pdns.d
+PDNS_MARKER="$PDNS_D/95-homelab-domain-admin-api.conf"
+SUDOERS_FILE=/etc/sudoers.d/homelab-domain-admin
+
+case "$1" in
+    configure)
+        echo "homelab-domain-admin post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-domain-admin/db_host || true;        DB_HOST="${RET:-localhost}"
+            db_get homelab-domain-admin/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-domain-admin/api_base || true;       API_BASE="${RET:-http://localhost:3000}"
+            db_get homelab-domain-admin/listen_port || true;    LISTEN_PORT="${RET:-2511}"
+            db_get homelab-domain-admin/pdns_api_host || true;  PDNS_API_HOST="${RET:-127.0.0.1}"
+            db_get homelab-domain-admin/pdns_api_port || true;  PDNS_API_PORT="${RET:-8081}"
+
+            echo "  bootstrapping Postgres roles for 'homelab_domain_admin' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_domain_admin --schema domainadmin --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success — see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-domain-admin' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
+
+            PDNS_API_KEY="$(openssl rand -base64 32)"
+
+            sed \
+                -e "s#https://api\.test\.mailmasker\.org#$API_BASE#g" \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_domain_admin_runtime#$RUNTIME_ROLE#g" \
+                -e "s#YOUR_POSTGRES_HOST#$DB_HOST#g" \
+                -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
+                -e "s#homelab_domain_admin_migrate#$MIGRATE_ROLE#g" \
+                -e "s#http://127\.0\.0\.1:8081#http://$PDNS_API_HOST:$PDNS_API_PORT#g" \
+                -e "s#YOUR_PDNS_API_KEY_HERE#$PDNS_API_KEY#g" \
+                -e "s#\"http://127\.0\.0\.1:2511\"#\"http://127.0.0.1:$LISTEN_PORT\"#g" \
+                -e "s#  port: 2511#  port: $LISTEN_PORT#g" \
+                "$SHARE_DIR/config/domain-admin.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+            echo "  (dpkg-reconfigure homelab-domain-admin to redo the prompts)"
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_DOMAIN_ADMIN_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
+            HOMELAB_DOMAIN_ADMIN_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-domain-admin-migrate
+
+        # Narrow, explicit sudoers grant -- lets the unprivileged `homelab`
+        # user restart pdns after a DNS write PowerDNS won't otherwise
+        # serve until restarted (see README.md), and manage opendkim (used
+        # starting in a later phase -- granted now since this is one
+        # static file, not something worth a second sudoers rewrite when
+        # that phase lands). Nothing else. Validated with visudo before
+        # being activated -- prefer leaving the OLD file (or none) in
+        # place over activating a broken one.
+        TMP_SUDOERS="$(mktemp)"
+        cat > "$TMP_SUDOERS" <<'SUDOERS'
+# Managed by homelab-domain-admin's postinst -- do not hand-edit.
+homelab ALL=(root) NOPASSWD: /usr/bin/systemctl restart pdns, /usr/bin/systemctl reload opendkim, /usr/bin/systemctl restart opendkim
+SUDOERS
+        if visudo -c -f "$TMP_SUDOERS" >/dev/null 2>&1; then
+            install -m 0440 "$TMP_SUDOERS" "$SUDOERS_FILE"
+            echo "  wrote $SUDOERS_FILE"
+        else
+            echo "  WARNING: generated sudoers file failed validation -- NOT installing it."
+            echo "           pdns restarts after a DNS write will need to be done by hand."
+        fi
+        rm -f "$TMP_SUDOERS"
+
+        # Enable PowerDNS's HTTP API, but only if PowerDNS is actually
+        # installed on this host (Recommends, not Depends -- a domain
+        # can have dns_managed=false, and this package can be installed
+        # before homelab-dns is). Same validate-then-restart idiom as
+        # homelab-dns's own postinst -- pdns.service has no reload path
+        # at all, so a genuine config change unavoidably needs a restart.
+        if command -v pdns_server >/dev/null 2>&1; then
+            mkdir -p "$PDNS_D"
+            sed -e "s#__PDNS_API_KEY__#${PDNS_API_KEY:-$(grep -A2 '^powerdns:' "$CONFIG_FILE" | sed -n 's/^  api_key: //p')}#g" \
+                "$SHARE_DIR/pdns.d/95-homelab-domain-admin-api.conf.template" > "$PDNS_MARKER"
+            chmod 640 "$PDNS_MARKER"
+            chgrp pdns "$PDNS_MARKER" 2>/dev/null || true
+            echo "  wrote $PDNS_MARKER"
+
+            if pdns_server --config=check >/dev/null 2>&1; then
+                if systemctl is-active --quiet pdns; then
+                    systemctl restart pdns || echo "WARNING: pdns restart failed -- check 'systemctl status pdns' by hand."
+                else
+                    systemctl start pdns || echo "WARNING: pdns failed to start -- check 'systemctl status pdns' by hand."
+                fi
+            else
+                echo "  WARNING: PowerDNS config check failed -- NOT touching pdns."
+                echo "           Run 'pdns_server --config=check' by hand to see the error;"
+                echo "           the previous running config (if any) is untouched."
+            fi
+        else
+            echo "  PowerDNS is not installed on this host -- skipping API enablement"
+            echo "  (install homelab-dns first, then 'dpkg-reconfigure homelab-domain-admin')."
+        fi
+
+        systemctl enable homelab-domain-admin >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-domain-admin; then
+            systemctl restart homelab-domain-admin || echo "WARNING: homelab-domain-admin restart failed -- check 'systemctl status homelab-domain-admin' by hand."
+        else
+            systemctl start homelab-domain-admin || echo "WARNING: homelab-domain-admin failed to start -- check 'systemctl status homelab-domain-admin' by hand."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-domain-admin configured."
+        echo "config: $CONFIG_FILE"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

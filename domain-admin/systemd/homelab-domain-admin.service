@@ -1,0 +1,27 @@
+[Unit]
+Description=Homelab Domain Admin
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_DOMAIN_ADMIN_CONFIG=/etc/homelab/domain-admin/config.yml"
+# Never fronted by homelab-webproxy and never reached by a browser --
+# only homelab-api's own gateway route calls this, over plain internal
+# HTTP (see README.md). No MOJO_REVERSE_PROXY needed for the same
+# reason mailbridge doesn't need it: there is no proxy in front of this
+# one.
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-domain-admin
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-domain-admin
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-domain-admin
+
+[Install]
+WantedBy=multi-user.target

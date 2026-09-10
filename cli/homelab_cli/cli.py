@@ -129,6 +129,139 @@ def cmd_registry_list(args):
     return 0
 
 
+# --- dns: homelab-api's /api/v1/domains/* gateway -> homelab-domain-admin
+# (see ../../domain-admin/README.md). site_admin role required
+# server-side (role-gating itself lands once homelab-api's introspect
+# response carries roles -- see that package's own README "API"
+# section; for now the server just requires any authenticated caller,
+# same as every other command below tries and lets the server decide). -
+
+def cmd_dns_domains_list(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        domains = _client().dns_list_domains(session["token"])
+    except ApiError as e:
+        print(f"Could not list domains: {e.message}", file=sys.stderr)
+        return 1
+    if not domains:
+        print("(no domains)")
+        return 0
+    for d in domains:
+        state = "active" if d["active"] else "disabled"
+        flags = []
+        if d["mail_enabled"]:
+            flags.append("mail")
+        if d["dns_managed"]:
+            flags.append("dns")
+        print(f"{d['domain_name']}  ({state}; {', '.join(flags) or 'no flags'})")
+    return 0
+
+
+def cmd_dns_domains_add(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        result = _client().dns_add_domain(
+            session["token"], args.domain_name,
+            mail_enabled=args.mail_enabled, dns_managed=args.dns_managed,
+            nameservers=args.ns,
+        )
+    except ApiError as e:
+        print(f"Could not add domain: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Added: {result['domain_name']} (id {result['id']})")
+    return 0
+
+
+def cmd_dns_domains_show(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        d = _client().dns_get_domain(session["token"], args.domain_name)
+    except ApiError as e:
+        print(f"Could not show domain: {e.message}", file=sys.stderr)
+        return 1
+    for key in ("domain_name", "active", "mail_enabled", "dns_managed", "created_by", "created_at"):
+        print(f"{key}: {d.get(key)}")
+    return 0
+
+
+def cmd_dns_domains_enable(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_set_domain_enabled(session["token"], args.domain_name, True)
+    except ApiError as e:
+        print(f"Could not enable domain: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Enabled {args.domain_name}")
+    return 0
+
+
+def cmd_dns_domains_disable(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_set_domain_enabled(session["token"], args.domain_name, False)
+    except ApiError as e:
+        print(f"Could not disable domain: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Disabled {args.domain_name}")
+    return 0
+
+
+def cmd_dns_records_list(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        records = _client().dns_list_records(session["token"], args.domain_name)
+    except ApiError as e:
+        print(f"Could not list records: {e.message}", file=sys.stderr)
+        return 1
+    if not records:
+        print("(no records)")
+        return 0
+    for r in records:
+        values = ", ".join(r["content"])
+        print(f"{r['name']}  {r['type']}  {r['ttl']}  {values}")
+    return 0
+
+
+def cmd_dns_records_add(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_add_record(
+            session["token"], args.domain_name, args.name, args.type, args.value, ttl=args.ttl,
+        )
+    except ApiError as e:
+        print(f"Could not add record: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Added {args.name} {args.type}")
+    return 0
+
+
+def cmd_dns_records_delete(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_delete_record(session["token"], args.domain_name, args.name, args.type)
+    except ApiError as e:
+        print(f"Could not delete record: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Deleted {args.name} {args.type}")
+    return 0
+
+
 # --- mail: homelab-api's /api/v1/mail/* gateway -> homelab-mailbridge
 # (see ../../mailbridge/README.md). No IMAP/SMTP client code here at
 # all any more -- just HTTP, same as every other command. ---------------
@@ -363,6 +496,55 @@ def build_parser():
     p = registry_sub.add_parser("lookup", help="Look up a feature's address (see 'registry list' for valid names)")
     p.add_argument("feature_name")
     p.set_defaults(func=cmd_registry_lookup)
+
+    dns = sub.add_parser("dns", help="DNS + mail-domain administration (site_admin role required)")
+    dns_sub = dns.add_subparsers(dest="dns_command", required=True)
+
+    domains = dns_sub.add_parser("domains", help="Domain management")
+    domains_sub = domains.add_subparsers(dest="dns_domains_command", required=True)
+
+    p = domains_sub.add_parser("list", help="List every managed domain")
+    p.set_defaults(func=cmd_dns_domains_list)
+
+    p = domains_sub.add_parser("add", help="Add a domain (creates a PowerDNS zone unless --no-dns)")
+    p.add_argument("domain_name")
+    p.add_argument("--no-dns", dest="dns_managed", action="store_false", default=True, help="Mail-only: don't create/manage a DNS zone")
+    p.add_argument("--no-mail", dest="mail_enabled", action="store_false", default=True, help="DNS-only: don't accept mail for this domain")
+    p.add_argument("--ns", action="append", help="Nameserver for the new zone (repeatable; server default used if omitted)")
+    p.set_defaults(func=cmd_dns_domains_add)
+
+    p = domains_sub.add_parser("show", help="Show one domain's full state")
+    p.add_argument("domain_name")
+    p.set_defaults(func=cmd_dns_domains_show)
+
+    p = domains_sub.add_parser("enable", help="Re-enable mail acceptance for a domain")
+    p.add_argument("domain_name")
+    p.set_defaults(func=cmd_dns_domains_enable)
+
+    p = domains_sub.add_parser("disable", help="Stop accepting mail for a domain (soft -- does not delete DNS)")
+    p.add_argument("domain_name")
+    p.set_defaults(func=cmd_dns_domains_disable)
+
+    records = dns_sub.add_parser("records", help="DNS record management")
+    records_sub = records.add_subparsers(dest="dns_records_command", required=True)
+
+    p = records_sub.add_parser("list", help="List a domain's DNS records")
+    p.add_argument("domain_name")
+    p.set_defaults(func=cmd_dns_records_list)
+
+    p = records_sub.add_parser("add", help="Create or replace a record")
+    p.add_argument("domain_name")
+    p.add_argument("--name", required=True)
+    p.add_argument("--type", required=True)
+    p.add_argument("--value", required=True, action="append", help="Record content (repeatable for multi-value records)")
+    p.add_argument("--ttl", type=int, default=3600)
+    p.set_defaults(func=cmd_dns_records_add)
+
+    p = records_sub.add_parser("delete", help="Delete a record")
+    p.add_argument("domain_name")
+    p.add_argument("--name", required=True)
+    p.add_argument("--type", required=True)
+    p.set_defaults(func=cmd_dns_records_delete)
 
     mail = sub.add_parser("mail", help="Email, via homelab-api's mail gateway")
     mail_sub = mail.add_subparsers(dest="mail_command", required=True)

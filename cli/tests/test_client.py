@@ -72,6 +72,51 @@ def test_registry_list_builds_correct_path_and_returns_list(client):
     assert result == payload
 
 
+def test_dns_list_domains_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.dns_list_domains("t")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/domains")
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer t"
+
+
+def test_dns_add_domain_sends_flags_and_nameservers(client):
+    with patch("requests.request", return_value=_mock_response(201, {"domain_name": "example.org"})) as m:
+        client.dns_add_domain("t", "example.org", mail_enabled=False, dns_managed=True, nameservers=["ns1.example.org."])
+    assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/domains")
+    body = m.call_args.kwargs["json"]
+    assert body == {
+        "domain_name": "example.org", "mail_enabled": False, "dns_managed": True,
+        "nameservers": ["ns1.example.org."],
+    }
+
+
+def test_dns_add_domain_omits_nameservers_when_not_given(client):
+    with patch("requests.request", return_value=_mock_response(201, {})) as m:
+        client.dns_add_domain("t", "example.org")
+    assert "nameservers" not in m.call_args.kwargs["json"]
+
+
+def test_dns_set_domain_enabled_builds_correct_request(client):
+    with patch("requests.request", return_value=_mock_response(200, {})) as m:
+        client.dns_set_domain_enabled("t", "example.org", False)
+    assert m.call_args.args[:2] == ("PATCH", "http://localhost:3000/api/v1/domains/example.org")
+    assert m.call_args.kwargs["json"] == {"mail_enabled": False}
+
+
+def test_dns_add_record_builds_correct_request(client):
+    with patch("requests.request", return_value=_mock_response(201, {"ok": True})) as m:
+        client.dns_add_record("t", "example.org", "example.org", "A", ["203.0.113.10"], ttl=300)
+    assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/domains/example.org/dns/records")
+    assert m.call_args.kwargs["json"] == {"name": "example.org", "type": "A", "content": ["203.0.113.10"], "ttl": 300}
+
+
+def test_dns_delete_record_builds_correct_request(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.dns_delete_record("t", "example.org", "example.org", "A")
+    assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/domains/example.org/dns/records")
+    assert m.call_args.kwargs["json"] == {"name": "example.org", "type": "A"}
+
+
 def test_api_base_trailing_slash_is_stripped():
     c = Client("http://localhost:3000/")
     with patch("requests.request", return_value=_mock_response(200, {})) as m:
