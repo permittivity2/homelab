@@ -36,23 +36,39 @@ jobs:
           sudo apt-get install -y \
             libmojolicious-perl libyaml-libyaml-perl libmojo-pg-perl \
             libdbi-perl libdbd-pg-perl libminion-perl postgresql-client \
-            libcrypt-jwt-perl libcryptx-perl libcrypt-argon2-perl libcrypt-urandom-perl
+            libcrypt-jwt-perl libcryptx-perl libcrypt-argon2-perl libcrypt-urandom-perl \
+            libimage-magick-perl
       - name: Run every package's t/*.t (skips packages with none)
         # Only requires t/ — several packages (pgbouncer, database) ship
         # a script/ + t/ with no lib/ at all (no Perl modules, just a
         # standalone tool); `-I lib` is harmless when lib/ doesn't exist.
         # An earlier version of this loop required both t/ AND lib/,
         # which silently excluded those packages' tests from CI entirely.
+        #
+        # Deliberately does NOT `exit 1` on the first failing package --
+        # a real incident (2026-09-10) showed that stops the loop dead
+        # and silently skips every package alphabetically after the
+        # failure (mailbridge/pgbouncer/postfix/roundcube/sso/webproxy
+        # went completely unchecked for a full day of pushes because
+        # drive/t/thumbnails.t failed first). Run every package
+        # regardless, collect failing package names, and fail the job
+        # only at the end with a full list.
         run: |
-          set -e
           shopt -s nullglob
+          failed=()
           for pkg in */; do
             if [ -d "${pkg}t" ]; then
               echo "::group::prove: $pkg"
-              (cd "$pkg" && prove -I lib -r t) || exit 1
+              if ! (cd "$pkg" && prove -I lib -r t); then
+                failed+=("$pkg")
+              fi
               echo "::endgroup::"
             fi
           done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::Failing packages: ${failed[*]}"
+            exit 1
+          fi
 
   python-unit-tests:
     # homelab-cli is the one shipped package allowed to be Python (see
