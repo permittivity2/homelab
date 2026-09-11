@@ -1,0 +1,17 @@
+# Managed by homelab-postfix -- do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-postfix). Postfix's own pgsql map
+# format (see `man 5 pgsql_table`). Backs virtual_alias_maps: inbound
+# routing only, so this query intentionally checks `active` alone --
+# it must never depend on send_enabled (see
+# domain-admin/README.md's "Multi-domain send-as" section for why
+# receiving and sending are independently toggleable). Postfix's own
+# map-lookup fallback (exact address, then bare @domain) does catch-all
+# matching automatically -- source_pattern rows are stored exactly as
+# Postfix expects ('@forge.name' or 'sales@forge.name'), no app-side
+# wildcard logic needed. See ../../domain-admin/README.md and this
+# package's own README.md "Multi-domain send-as" section.
+hosts = __DB_HOST__:__DB_PORT__
+user = __DB_USER__
+password = __DB_PASS__
+dbname = __DB_NAME__
+query = SELECT destination FROM domainadmin.mail_aliases WHERE source_pattern='%s' AND active = true

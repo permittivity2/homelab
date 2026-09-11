@@ -8,6 +8,8 @@ MAP_CF=/etc/postfix/pgsql-virtual-mailbox.cf
 DOMAINS_CF=/etc/postfix/pgsql-virtual-domains.cf
 DOVECOT_SASL_DROPIN=/etc/dovecot/conf.d/92-homelab-postfix-sasl.conf
 RECIPIENT_ACCESS_CF=/etc/postfix/pgsql-recipient-access.cf
+ALIAS_MAPS_CF=/etc/postfix/pgsql-virtual-alias-maps.cf
+SENDER_LOGIN_CF=/etc/postfix/pgsql-sender-login-maps.cf
 MASTER_CF=/etc/postfix/master.cf
 
 case "$1" in
@@ -193,6 +195,50 @@ case "$1" in
             esac
         fi
 
+        # --- Multi-domain send-as: virtual_alias_maps (inbound routing)
+        # + smtpd_sender_login_maps (outbound authorization), both
+        # backed by domainadmin.mail_aliases --- Reuses the same
+        # credential as $MAP_CF/$DOMAINS_CF/$RECIPIENT_ACCESS_CF above
+        # (one role, one password). Both are brand-new settings with no
+        # prior static value to protect (unlike virtual_mailbox_domains
+        # above), so postconf -e applies directly once each .cf exists --
+        # no probe-then-flip caution needed. See
+        # ../../domain-admin/README.md and this package's own README.md
+        # "Multi-domain send-as" section.
+        if [ -f "$MAP_CF" ] && [ -n "$MAP_DB_USER" ] && [ ! -f "$ALIAS_MAPS_CF" ]; then
+            sed \
+                -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
+                -e "s#__DB_PORT__#6432#g" \
+                -e "s#__DB_NAME__#homelab#g" \
+                -e "s#__DB_USER__#$MAP_DB_USER#g" \
+                -e "s#__DB_PASS__#$MAP_DB_PASS#g" \
+                "$SHARE_DIR/config/pgsql-virtual-alias-maps.cf.template" > "$ALIAS_MAPS_CF"
+            chmod 640 "$ALIAS_MAPS_CF"
+            chgrp postfix "$ALIAS_MAPS_CF" 2>/dev/null || true
+            echo "  wrote $ALIAS_MAPS_CF"
+        fi
+        if [ -f "$ALIAS_MAPS_CF" ]; then
+            postconf -e "virtual_alias_maps = pgsql:$ALIAS_MAPS_CF"
+            echo "  virtual_alias_maps now backed by a live domainadmin.mail_aliases lookup"
+        fi
+
+        if [ -f "$MAP_CF" ] && [ -n "$MAP_DB_USER" ] && [ ! -f "$SENDER_LOGIN_CF" ]; then
+            sed \
+                -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
+                -e "s#__DB_PORT__#6432#g" \
+                -e "s#__DB_NAME__#homelab#g" \
+                -e "s#__DB_USER__#$MAP_DB_USER#g" \
+                -e "s#__DB_PASS__#$MAP_DB_PASS#g" \
+                "$SHARE_DIR/config/pgsql-sender-login-maps.cf.template" > "$SENDER_LOGIN_CF"
+            chmod 640 "$SENDER_LOGIN_CF"
+            chgrp postfix "$SENDER_LOGIN_CF" 2>/dev/null || true
+            echo "  wrote $SENDER_LOGIN_CF"
+        fi
+        if [ -f "$SENDER_LOGIN_CF" ]; then
+            postconf -e "smtpd_sender_login_maps = pgsql:$SENDER_LOGIN_CF"
+            echo "  smtpd_sender_login_maps now backed by a live domainadmin.mail_aliases lookup"
+        fi
+
         # --- DKIM: opt-in OpenDKIM milter wiring (see README.md's "DKIM"
         # section) --- deliberately gated on a debconf flag that
         # defaults to false, so a routine upgrade of an already-
@@ -352,7 +398,9 @@ case "$1" in
         echo "homelab-postfix configured."
         echo "main.cf:          /etc/postfix/main.cf"
         echo "recipient map:    $MAP_CF"
-        echo "submission (587): SASL via Dovecot, TLS required"
+        echo "alias map:        $ALIAS_MAPS_CF"
+        echo "sender login map: $SENDER_LOGIN_CF"
+        echo "submission (587): SASL via Dovecot, TLS required, sender-login-mismatch enforced"
         echo "smtp (25):        virtual_mailbox_domains=$CURRENT_VMD, LMTP to homelab-dovecot"
         echo ""
         ;;

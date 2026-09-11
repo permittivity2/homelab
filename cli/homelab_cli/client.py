@@ -176,6 +176,29 @@ class Client:
     def dns_delete_recipient_access(self, token, recipient):
         return self._request("DELETE", f"/api/v1/domains/recipient-access/{recipient}", headers=self._auth(token))
 
+    # --- Multi-domain send-as grants, same gateway prefix as the DNS
+    # methods above (site_admin required server-side except for the
+    # self-service /mine endpoint under "Mail" below). See
+    # ../../domain-admin/README.md's "Multi-domain send-as" section. ---
+    def dns_add_mail_alias(self, token, source_pattern, destination, send_enabled=True):
+        return self._request(
+            "POST", "/api/v1/domains/mail-aliases", headers=self._auth(token),
+            json={"source_pattern": source_pattern, "destination": destination, "send_enabled": send_enabled},
+        )
+
+    def dns_list_mail_aliases(self, token, destination=None):
+        params = {"destination": destination} if destination else {}
+        return self._request("GET", "/api/v1/domains/mail-aliases", headers=self._auth(token), params=params)
+
+    def dns_set_mail_alias_send_enabled(self, token, source_pattern, send_enabled):
+        return self._request(
+            "PATCH", f"/api/v1/domains/mail-aliases/{source_pattern}", headers=self._auth(token),
+            json={"send_enabled": send_enabled},
+        )
+
+    def dns_delete_mail_alias(self, token, source_pattern):
+        return self._request("DELETE", f"/api/v1/domains/mail-aliases/{source_pattern}", headers=self._auth(token))
+
     # --- Mail, via homelab-api's /api/v1/mail/* gateway ->
     # homelab-mailbridge (see ../../mailbridge/README.md). No more
     # imaplib/smtplib here at all -- these are plain HTTP calls, same
@@ -191,8 +214,19 @@ class Client:
                 return None
             raise
 
-    def mail_send(self, token, to, subject, body):
-        return self._request("POST", "/api/v1/mail/send", headers=self._auth(token), json={"to": to, "subject": subject, "body": body})
+    def mail_send(self, token, to, subject, body, from_address=None):
+        payload = {"to": to, "subject": subject, "body": body}
+        if from_address:
+            payload["from"] = from_address
+        return self._request("POST", "/api/v1/mail/send", headers=self._auth(token), json=payload)
+
+    # Self-service -- unlike every dns_mail_alias_* method above, this
+    # one only ever needs a valid JWT, no site_admin role (see
+    # ../../domain-admin/README.md). Still the /api/v1/domains/* gateway
+    # prefix under the hood, but named/grouped with "mail" here to match
+    # `homelab-cli mail allowed-senders`'s own user-facing grouping.
+    def mail_allowed_senders(self, token):
+        return self._request("GET", "/api/v1/domains/mail-aliases/mine", headers=self._auth(token))
 
     # --- Jobs, via homelab-api's /api/v1/jobs/* gateway -> homelab-worker
     # (see ../../worker/README.md). A generic background-job engine --

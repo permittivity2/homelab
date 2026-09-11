@@ -7,5 +7,6 @@ submission inet n       -       n       -       -       smtpd
   -o smtpd_reject_unlisted_recipient=no
   -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
   -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
+  -o smtpd_sender_restrictions=reject_authenticated_sender_login_mismatch,permit_sasl_authenticated
   -o milter_macro_daemon_name=ORIGINATING
 # END homelab-postfix managed

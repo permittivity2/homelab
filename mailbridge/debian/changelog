@@ -1,3 +1,9 @@
+homelab-mailbridge (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 10:45:20 -0500
+
 homelab-mailbridge (0.1.1) unstable; urgency=medium
 
   * Release v0.1.1

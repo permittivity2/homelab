@@ -142,6 +142,51 @@ def test_dns_delete_recipient_access_builds_correct_path(client):
     assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/domains/recipient-access/bad@example.org")
 
 
+def test_dns_add_mail_alias_defaults_send_enabled_true(client):
+    with patch("requests.request", return_value=_mock_response(201, {"ok": True})) as m:
+        client.dns_add_mail_alias("t", "@forge.name", "permittivity@mailmasker.org")
+    assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/domains/mail-aliases")
+    assert m.call_args.kwargs["json"] == {
+        "source_pattern": "@forge.name", "destination": "permittivity@mailmasker.org", "send_enabled": True,
+    }
+
+
+def test_dns_add_mail_alias_no_send(client):
+    with patch("requests.request", return_value=_mock_response(201, {"ok": True})) as m:
+        client.dns_add_mail_alias("t", "@forge.name", "permittivity@mailmasker.org", send_enabled=False)
+    assert m.call_args.kwargs["json"]["send_enabled"] is False
+
+
+def test_dns_list_mail_aliases_with_and_without_user_filter(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.dns_list_mail_aliases("t")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/domains/mail-aliases")
+    assert m.call_args.kwargs["params"] == {}
+
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.dns_list_mail_aliases("t", destination="permittivity@mailmasker.org")
+    assert m.call_args.kwargs["params"] == {"destination": "permittivity@mailmasker.org"}
+
+
+def test_dns_set_mail_alias_send_enabled_builds_correct_request(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.dns_set_mail_alias_send_enabled("t", "@forge.name", False)
+    assert m.call_args.args[:2] == ("PATCH", "http://localhost:3000/api/v1/domains/mail-aliases/@forge.name")
+    assert m.call_args.kwargs["json"] == {"send_enabled": False}
+
+
+def test_dns_delete_mail_alias_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.dns_delete_mail_alias("t", "@forge.name")
+    assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/domains/mail-aliases/@forge.name")
+
+
+def test_mail_allowed_senders_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, {"send": {}, "receive_only": {}})) as m:
+        client.mail_allowed_senders("t")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/domains/mail-aliases/mine")
+
+
 def test_api_base_trailing_slash_is_stripped():
     c = Client("http://localhost:3000/")
     with patch("requests.request", return_value=_mock_response(200, {})) as m:
@@ -342,6 +387,13 @@ def test_mail_send_posts_json_body(client):
     with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
         client.mail_send("the-jwt", "to@example.com", "subj", "body text")
     assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/mail/send")
+    assert "from" not in m.call_args.kwargs["json"], "from is omitted, not sent as null, when not given"
+
+
+def test_mail_send_includes_from_when_given(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.mail_send("the-jwt", "to@example.com", "subj", "body text", from_address="sales@forge.name")
+    assert m.call_args.kwargs["json"]["from"] == "sales@forge.name"
 
 
 # --- Jobs, via homelab-api's /api/v1/jobs/* gateway -> homelab-worker

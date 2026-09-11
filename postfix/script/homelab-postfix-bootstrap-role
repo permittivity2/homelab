@@ -141,6 +141,15 @@ GRANT SELECT (email, active) ON api.users TO "$ROLE";
 GRANT USAGE ON SCHEMA domainadmin TO "$ROLE";
 GRANT SELECT (domain_name, mail_enabled, active) ON domainadmin.domains TO "$ROLE";
 GRANT SELECT ON domainadmin.recipient_access TO "$ROLE";
+
+-- Third cross-schema grant, same discipline: backs virtual_alias_maps
+-- (inbound routing) and smtpd_sender_login_maps (outbound
+-- authorization) -- see config/pgsql-virtual-alias-maps.cf.template
+-- and config/pgsql-sender-login-maps.cf.template. Both queries only
+-- ever read source_pattern/destination/active/send_enabled, so a
+-- whole-table SELECT (matching recipient_access's own grant above,
+-- not a column-scoped one) is already the narrowest useful shape.
+GRANT SELECT ON domainadmin.mail_aliases TO "$ROLE";
 SQL
 }
 
@@ -200,6 +209,17 @@ sub check_domainadmin_domains_exists {
     return defined $out && length $out;
 }
 
+# Same ordering-dependency check as check_domainadmin_domains_exists,
+# for the mail_aliases grant added above -- the 005-mail-aliases.sql
+# migration must have run (i.e. homelab-domain-admin migrated at least
+# once past that point) before this script's grant onto
+# domainadmin.mail_aliases can succeed.
+sub check_domainadmin_mail_aliases_exists {
+    my (@cmd) = @_;
+    my $out = run_query_stdin_local_or_remote(q{SELECT to_regclass('domainadmin.mail_aliases')}, @cmd);
+    return defined $out && length $out;
+}
+
 sub fetch_scram_secret {
     my (@cmd) = @_;
     my $query = sprintf(q{SELECT rolpassword FROM pg_authid WHERE rolname = '%s'}, sql_escape($ROLE));
@@ -214,6 +234,9 @@ sub run_local {
     }
     unless (check_domainadmin_domains_exists(@psql_prefix, '-d', $DB, '-X', '-tA')) {
         die_msg("domainadmin.domains does not exist on $DB_HOST yet -- install/migrate homelab-domain-admin there first");
+    }
+    unless (check_domainadmin_mail_aliases_exists(@psql_prefix, '-d', $DB, '-X', '-tA')) {
+        die_msg("domainadmin.mail_aliases does not exist on $DB_HOST yet -- install/migrate a recent enough homelab-domain-admin there first");
     }
     log_msg("bootstrapping '$ROLE' locally (db-host is this host)");
     run_sql_local_or_remote(build_sql(%opts), @psql_prefix, '-q', '-d', $DB, '-X', '-v', 'ON_ERROR_STOP=1')
@@ -233,6 +256,9 @@ sub run_remote {
     }
     unless (check_domainadmin_domains_exists(@remote_prefix, "sudo -u postgres psql -d $DB -X -tA")) {
         die_msg("domainadmin.domains does not exist on $DB_HOST yet -- install/migrate homelab-domain-admin there first");
+    }
+    unless (check_domainadmin_mail_aliases_exists(@remote_prefix, "sudo -u postgres psql -d $DB -X -tA")) {
+        die_msg("domainadmin.mail_aliases does not exist on $DB_HOST yet -- install/migrate a recent enough homelab-domain-admin there first");
     }
     log_msg("bootstrapping '$ROLE' on $DB_HOST via SSH");
     run_sql_local_or_remote(

@@ -1,0 +1,27 @@
+# Managed by homelab-postfix -- do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-postfix). Backs
+# smtpd_sender_login_maps (used by reject_authenticated_sender_login_mismatch
+# on the submission listener, see master.cf.submission-stanza) --
+# outbound authorization only, so this query intentionally checks
+# send_enabled in addition to active. A row with active=true,
+# send_enabled=false (a suspended grant, see
+# domain-admin/README.md's "Multi-domain send-as" section) keeps
+# routing inbound mail via pgsql-virtual-alias-maps.cf.template but
+# never satisfies THIS query, so an authenticated user can no longer
+# send as that address/domain until send_enabled flips back to true --
+# no separate credential rotation or re-provisioning needed either way.
+#
+# Inlined as a UNION query rather than a stored cross-schema view --
+# see domain-admin/README.md for why this repo prefers that here.
+# Three-way UNION ALL: (1) a user may always send as themselves, (2) a
+# catch-all domain grant ('@forge.name') authorizes any address on that
+# domain -- doubled %% is Postfix's own escape for a literal % inside a
+# pgsql_table query alongside its own %s substitution, matching the
+# exact syntax verified working in this shape elsewhere, see
+# ../../domain-admin/README.md -- (3) an exact-address override grant
+# ('sales@forge.name') authorizes only that one address.
+hosts = __DB_HOST__:__DB_PORT__
+user = __DB_USER__
+password = __DB_PASS__
+dbname = __DB_NAME__
+query = SELECT email FROM api.users WHERE email='%s' AND active = true UNION ALL SELECT destination FROM domainadmin.mail_aliases WHERE active = true AND send_enabled = true AND source_pattern LIKE '@%%' AND '%s' LIKE '%%' || source_pattern UNION ALL SELECT destination FROM domainadmin.mail_aliases WHERE active = true AND send_enabled = true AND source_pattern = '%s'

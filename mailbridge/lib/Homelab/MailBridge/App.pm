@@ -69,8 +69,13 @@ use Mail::IMAPClient;
 use Net::SMTP;
 use Email::MIME;
 use Mojo::Date;
+use Mojo::UserAgent;
 use Mojo::Util qw(sha1_sum);
 use Homelab::Common::AuthClient qw(introspect);
+
+# Reused across requests, matching Homelab::Common::AuthClient's own
+# module-level $UA convention.
+my $MAIL_ALIASES_UA = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10);
 
 # Returns (email, jwt) on success. On failure, has already rendered a
 # 401 and returns nothing -- callers use `my ($email, $jwt) =
@@ -218,8 +223,17 @@ sub send_message ($c) {
     my $to      = $params->{to};
     my $subject = $params->{subject};
     my $body    = $params->{body};
+    # Optional -- defaults to the authenticated user's own address
+    # (fully backward compatible with every caller that predates this
+    # field). See ../../domain-admin/README.md's "Multi-domain send-as"
+    # section for the full design.
+    my $from    = $params->{from} // $email;
     unless ($to && $subject && defined $body) {
         return $c->render(json => { error => 'to, subject, and body are required' }, status => 400);
+    }
+
+    unless (_from_address_authorized($c, $email, $token, $from)) {
+        return $c->render(json => { error => "not authorized to send as $from" }, status => 403);
     }
 
     eval {
@@ -243,10 +257,10 @@ sub send_message ($c) {
         # see README.md.
         my $date  = Mojo::Date->new(time)->to_string;
         my $msgid = '<' . sha1_sum(time . $$ . rand()) . '@homelab-mailbridge>';
-        my $raw   = "From: $email\r\nTo: $to\r\nSubject: $subject\r\nDate: $date\r\n"
+        my $raw   = "From: $from\r\nTo: $to\r\nSubject: $subject\r\nDate: $date\r\n"
                   . "Message-ID: $msgid\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n$body";
 
-        $smtp->mail($email) or die "MAIL FROM failed\n";
+        $smtp->mail($from) or die "MAIL FROM failed\n";
         $smtp->to($to)      or die "RCPT TO failed\n";
         $smtp->data         or die "DATA failed\n";
         $smtp->datasend($raw) or die "datasend failed\n";
@@ -258,6 +272,36 @@ sub send_message ($c) {
         return $c->render(json => { error => 'could not send message' }, status => 502);
     }
     return $c->render(json => { ok => \1 });
+}
+
+# Defense in depth only -- Postfix's own
+# reject_authenticated_sender_login_mismatch (see
+# ../../postfix/README.md and ../../domain-admin/README.md's
+# "Multi-domain send-as" section) is the actual enforcement boundary;
+# this just means a request this app rejects never even reaches an
+# SMTP connection that Postfix would refuse anyway. Fails CLOSED: any
+# failure to positively confirm authorization (domain-admin
+# unreachable, malformed response, transport error) returns false,
+# never "assume authorized" -- same convention as the old homelab-api
+# repo's own _from_address_authorized, which this is modeled on.
+sub _from_address_authorized ($c, $email, $token, $from) {
+    my ($from_addr) = $from =~ /<([^>]+)>/ ? ($1) : ($from);
+    return 1 if lc($from_addr) eq lc($email);
+
+    my $tx = $MAIL_ALIASES_UA->get(
+        $c->app->api_base . '/api/v1/domains/mail-aliases/mine' => { Authorization => "Bearer $token" },
+    );
+    my $err = $tx->error;
+    return 0 if $err && !$err->{code};    # transport failure -- fail closed
+    return 0 unless $tx->result->code == 200;
+    my $body = eval { $tx->result->json } // {};
+    my $send = $body->{send} // {};
+
+    return 1 if grep { lc($_) eq lc($from_addr) } @{ $send->{addresses} // [] };
+    my ($domain) = $from_addr =~ /\@(.+)$/;
+    return 0 unless $domain;
+    return 1 if grep { lc($_) eq '@' . lc($domain) } @{ $send->{domains} // [] };
+    return 0;
 }
 
 1;

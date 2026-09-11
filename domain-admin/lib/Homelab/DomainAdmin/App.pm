@@ -88,6 +88,26 @@ sub startup ($self) {
         return $result->{email};
     });
 
+    # Same JWT check as authenticated_email above, minus the site_admin
+    # requirement -- the one self-service exception in this otherwise
+    # entirely site_admin-only service: GET .../mail-aliases/mine lets
+    # ANY authenticated user see their own send/receive grants, same
+    # "owner always sees their own" split homelab-worker's own
+    # /internal/v1/jobs already established.
+    $self->helper(authenticated_email_any => sub ($c) {
+        my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+        unless ($jwt) {
+            $c->render(json => { error => 'not logged in' }, status => 401);
+            return undef;
+        }
+        my $result = introspect($jwt, api_base => $self->api_base);
+        unless ($result) {
+            $c->render(json => { error => 'not logged in' }, status => 401);
+            return undef;
+        }
+        return $result->{email};
+    });
+
     # Marks that PowerDNS needs a restart before a just-written zone/
     # record NAME becomes servable (see README.md's "PowerDNS caches its
     # zone list at process start" gotcha) -- a plain upsert on a
@@ -133,6 +153,19 @@ sub startup ($self) {
     $r->get('/internal/v1/domains/recipient-access')                             ->to('recipient_access#list');
     $r->post('/internal/v1/domains/recipient-access')                            ->to('recipient_access#upsert');
     $r->delete('/internal/v1/domains/recipient-access/:recipient' => [recipient => qr/[^\/]+/])->to('recipient_access#delete_entry');
+
+    # Same registration-order requirement as recipient-access above --
+    # "mail-aliases" is a single path segment right where an unqualified
+    # :domain catch-all would otherwise greedily match it
+    # (domain="mail-aliases"). GET .../mail-aliases/mine has no
+    # :source_pattern sibling route at the GET verb, so it can't
+    # collide with the PATCH/DELETE :source_pattern routes below either
+    # way, but is registered first regardless for readability.
+    $r->get('/internal/v1/domains/mail-aliases/mine')                            ->to('mail_aliases#mine');
+    $r->get('/internal/v1/domains/mail-aliases')                                 ->to('mail_aliases#list');
+    $r->post('/internal/v1/domains/mail-aliases')                                ->to('mail_aliases#create');
+    $r->patch('/internal/v1/domains/mail-aliases/:source_pattern' => [source_pattern => qr/[^\/]+/])->to('mail_aliases#update');
+    $r->delete('/internal/v1/domains/mail-aliases/:source_pattern' => [source_pattern => qr/[^\/]+/])->to('mail_aliases#delete_entry');
 
     $r->get('/internal/v1/domains/:domain'    => [domain => qr/[^\/]+/])->to('domains#show');
     $r->patch('/internal/v1/domains/:domain'  => [domain => qr/[^\/]+/])->to('domains#update');

@@ -78,6 +78,25 @@ SKIP: {
     is($got_body, $want_body, 'read-back body matches what was sent (line-ending-normalized)');
 }
 
+# --- Optional `from` field (multi-domain send-as, see
+# ../../domain-admin/README.md's "Multi-domain send-as" section) ---
+
+# Passing from= as your own address must behave identically to
+# omitting it entirely (tested above) -- fully backward compatible.
+$t->post_ok('/api/v1/mail/send' => $auth => json => {
+    to => $email, subject => "$subject (explicit from)", body => $body, from => $email,
+})->status_is(200)->json_is('/ok', 1, 'passing from= as your own address works exactly like omitting it');
+
+# An unauthorized from= is rejected BEFORE any SMTP connection is even
+# attempted -- fail-closed defense in depth (Postfix's own
+# reject_authenticated_sender_login_mismatch, wired up in
+# homelab-postfix, is the real enforcement boundary; this just proves
+# mailbridge doesn't even try in the first place).
+$t->post_ok('/api/v1/mail/send' => $auth => json => {
+    to => $email, subject => 'should never send', body => $body,
+    from => 'definitely-not-authorized-' . time . '@unrelated-domain.invalid',
+})->status_is(403, 'an unauthorized from= address is rejected, not silently sent as the real user');
+
 # Another user's JWT must not be treated any differently by these
 # routes -- there's no per-user data here to leak (mailbridge doesn't
 # store anything), but the auth check itself must still hold for an

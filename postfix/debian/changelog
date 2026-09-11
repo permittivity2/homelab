@@ -1,3 +1,9 @@
+homelab-postfix (0.1.8) unstable; urgency=medium
+
+  * Release v0.1.8
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 10:45:16 -0500
+
 homelab-postfix (0.1.7) unstable; urgency=medium
 
   * Release v0.1.7

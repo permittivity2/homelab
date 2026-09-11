@@ -11,6 +11,10 @@ override_dh_install:
 		debian/homelab-postfix/usr/share/homelab-postfix/config/pgsql-virtual-domains.cf.template
 	install -D -m 644 config/pgsql-recipient-access.cf.template \
 		debian/homelab-postfix/usr/share/homelab-postfix/config/pgsql-recipient-access.cf.template
+	install -D -m 644 config/pgsql-virtual-alias-maps.cf.template \
+		debian/homelab-postfix/usr/share/homelab-postfix/config/pgsql-virtual-alias-maps.cf.template
+	install -D -m 644 config/pgsql-sender-login-maps.cf.template \
+		debian/homelab-postfix/usr/share/homelab-postfix/config/pgsql-sender-login-maps.cf.template
 	install -D -m 644 config/92-homelab-postfix-sasl.conf.template \
 		debian/homelab-postfix/usr/share/homelab-postfix/config/92-homelab-postfix-sasl.conf.template
 	install -D -m 644 config/master.cf.submission-stanza \

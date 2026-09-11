@@ -150,6 +150,76 @@ $t->delete_ok("/internal/v1/domains/recipient-access/$recipient" => $auth)
 $t->post_ok('/internal/v1/domains/recipient-access' => $auth => json => { action => 'REJECT' })
   ->status_is(400, 'recipient is required');
 
+# --- Multi-domain send-as: mail_aliases, and specifically that
+# `active` (inbound routing) and `send_enabled` (outbound
+# authorization) are genuinely independent -- the whole point of the
+# feature (see README.md's "Multi-domain send-as" section). ---
+my $alias_domain  = 'homelab-domain-admin-mailalias-test-' . time . '-' . $$ . '.invalid';
+my $alias_pattern = "\@$alias_domain";
+
+$t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => {
+    source_pattern => $alias_pattern, destination => $email,
+})->status_is(201, 'the literal "mail-aliases" path segment routes here, not to domains#show')
+  ->json_is('/source_pattern', $alias_pattern)->json_is('/destination', $email)
+  ->json_is('/active', 1)->json_is('/send_enabled', 1);
+
+$t->get_ok("/internal/v1/domains/$alias_domain" => $auth)
+  ->status_is(200, 'creating a mail-alias for a brand-new domain auto-creates its domainadmin.domains row')
+  ->json_is('/mail_enabled', 0, 'auto-created as DKIM/DNS-eligible but NOT a virtual_mailbox_domain')
+  ->json_is('/dns_managed', 1);
+
+$t->get_ok('/internal/v1/domains/mail-aliases' => $auth)
+  ->status_is(200)->json_has('/0', 'at least one entry comes back');
+
+$t->get_ok("/internal/v1/domains/mail-aliases?destination=$email" => $auth)->status_is(200);
+ok((grep { $_->{source_pattern} eq $alias_pattern } @{ $t->tx->res->json }), '?destination= filter finds our grant');
+
+$t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => {
+    source_pattern => $alias_pattern, destination => $email, send_enabled => \0,
+})->status_is(201)->json_is('/send_enabled', 0, 'posting the same source_pattern again upserts in place, not a 409/duplicate');
+
+$t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json => { send_enabled => \1 })
+  ->status_is(200)->json_is('/send_enabled', 1);
+
+# /mine is the one self-service exception in this whole service --
+# $plain_auth is the SAME token from before site_admin was ever
+# granted (still a valid JWT, just not site_admin), proving this route
+# really doesn't require the role every other route in this file does.
+$t->get_ok('/internal/v1/domains/mail-aliases/mine' => $plain_auth)
+  ->status_is(200, '/mine works without site_admin, unlike every other route in this file');
+my $mine = $t->tx->res->json;
+ok((grep { $_ eq $email } @{ $mine->{send}{addresses} }), q{caller's own address is always in send.addresses});
+ok((grep { $_ eq $alias_pattern } @{ $mine->{send}{domains} }), 'active+send_enabled catch-all grant appears under send.domains');
+is(scalar(@{ $mine->{receive_only}{domains} }), 0, 'nothing under receive_only yet');
+
+# The actual point of having two flags: disabling send must NOT touch
+# `active` -- a real assertion on the persisted row, not just on /mine.
+$t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json => { send_enabled => \0 })
+  ->status_is(200)->json_is('/send_enabled', 0)
+  ->json_is('/active', 1, 'active is untouched by the send_enabled toggle -- inbound routing keeps working');
+
+$t->get_ok('/internal/v1/domains/mail-aliases/mine' => $plain_auth)->status_is(200);
+$mine = $t->tx->res->json;
+ok(!(grep { $_ eq $alias_pattern } @{ $mine->{send}{domains} }), 'no longer under send.domains once send_enabled=false');
+ok((grep { $_ eq $alias_pattern } @{ $mine->{receive_only}{domains} }), 'moved to receive_only.domains instead -- still receiving, just not sending');
+
+$t->patch_ok('/internal/v1/domains/mail-aliases/nonexistent-pattern' => $auth => json => { send_enabled => \1 })
+  ->status_is(404);
+$t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json => {})
+  ->status_is(400, 'send_enabled is required');
+
+$t->delete_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth)
+  ->status_is(200)->json_is('/ok', 1);
+$t->delete_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth)
+  ->status_is(404, 'deleting an already-gone entry is a clean 404, not a 500');
+
+$t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => { destination => $email })
+  ->status_is(400, 'source_pattern and destination are required');
+$t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => { source_pattern => 'no-at-sign', destination => $email })
+  ->status_is(400, 'source_pattern must contain a domain');
+
+$t->get_ok('/internal/v1/domains/mail-aliases/mine')->status_is(401, 'no Authorization header -> 401, same as every other route');
+
 # --- DKIM rotation state machine -- real opendkim-genkey + real
 # PowerDNS TXT writes, no mocks (needs opendkim-tools installed and
 # /etc/opendkim/keys writable, true on any host homelab-postfix is

@@ -1,3 +1,15 @@
+homelab-domain-admin (0.1.7) unstable; urgency=medium
+
+  * Release v0.1.7
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 10:53:02 -0500
+
+homelab-domain-admin (0.1.6) unstable; urgency=medium
+
+  * Release v0.1.6
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 10:45:13 -0500
+
 homelab-domain-admin (0.1.5) unstable; urgency=medium
 
   * Release v0.1.5

@@ -376,6 +376,77 @@ def cmd_dns_recipient_access_remove(args):
     return 0
 
 
+def cmd_dns_mail_aliases_add(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_add_mail_alias(session["token"], args.source_pattern, args.destination, send_enabled=args.send_enabled)
+    except ApiError as e:
+        print(f"Could not add mail alias: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Added {args.source_pattern} -> {args.destination}")
+    return 0
+
+
+def cmd_dns_mail_aliases_list(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        rows = _client().dns_list_mail_aliases(session["token"], destination=args.user)
+    except ApiError as e:
+        print(f"Could not list mail aliases: {e.message}", file=sys.stderr)
+        return 1
+    if not rows:
+        print("(no entries)")
+        return 0
+    for r in rows:
+        state = "active" if r["active"] else "inactive"
+        send = "send+receive" if r["send_enabled"] else "receive-only"
+        print(f"{r['source_pattern']}  -> {r['destination']}  {state}  {send}")
+    return 0
+
+
+def cmd_dns_mail_aliases_enable_send(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_set_mail_alias_send_enabled(session["token"], args.source_pattern, True)
+    except ApiError as e:
+        print(f"Could not enable sending for {args.source_pattern}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Sending enabled for {args.source_pattern}")
+    return 0
+
+
+def cmd_dns_mail_aliases_disable_send(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_set_mail_alias_send_enabled(session["token"], args.source_pattern, False)
+    except ApiError as e:
+        print(f"Could not disable sending for {args.source_pattern}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Sending disabled for {args.source_pattern} (still receiving)")
+    return 0
+
+
+def cmd_dns_mail_aliases_remove(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_delete_mail_alias(session["token"], args.source_pattern)
+    except ApiError as e:
+        print(f"Could not remove {args.source_pattern}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Removed {args.source_pattern}")
+    return 0
+
+
 # --- mail: homelab-api's /api/v1/mail/* gateway -> homelab-mailbridge
 # (see ../../mailbridge/README.md). No IMAP/SMTP client code here at
 # all any more -- just HTTP, same as every other command. ---------------
@@ -427,11 +498,36 @@ def cmd_mail_send(args):
     if body is None:
         body = sys.stdin.read()
     try:
-        _client().mail_send(session["token"], args.to, args.subject, body)
+        _client().mail_send(session["token"], args.to, args.subject, body, from_address=args.from_address)
     except ApiError as e:
         print(f"Could not send message: {e.message}", file=sys.stderr)
         return 1
     print(f"Sent to {args.to}")
+    return 0
+
+
+def cmd_mail_allowed_senders(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        result = _client().mail_allowed_senders(session["token"])
+    except ApiError as e:
+        print(f"Could not list allowed senders: {e.message}", file=sys.stderr)
+        return 1
+    send = result.get("send", {})
+    receive_only = result.get("receive_only", {})
+    print("Can send as:")
+    for a in send.get("addresses", []):
+        print(f"  {a}")
+    for d in send.get("domains", []):
+        print(f"  anything{d}")
+    if receive_only.get("addresses") or receive_only.get("domains"):
+        print("Receive-only (sending currently disabled):")
+        for a in receive_only.get("addresses", []):
+            print(f"  {a}")
+        for d in receive_only.get("domains", []):
+            print(f"  anything{d}")
     return 0
 
 
@@ -765,6 +861,31 @@ def build_parser():
     p.add_argument("recipient")
     p.set_defaults(func=cmd_dns_recipient_access_remove)
 
+    ma = dns_sub.add_parser("mail-aliases", help="Multi-domain send-as/receive-as grants (admin)")
+    ma_sub = ma.add_subparsers(dest="dns_mail_aliases_command", required=True)
+
+    p = ma_sub.add_parser("add", help="Grant a domain/address to a user (creates the domain, DKIM-eligible but not mail_enabled, if new)")
+    p.add_argument("source_pattern", help="'@forge.name' (catch-all) or 'sales@forge.name' (exact address)")
+    p.add_argument("destination", help="The real user email this routes to, e.g. permittivity@mailmasker.org")
+    p.add_argument("--no-send", dest="send_enabled", action="store_false", default=True, help="Grant receive-only (sending starts disabled)")
+    p.set_defaults(func=cmd_dns_mail_aliases_add)
+
+    p = ma_sub.add_parser("list", help="List every grant, or one user's with --user")
+    p.add_argument("--user", help="Filter to this destination email only")
+    p.set_defaults(func=cmd_dns_mail_aliases_list)
+
+    p = ma_sub.add_parser("enable-send", help="Re-enable sending for a grant (receiving is unaffected either way)")
+    p.add_argument("source_pattern")
+    p.set_defaults(func=cmd_dns_mail_aliases_enable_send)
+
+    p = ma_sub.add_parser("disable-send", help="Suspend sending for a grant without affecting receiving -- e.g. non-payment")
+    p.add_argument("source_pattern")
+    p.set_defaults(func=cmd_dns_mail_aliases_disable_send)
+
+    p = ma_sub.add_parser("remove", help="Fully revoke a grant (stops both routing and sending)")
+    p.add_argument("source_pattern")
+    p.set_defaults(func=cmd_dns_mail_aliases_remove)
+
     mail = sub.add_parser("mail", help="Email, via homelab-api's mail gateway")
     mail_sub = mail.add_subparsers(dest="mail_command", required=True)
 
@@ -783,7 +904,11 @@ def build_parser():
     p.add_argument("--subject", required=True)
     p.add_argument("--body", help="Message body (prompted from stdin if omitted and --body-file not given)")
     p.add_argument("--body-file", help="Read the message body from this file")
+    p.add_argument("--from", dest="from_address", help="Send as this address instead of your own login (must be an authorized grant -- see 'mail allowed-senders')")
     p.set_defaults(func=cmd_mail_send)
+
+    p = mail_sub.add_parser("allowed-senders", help="List the domains/addresses you're currently authorized to send as")
+    p.set_defaults(func=cmd_mail_allowed_senders)
 
     drive = sub.add_parser("drive", help="File storage, via homelab-api's drive gateway")
     drive_sub = drive.add_subparsers(dest="drive_command", required=True)
