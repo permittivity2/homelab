@@ -7,3 +7,28 @@ override_dh_auto_test:
 	# No package-build-time tests (pytest isn't a runtime dep, and the
 	# suite doesn't need any live infrastructure — run it directly via
 	# `python3 -m pytest tests/` during development instead).
+
+# Man page generated fresh from the real, live build_parser() (the same
+# function argcomplete.autocomplete() already uses for tab completion,
+# see README.md's Tab completion section for why this matters) via
+# argparse-manpage -- never hand-authored/committed, so it structurally
+# cannot drift from the actual command tree. Runs against the source
+# tree directly (PYTHONPATH=.), not the built wheel -- simpler, and
+# dh_auto_build has already run by this hook point regardless. Shipped
+# via debian/homelab-cli.install, same mechanism as the bash-completion
+# file below.
+execute_after_dh_auto_build:
+	PYTHONPATH=. argparse-manpage \
+		--module homelab_cli.cli --function build_parser \
+		--project-name homelab-cli --prog homelab-cli \
+		--version "$(shell dpkg-parsechangelog -S Version)" \
+		--author "Jeff Gardner <mailmasker-api01@forge.name>" \
+		--url "https://github.com/permittivity2/homelab" \
+		--output debian/homelab-cli.1
+	# argparse-manpage hardcodes the epilog's section title to
+	# "COMMENTS" (verified in its own source, not configurable via any
+	# flag) -- our epilog is an EXAMPLES block, so retitle it for a
+	# conventional-looking man page. Safe/deterministic: this exact
+	# string is always what that tool emits for an epilog, regardless
+	# of the epilog's own content.
+	sed -i 's/^\.SH COMMENTS$$/.SH EXAMPLES/' debian/homelab-cli.1

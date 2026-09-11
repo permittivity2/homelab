@@ -1,1 +1,2 @@
 completions/homelab-cli usr/share/bash-completion/completions/
+debian/homelab-cli.1 usr/share/man/man1/

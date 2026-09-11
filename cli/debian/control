@@ -2,7 +2,7 @@ Source: homelab-cli
 Section: python
 Priority: optional
 Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
-Build-Depends: debhelper-compat (= 13), dh-python, python3-all, python3-setuptools, pybuild-plugin-pyproject
+Build-Depends: debhelper-compat (= 13), dh-python, python3-all, python3-setuptools, pybuild-plugin-pyproject, python3-argparse-manpage
 Standards-Version: 4.6.2
 Homepage: https://github.com/permittivity2/homelab
 X-Python3-Version: >= 3.10

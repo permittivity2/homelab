@@ -11,6 +11,10 @@
 */debian/*.debhelper.log
 */debian/*.debhelper
 
+# Generated man page (cli/) -- built fresh from build_parser() every
+# build via argparse-manpage, never hand-maintained/committed.
+cli/debian/homelab-cli.1
+
 # Python build artifacts
 __pycache__/
 *.pyc

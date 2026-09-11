@@ -849,8 +849,58 @@ def cmd_admin_revoke_role(args):
     return 0
 
 
+# Both DESCRIPTION and EPILOG below are surfaced twice: directly in
+# `homelab-cli --help`, and again in the generated man page's
+# DESCRIPTION/EXAMPLES sections (see debian/rules -- argparse-manpage
+# is pointed straight at build_parser(), so there's exactly one place
+# to keep this prose in sync, not two). Keep additions here short --
+# this is a pointer to the full picture, not a copy of README.md.
+# RawDescriptionHelpFormatter (below) preserves this text's own line
+# breaks rather than re-wrapping it -- needed so the epilog's example
+# block keeps its indentation/blank lines, but that means this
+# description has to be hand-wrapped too, not left as one long line.
+_DESCRIPTION = """\
+Command-line client for the homelab-* ecosystem: account/session
+management, email, file storage, DNS + mail-domain administration,
+background job status, and (site_admin accounts) user administration
+-- nearly everything the web UIs can do. --api-base is the only
+address this CLI ever needs; homelab-api is the single gateway every
+other feature is reached through."""
+
+_EPILOG = """\
+examples:
+  homelab-cli configure --api-base https://api.test.mailmasker.org
+  homelab-cli register you@test.mailmasker.org
+  homelab-cli login you@test.mailmasker.org
+
+  homelab-cli mail send --to you@example.com --subject Hi --body "..."
+  homelab-cli drive upload ./file.txt
+  homelab-cli jobs list
+
+  homelab-cli dns domains add example.org
+  homelab-cli dns records add example.org --name example.org --type A --value 203.0.113.10
+  homelab-cli dns spf set example.org
+  homelab-cli dns dmarc set example.org --policy quarantine --rua you@example.org
+  homelab-cli dns dkim rotate example.org
+  homelab-cli dns mail-aliases add @example.org you@test.mailmasker.org
+
+  homelab-cli mail allowed-senders
+  homelab-cli admin users list
+
+Session (token/refresh_token) is stored 0600 in
+~/.config/homelab-cli/session.yml; the non-secret api_base lives in
+config.yml in the same directory. Full documentation, including every
+command's own gotchas: https://github.com/permittivity2/homelab
+"""
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="homelab-cli", description="Command-line client for the homelab-* ecosystem")
+    parser = argparse.ArgumentParser(
+        prog="homelab-cli",
+        description=_DESCRIPTION,
+        epilog=_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # homelab-api is the ONLY address this CLI ever needs -- drive and

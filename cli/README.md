@@ -229,6 +229,34 @@ function with `COMP_WORDS`/`COMP_CWORD` set, checking the real
 `$COMPREPLY`) — worth remembering if this ever needs re-verifying,
 since the unit tests alone couldn't have caught it.
 
+## Man page
+
+`man homelab-cli` after installing the package covers the full command
+tree, not just the top-level overview `--help` gives you — every
+subcommand down to e.g. `dns mail-aliases enable-send` gets its own
+usage/options section. Same "never falls out of sync" reasoning as tab
+completion above, applied to the same underlying problem: generated at
+**build time** (`debian/rules`' `execute_after_dh_auto_build`) by
+[`argparse-manpage`](https://pypi.org/project/argparse-manpage/)
+walking the real, live `build_parser()` — not hand-authored, not
+committed (`debian/homelab-cli.1` is gitignored, regenerated fresh
+every build), so a new command can never ship without its man page
+entry, the way a hand-maintained doc could silently drift.
+
+`--description`/`--epilog` on the top-level `ArgumentParser` (see
+`_DESCRIPTION`/`_EPILOG` in `cli.py`) render in **both** places —
+`homelab-cli --help` and the man page's DESCRIPTION/EXAMPLES
+sections — so there's exactly one place to keep that prose in sync,
+not two. `RawDescriptionHelpFormatter` is what makes `--help` respect
+the epilog's own line breaks (the EXAMPLES block); the description
+text is hand-wrapped for the same reason, since that formatter turns
+off argparse's *own* re-wrapping for both fields at once. One cosmetic
+wrinkle worked around in `debian/rules`: argparse-manpage hardcodes
+the epilog's section title to `COMMENTS`, not configurable via any of
+its own flags (confirmed by reading its source) — a build-time `sed`
+retitles it to `EXAMPLES` before the file ships, since that's what the
+section actually contains.
+
 ## Testing
 
 ```bash
