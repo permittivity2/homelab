@@ -42,7 +42,8 @@ my $refresh_token = $t->tx->res->json('/refresh_token');
 
 $t->get_ok('/api/v1/auth/introspect' => { Authorization => "Bearer $jwt" })
   ->status_is(200)
-  ->json_is('/email', $email);
+  ->json_is('/email', $email)
+  ->json_is('/roles', ['user'], 'introspect includes roles (Phase 5, for homelab-domain-admin site_admin gating) -- a fresh account only holds the default user role');
 
 $t->get_ok('/api/v1/auth/introspect' => { Authorization => 'Bearer garbage' })
   ->status_is(401);

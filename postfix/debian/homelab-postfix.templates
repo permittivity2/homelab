@@ -29,3 +29,18 @@ Description: PgBouncer host for the runtime recipient-validation query:
  (port 6432), never straight to Postgres — see CLAUDE.md's split
  runtime/migrate role design. The bootstrapped role is also registered
  into this host's pgbouncer userlist.txt.
+
+Template: homelab-postfix/enable_dkim
+Type: boolean
+Default: false
+Description: Wire DKIM signing into Postfix (OpenDKIM milter)?
+ Adds smtpd_milters/non_smtpd_milters pointing at OpenDKIM
+ (inet:localhost:8891 -- OpenDMARC is not wired here, out of scope for
+ this package), and sets up /etc/opendkim/keys ownership so the
+ unprivileged `homelab` user (which
+ homelab-domain-admin runs as) can generate and rotate keys there. An
+ already-configured host answering "false" here (the default) gets
+ zero milter-config change on a routine upgrade -- turn this on
+ explicitly via `dpkg-reconfigure homelab-postfix` when ready. Key
+ generation/rotation itself is done separately via `homelab-cli dns
+ dkim rotate/activate/retire`, not by this postinst.

@@ -8,18 +8,17 @@ backs `/api/v1/mail/*`. See the repo root `CLAUDE.md` and the approved
 plan this package implements for the full design discussion (single
 consolidated package vs. extending `dns`/`postfix` in place, and why).
 
-This first release covers domain metadata + DNS zone/record CRUD. DKIM
-key generation/rotation and per-recipient mail allow/block land in
-later releases — their schema already exists (see Data model below) so
-the install-ordering story for `homelab-postfix` doesn't shift under it
-later.
+This release covers domain metadata + DNS zone/record CRUD, per-recipient
+mail allow/block, and the full DKIM key rotation lifecycle (this last
+piece, Phase 5 of the original design, is documented in its own section
+below). All three share the same `site_admin`-gated auth model.
 
 ## Deployment topology
 
 **Must be installed on the same host as `homelab-postfix`/OpenDKIM.**
-DKIM private key material (generated in a later release) is read from
-local disk only and must never cross a network — this service cannot
-run remotely from the OpenDKIM install it will manage. It reaches
+DKIM private key material is read from local disk only and must never
+cross a network — this service cannot run remotely from the OpenDKIM
+install it manages. It reaches
 PowerDNS over the network via PowerDNS's own HTTP API (public zone data
 only) and `homelab-api` for auth (bearer tokens only) — both fine to
 call remotely. On `test-static-internet-ip` (currently single-host)
@@ -87,16 +86,90 @@ split-role pattern as every other feature — see `../CLAUDE.md`):
   in its own separate database, stay the single source of truth for
   that). `mail_enabled` is what `homelab-postfix`'s live domain lookup
   will query once it's wired up.
-- `domainadmin.dkim_selectors` — DKIM rotation state machine, unused
-  until a later release. **No private key column, deliberately**: a
+- `domainadmin.dkim_selectors` — DKIM rotation state machine (see the
+  dedicated section below). **No private key column, deliberately**: a
   DKIM private key must exist on the OpenDKIM host's disk regardless of
   anything else (that's how OpenDKIM reads it), so a second copy in
   this shared, `pg_dump`-backed database would only add a single
   high-value target without removing that requirement. Only the public
   key, selector, state, and timestamps are ever stored here.
-- `domainadmin.recipient_access` — per-recipient mail allow/block,
-  unused until a later release.
+- `domainadmin.recipient_access` — per-recipient mail allow/block.
 - `domainadmin.pending_restart` — the debounce table described above.
+
+## DKIM key rotation
+
+Selectors are **date + incrementing-letter** (`20260910a`, then
+`20260910b` if a second rotation happens the same day), not a single
+fixed selector reused forever — a fixed selector can never rotate
+safely, since the moment a new key is published under the old name,
+every in-flight message signed with the old key stops verifying. Each
+selector moves through a state machine, one row per selector per domain
+in `domainadmin.dkim_selectors`:
+
+```
+pending  --activate-->  active  --(auto, after overlap)-->  retired
+   |                        |
+   `--cancel (delete)       `--activate of a NEW selector--> retiring --(overlap elapses)--> retired
+                                                                 |
+                                                                 `--retire (break-glass)--> retired
+```
+
+- **`rotate`** generates a brand-new 2048-bit key (`opendkim-genkey`),
+  publishes its public half as a DNS TXT record, and stores the row as
+  `pending`. Nothing signs with it yet — a pending key existing in DNS
+  before it's ever used to sign is exactly what lets a verifier resolve
+  it the instant `activate` flips a live sender over, with no
+  publish-then-wait race.
+- **`activate`** starts signing outbound mail with this selector and,
+  in the same DB transaction, demotes whichever selector was previously
+  `active` (if any) to `retiring`, setting `retire_after = NOW() +
+  retirement_days` (config `dkim.retirement_days`, **default 7 days**).
+  During this overlap window the old selector's TXT record and key file
+  both stay fully published and valid, so mail already in flight (or
+  sitting in a slow queue) signed with the old key still verifies —
+  this overlap is a hard requirement of the design, not a nicety: two
+  selectors are simultaneously live in DNS by design during a rotation.
+- A plain `Mojo::IOLoop->recurring` timer in `App.pm` (not Minion —
+  this project's standing choice for lightweight periodic work, see the
+  root `CLAUDE.md`) checks every 60 seconds for any `retiring` row past
+  its `retire_after`, claims it with `SELECT ... FOR UPDATE OF s SKIP
+  LOCKED LIMIT 1` (safe under a multi-worker hypnotoad the same way the
+  PowerDNS restart debounce already is), and retires it automatically —
+  removing the DNS TXT record, deleting the on-disk key files, and
+  marking the row `retired`. No human action needed for the normal case.
+- **`retire`** is the break-glass path: retires a selector (`active` or
+  `retiring`) immediately, skipping the rest of the overlap window, for
+  a suspected-compromised key. Shares its actual retirement logic
+  (`_do_retire`) with the automatic timer above rather than
+  duplicating it.
+- **`cancel`** (DELETE) removes an in-progress, never-activated
+  (`pending`) rotation outright — deletes the DNS TXT record, the key
+  files, and the row itself (unlike `retire`, which keeps a historical
+  `retired` row for audit purposes).
+
+KeyTable/SigningTable (`/etc/opendkim/KeyTable`, `/etc/opendkim/
+SigningTable`) are **fully rebuilt from scratch** from every
+currently-`active` selector across every domain on every
+activate/retire, then OpenDKIM is sent a reload (SIGHUP), not a
+restart. This only matters for *signing* — verification of an inbound
+signature is a pure DNS TXT lookup by the remote server, so a
+`pending`/`retiring` selector correctly needs no KeyTable/SigningTable
+entry at all even though its key file and TXT record both still exist;
+a full rebuild is simpler and safer than incrementally patching two
+flat files, and means a partially-failed previous write can never leave
+a stale entry behind.
+
+The public key is extracted straight from the private key file via
+`openssl rsa -in <priv> -pubout -outform DER | openssl base64 -A`
+rather than parsing `opendkim-genkey`'s own human-oriented, BIND-zone-
+quoted `.txt` output — fewer moving parts, and it's the same well-known
+technique used to hand-build a DKIM TXT record from any RSA key.
+
+This depends on `homelab-postfix`'s opt-in OpenDKIM wiring (see its
+own README) already being enabled on this host — DKIM rotation calls
+will fail with a clear `opendkim-genkey failed` error if
+`opendkim-tools` isn't installed or `/etc/opendkim/keys` isn't writable
+by the `homelab` user, rather than a confusing lower-level error.
 
 ## API
 
@@ -117,6 +190,12 @@ GET    /internal/v1/domains/:domain/dns/records
 POST   /internal/v1/domains/:domain/dns/records        {name, type, content, ttl?}
 DELETE /internal/v1/domains/:domain/dns/records        {name, type}
 
+GET    /internal/v1/domains/:domain/dkim/selectors
+POST   /internal/v1/domains/:domain/dkim/rotate
+POST   /internal/v1/domains/:domain/dkim/:selector/activate
+POST   /internal/v1/domains/:domain/dkim/:selector/retire
+DELETE /internal/v1/domains/:domain/dkim/:selector      (cancel a still-'pending' rotation)
+
 GET    /internal/v1/domains/recipient-access
 POST   /internal/v1/domains/recipient-access                     {recipient, action, reason?}  (upsert)
 DELETE /internal/v1/domains/recipient-access/:recipient
@@ -131,14 +210,17 @@ too (Mojolicious tries routes in registration order), routing to
 placeholder fix as `:domain` (a real address always has one).
 
 Auth: every route requires a valid bearer token, verified via
-`Homelab::Common::AuthClient::introspect()` (the `authenticated_email`
-helper). Role-gating to `site_admin` specifically is a later release —
-it needs `homelab-api`'s own `/api/v1/auth/introspect` response
-extended with a `roles` field, which is a separate, small,
-`homelab-api`-side change tracked apart from this package. Until then,
-this is the same bar every other backend applies before its own
-additional checks — not a gap, "verify at every hop" like everywhere
-else in this ecosystem.
+`Homelab::Common::AuthClient::introspect()`, AND the `site_admin` role
+specifically — both enforced in one place, the `authenticated_email`
+helper in `App.pm` (403 with a clear "site_admin role required" message
+if the token is valid but lacks the role). Because every route already
+calls `$c->authenticated_email or return;` as its first line, this one
+change gates the entire package at once — DKIM key rotation and DNS
+zone edits are exactly the kind of action that shouldn't be available
+to a plain authenticated user. This relies on `homelab-api`'s
+`/api/v1/auth/introspect` response carrying a `roles` array (added
+alongside this), so "verify at every hop" now includes "and check the
+role at every hop," not just token validity.
 
 Gateway route added to `homelab-api` (`api/lib/Homelab/API/App.pm`):
 `/api/v1/domains/*` → this service, `strip_prefix => '/api/v1/domains'`,
@@ -157,6 +239,11 @@ homelab-cli dns domains disable example.org
 homelab-cli dns records list example.org
 homelab-cli dns records add example.org --name example.org --type A --value 203.0.113.10
 homelab-cli dns records delete example.org --name example.org --type A
+
+homelab-cli dns dkim list example.org
+homelab-cli dns dkim rotate example.org
+homelab-cli dns dkim activate example.org 20260910a
+homelab-cli dns dkim retire example.org 20260910a
 
 homelab-cli dns recipient-access list
 homelab-cli dns recipient-access block bad@example.org --reason spam
@@ -205,13 +292,68 @@ homelab-cli dns recipient-access remove bad@example.org
   comments, now bitten a second time in test code instead of shipped
   code. `shlex.quote()` each piece, or join into one pre-quoted command
   string, when a remote CLI argument might contain whitespace.
+- **OpenDKIM's `RequireSafeKeys` check rejects every signing attempt
+  under this design, unconditionally, not as an edge case.** OpenDKIM
+  refuses to sign with a key if it considers the key file's group
+  membership insecure — and the `opendkim` daemon account's own primary
+  group already *is* `opendkim`, with `homelab` (this package's service
+  account, needing write access to generate/rotate keys) added as a
+  second, deliberate member of that same group. Two members is already
+  "multiple users" to this check, so it fires on every single signing
+  attempt, not just some hypothetical loosely-shared directory. Caught
+  by a real `homelab-cli dns dkim rotate` → real send, which came back
+  "key data is not secure: root is in group ... which has multiple
+  users". Fixed with `RequireSafeKeys no` in
+  `postfix/config/opendkim.conf.template` — see that file's own comment
+  and `postfix/README.md` for why this is the correct call here, not an
+  unconsidered weakening.
+- **A new debian/rules template needs its own explicit `install -D`
+  line, or postinst fails at runtime, not at build time.** Adding
+  `opendkim.conf.template` to `postfix/config/` without also adding the
+  matching `install -D` line in `postfix/debian/rules` built a `.deb`
+  that looked fine but failed with `install: No such file or directory`
+  the moment postinst tried to install it on a real host with DKIM
+  enabled — the build itself never checks that every file under
+  `config/` has a matching install line. Worth double-checking this
+  file whenever a new config template is added to any package in this
+  repo, not just this one.
+- **`Mail::DKIM::Verifier->load($fh)` silently returned `Result: none`
+  on a real Maildir-stored message** during manual signature
+  verification — no error, just a useless result, despite the message
+  genuinely being signed. The fix was reading the message line-by-line
+  and normalizing each line to CRLF (`$line =~ s/\r?\n$/\r\n/`) before
+  feeding it through the `PRINT`/`CLOSE` streaming interface instead —
+  DKIM canonicalization is CRLF-based per RFC 6376, and a Maildir's
+  bare-LF line endings apparently defeat the simpler `load()` interface
+  silently rather than erroring. Not this package's code (this was
+  ad hoc verification tooling used to confirm the real rotate/activate
+  cycle actually produces valid signatures), but worth keeping in mind
+  for any future DKIM-verification tooling in this repo.
 
 ## Testing
 
 `t/basic.t` (Test::Mojo, real Postgres + a real reachable PowerDNS API —
 set `HOMELAB_DOMAIN_ADMIN_CONFIG`) covers auth-required-on-every-route,
-domain metadata CRUD (including the `dns_managed=false` mail-only path,
-which makes zero PowerDNS calls), and a real DNS zone/record CRUD round
-trip against a throwaway zone name that can never collide with a real
-domain. Live end-to-end coverage against the real `test.forge.name`
-domain is in `../tests/e2e/`.
+`site_admin`-required-on-every-route (a plain authenticated token gets
+403), domain metadata CRUD (including the `dns_managed=false` mail-only
+path, which makes zero PowerDNS calls), a real DNS zone/record CRUD
+round trip against a throwaway zone name that can never collide with a
+real domain, and a full DKIM lifecycle round trip against a throwaway
+`.invalid` zone (rotate twice, activate the first then the second —
+confirming the first is correctly demoted to `retiring` with a real
+`retire_after` timestamp — force-retire, then confirm both a 409 on
+retiring an already-retired selector and a 404 on a nonexistent one).
+
+Beyond the automated suite, the full DKIM lifecycle was also manually
+verified end-to-end against the real `test.forge.name` domain with
+actual cryptographic signature checking (`Mail::DKIM::Verifier`, not
+just HTTP status codes): rotate → activate → send a real email → verify
+`Result: pass`; rotate a second selector → activate it (demoting the
+first to `retiring` with `retire_after` seven days out) → confirm the
+*first* email, sent before the rotation, still verifies `pass` during
+the overlap window → confirm a *new* email is signed with the new
+selector → force-retire the old selector via the CLI → confirm via an
+external `dig` that its TXT record is gone and via the on-disk key
+directory that only the new selector's key files remain. Live
+end-to-end coverage against the real `test.forge.name` domain is in
+`../tests/e2e/`.

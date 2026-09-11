@@ -262,6 +262,63 @@ def cmd_dns_records_delete(args):
     return 0
 
 
+def cmd_dns_dkim_list(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        selectors = _client().dns_list_dkim(session["token"], args.domain_name)
+    except ApiError as e:
+        print(f"Could not list DKIM selectors: {e.message}", file=sys.stderr)
+        return 1
+    if not selectors:
+        print("(no selectors)")
+        return 0
+    for s in selectors:
+        extra = f"  retire_after={s['retire_after']}" if s.get("retire_after") else ""
+        print(f"{s['selector']}  {s['state']}{extra}")
+    return 0
+
+
+def cmd_dns_dkim_rotate(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        result = _client().dns_rotate_dkim(session["token"], args.domain_name)
+    except ApiError as e:
+        print(f"Could not rotate DKIM key: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Generated selector {result['selector']} (state: {result['state']}) -- activate it once its DNS TXT record has propagated")
+    return 0
+
+
+def cmd_dns_dkim_activate(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_activate_dkim(session["token"], args.domain_name, args.selector)
+    except ApiError as e:
+        print(f"Could not activate {args.selector}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Activated {args.selector} -- now signing outbound mail for {args.domain_name}")
+    return 0
+
+
+def cmd_dns_dkim_retire(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_retire_dkim(session["token"], args.domain_name, args.selector)
+    except ApiError as e:
+        print(f"Could not retire {args.selector}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Retired {args.selector}")
+    return 0
+
+
 def cmd_dns_recipient_access_list(args):
     session = _require_session()
     if not session:
@@ -602,6 +659,27 @@ def build_parser():
     p.add_argument("--name", required=True)
     p.add_argument("--type", required=True)
     p.set_defaults(func=cmd_dns_records_delete)
+
+    dkim = dns_sub.add_parser("dkim", help="DKIM key rotation")
+    dkim_sub = dkim.add_subparsers(dest="dns_dkim_command", required=True)
+
+    p = dkim_sub.add_parser("list", help="List a domain's DKIM selectors and their rotation state")
+    p.add_argument("domain_name")
+    p.set_defaults(func=cmd_dns_dkim_list)
+
+    p = dkim_sub.add_parser("rotate", help="Generate a new selector and publish its DNS TXT record (state: pending)")
+    p.add_argument("domain_name")
+    p.set_defaults(func=cmd_dns_dkim_rotate)
+
+    p = dkim_sub.add_parser("activate", help="Start signing with this selector; demotes the previous one to retiring")
+    p.add_argument("domain_name")
+    p.add_argument("selector")
+    p.set_defaults(func=cmd_dns_dkim_activate)
+
+    p = dkim_sub.add_parser("retire", help="Force-retire a selector now (break-glass; normally automatic after the overlap window)")
+    p.add_argument("domain_name")
+    p.add_argument("selector")
+    p.set_defaults(func=cmd_dns_dkim_retire)
 
     ra = dns_sub.add_parser("recipient-access", help="Per-recipient mail allow/block")
     ra_sub = ra.add_subparsers(dest="dns_recipient_access_command", required=True)

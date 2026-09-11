@@ -68,6 +68,18 @@ $t->get_ok('/api/v1/mail/messages' => $auth)
 # route, different reason -- see api/README.md). A throwaway,
 # mail-only, dns_managed=false domain avoids touching real PowerDNS
 # state from this test.
+#
+# Every homelab-domain-admin route requires site_admin (Phase 5) -- the
+# forwarded Authorization header passes through unchanged, so the
+# gateway itself can't grant this, the account behind $jwt actually
+# needs the role. Same direct-SQL grant as api/t/admin.t's own test
+# account, since this app owns the api schema directly.
+{
+    my $user_id = $t->app->pg->db->query('SELECT id FROM api.users WHERE email = ?', $email)->hash->{id};
+    my $role_id = $t->app->pg->db->query(q{SELECT id FROM api.roles WHERE name = 'site_admin'})->hash->{id};
+    $t->app->pg->db->query('INSERT INTO api.user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING', $user_id, $role_id);
+}
+
 my $domain = 'e2e-api-gateway-domain-' . time . '-' . $$ . '.invalid';
 $t->post_ok('/api/v1/domains' => $auth => json => { domain_name => $domain, dns_managed => \0 })
   ->status_is(201, 'gateway resolved homelab-domain-admin via the registry and forwarded successfully')

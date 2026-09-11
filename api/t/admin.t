@@ -47,6 +47,12 @@ $t->post_ok("/api/v1/admin/users/1/roles" => { Authorization => "Bearer $plain_j
 $t->post_ok('/api/v1/auth/login', json => { email => $admin_email, password => $admin_password })->status_is(200);
 my $admin_jwt = $t->tx->res->json('/token');
 
+{
+    $t->get_ok('/api/v1/auth/introspect' => { Authorization => "Bearer $admin_jwt" })->status_is(200);
+    is_deeply([sort @{ $t->tx->res->json('/roles') }], ['site_admin', 'user'],
+        'introspect reflects a just-granted role immediately, not just a stale token claim');
+}
+
 # --- Now the same "no role" account IS listed, with its roles ---
 $t->get_ok('/api/v1/admin/users' => { Authorization => "Bearer $admin_jwt" })
   ->status_is(200);

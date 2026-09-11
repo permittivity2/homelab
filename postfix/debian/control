@@ -8,7 +8,7 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-postfix
 Architecture: all
-Depends: ${misc:Depends}, postfix, postfix-pgsql, homelab-dovecot (>= 0.1.2), adduser, postgresql-client
+Depends: ${misc:Depends}, postfix, postfix-pgsql, homelab-dovecot (>= 0.1.2), adduser, postgresql-client, opendkim, opendkim-tools
 Description: SMTP submission/relay wired to the homelab-* shared identity
  Wires Postfix to the shared `homelab` Postgres database for recipient
  validation only -- a narrow, column-scoped cross-schema grant (email/
@@ -41,3 +41,15 @@ Description: SMTP submission/relay wired to the homelab-* shared identity
  serves its originally-configured domain fine on its own); see
  README.md's "Multi-domain support" section for the rollout-safety
  mechanics if it isn't installed yet at upgrade time.
+ .
+ opendkim/opendkim-tools are hard Depends (the binaries are harmless to
+ have installed), but actually wiring DKIM signing into the mail flow
+ (smtpd_milters, starting the opendkim service) is opt-in via debconf
+ (homelab-postfix/enable_dkim, default false) -- an already-configured
+ host upgrading this package gets zero milter-config change unless that
+ flag is explicitly turned on (dpkg-reconfigure homelab-postfix). Key
+ generation/rotation itself is homelab-domain-admin's job (`homelab-cli
+ dns dkim rotate/activate/retire`) -- see its own README.md's "DKIM"
+ section for the full design; this package only owns the milter wiring
+ and the /etc/opendkim/keys directory permissions the `homelab` user
+ needs to write new keys into.

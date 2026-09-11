@@ -258,7 +258,16 @@ sub _introspect ($self, $c) {
     return $c->render(json => { error => 'session revoked' }, status => 401)
         unless $session && !$session->{revoked};
 
-    return $c->render(json => { email => $payload->{email}, exp => $payload->{exp} });
+    # Added for homelab-domain-admin's site_admin gating (Phase 5) --
+    # every existing caller (Dovecot's oauth2 passdb, mailbridge) simply
+    # ignores this new key, same additive-response precedent as every
+    # other field added here historically.
+    my $roles = $self->pg->db->query(
+        q{SELECT r.name FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+          JOIN api.users u ON u.id = ur.user_id WHERE u.email = ?}, $payload->{email},
+    )->hashes->map(sub { $_->{name} })->to_array;
+
+    return $c->render(json => { email => $payload->{email}, exp => $payload->{exp}, roles => $roles });
 }
 
 sub _refresh ($self, $c) {

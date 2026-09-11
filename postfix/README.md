@@ -137,6 +137,76 @@ block a real recipient, confirm RCPT TO is rejected (550/554); remove
 the block, confirm the same recipient is accepted again (250) — with
 zero code path specific to the recipient tested.
 
+## DKIM signing (OpenDKIM, opt-in)
+
+`homelab-postfix/enable_dkim` (debconf boolean, **default false**) wires
+DKIM signing into Postfix via OpenDKIM as a milter — deliberately
+opt-in rather than forced onto every install: an already-configured,
+already-working host answering "false" (the default, and what a routine
+`apt upgrade` sees) gets zero milter-config change at all. Turn it on
+explicitly with `dpkg-reconfigure homelab-postfix` when ready; key
+generation/rotation itself is a completely separate concern handled by
+`homelab-domain-admin` (`homelab-cli dns dkim rotate/activate/retire`,
+see `../domain-admin/README.md`'s "DKIM key rotation" section for the
+full state-machine design) — this package only wires the milter and
+prepares the filesystem, it never generates or touches key material
+itself.
+
+When enabled, `postinst`:
+- Adds `homelab` (the account `homelab-domain-admin` runs as) as a
+  second member of the `opendkim` group, and creates `/etc/opendkim/
+  keys` owned `opendkim:opendkim`, mode `2770` (setgid, so new key
+  files/directories `homelab-domain-admin` creates underneath
+  automatically inherit the `opendkim` group without an extra `chgrp`
+  step) — this is the write access `homelab-domain-admin` needs to
+  generate and rotate keys on this same host.
+- Creates empty `KeyTable`/`SigningTable` (`homelab-domain-admin`
+  rebuilds their real content on every rotate/activate/retire — this
+  package only creates them so OpenDKIM has something to point at from
+  first boot) and an empty `TrustedHosts`.
+- Installs `config/opendkim.conf.template` wholesale as
+  `/etc/opendkim.conf` (OpenDKIM has no drop-in include directory the
+  way Postfix/PowerDNS do, so this replaces the vendor default
+  entirely rather than patching it).
+- Wires `smtpd_milters`/`non_smtpd_milters` to `inet:localhost:8891`
+  via the same read-modify-append idiom used elsewhere in this package
+  (never clobbers a hand-added milter already present), plus
+  `milter_default_action = accept` and `milter_protocol = 6`.
+- Enables and (re)starts the `opendkim` service.
+
+**OpenDMARC is deliberately NOT wired here.** An earlier version of
+this package's milter config also pointed at `inet:localhost:8893`
+(OpenDMARC's default port) — but OpenDMARC was never actually installed
+or configured by this package, so every message hit a real, live
+"Connection refused" from Postfix trying to reach a milter that
+genuinely doesn't exist on this host. Removed from both the postinst
+wiring logic and the debconf template's own description text; DMARC
+policy enforcement is explicitly out of scope for this package for now,
+not an oversight.
+
+### Gotcha: `RequireSafeKeys` must be `no`
+
+`opendkim.conf.template` sets `RequireSafeKeys no`, which looks like a
+security downgrade but is structurally required by this exact design,
+not an unconsidered weakening. OpenDKIM's own "safe keys" check
+(enabled by default) refuses to sign with any key file whose group has
+more than one member — and the `opendkim` daemon account's own primary
+group already *is* `opendkim`, with `homelab` added as a second,
+deliberate member of that same group (see above — that's the whole
+point, it's how `homelab-domain-admin` gets write access to rotate
+keys). Two members is already "multiple users" to this check, so with
+the default `RequireSafeKeys yes` it fires on **every single signing
+attempt**, not as some rare edge case — caught by a real `homelab-cli
+dns dkim rotate` → real send coming back "key data is not secure: root
+is in group ... which has multiple users". The actual security boundary
+this design relies on instead is "only `opendkim` and `homelab` can
+read `/etc/opendkim/keys` at all" (mode `640` on each key file, group
+`opendkim`, and this package never adds a third member to that group) —
+which `RequireSafeKeys` has no way to distinguish from a genuinely,
+carelessly shared key directory, so disabling that specific check is
+the correct call here rather than a real loosening of the actual
+threat model.
+
 ## `master.cf`'s submission service
 
 Postfix ships `master.cf` with the submission (587) and submissions
@@ -182,6 +252,16 @@ infrastructure, not just the local test host:
 
 ## Gotchas
 
+- **A new config template needs its own explicit `install -D` line in
+  `debian/rules`, or the package builds fine and fails at postinst
+  time instead.** Adding `config/opendkim.conf.template` without also
+  adding its matching `install -D` line in `debian/rules` produced a
+  `.deb` that built and installed the control scripts without error,
+  then failed with `install: No such file or directory` the moment
+  `postinst` actually tried to install that template on a host with
+  DKIM enabled — nothing at build time checks that every file under
+  `config/` has a matching install line. Worth double-checking `rules`
+  whenever a new template is added here.
 - **PgBouncer can serve a stale pooled backend connection for a role
   that was dropped and recreated** (not merely password-rotated via
   `ALTER ROLE`), predating its current grants — `permission denied for

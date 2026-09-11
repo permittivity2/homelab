@@ -57,6 +57,22 @@ Add an entry to `homelab-webproxy`'s `sites.yml` (see
 need to know or care that this one issues credentials instead of
 serving a webmail UI.
 
+## `/api/v1/auth/introspect` carries the caller's roles
+
+`_introspect` returns `{email, exp, roles}` — `roles` is a plain array
+of role names (e.g. `["user"]` or `["user", "site_admin"]`), joined
+straight from `api.user_roles`/`api.roles` by email at introspect time,
+not baked into the JWT itself (so a role grant/revoke takes effect on
+the caller's very next request, no re-login needed — same "verify at
+every hop, live" property the rest of this app already has). Added so
+that a downstream backend behind the gateway (`homelab-domain-admin`
+being the first consumer — see `../domain-admin/README.md`) can enforce
+its own role gate after `introspect()` without needing a second,
+separate lookup of its own; every backend forwards the caller's
+`Authorization` header unchanged and calls `introspect()` itself, so
+this field is available anywhere in the ecosystem the same way `email`
+and `exp` already were.
+
 ## Admin endpoints (site_admin role required)
 
 `GET /api/v1/admin/users` (list every user with their granted role

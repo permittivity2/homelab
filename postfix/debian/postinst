@@ -193,6 +193,76 @@ case "$1" in
             esac
         fi
 
+        # --- DKIM: opt-in OpenDKIM milter wiring (see README.md's "DKIM"
+        # section) --- deliberately gated on a debconf flag that
+        # defaults to false, so a routine upgrade of an already-
+        # configured host never changes its milter config unexpectedly.
+        # Key generation/rotation is homelab-domain-admin's job
+        # entirely (`homelab-cli dns dkim ...`) -- this block only ever
+        # sets up directory/file ownership and points opendkim/postfix
+        # at each other.
+        db_get homelab-postfix/enable_dkim || true; ENABLE_DKIM="${RET:-false}"
+        if [ "$ENABLE_DKIM" = "true" ]; then
+            echo "  wiring DKIM (homelab-postfix/enable_dkim=true)..."
+
+            # homelab is the user homelab-domain-admin's systemd unit
+            # actually runs as -- group membership is what lets it
+            # write new key files/KeyTable/SigningTable without either
+            # service needing to run as the other's user.
+            usermod -aG opendkim homelab 2>/dev/null \
+                || echo "  WARNING: could not add 'homelab' to the 'opendkim' group -- is homelab-domain-admin installed yet? DKIM key writes will fail until this succeeds (rerun: usermod -aG opendkim homelab)."
+
+            mkdir -p /etc/opendkim/keys
+            chown opendkim:opendkim /etc/opendkim/keys
+            # setgid so every NEW per-domain subdirectory
+            # opendkim-genkey creates also inherits group opendkim,
+            # without needing this postinst to chgrp each one by hand.
+            chmod 2770 /etc/opendkim/keys
+
+            for f in /etc/opendkim/KeyTable /etc/opendkim/SigningTable; do
+                [ -f "$f" ] || : > "$f"
+                chown opendkim:opendkim "$f"
+                chmod 0660 "$f"
+            done
+            [ -f /etc/opendkim/TrustedHosts ] || printf '127.0.0.1\n::1\n' > /etc/opendkim/TrustedHosts
+
+            install -D -m 644 "$SHARE_DIR/config/opendkim.conf.template" /etc/opendkim.conf
+
+            # OpenDKIM only (inet:localhost:8891) -- NOT also wiring
+            # OpenDMARC's conventional inet:localhost:8893 here, unlike
+            # the real production host's milter chain: this package
+            # doesn't install/configure opendmarc at all, and a milter
+            # entry pointing at a port nothing listens on just produces
+            # a "Connection refused" warning on every message (harmless
+            # under milter_default_action=accept, but pure noise) --
+            # DMARC policy administration is explicitly out of scope
+            # for this phase (see domain-admin/README.md's DKIM
+            # section's "Explicitly out of scope"), a real follow-up if
+            # ever needed, not something to half-wire now.
+            CURRENT_SMTPD_MILTERS="$(postconf -h smtpd_milters 2>/dev/null || true)"
+            CURRENT_NON_SMTPD_MILTERS="$(postconf -h non_smtpd_milters 2>/dev/null || true)"
+            case "$CURRENT_SMTPD_MILTERS" in
+                *inet:localhost:8891*) ;;
+                "") postconf -e 'smtpd_milters = inet:localhost:8891' ;;
+                *)  postconf -e "smtpd_milters = $CURRENT_SMTPD_MILTERS, inet:localhost:8891" ;;
+            esac
+            case "$CURRENT_NON_SMTPD_MILTERS" in
+                *inet:localhost:8891*) ;;
+                "") postconf -e 'non_smtpd_milters = inet:localhost:8891' ;;
+                *)  postconf -e "non_smtpd_milters = $CURRENT_NON_SMTPD_MILTERS, inet:localhost:8891" ;;
+            esac
+            postconf -e 'milter_default_action = accept' 'milter_protocol = 6'
+
+            if command -v opendkim >/dev/null 2>&1; then
+                systemctl enable opendkim >/dev/null 2>&1 || true
+                systemctl restart opendkim \
+                    || echo "  WARNING: opendkim failed to restart -- check 'systemctl status opendkim'/'journalctl -xeu opendkim' by hand."
+            fi
+            echo "  DKIM milter wiring complete -- use 'homelab-cli dns dkim rotate/activate <domain>' to actually sign mail"
+        else
+            echo "  DKIM milter wiring skipped (homelab-postfix/enable_dkim=false) -- opendkim/opendkim-tools are installed but not wired in"
+        fi
+
         # Start postfix FIRST -- it creates /var/spool/postfix/private/,
         # which the dovecot SASL socket below must already exist before
         # dovecot can create a unix_listener inside it.

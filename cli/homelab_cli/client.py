@@ -152,6 +152,18 @@ class Client:
             json={"name": name, "type": type_},
         )
 
+    def dns_list_dkim(self, token, domain_name):
+        return self._request("GET", f"/api/v1/domains/{domain_name}/dkim/selectors", headers=self._auth(token))
+
+    def dns_rotate_dkim(self, token, domain_name):
+        return self._request("POST", f"/api/v1/domains/{domain_name}/dkim/rotate", headers=self._auth(token))
+
+    def dns_activate_dkim(self, token, domain_name, selector):
+        return self._request("POST", f"/api/v1/domains/{domain_name}/dkim/{selector}/activate", headers=self._auth(token))
+
+    def dns_retire_dkim(self, token, domain_name, selector):
+        return self._request("POST", f"/api/v1/domains/{domain_name}/dkim/{selector}/retire", headers=self._auth(token))
+
     def dns_list_recipient_access(self, token):
         return self._request("GET", "/api/v1/domains/recipient-access", headers=self._auth(token))
 

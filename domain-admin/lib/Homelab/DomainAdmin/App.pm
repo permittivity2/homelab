@@ -7,6 +7,7 @@ use Homelab::Common::Health qw(mount_health_route);
 use Homelab::Common::Registry qw(register);
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::DomainAdmin::PowerDNS;
+use Homelab::DomainAdmin::App::Controller::Dkim;
 
 has 'pg';
 has 'api_base';
@@ -57,14 +58,18 @@ sub startup ($self) {
     }
 
     # Shared per-request auth check -- every route in this service
-    # requires a valid, authenticated caller. Role-gating to site_admin
-    # specifically is added in a later phase (needs Homelab::Common::
-    # AuthClient::introspect's response extended with a `roles` field,
-    # a homelab-api-side change tracked separately) -- for now this is
-    # the same bar every other backend applies before ITS OWN additional
-    # checks, matching this project's "verify at every hop" convention.
-    # Renders 401 itself and returns undef on failure, so callers can
-    # just do `my $email = $c->authenticated_email or return;`.
+    # requires an authenticated caller who ALSO holds site_admin (there
+    # is no legitimate non-admin use case for DNS/DKIM/mail-routing
+    # control, unlike drive/mail's inherently per-user self-service).
+    # Now enforceable because homelab-api's /auth/introspect response
+    # was extended with a `roles` field specifically for this (Phase 5)
+    # -- Homelab::Common::AuthClient::introspect() needed zero code
+    # change itself, it already returns the JSON body verbatim.
+    # Renders 401/403 itself and returns undef on failure, so callers
+    # can just do `my $email = $c->authenticated_email or return;`
+    # exactly as before -- this tightens what "authenticated" already
+    # meant here rather than adding a second helper every controller
+    # would need to remember to also call.
     $self->helper(authenticated_email => sub ($c) {
         my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
         unless ($jwt) {
@@ -74,6 +79,10 @@ sub startup ($self) {
         my $result = introspect($jwt, api_base => $self->api_base);
         unless ($result) {
             $c->render(json => { error => 'not logged in' }, status => 401);
+            return undef;
+        }
+        unless (grep { $_ eq 'site_admin' } @{ $result->{roles} // [] }) {
+            $c->render(json => { error => 'site_admin role required' }, status => 403);
             return undef;
         }
         return $result->{email};
@@ -133,6 +142,15 @@ sub startup ($self) {
     $r->post('/internal/v1/domains/:domain/dns/records'   => [domain => qr/[^\/]+/])->to('dns#upsert_record');
     $r->delete('/internal/v1/domains/:domain/dns/records' => [domain => qr/[^\/]+/])->to('dns#delete_record');
 
+    # DKIM -- :selector never contains a dot in practice (date+letter,
+    # e.g. "20260911a"), but the same [^\/]+ override costs nothing and
+    # avoids ever rediscovering the :domain-style truncation bug for it.
+    $r->get('/internal/v1/domains/:domain/dkim/selectors'  => [domain => qr/[^\/]+/])->to('dkim#list');
+    $r->post('/internal/v1/domains/:domain/dkim/rotate'    => [domain => qr/[^\/]+/])->to('dkim#rotate');
+    $r->post('/internal/v1/domains/:domain/dkim/:selector/activate' => [domain => qr/[^\/]+/, selector => qr/[^\/]+/])->to('dkim#activate');
+    $r->post('/internal/v1/domains/:domain/dkim/:selector/retire'   => [domain => qr/[^\/]+/, selector => qr/[^\/]+/])->to('dkim#retire');
+    $r->delete('/internal/v1/domains/:domain/dkim/:selector'        => [domain => qr/[^\/]+/, selector => qr/[^\/]+/])->to('dkim#cancel');
+
     # Restart-debounce timer: fires every 10s, but only actually restarts
     # pdns if a write was marked >=10s ago (the debounce window -- lets
     # one composite "add domain" operation's several writes settle
@@ -141,6 +159,34 @@ sub startup ($self) {
     # races two workers into restarting pdns at once.
     Mojo::IOLoop->recurring(10 => sub { $self->_maybe_restart_pdns });
 
+    # DKIM retiring->retired timer: fires every 60s, claims at most one
+    # due row (next_action_at <= NOW()) via FOR UPDATE SKIP LOCKED so a
+    # multi-worker hypnotoad never races two workers into retiring the
+    # same selector twice -- same pattern as _maybe_restart_pdns above.
+    # Deliberately NOT built on Homelab::Common::Queue/Minion -- see
+    # README.md and the project plan for why (undocumented/unused
+    # bootstrap story in this codebase; not a prerequisite worth taking
+    # on for this one timer).
+    Mojo::IOLoop->recurring(60 => sub { $self->_maybe_retire_dkim_selector });
+
+    return;
+}
+
+sub _maybe_retire_dkim_selector ($self) {
+    my $db = $self->pg->db;
+    my $tx = $db->begin;
+    my $row = $db->query(
+        q{SELECT s.*, d.domain_name FROM domainadmin.dkim_selectors s
+          JOIN domainadmin.domains d ON d.id = s.domain_id
+          WHERE s.state = 'retiring' AND s.next_action_at <= NOW() FOR UPDATE OF s SKIP LOCKED LIMIT 1},
+    )->hash;
+    return unless $row;
+    $tx->commit;    # release the row lock before doing slower I/O below
+
+    $self->log->info("auto-retiring DKIM selector $row->{selector} ($row->{domain_name})");
+    my $c = $self->build_controller;
+    eval { Homelab::DomainAdmin::App::Controller::Dkim::_do_retire($c, $row->{domain_name}, $row) };
+    $self->log->warn("auto-retire of $row->{selector} ($row->{domain_name}) failed: $@") if $@;
     return;
 }
 
