@@ -295,8 +295,8 @@ Checkboxes on both the folder sidebar (`<li>` rows) and the file table
 (a `Selection` JS module, same object-literal-API shape as `Lightbox`),
 not merged into one list; merging risked breaking the mobile slide-in
 drawer for no functional gain. A bulk toolbar appears once anything is
-selected, offering **Delete** (synchronous) and **Download as zip**
-(async — see below).
+selected, offering **Delete all selected** (synchronous) and **Download
+as zip** (async — see below).
 
 **Delete** (`POST /bulk/delete`, + `/api/v1/bulk/delete`) is a plain
 loop over `_delete_file`/`_delete_folder` — both already do the real
@@ -371,33 +371,47 @@ full writeup): this is the user's real, full-scope session JWT, not a
 narrow "fetch this one file" credential — `homelab-api` has no
 token-narrowing capability today. The token only ever lives in the
 job's `input` JSONB on `homelab-worker`'s own side for as long as the
-job is pending/running, bounded by the JWT's own ~30-minute expiry, and
-this app's own `zip_job_status`/`download_zip` proxies never see or
-relay it back out (they relay `homelab-worker`'s *response*, which never
-includes raw `input` either — see `Controller::Jobs::_public_row`
-there).
+job is pending/running, bounded by the JWT's own ~30-minute expiry.
+The *same* token is also stashed in this app's own `drive.zip_placements`
+row (see below) for the same bounded window, for the same reason: the
+background delivery timer has no live request to pull a fresh one from.
 
-### Zip job routes — thin proxies, not the implementation
+### Zip job route, and delivery into an "Archives" folder
 
 `POST /zip-jobs` (+ `/api/v1/zip-jobs`) resolves the manifest, submits
 it to `homelab-worker` (`Homelab::Common::Registry::lookup`, then a
 direct HTTP `POST /internal/v1/jobs` — not `Homelab::Common::Proxy::forward`,
 since this needs to *build* a new request with the resolved manifest
-+forwarded JWT, not relay the incoming one unchanged) and hands the
-resulting job id straight back. `GET /zip-jobs/:id` and
-`GET /zip-jobs/:id/download` (+ `/api/v1/...` equivalents) are pure
-pass-throughs to `homelab-worker`'s own `GET /internal/v1/jobs/:id`
-and `.../download` — this app stores nothing at all about a zip job
-beyond what's needed to make each forwarding call; ownership/`site_admin`
-visibility is enforced entirely worker-side.
++forwarded JWT, not relay the incoming one unchanged), and returns
+immediately with `{id, output_name, dest_path}` — **not** a status to
+poll. Zip build time is unpredictable, so rather than a live "still
+building…" UI, the response just names where the finished file will
+land (`Archives/<output_name>.zip`), and the user checks back whenever.
 
-The frontend polls `GET /zip-jobs/:id` every 2 seconds while
-`state` is `pending`/`running`, then swaps in a real
-`<a href="/zip-jobs/:id/download" download>` link once `completed` (or
-shows the job's `error_message` if `failed`) — deliberately a plain
-link, not an auto-triggered `fetch()`+blob download: a large archive
-held entirely in memory as a blob is a real crash risk on mobile, and a
-plain link keeps HTTP `Range`-resume for free.
+Delivery is a second, independent step: `create_zip_job` also
+find-or-creates this user's root-level **Archives** folder
+(`_ensure_archives_folder`) and inserts a `drive.zip_placements` row
+(`migrations/003-zip-placements.sql`). A recurring 5-second timer in
+`Homelab::Drive::App` (`_claim_and_deliver_zip_placement` — this app's
+first recurring timer, same `FOR UPDATE SKIP LOCKED` claim pattern as
+`homelab-domain-admin`'s and `homelab-worker`'s own timers) claims one
+pending placement at a time, checks the underlying job via
+`homelab-worker`'s own `GET /internal/v1/jobs/:id`, and once it's
+`completed`, downloads the artifact and inserts it as a normal
+`drive.files` row — same INSERT shape as `_save_upload`, just fed from
+an HTTP response body instead of a `Mojo::Upload`. From then on the zip
+is a completely ordinary file: browsable, downloadable, deletable
+exactly like anything the user uploaded themselves. A job that fails to
+build fails the placement immediately; a delivery-side failure (worker
+briefly unreachable, or the stored JWT finally outliving its ~30-minute
+lifetime before a very slow job finishes) retries up to 5 times before
+giving up, at which point `homelab-cli jobs show/download <job_id>`
+against the still-intact job on `homelab-worker`'s own side (kept for
+its own `retention_hours`, unaffected by delivery here failing) is the
+manual fallback.
+
+There is no longer a browser-facing per-job status/download route at
+all — nothing needs one now that delivery happens server-side.
 
 ## Mobile layout
 

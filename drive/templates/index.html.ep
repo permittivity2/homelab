@@ -346,7 +346,7 @@
     <div class="bulk-toolbar" id="bulk-toolbar">
       <span class="count"><span id="bulk-count">0</span> selected</span>
       <button type="button" class="btn-zip" id="bulk-zip">Download as zip</button>
-      <button type="button" class="btn-delete" id="bulk-delete">Delete</button>
+      <button type="button" class="btn-delete" id="bulk-delete">Delete all selected</button>
       <button type="button" class="btn-clear" id="bulk-clear">Clear selection</button>
       <span class="zip-status" id="zip-status"></span>
     </div>
@@ -990,16 +990,17 @@ var Lightbox = (function () {
 // behavior for no functional gain -- see README.md's "Bulk select"
 // section). Same object-literal-API IIFE shape as the Lightbox module
 // above. Zip-building itself does NOT happen in this process -- see
-// App.pm's create_zip_job/zip_job_status/download_zip, which just proxy
-// to the separate homelab-worker service; this script only talks to
-// this page's own /bulk/delete and /zip-jobs routes via fetch() with
+// App.pm's create_zip_job, which submits the job to the separate
+// homelab-worker service and returns immediately (no status polling --
+// a background timer delivers the finished file into the user's own
+// Archives folder once it's ready); this script only talks to this
+// page's own /bulk/delete and /zip-jobs routes via fetch() with
 // credentials: 'same-origin', same pattern the drag-and-drop upload
 // script above already uses.
 var Selection = (function () {
   'use strict';
 
   var selected = new Map(); // "kind:id" -> {kind, id, name}
-  var pollTimer = null;
 
   function checkboxes() {
     return Array.prototype.slice.call(document.querySelectorAll('.select-checkbox'));
@@ -1013,10 +1014,6 @@ var Selection = (function () {
     return ids;
   }
 
-  function stopPoll() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  }
-
   function render() {
     var toolbar = document.getElementById('bulk-toolbar');
     var count = document.getElementById('bulk-count');
@@ -1026,7 +1023,6 @@ var Selection = (function () {
     if (selected.size === 0) {
       var status = document.getElementById('zip-status');
       if (status) status.innerHTML = '';
-      stopPoll();
     }
   }
 
@@ -1061,41 +1057,18 @@ var Selection = (function () {
     location.reload();
   }
 
-  function pollJob(id, status) {
-    stopPoll();
-    pollTimer = setInterval(async function () {
-      var resp;
-      try {
-        resp = await fetch('/zip-jobs/' + id, { credentials: 'same-origin' });
-      } catch (e) {
-        return; // transient network hiccup -- just try again next tick
-      }
-      if (!resp.ok) {
-        stopPoll();
-        if (status) status.innerHTML = '<span class="zip-error">Lost track of the zip job.</span>';
-        return;
-      }
-      var job = await resp.json();
-      if (job.state === 'completed') {
-        stopPoll();
-        if (status) {
-          status.innerHTML = '<a href="/zip-jobs/' + id + '/download" download>Download '
-            + (job.output_name || 'zip') + '</a>';
-        }
-      } else if (job.state === 'failed') {
-        stopPoll();
-        if (status) status.innerHTML = '<span class="zip-error">Zip failed: ' + (job.error_message || 'unknown error') + '</span>';
-      } else if (status) {
-        status.innerHTML = '<span class="spinner"></span> Building zip… (' + job.state + ')';
-      }
-    }, 2000);
-  }
-
+  // Zip build time is unpredictable (see the plan behind this change),
+  // so this deliberately does NOT poll for completion the way it used
+  // to. It just confirms submission and names where the finished file
+  // will land -- a background timer in Homelab::Drive::App delivers it
+  // into the user's own Archives folder once homelab-worker finishes,
+  // same as any other file they'd browse to. See App.pm's
+  // create_zip_job/_claim_and_deliver_zip_placement.
   async function doZip() {
     if (!selected.size) return;
     var status = document.getElementById('zip-status');
     var body = { file_ids: idsOfKind('file'), folder_ids: idsOfKind('folder') };
-    if (status) status.innerHTML = '<span class="spinner"></span> Building zip…';
+    if (status) status.innerHTML = '<span class="spinner"></span> Starting…';
 
     var resp;
     try {
@@ -1113,7 +1086,10 @@ var Selection = (function () {
       return;
     }
     var job = await resp.json();
-    pollJob(job.id, status);
+    if (status) {
+      status.textContent = "Your zip is being built. When ready, it'll appear as "
+        + (job.dest_path || 'Archives/' + job.output_name) + ' — check back there.';
+    }
   }
 
   checkboxes().forEach(function (cb) {

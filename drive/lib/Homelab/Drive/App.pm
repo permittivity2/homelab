@@ -3,11 +3,12 @@ use Mojo::Base 'Mojolicious', -signatures;
 
 use File::Path qw(make_path);
 use File::Basename qw(basename);
+use Mojo::UserAgent;
 
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
-use Homelab::Common::Registry qw(register);
+use Homelab::Common::Registry qw(register lookup);
 use Homelab::Common::AuthClient qw(introspect);
 
 has 'pg';
@@ -69,6 +70,13 @@ sub startup ($self) {
         $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
     }
 
+    # Delivers a completed homelab-worker zip job into this user's own
+    # Archives folder -- see create_zip_job/_deliver_zip_placement below
+    # and migrations/003-zip-placements.sql. Same recurring-timer +
+    # FOR UPDATE SKIP LOCKED claim pattern as homelab-domain-admin's and
+    # homelab-worker's own timers; this is drive's first one.
+    Mojo::IOLoop->recurring(5 => sub { $self->_claim_and_deliver_zip_placement });
+
     my $r = $self->routes;
     $r->get('/')               ->to('drive#index');
     $r->get('/folders/:id')    ->to('drive#index');
@@ -94,12 +102,17 @@ sub startup ($self) {
     $r->post('/bulk/delete')        ->to('drive#bulk_delete');
     $r->post('/api/v1/bulk/delete') ->to('drive#bulk_delete');
 
+    # Only job *creation* is a route -- there's no browser-facing status/
+    # download route any more (see create_zip_job below and README.md's
+    # "Bulk select: zip download" section): the finished archive is
+    # delivered into this user's own Archives folder by a background
+    # timer, not fetched via a per-job polling/download proxy. A site
+    # admin or scripted caller who wants to inspect one specific
+    # homelab-worker job directly already has `homelab-cli jobs
+    # show/download <job_id>`, which works for every job type, not just
+    # drive's zip jobs -- no need to duplicate that here.
     $r->post('/zip-jobs')             ->to('drive#create_zip_job');
-    $r->get('/zip-jobs/:id')          ->to('drive#zip_job_status');
-    $r->get('/zip-jobs/:id/download') ->to('drive#download_zip');
-    $r->post('/api/v1/zip-jobs')             ->to('drive#create_zip_job');
-    $r->get('/api/v1/zip-jobs/:id')          ->to('drive#zip_job_status');
-    $r->get('/api/v1/zip-jobs/:id/download') ->to('drive#download_zip');
+    $r->post('/api/v1/zip-jobs')      ->to('drive#create_zip_job');
 
     # --- JSON API (Bearer-token authenticated, e.g. homelab-cli or any
     # third-party script -- see README.md and ../../CLAUDE.md). Not
@@ -113,6 +126,128 @@ sub startup ($self) {
     $r->post('/api/v1/folders')         ->to('drive#api_create_folder');
     $r->delete('/api/v1/folders/:id')   ->to('drive#api_delete_folder');
 
+    return;
+}
+
+# Looks up homelab-worker's own address via the service registry --
+# undef if it's not currently registered/reachable. App-package-local
+# copy of the same-named helper in the Controller package below (that
+# one takes a controller `$c` for `$c->app->api_base`; this one already
+# IS the app, called from the recurring timer below with no request/
+# controller context to borrow one from) -- see the note on this file's
+# own per-`package` import/unqualified-call scoping further down for
+# why these aren't just shared as one sub.
+sub _worker_entry ($self) {
+    my $entry = eval { lookup('homelab-worker', api_base => $self->api_base) };
+    return ($entry && $entry->{host} && $entry->{port}) ? $entry : undef;
+}
+
+# Gives up on a placement's delivery after too many failed attempts
+# (worker unreachable, or the stored JWT having outlived its own
+# ~30min lifetime before the zip job finished building -- see
+# migrations/003-zip-placements.sql), rather than retrying forever.
+# Flips back to 'pending' (not 'failed') below the cap so the claim
+# query in _claim_and_deliver_zip_placement picks it up again next
+# tick -- 'processing' must never be a resting state.
+sub _bump_or_fail_zip_placement ($self, $row, $message) {
+    my $attempts = $row->{delivery_attempts} + 1;
+    if ($attempts >= 5) {
+        $self->pg->db->query(
+            q{UPDATE drive.zip_placements
+              SET state = 'failed', delivery_attempts = ?, error_message = ?, completed_at = NOW()
+              WHERE id = ?},
+            $attempts,
+            "$message (gave up after $attempts attempts -- see \`homelab-cli jobs show $row->{job_id}\`)",
+            $row->{id},
+        );
+    } else {
+        $self->pg->db->query(
+            q{UPDATE drive.zip_placements SET state = 'pending', delivery_attempts = ? WHERE id = ?},
+            $attempts, $row->{id},
+        );
+    }
+    return;
+}
+
+# Claims one pending drive.zip_placements row (single atomic UPDATE ...
+# WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1), safe under
+# hypnotoad's multiple prefork workers each running this same timer --
+# see migrations/003-zip-placements.sql's note on the 'processing'
+# state) and checks the underlying homelab-worker job:
+#  - job completed: downloads the artifact and inserts it as a normal
+#    drive.files row inside the placement's dest_folder_id (mirrors
+#    _save_upload's INSERT shape in the Controller package below, just
+#    fed from an HTTP response body instead of a Mojo::Upload), marks
+#    the placement completed.
+#  - job failed: marks the placement failed immediately, copying the
+#    job's own error_message -- no point retrying a job that already
+#    gave up building.
+#  - job still pending/running: flips back to 'pending' for another
+#    tick, no attempt cost -- homelab-worker's own job_timeout_minutes/
+#    max_attempts already bound how long a job can stay non-terminal.
+#  - the delivery step itself errors (worker unreachable, stale JWT,
+#    etc.): _bump_or_fail_zip_placement above.
+sub _claim_and_deliver_zip_placement ($self) {
+    my $row = $self->pg->db->query(
+        q{UPDATE drive.zip_placements SET state = 'processing'
+          WHERE id = (
+              SELECT id FROM drive.zip_placements
+              WHERE state = 'pending' ORDER BY created_at
+              FOR UPDATE SKIP LOCKED LIMIT 1
+          )
+          RETURNING *},
+    )->hash;
+    return unless $row;
+
+    my $entry = $self->_worker_entry;
+    unless ($entry) {
+        $self->_bump_or_fail_zip_placement($row, 'homelab-worker is not currently available');
+        return;
+    }
+
+    my $ua = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 60);
+    my $status_tx = $ua->get(
+        "http://$entry->{host}:$entry->{port}/internal/v1/jobs/$row->{job_id}"
+            => { Authorization => "Bearer $row->{jwt}" },
+    );
+    unless ($status_tx->res->code && $status_tx->res->code == 200) {
+        $self->_bump_or_fail_zip_placement($row, 'could not check the homelab-worker job status');
+        return;
+    }
+    my $job = $status_tx->res->json;
+
+    if ($job->{state} eq 'failed') {
+        $self->pg->db->query(
+            q{UPDATE drive.zip_placements SET state = 'failed', error_message = ?, completed_at = NOW() WHERE id = ?},
+            'zip build failed: ' . ($job->{error_message} // 'unknown error'), $row->{id},
+        );
+        return;
+    }
+    unless ($job->{state} eq 'completed') {
+        $self->pg->db->query(q{UPDATE drive.zip_placements SET state = 'pending' WHERE id = ?}, $row->{id});
+        return;
+    }
+
+    my $dl_tx = $ua->get(
+        "http://$entry->{host}:$entry->{port}/internal/v1/jobs/$row->{job_id}/download"
+            => { Authorization => "Bearer $row->{jwt}" },
+    );
+    unless ($dl_tx->res->code && $dl_tx->res->code == 200) {
+        $self->_bump_or_fail_zip_placement($row, 'could not download the finished zip from homelab-worker');
+        return;
+    }
+
+    my $file_row = $self->pg->db->query(
+        q{INSERT INTO drive.files (user_email, filename, size_bytes, mime_type, folder_id)
+          VALUES (?, ?, ?, 'application/zip', ?) RETURNING uuid},
+        $row->{user_email}, $row->{output_name}, length($dl_tx->res->body), $row->{dest_folder_id},
+    )->hash;
+    $dl_tx->res->content->asset->move_to($self->storage_path . '/' . $file_row->{uuid});
+
+    $self->pg->db->query(
+        q{UPDATE drive.zip_placements SET state = 'completed', completed_at = NOW() WHERE id = ?},
+        $row->{id},
+    );
     return;
 }
 
@@ -934,6 +1069,28 @@ sub _worker_entry ($c) {
     return ($entry && $entry->{host} && $entry->{port}) ? $entry : undef;
 }
 
+# Finds this user's root-level "Archives" folder, creating it on first
+# use -- every completed zip job lands here (see create_zip_job below
+# and _claim_and_deliver_zip_placement in the App package above). Reuses
+# _create_folder's own existing-name check rather than duplicating it;
+# if that check loses a create race against a concurrent first zip job
+# from the same user (accepted minor race, same "soft guideline, not
+# worth locking for" tone as homelab-worker's own concurrency-cap race
+# -- see migrations/003-zip-placements.sql), the folder exists either
+# way, so just re-fetch its id instead of failing the whole submission.
+sub _ensure_archives_folder ($c, $email) {
+    my $find = sub {
+        return $c->app->pg->db->query(
+            q{SELECT id FROM drive.folders WHERE user_email = ? AND parent_folder_id IS NULL AND name = 'Archives'},
+            $email,
+        )->hash;
+    };
+    my $existing = $find->();
+    return $existing->{id} if $existing;
+    my ($row) = _create_folder($c, $email, 'Archives', undef);
+    return $row ? $row->{id} : $find->()->{id};
+}
+
 # POST /zip-jobs (+ /api/v1/zip-jobs) {file_ids: [...], folder_ids: [...]}
 # Resolves the selection into a manifest (above), builds the generic
 # zip-job payload homelab-worker expects (see ../../worker/README.md),
@@ -942,9 +1099,13 @@ sub _worker_entry ($c) {
 # section: this app has no narrower credential to hand out instead, and
 # the worker fetches each entry back from THIS app's own
 # /api/v1/files/:id using exactly that token, re-verified there the
-# normal way. Drive itself never builds the zip or stores anything about
-# the job beyond forwarding this one call -- homelab-worker owns all of
-# that.
+# normal way. Drive itself never builds the zip -- but it DOES now
+# record a drive.zip_placements row so the background timer in the App
+# package above can deliver the finished artifact into this user's own
+# Archives folder once the job completes; there's no live status/
+# download response here any more (zip build time is unpredictable, so
+# the response just names where the finished file will land -- see
+# README.md's "Bulk select: zip download" section).
 sub create_zip_job ($c) {
     my ($email, $jwt) = _current_auth($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
@@ -978,54 +1139,19 @@ sub create_zip_job ($c) {
     unless ($tx->res->code) {
         return $c->render(json => { error => 'homelab-worker is not reachable' }, status => 504);
     }
-    return $c->render(json => $tx->res->json, status => $tx->res->code);
-}
-
-# GET /zip-jobs/:id (+ /api/v1/zip-jobs/:id) -- thin proxy to
-# homelab-worker's own GET /internal/v1/jobs/:id, relayed as-is
-# (ownership/site_admin visibility is enforced worker-side, see
-# ../../worker/README.md -- drive doesn't duplicate that check here).
-sub zip_job_status ($c) {
-    my ($email, $jwt) = _current_auth($c);
-    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
-
-    my $entry = _worker_entry($c);
-    return $c->render(json => { error => 'homelab-worker is not currently available' }, status => 502) unless $entry;
-
-    my $id = $c->param('id');
-    my $tx = $WORKER_UA->get("http://$entry->{host}:$entry->{port}/internal/v1/jobs/$id" => { Authorization => "Bearer $jwt" });
-    unless ($tx->res->code) {
-        return $c->render(json => { error => 'homelab-worker is not reachable' }, status => 504);
+    unless ($tx->res->code == 201) {
+        return $c->render(json => $tx->res->json, status => $tx->res->code);
     }
-    return $c->render(json => $tx->res->json, status => $tx->res->code);
-}
+    my $job_id = $tx->res->json->{id};
 
-# GET /zip-jobs/:id/download (+ /api/v1/zip-jobs/:id/download) -- thin
-# proxy to homelab-worker's own download route, streaming the finished
-# archive's bytes straight through (Content-Type/Content-Disposition
-# relayed unchanged, so the browser sees the real filename homelab-worker
-# set). A non-200 from the worker (still running, failed, not found/not
-# owned) is relayed as JSON, same shape as every other error response
-# this app renders.
-sub download_zip ($c) {
-    my ($email, $jwt) = _current_auth($c);
-    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+    my $archives_folder_id = _ensure_archives_folder($c, $email);
+    $c->app->pg->db->query(
+        q{INSERT INTO drive.zip_placements (job_id, user_email, jwt, dest_folder_id, output_name)
+          VALUES (?, ?, ?, ?, ?)},
+        $job_id, $email, $jwt, $archives_folder_id, $output_name,
+    );
 
-    my $entry = _worker_entry($c);
-    return $c->render(json => { error => 'homelab-worker is not currently available' }, status => 502) unless $entry;
-
-    my $id = $c->param('id');
-    my $tx = $WORKER_UA->get("http://$entry->{host}:$entry->{port}/internal/v1/jobs/$id/download" => { Authorization => "Bearer $jwt" });
-    unless ($tx->res->code) {
-        return $c->render(json => { error => 'homelab-worker is not reachable' }, status => 504);
-    }
-    if ($tx->res->code != 200) {
-        return $c->render(json => ($tx->res->json // { error => 'download failed' }), status => $tx->res->code);
-    }
-
-    $c->res->headers->content_type($tx->res->headers->content_type) if $tx->res->headers->content_type;
-    $c->res->headers->content_disposition($tx->res->headers->content_disposition) if $tx->res->headers->content_disposition;
-    return $c->render(data => $tx->res->body);
+    return $c->render(json => { id => $job_id, output_name => $output_name, dest_path => "Archives/$output_name" }, status => 201);
 }
 
 1;

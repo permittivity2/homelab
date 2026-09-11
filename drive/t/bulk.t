@@ -112,27 +112,46 @@ $t->post_ok('/bulk/delete' => json => { file_ids => [999999999], folder_ids => [
 # Zip: manifest resolution + a real end-to-end job via homelab-worker
 # =====================================================================
 
-# Waits (bounded, so a genuinely broken worker fails the test instead of
-# hanging CI forever) for a job to leave pending/running, downloads its
-# artifact once completed, and returns a real, already-`read()`
+# Waits (bounded, so a genuinely broken worker/delivery timer fails the
+# test instead of hanging CI forever) for the drive.zip_placements row
+# to leave 'pending'/'processing', then confirms the finished archive
+# landed as a REAL drive.files row inside the user's Archives folder --
+# not via a per-job status/download route any more (there isn't one --
+# see App.pm's create_zip_job/_claim_and_deliver_zip_placement and
+# README.md's "Zip job route, and delivery into an Archives folder"
+# section) -- and downloads it via the ordinary /api/v1/files/:id route
+# every other file already uses. Returns a real, already-`read()`
 # Archive::Zip object -- shared by both zip scenarios below.
 sub run_zip_job_and_fetch_archive {
     my ($body) = @_;
-    $t->post_ok('/zip-jobs' => json => $body)->status_is(201)->json_has('/id')->json_is('/state', 'pending');
-    my $job_id = $t->tx->res->json('/id');
+    $t->post_ok('/zip-jobs' => json => $body)->status_is(201)->json_has('/id')->json_has('/output_name');
+    my $job_id      = $t->tx->res->json('/id');
+    my $output_name = $t->tx->res->json('/output_name');
     ok($job_id, 'homelab-worker returned a real job id');
+    is($t->tx->res->json('/dest_path'), "Archives/$output_name",
+        'the response names the real Archives destination immediately, with no status to poll');
 
-    my $job;
+    my $placement;
     for (1 .. 30) {
-        $t->get_ok("/zip-jobs/$job_id")->status_is(200);
-        $job = $t->tx->res->json;
-        last if $job->{state} eq 'completed' || $job->{state} eq 'failed';
+        $placement = $t->app->pg->db->query(
+            'SELECT state, error_message FROM drive.zip_placements WHERE job_id = ?', $job_id,
+        )->hash;
+        last if $placement && $placement->{state} =~ /^(completed|failed)$/;
         sleep 1;
     }
-    is($job->{state}, 'completed', 'the zip job reached a real completed state via homelab-worker\'s own timer')
-        or diag("job ended in state '$job->{state}': " . ($job->{error_message} // ''));
+    is($placement->{state}, 'completed', 'the zip placement reached a real completed state via the delivery timer')
+        or diag("placement ended in state '$placement->{state}': " . ($placement->{error_message} // ''));
 
-    $t->get_ok("/zip-jobs/$job_id/download")->status_is(200);
+    my $file = $t->app->pg->db->query(
+        q{SELECT f.id, f.mime_type FROM drive.files f
+          JOIN drive.folders fo ON fo.id = f.folder_id
+          WHERE f.user_email = ? AND fo.name = 'Archives' AND fo.parent_folder_id IS NULL AND f.filename = ?},
+        $email, $output_name,
+    )->hash;
+    ok($file, 'the finished zip landed as a real drive.files row inside Archives');
+    is($file->{mime_type}, 'application/zip', 'stored with the correct mime type');
+
+    $t->get_ok("/api/v1/files/$file->{id}")->status_is(200);
     my $zip_bytes = $t->tx->res->body;
     ok(length($zip_bytes) > 0, 'downloaded a non-empty archive');
 
@@ -143,7 +162,7 @@ sub run_zip_job_and_fetch_archive {
 
     my $zip = Archive::Zip->new;
     is($zip->read($zip_path), AZ_OK, 'the downloaded bytes are a real, readable zip archive');
-    return ($zip, $job_id);
+    return ($zip, $file->{id});
 }
 
 # --- Nothing selected -> a clean 400, not a pointless empty job ---
@@ -164,8 +183,12 @@ my $img_id         = upload_text("jpgbytes $$\n", 'img.jpg', $photos2024_id);
     my $tx = $ua->post("$api_base/api/v1/auth/login", json => { email => $other_email, password => $other_password });
     my $other_jwt = $tx->result->json('/token');
 
-    my ($zip, $job_id) = run_zip_job_and_fetch_archive({ file_ids => [$img_id], folder_ids => [$photos_id] });
-    $t->get_ok("/zip-jobs/$job_id" => { Authorization => "Bearer $other_jwt" })->status_is(404);
+    my ($zip, $file_id) = run_zip_job_and_fetch_archive({ file_ids => [$img_id], folder_ids => [$photos_id] });
+    # The finished zip is now a completely ordinary drive.files row --
+    # already-covered ownership rules on /api/v1/files/:id apply to it
+    # exactly like any other file, no special-cased zip-job visibility
+    # logic left to test here.
+    $t->get_ok("/api/v1/files/$file_id" => { Authorization => "Bearer $other_jwt" })->status_is(404);
 
     my @names = sort map { $_->fileName } $zip->members;
     is_deeply(\@names, ['Photos/2024/img.jpg'],
@@ -203,6 +226,91 @@ my $dup_b_id = upload_text($content_b, 'dup.txt', $folder_b_id);
     my %by_content = map { $contents{$_} => $_ } keys %contents;
     ok((exists $by_content{$content_a} && exists $by_content{$content_b}),
         'both real, distinct files are present under their (possibly renamed) paths -- not the same file archived twice');
+}
+
+# --- Archives folder find-or-create is idempotent: both real zip jobs
+# above landed their output in the SAME folder, not one each. ---
+{
+    my $archives = $t->app->pg->db->query(
+        q{SELECT count(*) AS n FROM drive.folders WHERE user_email = ? AND parent_folder_id IS NULL AND name = 'Archives'},
+        $email,
+    )->hash;
+    is($archives->{n}, 1, 'exactly one root-level Archives folder exists for this account after two zip jobs');
+}
+
+# =====================================================================
+# Delivery failure paths (drive.zip_placements state machine)
+# =====================================================================
+
+# --- A job that genuinely fails to build on homelab-worker's side ---
+# fails the placement immediately, and never produces a drive.files
+# row. Forced by deleting the only selected file out from under a job
+# that was JUST submitted -- homelab-worker's own claim timer ticks
+# every 5s and hasn't had a real chance to start fetching it yet, so
+# the worker's fetch back to this app's own /api/v1/files/:id 404s and
+# JobType::Zip::run() dies, same as any other genuinely broken fetch
+# would (see ../../worker/lib/Homelab/Worker/JobType/Zip.pm). This is a
+# real race, not a mock -- deliberately, per this project's "no faking
+# the dependency away" testing convention (see this file's own opening
+# comment) -- but a comfortably safe one given both timers' 5s cadence.
+{
+    my $doomed_id = upload_text("doomed $$\n", 'doomed.txt');
+    $t->post_ok('/zip-jobs' => json => { file_ids => [$doomed_id], folder_ids => [] })->status_is(201);
+    my $job_id      = $t->tx->res->json('/id');
+    my $output_name = $t->tx->res->json('/output_name');
+    $t->delete_ok("/api/v1/files/$doomed_id")->status_is(200);
+
+    my $placement;
+    for (1 .. 30) {
+        $placement = $t->app->pg->db->query(
+            'SELECT state, error_message FROM drive.zip_placements WHERE job_id = ?', $job_id,
+        )->hash;
+        last if $placement && $placement->{state} =~ /^(completed|failed)$/;
+        sleep 1;
+    }
+    is($placement->{state}, 'failed', 'a zip job that fails to build on homelab-worker fails the placement, not stuck pending forever')
+        or diag("placement ended in state '$placement->{state}'");
+    like($placement->{error_message}, qr/zip build failed/, 'the placement records the real build failure reason');
+
+    my $leaked = $t->app->pg->db->query(
+        'SELECT id FROM drive.files WHERE user_email = ? AND filename = ?', $email, $output_name,
+    )->hash;
+    ok(!$leaked, 'no drive.files row was created for a job that never actually produced an artifact');
+}
+
+# --- Delivery-side errors (not a job failure -- a placement that can
+# never be checked, e.g. the job_id doesn't exist) retry a bounded
+# number of times, then give up -- never stuck retrying forever.
+# Exercised by calling the delivery timer's own claim method directly
+# (bypassing the real 5s recurring timer) so this is fast and
+# deterministic rather than racing real wall-clock ticks. ---
+{
+    my $bogus_job_id = 999999999;
+    my $archives_id  = $t->app->pg->db->query(
+        q{SELECT id FROM drive.folders WHERE user_email = ? AND parent_folder_id IS NULL AND name = 'Archives'},
+        $email,
+    )->hash->{id};
+    # Pull the same JWT this whole test file has been auto-attaching
+    # (see the on(start => ...) hook near the top) straight off a live
+    # request, rather than re-deriving/duplicating it.
+    $t->get_ok('/api/v1/files')->status_is(200);
+    my $real_jwt = $t->tx->req->headers->authorization;
+    $real_jwt =~ s/^Bearer\s+//;
+
+    $t->app->pg->db->query(
+        q{INSERT INTO drive.zip_placements (job_id, user_email, jwt, dest_folder_id, output_name)
+          VALUES (?, ?, ?, ?, ?)},
+        $bogus_job_id, $email, $real_jwt, $archives_id, 'unreachable-job.zip',
+    );
+
+    for (1 .. 5) { $t->app->_claim_and_deliver_zip_placement }
+
+    my $placement = $t->app->pg->db->query(
+        'SELECT state, delivery_attempts, error_message FROM drive.zip_placements WHERE job_id = ?', $bogus_job_id,
+    )->hash;
+    is($placement->{state}, 'failed', 'a placement whose job can never be checked gives up instead of retrying forever');
+    is($placement->{delivery_attempts}, 5, 'gave up at exactly the documented 5-attempt cap');
+    like($placement->{error_message}, qr/homelab-cli jobs show/, 'the failure message points at the manual CLI fallback');
 }
 
 done_testing;
