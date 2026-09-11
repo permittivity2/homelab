@@ -1,0 +1,102 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/worker
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-worker
+
+case "$1" in
+    configure)
+        echo "homelab-worker post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-worker/db_host || true;        DB_HOST="${RET:-localhost}"
+            db_get homelab-worker/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-worker/api_base || true;       API_BASE="${RET:-http://localhost:3000}"
+            db_get homelab-worker/listen_port || true;    LISTEN_PORT="${RET:-2512}"
+            db_get homelab-worker/storage_path || true;   STORAGE_PATH="${RET:-/var/lib/homelab/worker-storage}"
+
+            echo "  bootstrapping Postgres roles for 'homelab_worker' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_worker --schema worker --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success — see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-worker' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
+
+            sed \
+                -e "s#https://api\.test\.mailmasker\.org#$API_BASE#g" \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_worker_runtime#$RUNTIME_ROLE#g" \
+                -e "s#YOUR_POSTGRES_HOST#$DB_HOST#g" \
+                -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
+                -e "s#homelab_worker_migrate#$MIGRATE_ROLE#g" \
+                -e "s#/var/lib/homelab/worker-storage#$STORAGE_PATH#g" \
+                -e "s#\"http://127\.0\.0\.1:2512\"#\"http://127.0.0.1:$LISTEN_PORT\"#g" \
+                -e "s#  port: 2512#  port: $LISTEN_PORT#g" \
+                "$SHARE_DIR/config/worker.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+            echo "  (dpkg-reconfigure homelab-worker to redo the prompts)"
+        fi
+
+        STORAGE_DIR="$(sed -n 's/^storage_path: //p' "$CONFIG_FILE")"
+        if [ -n "$STORAGE_DIR" ]; then
+            mkdir -p "$STORAGE_DIR"
+            chown homelab:homelab "$STORAGE_DIR"
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_WORKER_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
+            HOMELAB_WORKER_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-worker-migrate
+
+        systemctl enable homelab-worker >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-worker; then
+            systemctl restart homelab-worker || echo "WARNING: homelab-worker restart failed -- check 'systemctl status homelab-worker' by hand."
+        else
+            systemctl start homelab-worker || echo "WARNING: homelab-worker failed to start -- check 'systemctl status homelab-worker' by hand."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-worker configured."
+        echo "config: $CONFIG_FILE"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

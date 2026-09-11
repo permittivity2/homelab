@@ -1,0 +1,31 @@
+Source: homelab-worker
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-worker
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common,
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         libarchive-zip-perl,
+         adduser,
+         sudo
+Recommends: homelab-api
+Description: Centralized background-job engine for the homelab-* ecosystem
+ Executes long-running work submitted by any other homelab-* feature over
+ HTTP, fronted by homelab-api's /api/v1/jobs/* gateway route the same way
+ homelab-mailbridge backs /api/v1/mail/*. Zip-building is the first job
+ type; the engine itself is generic (a small Perl module-per-type
+ interface, see README.md) so future types -- SHA1 hashing, image
+ resizing, video transcoding, full-account bundling -- are additive, not
+ a rewrite. Deliberately host-independent: output artifacts live on this
+ host's own disk, never assumed to share a filesystem with whatever
+ feature submitted the job. Job state lives entirely in Postgres, so a
+ crash or restart at any point recovers cleanly via an automatic
+ stale-job reclaim sweep, not in-process memory.

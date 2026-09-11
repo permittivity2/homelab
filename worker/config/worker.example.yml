@@ -1,0 +1,56 @@
+# Homelab Worker Configuration
+#
+# Centralized, host-independent background-job engine for the homelab-*
+# ecosystem -- executes long-running work (zip-building today; future job
+# types register the same way, see README.md) submitted by any other
+# feature over HTTP, fronted by homelab-api's /api/v1/jobs/* gateway
+# route the same way homelab-mailbridge backs /api/v1/mail/*. Never
+# assumes co-location with whatever submitted a job -- output artifacts
+# live on THIS host's own disk; callers fetch them back over HTTP via the
+# download route, never a shared filesystem path.
+
+homelab_api:
+  base_url: https://api.test.mailmasker.org
+
+# RUNTIME connection -- CRUD only, no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_worker_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection -- direct to Postgres, bypassing pgbouncer. Only
+# used by homelab-worker-migrate at install/upgrade time.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_worker_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+# Where finished job artifacts are written, at storage_path/<output_uuid>.
+# Owned by the `homelab` service user. Deliberately never assumed to be
+# the same path (or even the same host) as any caller's own storage --
+# see README.md's "the auth hand-off" section for how a caller like
+# homelab-drive gets bytes IN, and the download route for how it gets
+# the finished artifact back OUT.
+storage_path: /var/lib/homelab/worker-storage
+
+jobs:
+  retention_hours: 24        # how long a finished job/artifact stays before cleanup
+  job_timeout_minutes: 30    # a 'running' job idle longer than this is presumed crashed
+  max_attempts: 3            # give up (state -> failed) after this many reclaim cycles
+  max_concurrent_jobs: auto  # integer, or 'auto' = floor(cpu_cores * 2 * 0.8) via `nproc`
+
+# What this instance announces itself as in homelab-api's service
+# registry -- host/port only, deliberately no public_base_url: nothing
+# external ever connects to this directly.
+registry:
+  host: 127.0.0.1
+  port: 2512
+
+server:
+  listen: "http://127.0.0.1:2512"
+  workers: 2
+  pid_file: /var/lib/homelab/worker-hypnotoad.pid

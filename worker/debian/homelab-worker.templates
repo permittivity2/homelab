@@ -1,0 +1,31 @@
+Template: homelab-worker/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-worker/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
+Template: homelab-worker/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url — every request this
+ app handles is authenticated by introspecting the caller's JWT here.
+
+Template: homelab-worker/listen_port
+Type: string
+Default: 2512
+Description: Port for homelab-worker to listen on:
+
+Template: homelab-worker/storage_path
+Type: string
+Default: /var/lib/homelab/worker-storage
+Description: Directory to store finished job artifacts in:
+ Owned by the homelab service user. Written into config.yml's
+ storage_path — see README.md.

@@ -1,0 +1,11 @@
+homelab-worker (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 08:02:23 -0500
+
+homelab-worker (0.0.0) unstable; urgency=medium
+
+  * Placeholder seed entry — build-package.sh prepends real entries above this.
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 00:00:00 -0500
