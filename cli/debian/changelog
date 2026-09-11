@@ -1,3 +1,15 @@
+homelab-cli (0.3.13) unstable; urgency=medium
+
+  * Release v0.3.13
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 13:22:32 -0500
+
+homelab-cli (0.3.13) unstable; urgency=medium
+
+  * Transparent JWT refresh-on-401 retry; man-page/README updates
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 13:22:26 -0500
+
 homelab-cli (0.3.12) unstable; urgency=medium
 
   * Release v0.3.12

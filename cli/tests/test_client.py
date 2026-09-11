@@ -229,9 +229,14 @@ def test_admin_revoke_role_builds_correct_path():
 # Client, same base URL as everything else above (no more separate
 # DriveClient/drive_base: see ../README.md). Most of these go through
 # the same requests.request-based _request() helper as the rest of
-# Client, so _mock_response works for them too; drive_download_file is
-# the one exception (streamed via a raw requests.get call, same as
-# before), so it still needs _mock_get_response. ---
+# Client, so _mock_response works for them too; drive_download_file (and
+# jobs_download, below) are streamed via Client._send() directly instead
+# of _request() (no JSON body to parse), but that's still
+# requests.request under the hood (not a separate requests.get call) so
+# they get the same transparent refresh-on-401 retry as everything
+# else -- _mock_get_response exists only because these need
+# iter_content on the mock response, not because they're a different
+# HTTP call path. ---
 
 def _mock_get_response(status_code, json_body=None, content=b""):
     resp = Mock()
@@ -270,10 +275,11 @@ def test_drive_upload_file_sends_multipart(client):
 
 
 def test_drive_download_file_writes_content(client):
-    with patch("requests.get", return_value=_mock_get_response(200, content=b"hello world")):
+    with patch("requests.request", return_value=_mock_get_response(200, content=b"hello world")) as m:
         m_open = mock_open()
         with patch("builtins.open", m_open):
             client.drive_download_file("the-jwt", 7, "/tmp/out.txt")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/drive/files/7")
     m_open.assert_called_once_with("/tmp/out.txt", "wb")
     m_open().write.assert_called_with(b"hello world")
 
@@ -441,11 +447,11 @@ def test_jobs_get_not_found_raises_api_error(client):
 
 
 def test_jobs_download_writes_content(client):
-    with patch("requests.get", return_value=_mock_get_response(200, content=b"zip bytes")) as m:
+    with patch("requests.request", return_value=_mock_get_response(200, content=b"zip bytes")) as m:
         m_open = mock_open()
         with patch("builtins.open", m_open):
             client.jobs_download("the-jwt", 7, "/tmp/out.zip")
-    assert m.call_args.args[0] == "http://localhost:3000/api/v1/jobs/7/download"
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/jobs/7/download")
     assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer the-jwt"
     m_open.assert_called_once_with("/tmp/out.zip", "wb")
     m_open().write.assert_called_with(b"zip bytes")
@@ -457,7 +463,86 @@ def test_jobs_download_not_ready_raises_api_error(client):
     non-ok response, not silently written as a truncated/empty file."""
     resp = _mock_get_response(409, json_body={"error": "job is not finished (state: running)"})
     resp.ok = False
-    with patch("requests.get", return_value=resp):
+    with patch("requests.request", return_value=resp):
         with pytest.raises(ApiError) as exc_info:
             client.jobs_download("the-jwt", 7, "/tmp/out.zip")
     assert exc_info.value.status_code == 409
+
+
+# --- Transparent refresh-on-401 (Client._send) -- what lets a
+# homelab-cli session outlive a single ~30-minute JWT without the user
+# re-running `login`. See client.py's own comments on _send/_try_refresh
+# for the exact contract; these tests are the executable version of it. ---
+
+def test_expired_token_triggers_one_refresh_then_succeeds(client):
+    client.refresh_token = "old-refresh"
+    responses = [
+        _mock_response(401, {"error": "token expired"}),                              # original call, stale JWT
+        _mock_response(200, {"token": "new-jwt", "refresh_token": "new-refresh"}),     # POST /auth/refresh
+        _mock_response(200, [{"id": 1, "domain_name": "forge.name"}]),                 # retried original call
+    ]
+    with patch("requests.request", side_effect=responses) as m:
+        result = client.dns_list_domains("stale-jwt")
+
+    assert result == [{"id": 1, "domain_name": "forge.name"}]
+    assert m.call_count == 3
+    assert m.call_args_list[1].args[:2] == ("POST", "http://localhost:3000/api/v1/auth/refresh")
+    assert m.call_args_list[1].kwargs["json"] == {"refresh_token": "old-refresh"}
+    # The retried call must use the NEW token, not the original stale one.
+    assert m.call_args_list[2].kwargs["headers"]["Authorization"] == "Bearer new-jwt"
+    # The rotated refresh_token is retained for any future refresh.
+    assert client.refresh_token == "new-refresh"
+
+
+def test_on_token_refreshed_callback_fires_with_new_tokens(client):
+    seen = []
+    client.refresh_token = "old-refresh"
+    client.on_token_refreshed = lambda t, rt: seen.append((t, rt))
+    responses = [
+        _mock_response(401, {"error": "token expired"}),
+        _mock_response(200, {"token": "new-jwt", "refresh_token": "new-refresh"}),
+        _mock_response(200, []),
+    ]
+    with patch("requests.request", side_effect=responses):
+        client.dns_list_domains("stale-jwt")
+    assert seen == [("new-jwt", "new-refresh")]
+
+
+def test_refresh_token_itself_invalid_raises_clear_session_expired_error_no_loop(client):
+    client.refresh_token = "also-expired"
+    responses = [
+        _mock_response(401, {"error": "token expired"}),                     # original call
+        _mock_response(401, {"error": "invalid or expired refresh_token"}),  # refresh attempt also fails
+    ]
+    with patch("requests.request", side_effect=responses) as m:
+        with pytest.raises(ApiError) as exc_info:
+            client.dns_list_domains("stale-jwt")
+
+    assert m.call_count == 2, "must not retry the refresh itself, and must not retry the original call again"
+    assert exc_info.value.status_code == 401
+    assert "session expired" in exc_info.value.message
+    assert "login" in exc_info.value.message
+
+
+def test_401_with_no_refresh_token_raises_immediately_unchanged(client):
+    """No refresh_token on hand (e.g. never logged in) must behave
+    exactly like before this feature existed -- no refresh attempted."""
+    assert client.refresh_token is None
+    with patch("requests.request", return_value=_mock_response(401, {"error": "not logged in"})) as m:
+        with pytest.raises(ApiError) as exc_info:
+            client.dns_list_domains("whatever")
+    assert m.call_count == 1
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.message == "not logged in"
+
+
+def test_401_on_an_unauthenticated_call_never_attempts_refresh(client):
+    """login()/register() carry no Authorization header at all -- a 401
+    from a bad password must never be mistaken for an expired-JWT
+    situation, even if a refresh_token happens to be set."""
+    client.refresh_token = "some-refresh"
+    with patch("requests.request", return_value=_mock_response(401, {"error": "invalid email or password"})) as m:
+        with pytest.raises(ApiError) as exc_info:
+            client.login("a@b.com", "wrong")
+    assert m.call_count == 1
+    assert exc_info.value.message == "invalid email or password"

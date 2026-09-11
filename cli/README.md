@@ -44,6 +44,21 @@ config, same trust model as `gh`/`aws`/`kubectl`" reasoning as
 `../api/README.md`'s "Two different clients, two different trust
 models" section.
 
+The JWT itself is short-lived (`jwt.expiry_seconds` in `homelab-api`'s
+own config, 30 minutes by default) but this is invisible in normal use:
+`Client` (`homelab_cli/client.py`) transparently catches a 401 on any
+authenticated call, spends the `refresh_token` for a new one, retries
+the same request once, and writes the refreshed pair back to
+`session.yml` — a long-running session (or just a command run a while
+after the last one) keeps working without ever needing an explicit
+`homelab-cli login` again, up to the refresh token's own 30-day
+lifetime. `/api/v1/auth/refresh` rotates the refresh token on every
+use, so the one on disk is always the current one, never reused stale.
+If the refresh token itself has expired or been revoked (e.g. via
+`logout` elsewhere), that one retry fails closed with a clear "session
+expired -- run `homelab-cli login` again" instead of a confusing raw
+401.
+
 ## Email (`mail`)
 
 ```bash

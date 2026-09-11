@@ -22,7 +22,31 @@ KNOWN_ROLES = ["user", "site_admin"]
 
 
 def _client():
-    return Client(cfgmod.load_config()["api_base"])
+    # Wires up transparent refresh-on-401 (see Client._send in
+    # client.py): if the session's JWT has expired mid-command, the
+    # Client retries once using this refresh_token and persists whatever
+    # it gets back via on_token_refreshed -- so a command started right
+    # before a 30-minute JWT expiry still succeeds instead of failing
+    # with "not logged in". `session` here is a fresh, separate load from
+    # whatever the calling cmd_* function itself loaded (each cmd_*
+    # still reads its own session["token"] the same way it always has,
+    # per this fix's design -- touching none of those call sites); the
+    # only thing this closure needs from it is the refresh_token and a
+    # place to write an updated one back to disk. No session at all
+    # (never logged in) means refresh_token=None, which makes
+    # Client._send's retry branch a no-op -- unchanged prior behavior.
+    session = cfgmod.load_session() or {}
+
+    def _on_token_refreshed(new_token, new_refresh_token):
+        session["token"] = new_token
+        session["refresh_token"] = new_refresh_token
+        cfgmod.save_session(session)
+
+    return Client(
+        cfgmod.load_config()["api_base"],
+        refresh_token=session.get("refresh_token"),
+        on_token_refreshed=_on_token_refreshed,
+    )
 
 
 # SPF's real qualifier characters, keyed by the friendly --all value --

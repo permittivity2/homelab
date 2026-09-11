@@ -17,16 +17,79 @@ class ApiError(Exception):
 
 
 class Client:
-    def __init__(self, api_base, timeout=10):
+    # refresh_token/on_token_refreshed are both optional so a Client used
+    # only for register/login (no session yet) behaves exactly as before
+    # -- a 401 with no refresh_token on hand just raises immediately, the
+    # same as prior to this refresh support existing at all.
+    def __init__(self, api_base, timeout=10, refresh_token=None, on_token_refreshed=None):
         self.api_base = api_base.rstrip("/")
         self.timeout = timeout
+        self.refresh_token = refresh_token
+        self.on_token_refreshed = on_token_refreshed
 
-    def _request(self, method, path, timeout=None, **kwargs):
+    # Sends one HTTP request. If the server says 401 for a call that
+    # actually carried a Bearer Authorization header (i.e. this wasn't
+    # already an unauthenticated call like login/register) AND we hold a
+    # refresh_token, transparently refresh once and retry the SAME
+    # request with the new token -- this is what lets a homelab-cli
+    # session outlive a single 30-minute JWT without the user noticing.
+    # The refresh call itself (self.refresh(), invoked from
+    # _try_refresh() below) never carries an Authorization header, so it
+    # can never recursively trigger this same branch -- no separate
+    # reentrancy guard needed. Returns the raw requests.Response so both
+    # _request() (JSON calls) and the streaming download methods below
+    # can share this retry behavior instead of each reimplementing it.
+    def _send(self, method, path, timeout=None, **kwargs):
         try:
             resp = requests.request(method, f"{self.api_base}{path}", timeout=timeout or self.timeout, **kwargs)
         except requests.exceptions.RequestException as e:
             raise ApiError(0, str(e)) from e
 
+        if resp.status_code == 401 and self.refresh_token:
+            headers = kwargs.get("headers") or {}
+            if headers.get("Authorization", "").startswith("Bearer "):
+                new_token = self._try_refresh()
+                if new_token is None:
+                    # The refresh_token itself is also invalid/expired/
+                    # revoked -- surface a clear, actionable message
+                    # instead of whatever the original stale-JWT 401 said
+                    # (typically a generic "invalid token").
+                    raise ApiError(401, "session expired -- run 'homelab-cli login' again")
+                headers = dict(headers)
+                headers["Authorization"] = f"Bearer {new_token}"
+                kwargs = dict(kwargs, headers=headers)
+                try:
+                    resp = requests.request(method, f"{self.api_base}{path}", timeout=timeout or self.timeout, **kwargs)
+                except requests.exceptions.RequestException as e:
+                    raise ApiError(0, str(e)) from e
+        return resp
+
+    # Exactly one refresh attempt -- never loops. Returns the new access
+    # token on success, or None on any failure (network error, or the
+    # refresh_token itself being invalid/expired/revoked), so _send()
+    # can fall through to a clear error instead of retrying forever.
+    def _try_refresh(self):
+        try:
+            result = self.refresh(self.refresh_token)
+        except ApiError:
+            return None
+        new_token = result.get("token")
+        new_refresh_token = result.get("refresh_token")
+        if not new_token:
+            return None
+        # /auth/refresh rotates the refresh_token on every use (see
+        # api/lib/Homelab/API/App.pm's _refresh -- the old one is
+        # revoked server-side the instant this response is issued), so
+        # the OLD self.refresh_token must never be reused again even if
+        # the caller somehow declined to persist the new one.
+        if new_refresh_token:
+            self.refresh_token = new_refresh_token
+        if self.on_token_refreshed:
+            self.on_token_refreshed(new_token, self.refresh_token)
+        return new_token
+
+    def _request(self, method, path, timeout=None, **kwargs):
+        resp = self._send(method, path, timeout=timeout, **kwargs)
         try:
             body = resp.json()
         except ValueError:
@@ -90,13 +153,10 @@ class Client:
             )
 
     def drive_download_file(self, token, file_id, dest_path):
-        try:
-            resp = requests.get(
-                f"{self.api_base}/api/v1/drive/files/{file_id}", headers=self._auth(token),
-                timeout=60, stream=True,
-            )
-        except requests.exceptions.RequestException as e:
-            raise ApiError(0, str(e)) from e
+        resp = self._send(
+            "GET", f"/api/v1/drive/files/{file_id}", headers=self._auth(token),
+            timeout=60, stream=True,
+        )
         if not resp.ok:
             raise ApiError(resp.status_code, _error_message(resp))
         with open(dest_path, "wb") as f:
@@ -248,13 +308,10 @@ class Client:
         return self._request("GET", f"/api/v1/jobs/{job_id}", headers=self._auth(token))
 
     def jobs_download(self, token, job_id, dest_path):
-        try:
-            resp = requests.get(
-                f"{self.api_base}/api/v1/jobs/{job_id}/download", headers=self._auth(token),
-                timeout=60, stream=True,
-            )
-        except requests.exceptions.RequestException as e:
-            raise ApiError(0, str(e)) from e
+        resp = self._send(
+            "GET", f"/api/v1/jobs/{job_id}/download", headers=self._auth(token),
+            timeout=60, stream=True,
+        )
         if not resp.ok:
             raise ApiError(resp.status_code, _error_message(resp))
         with open(dest_path, "wb") as f:
