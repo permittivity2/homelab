@@ -101,6 +101,36 @@ def mail_account(ssh_host):
     return email, password
 
 
+def test_second_domain_recipient_accepted(ssh_host):
+    """Phase 3 (multi-domain support) regression test: virtual_mailbox_domains
+    is now a live lookup against homelab-domain-admin's domainadmin.domains
+    table, not a single hardcoded value -- test.forge.name (added via
+    `homelab-cli dns domains add`, see domain-admin's own tests/README)
+    must be accepted as a real mail domain by Postfix, exactly like the
+    original test.mailmasker.org still is, with zero code specific to
+    either domain name. A real account on the second domain is the only
+    way to prove the live lookup, not just the static fallback, is
+    actually what is answering."""
+    email = f"e2e-postfix-domain2-{int(time.time())}@test.forge.name"
+    password = "E2ePostfixDomain2Test1Aa"
+    result = subprocess.run(
+        ["ssh", ssh_host, "homelab-cli", "register", email, "--password", password],
+        capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, f"second-domain test account registration failed: {result.stderr}"
+
+    with _tunnel(ssh_host, LOCAL_SMTP_PORT, 25) as port:
+        s = smtplib.SMTP("127.0.0.1", port, timeout=10)
+        try:
+            s.ehlo("e2e-test-client")
+            s.mail("e2e-sender@example.com")
+            code, msg = s.rcpt(email)
+            assert code == 250, f"a real, active recipient on the second mail domain was rejected: {code} {msg}"
+        finally:
+            with contextlib.suppress(Exception):
+                s.quit()
+
+
 def test_valid_recipient_accepted(ssh_host, mail_account):
     email, _ = mail_account
     with _tunnel(ssh_host, LOCAL_SMTP_PORT, 25) as port:

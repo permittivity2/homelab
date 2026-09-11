@@ -56,6 +56,56 @@ a directory that doesn't exist yet. `debian/postinst` does exactly this
 sequence (start Postfix → write the Dovecot drop-in → reload Dovecot →
 add the submission service → reload Postfix again).
 
+## Multi-domain support
+
+`virtual_mailbox_domains` is no longer a single hardcoded debconf
+value — it's a live `pgsql:` lookup (`config/pgsql-virtual-domains.cf.template`)
+against `homelab-domain-admin`'s own `domainadmin.domains` table
+(`SELECT 1 FROM domainadmin.domains WHERE domain_name='%s' AND
+mail_enabled = true AND active = true`), the same "live map, not a
+static value" shape `virtual_mailbox_maps` already used. `homelab-cli
+dns domains add/enable/disable` takes effect on this host without ever
+touching Postfix config directly.
+
+`script/homelab-postfix-bootstrap-role`'s single `homelab_postfix_runtime`
+role now carries a second, equally narrow, column-scoped cross-schema
+grant (`domain_name`, `mail_enabled`, `active` only) reaching into
+`homelab-domain-admin`'s schema instead of `homelab-api`'s — same
+credential, same password, one more read-only grant, added the same way
+the original `api.users` grant was. `domainadmin.recipient_access` is
+also granted here (used starting Phase 4's recipient allow/block, not
+yet wired into `main.cf`).
+
+**Rollout safety, for a host with mail already flowing for its
+originally-configured domain**: `postinst` never flips
+`virtual_mailbox_domains` over blindly.
+1. It seeds that domain into `domainadmin.domains` first (idempotent
+   `INSERT ... ON CONFLICT DO NOTHING`) — never baked into a migration
+   file, which would wrongly hardcode one installation's domain into
+   every future install of `homelab-domain-admin`.
+2. It then probes the live map with `postmap -q` for that exact domain
+   (reusing the same probe idiom already used for the stale-pgbouncer
+   check above) and only flips `virtual_mailbox_domains` over if the
+   probe actually returns `1`. If it doesn't — `homelab-domain-admin`
+   not installed yet, not migrated, or the new grants haven't been
+   applied — it warns and leaves the static value in place. Mail flow
+   is never interrupted by this upgrade path; a failed probe just means
+   the multi-domain feature isn't active yet until re-run via
+   `dpkg-reconfigure homelab-postfix`.
+
+**Real bug hit standing this up**: on a host where
+`homelab_postfix_runtime` was already bootstrapped by an earlier
+package version (the common case — `postinst`'s bootstrap block is
+gated on the map file not existing, so it never re-runs on an upgrade),
+the two new grants above are never actually applied to the
+already-existing role — only a genuinely fresh bootstrap picks up the
+updated `build_sql()`. The probe step exists precisely to catch this
+class of problem (it failed with `permission denied for schema
+domainadmin` until the grants were applied by hand once, matching
+exactly what the updated script now generates) rather than silently
+leaving `virtual_mailbox_domains` on a lookup that would 500 every
+`RCPT TO`.
+
 ## `master.cf`'s submission service
 
 Postfix ships `master.cf` with the submission (587) and submissions

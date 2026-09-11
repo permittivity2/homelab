@@ -1,0 +1,13 @@
+# Managed by homelab-postfix -- do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-postfix). Replaces the previous
+# single hardcoded virtual_mailbox_domains debconf value -- now a live
+# lookup against homelab-domain-admin's own domainadmin.domains table,
+# so `homelab-cli dns domains add/enable/disable` takes effect on this
+# host without ever touching Postfix config directly. See
+# ../../domain-admin/README.md and this package's own README.md
+# "Multi-domain support" section.
+hosts = __DB_HOST__:__DB_PORT__
+user = __DB_USER__
+password = __DB_PASS__
+dbname = __DB_NAME__
+query = SELECT 1 FROM domainadmin.domains WHERE domain_name='%s' AND mail_enabled = true AND active = true

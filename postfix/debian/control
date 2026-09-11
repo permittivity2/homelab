@@ -32,3 +32,12 @@ Description: SMTP submission/relay wired to the homelab-* shared identity
  recommendation: SASL authentication and all mail delivery both fail
  without it (the SASL socket and the LMTP listener it delivers to are
  both provided by homelab-dovecot).
+ .
+ virtual_mailbox_domains is a live pgsql: lookup against
+ homelab-domain-admin's domainadmin.domains table, not a single
+ hardcoded domain -- `homelab-cli dns domains add/enable/disable` takes
+ effect here without ever touching this host's Postfix config. Not a
+ hard Depends on homelab-domain-admin (this package still installs and
+ serves its originally-configured domain fine on its own); see
+ README.md's "Multi-domain support" section for the rollout-safety
+ mechanics if it isn't installed yet at upgrade time.

@@ -7,6 +7,8 @@ override_dh_install:
 	dh_install
 	install -D -m 644 config/pgsql-virtual-mailbox.cf.template \
 		debian/homelab-postfix/usr/share/homelab-postfix/config/pgsql-virtual-mailbox.cf.template
+	install -D -m 644 config/pgsql-virtual-domains.cf.template \
+		debian/homelab-postfix/usr/share/homelab-postfix/config/pgsql-virtual-domains.cf.template
 	install -D -m 644 config/92-homelab-postfix-sasl.conf.template \
 		debian/homelab-postfix/usr/share/homelab-postfix/config/92-homelab-postfix-sasl.conf.template
 	install -D -m 644 config/master.cf.submission-stanza \

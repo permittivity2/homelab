@@ -131,6 +131,16 @@ END
 -- "is this a valid, active recipient" at RCPT TO time.
 GRANT USAGE ON SCHEMA api TO "$ROLE";
 GRANT SELECT (email, active) ON api.users TO "$ROLE";
+
+-- Second cross-schema grant, same discipline: column-scoped, read-only,
+-- reaching into homelab-domain-admin's schema instead of homelab-api's.
+-- Backs the live virtual_mailbox_domains lookup (see
+-- config/pgsql-virtual-domains.cf.template) -- postfix only needs to
+-- know whether a domain is currently a valid, active mail domain, never
+-- anything about DNS/DKIM state.
+GRANT USAGE ON SCHEMA domainadmin TO "$ROLE";
+GRANT SELECT (domain_name, mail_enabled, active) ON domainadmin.domains TO "$ROLE";
+GRANT SELECT ON domainadmin.recipient_access TO "$ROLE";
 SQL
 }
 
@@ -180,6 +190,16 @@ sub check_api_users_exists {
     return defined $out && length $out;
 }
 
+# Same ordering-dependency check as check_api_users_exists, for the
+# second cross-schema grant added above -- homelab-domain-admin must be
+# installed/migrated (and its own schema created) before this script's
+# grant onto domainadmin.domains can succeed.
+sub check_domainadmin_domains_exists {
+    my (@cmd) = @_;
+    my $out = run_query_stdin_local_or_remote(q{SELECT to_regclass('domainadmin.domains')}, @cmd);
+    return defined $out && length $out;
+}
+
 sub fetch_scram_secret {
     my (@cmd) = @_;
     my $query = sprintf(q{SELECT rolpassword FROM pg_authid WHERE rolname = '%s'}, sql_escape($ROLE));
@@ -191,6 +211,9 @@ sub run_local {
     my @psql_prefix = ('sudo', '-u', 'postgres', 'psql');
     unless (check_api_users_exists(@psql_prefix, '-d', $DB, '-X', '-tA')) {
         die_msg("api.users does not exist on $DB_HOST yet -- install/migrate homelab-api there first");
+    }
+    unless (check_domainadmin_domains_exists(@psql_prefix, '-d', $DB, '-X', '-tA')) {
+        die_msg("domainadmin.domains does not exist on $DB_HOST yet -- install/migrate homelab-domain-admin there first");
     }
     log_msg("bootstrapping '$ROLE' locally (db-host is this host)");
     run_sql_local_or_remote(build_sql(%opts), @psql_prefix, '-q', '-d', $DB, '-X', '-v', 'ON_ERROR_STOP=1')
@@ -207,6 +230,9 @@ sub run_remote {
     my @remote_prefix = ('ssh', @SSH_OPTS, $DB_HOST);
     unless (check_api_users_exists(@remote_prefix, "sudo -u postgres psql -d $DB -X -tA")) {
         die_msg("api.users does not exist on $DB_HOST yet -- install/migrate homelab-api there first");
+    }
+    unless (check_domainadmin_domains_exists(@remote_prefix, "sudo -u postgres psql -d $DB -X -tA")) {
+        die_msg("domainadmin.domains does not exist on $DB_HOST yet -- install/migrate homelab-domain-admin there first");
     }
     log_msg("bootstrapping '$ROLE' on $DB_HOST via SSH");
     run_sql_local_or_remote(
@@ -232,10 +258,10 @@ sub run_manual {
     sudo -u postgres psql -d $DB -v ON_ERROR_STOP=1 -f $pending_file
   (copy $pending_file to $DB_HOST first if it isn't already there)
 
-  Note: if api.users doesn't exist there yet (homelab-api not installed/
-  migrated on that host), the GRANT statement in this file will fail with
-  a clear Postgres error -- install/migrate homelab-api first, then
-  re-run this script.
+  Note: if api.users or domainadmin.domains doesn't exist there yet
+  (homelab-api or homelab-domain-admin not installed/migrated on that
+  host), the GRANT statements in this file will fail with a clear
+  Postgres error -- install/migrate both first, then re-run this script.
 
 MSG
 

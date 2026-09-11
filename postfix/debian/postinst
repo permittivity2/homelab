@@ -5,6 +5,7 @@ set -e
 
 SHARE_DIR=/usr/share/homelab-postfix
 MAP_CF=/etc/postfix/pgsql-virtual-mailbox.cf
+DOMAINS_CF=/etc/postfix/pgsql-virtual-domains.cf
 DOVECOT_SASL_DROPIN=/etc/dovecot/conf.d/92-homelab-postfix-sasl.conf
 MASTER_CF=/etc/postfix/master.cf
 
@@ -89,6 +90,68 @@ case "$1" in
         else
             echo "  $MAP_CF already exists -- leaving it and the bootstrapped role untouched"
             echo "  (dpkg-reconfigure homelab-postfix to redo bootstrap, e.g. after a password rotation)"
+        fi
+
+        # --- Multi-domain support: live domainadmin.domains lookup ---
+        # replaces this package's original single hardcoded
+        # virtual_mailbox_domains value (still set above as the safe
+        # default) with a live pgsql: lookup, but only once seeded and
+        # verified -- see README.md's "Multi-domain support" section.
+        # A host with mail already flowing for $MAIL_DOMAIN must never
+        # have a window where the live lookup is consulted before it
+        # can answer correctly.
+
+        # Reuse whichever credential is already on disk for the
+        # existing recipient-validation map -- same role, same
+        # password, no new secret to mint or rotate. Works whether
+        # $MAP_CF was just freshly written above (a first install) or
+        # already existed from a prior install (an upgrade).
+        MAP_DB_USER="$(sed -n 's/^user = //p' "$MAP_CF" 2>/dev/null)"
+        MAP_DB_PASS="$(sed -n 's/^password = //p' "$MAP_CF" 2>/dev/null)"
+
+        if [ -f "$MAP_CF" ] && [ -n "$MAP_DB_USER" ] && [ ! -f "$DOMAINS_CF" ]; then
+            sed \
+                -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
+                -e "s#__DB_PORT__#6432#g" \
+                -e "s#__DB_NAME__#homelab#g" \
+                -e "s#__DB_USER__#$MAP_DB_USER#g" \
+                -e "s#__DB_PASS__#$MAP_DB_PASS#g" \
+                "$SHARE_DIR/config/pgsql-virtual-domains.cf.template" > "$DOMAINS_CF"
+            chmod 640 "$DOMAINS_CF"
+            chgrp postfix "$DOMAINS_CF" 2>/dev/null || true
+            echo "  wrote $DOMAINS_CF"
+        fi
+
+        if [ -f "$DOMAINS_CF" ]; then
+            # Seed the currently-configured domain as data (idempotent)
+            # BEFORE the live lookup is ever consulted -- never baked
+            # into a migration file, which would wrongly hardcode one
+            # installation's domain into every future install of
+            # homelab-domain-admin.
+            if command -v psql >/dev/null 2>&1 && sudo -u postgres psql -X -tA -d homelab -v ON_ERROR_STOP=1 -c \
+                "INSERT INTO domainadmin.domains (domain_name, mail_enabled, dns_managed, active) VALUES ('$MAIL_DOMAIN', true, true, true) ON CONFLICT (domain_name) DO NOTHING;" \
+                >/dev/null 2>&1
+            then
+                echo "  seeded '$MAIL_DOMAIN' into domainadmin.domains (idempotent -- a no-op if already present)"
+            else
+                echo "  WARNING: could not seed '$MAIL_DOMAIN' into domainadmin.domains directly (DB host not local, or homelab-domain-admin isn't migrated there yet)."
+                echo "           Run 'homelab-cli dns domains add $MAIL_DOMAIN' by hand once homelab-domain-admin is reachable, then re-run 'dpkg-reconfigure homelab-postfix'."
+            fi
+
+            # Never flip virtual_mailbox_domains onto the live lookup
+            # until it is actually proven to answer correctly for the
+            # domain currently being served -- fails toward "keep the
+            # already-working static value," never toward silently
+            # rejecting mail for an already-deployed domain.
+            DOMAIN_PROBE="$(postmap -q "$MAIL_DOMAIN" "pgsql:$DOMAINS_CF" 2>/dev/null || true)"
+            if [ "$DOMAIN_PROBE" = "1" ]; then
+                postconf -e "virtual_mailbox_domains = pgsql:$DOMAINS_CF"
+                echo "  virtual_mailbox_domains now backed by a live domainadmin.domains lookup"
+            else
+                echo "  WARNING: live domain lookup returned '$DOMAIN_PROBE' (expected '1') for '$MAIL_DOMAIN' -- NOT flipping virtual_mailbox_domains over to it."
+                echo "           Confirm homelab-domain-admin is installed, migrated, and has this domain seeded (mail_enabled, active), then re-run 'dpkg-reconfigure homelab-postfix'."
+                echo "           Leaving virtual_mailbox_domains at its static value ($MAIL_DOMAIN) -- mail flow is unaffected."
+            fi
         fi
 
         # Start postfix FIRST -- it creates /var/spool/postfix/private/,
@@ -176,11 +239,12 @@ case "$1" in
         db_stop
 
         echo ""
+        CURRENT_VMD="$(postconf -h virtual_mailbox_domains 2>/dev/null || echo "$MAIL_DOMAIN")"
         echo "homelab-postfix configured."
         echo "main.cf:          /etc/postfix/main.cf"
         echo "recipient map:    $MAP_CF"
         echo "submission (587): SASL via Dovecot, TLS required"
-        echo "smtp (25):        virtual_mailbox_domains=$MAIL_DOMAIN, LMTP to homelab-dovecot"
+        echo "smtp (25):        virtual_mailbox_domains=$CURRENT_VMD, LMTP to homelab-dovecot"
         echo ""
         ;;
 
