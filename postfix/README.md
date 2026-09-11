@@ -73,8 +73,7 @@ grant (`domain_name`, `mail_enabled`, `active` only) reaching into
 `homelab-domain-admin`'s schema instead of `homelab-api`'s — same
 credential, same password, one more read-only grant, added the same way
 the original `api.users` grant was. `domainadmin.recipient_access` is
-also granted here (used starting Phase 4's recipient allow/block, not
-yet wired into `main.cf`).
+also granted here, backing the recipient allow/block feature below.
 
 **Rollout safety, for a host with mail already flowing for its
 originally-configured domain**: `postinst` never flips
@@ -105,6 +104,38 @@ domainadmin` until the grants were applied by hand once, matching
 exactly what the updated script now generates) rather than silently
 leaving `virtual_mailbox_domains` on a lookup that would 500 every
 `RCPT TO`.
+
+## Recipient allow/block
+
+A live `pgsql:` lookup (`config/pgsql-recipient-access.cf.template`)
+against `homelab-domain-admin`'s `domainadmin.recipient_access` table
+backs Postfix's own `check_recipient_access` restriction — `SELECT
+action FROM domainadmin.recipient_access WHERE recipient='%s'`, where
+`action` is whatever Postfix verb was stored (`OK`, `REJECT`,
+`DISCARD`, `DEFER`, or a literal `"550 5.7.1 ..."` response — this
+package never duplicates Postfix's own vocabulary). `homelab-cli dns
+recipient-access block/allow/remove` takes effect immediately, no
+Postfix reload needed (same live-lookup shape as the domains table
+above).
+
+Wired into `smtpd_recipient_restrictions` via read-modify-append
+(`postinst` never clobbers a hand-added rule already there) — same
+provisioning-then-probe-then-flip file layout as the domains feature,
+reusing the same `homelab_postfix_runtime` credential. Positioned
+**first**, before `permit_mynetworks`/`permit_sasl_authenticated`, not
+merely before `reject_unauth_destination`: those two permit rules
+return an immediate, terminal `OK` for matching connections, which
+would otherwise let a mynetworks or SASL-authenticated sender skip
+`check_recipient_access` entirely — exactly the senders most likely to
+be trusted enough to reach a blocked recipient in the first place. An
+explicit `allow` entry is equally terminal in the other direction: it
+returns `OK` immediately, ahead of every other restriction, the same
+way an explicit allowlist is supposed to behave.
+
+Real, end-to-end tested (`tests/e2e/test_postfix_mail.py::test_recipient_access_block_then_allow`):
+block a real recipient, confirm RCPT TO is rejected (550/554); remove
+the block, confirm the same recipient is accepted again (250) — with
+zero code path specific to the recipient tested.
 
 ## `master.cf`'s submission service
 

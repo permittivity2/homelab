@@ -1,0 +1,13 @@
+# Managed by homelab-postfix -- do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-postfix). Backs Postfix's own
+# check_recipient_access restriction against a live lookup in
+# homelab-domain-admin's domainadmin.recipient_access table, so
+# `homelab-cli dns recipient-access block/allow/remove` takes effect on
+# this host without ever touching Postfix config directly. See
+# ../../domain-admin/README.md and this package's own README.md
+# "Recipient allow/block" section.
+hosts = __DB_HOST__:__DB_PORT__
+user = __DB_USER__
+password = __DB_PASS__
+dbname = __DB_NAME__
+query = SELECT action FROM domainadmin.recipient_access WHERE recipient='%s'

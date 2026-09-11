@@ -262,6 +262,63 @@ def cmd_dns_records_delete(args):
     return 0
 
 
+def cmd_dns_recipient_access_list(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        entries = _client().dns_list_recipient_access(session["token"])
+    except ApiError as e:
+        print(f"Could not list recipient-access entries: {e.message}", file=sys.stderr)
+        return 1
+    if not entries:
+        print("(no entries)")
+        return 0
+    for e in entries:
+        reason = f"  ({e['reason']})" if e.get("reason") else ""
+        print(f"{e['recipient']}  {e['action']}{reason}")
+    return 0
+
+
+def cmd_dns_recipient_access_block(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_set_recipient_access(session["token"], args.recipient, "REJECT", reason=args.reason)
+    except ApiError as e:
+        print(f"Could not block {args.recipient}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Blocked {args.recipient}")
+    return 0
+
+
+def cmd_dns_recipient_access_allow(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_set_recipient_access(session["token"], args.recipient, "OK", reason=args.reason)
+    except ApiError as e:
+        print(f"Could not allow {args.recipient}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Allowed {args.recipient}")
+    return 0
+
+
+def cmd_dns_recipient_access_remove(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().dns_delete_recipient_access(session["token"], args.recipient)
+    except ApiError as e:
+        print(f"Could not remove {args.recipient}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Removed {args.recipient}")
+    return 0
+
+
 # --- mail: homelab-api's /api/v1/mail/* gateway -> homelab-mailbridge
 # (see ../../mailbridge/README.md). No IMAP/SMTP client code here at
 # all any more -- just HTTP, same as every other command. ---------------
@@ -545,6 +602,26 @@ def build_parser():
     p.add_argument("--name", required=True)
     p.add_argument("--type", required=True)
     p.set_defaults(func=cmd_dns_records_delete)
+
+    ra = dns_sub.add_parser("recipient-access", help="Per-recipient mail allow/block")
+    ra_sub = ra.add_subparsers(dest="dns_recipient_access_command", required=True)
+
+    p = ra_sub.add_parser("list", help="List every allow/block override")
+    p.set_defaults(func=cmd_dns_recipient_access_list)
+
+    p = ra_sub.add_parser("block", help="Reject mail to this recipient at RCPT TO")
+    p.add_argument("recipient")
+    p.add_argument("--reason")
+    p.set_defaults(func=cmd_dns_recipient_access_block)
+
+    p = ra_sub.add_parser("allow", help="Explicitly allow this recipient (bypasses other restrictions)")
+    p.add_argument("recipient")
+    p.add_argument("--reason")
+    p.set_defaults(func=cmd_dns_recipient_access_allow)
+
+    p = ra_sub.add_parser("remove", help="Remove an override (revert to default behavior)")
+    p.add_argument("recipient")
+    p.set_defaults(func=cmd_dns_recipient_access_remove)
 
     mail = sub.add_parser("mail", help="Email, via homelab-api's mail gateway")
     mail_sub = mail.add_subparsers(dest="mail_command", required=True)

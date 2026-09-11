@@ -117,6 +117,31 @@ def test_dns_delete_record_builds_correct_request(client):
     assert m.call_args.kwargs["json"] == {"name": "example.org", "type": "A"}
 
 
+def test_dns_list_recipient_access_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.dns_list_recipient_access("t")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/domains/recipient-access")
+
+
+def test_dns_set_recipient_access_omits_reason_when_not_given(client):
+    with patch("requests.request", return_value=_mock_response(201, {"ok": True})) as m:
+        client.dns_set_recipient_access("t", "bad@example.org", "REJECT")
+    assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/domains/recipient-access")
+    assert m.call_args.kwargs["json"] == {"recipient": "bad@example.org", "action": "REJECT"}
+
+
+def test_dns_set_recipient_access_includes_reason_when_given(client):
+    with patch("requests.request", return_value=_mock_response(201, {"ok": True})) as m:
+        client.dns_set_recipient_access("t", "bad@example.org", "REJECT", reason="spam")
+    assert m.call_args.kwargs["json"] == {"recipient": "bad@example.org", "action": "REJECT", "reason": "spam"}
+
+
+def test_dns_delete_recipient_access_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.dns_delete_recipient_access("t", "bad@example.org")
+    assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/domains/recipient-access/bad@example.org")
+
+
 def test_api_base_trailing_slash_is_stripped():
     c = Client("http://localhost:3000/")
     with patch("requests.request", return_value=_mock_response(200, {})) as m:

@@ -101,4 +101,31 @@ $t->delete_ok("/internal/v1/domains/$zone/dns/records" => $auth => json => { nam
 
 $t->delete_ok("/internal/v1/domains/$zone" => $auth)->status_is(200, 'soft-disable never touches the PowerDNS zone itself');
 
+# --- Recipient allow/block ---
+my $recipient = 'homelab-domain-admin-test-' . time . '-' . $$ . '@invalid.example';
+
+$t->get_ok('/internal/v1/domains/recipient-access' => $auth)
+  ->status_is(200, 'the literal "recipient-access" path segment routes here, not to domains#show with domain="recipient-access"');
+
+$t->post_ok('/internal/v1/domains/recipient-access' => $auth => json => { recipient => $recipient, action => 'REJECT', reason => 'test' })
+  ->status_is(201)->json_is('/action', 'REJECT')->json_is('/reason', 'test');
+
+$t->get_ok('/internal/v1/domains/recipient-access' => $auth)
+  ->status_is(200)
+  ->json_has('/0', 'at least one entry comes back');
+
+# Upsert, not insert-only -- re-blocking (here: re-allowing) an address
+# already in the table updates it in place rather than 409ing.
+$t->post_ok('/internal/v1/domains/recipient-access' => $auth => json => { recipient => $recipient, action => 'OK' })
+  ->status_is(201)->json_is('/action', 'OK', 'posting the same recipient again updates the row instead of erroring');
+
+$t->delete_ok("/internal/v1/domains/recipient-access/$recipient" => $auth)
+  ->status_is(200)->json_is('/ok', 1);
+
+$t->delete_ok("/internal/v1/domains/recipient-access/$recipient" => $auth)
+  ->status_is(404, 'deleting an already-gone entry is a clean 404, not a 500');
+
+$t->post_ok('/internal/v1/domains/recipient-access' => $auth => json => { action => 'REJECT' })
+  ->status_is(400, 'recipient is required');
+
 done_testing;

@@ -215,6 +215,70 @@ def test_authenticated_relay_is_permitted(ssh_host, mail_account):
                 s.quit()
 
 
+def test_recipient_access_block_then_allow(ssh_host, mail_account):
+    """Phase 4 (recipient allow/block) regression test: a live
+    domainadmin.recipient_access lookup backs check_recipient_access --
+    blocking a real, otherwise-valid recipient must reject it at RCPT
+    TO (before Postfix ever accepts the message body), and removing the
+    block must restore normal delivery, with zero code change either
+    way -- see postfix/README.md's "Recipient allow/block" section."""
+    email, _ = mail_account
+    login_email, login_password = mail_account
+
+    login = subprocess.run(
+        ["ssh", ssh_host, "homelab-cli", "login", login_email, "--password", login_password],
+        capture_output=True, text=True, timeout=20,
+    )
+    assert login.returncode == 0, f"could not log in test account: {login.stderr}"
+
+    try:
+        # No --reason here: subprocess.run(["ssh", host, "cmd", "arg with
+        # spaces"]) doesn't survive the trip -- OpenSSH joins all
+        # trailing argv elements with plain spaces and hands the result
+        # to the remote shell as ONE string (see homelab-postfix-bootstrap-role's
+        # own comment on this exact behavior), so a space-containing
+        # argument silently re-splits into two words remotely. Not
+        # needed to prove the block/allow mechanism itself.
+        block = subprocess.run(
+            ["ssh", ssh_host, "homelab-cli", "dns", "recipient-access", "block", email],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert block.returncode == 0, f"blocking a recipient failed: {block.stderr}"
+
+        with _tunnel(ssh_host, LOCAL_SMTP_PORT, 25) as port:
+            s = smtplib.SMTP("127.0.0.1", port, timeout=10)
+            try:
+                s.ehlo("e2e-test-client")
+                s.mail("e2e-sender@example.com")
+                code, msg = s.rcpt(email)
+                assert code in (550, 554), (
+                    f"a blocked recipient was NOT rejected at RCPT TO: {code} {msg}"
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    s.quit()
+    finally:
+        # Always remove the block, even on failure above, so this test
+        # never leaves the shared test account permanently unreachable
+        # for any other test that reuses the module-scoped fixture.
+        remove = subprocess.run(
+            ["ssh", ssh_host, "homelab-cli", "dns", "recipient-access", "remove", email],
+            capture_output=True, text=True, timeout=20,
+        )
+        assert remove.returncode == 0, f"removing the block failed: {remove.stderr}"
+
+    with _tunnel(ssh_host, LOCAL_SMTP_PORT, 25) as port:
+        s = smtplib.SMTP("127.0.0.1", port, timeout=10)
+        try:
+            s.ehlo("e2e-test-client")
+            s.mail("e2e-sender@example.com")
+            code, msg = s.rcpt(email)
+            assert code == 250, f"an unblocked recipient was still rejected: {code} {msg}"
+        finally:
+            with contextlib.suppress(Exception):
+                s.quit()
+
+
 def test_inbound_smtp_delivers_to_real_mailbox(ssh_host, mail_account):
     """The actual end-to-end proof: a full SMTP conversation (not just
     RCPT TO validation) from an unauthenticated, inbound-style

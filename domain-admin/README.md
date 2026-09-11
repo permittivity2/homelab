@@ -116,7 +116,19 @@ DELETE /internal/v1/domains/:domain                   (soft: active=false, never
 GET    /internal/v1/domains/:domain/dns/records
 POST   /internal/v1/domains/:domain/dns/records        {name, type, content, ttl?}
 DELETE /internal/v1/domains/:domain/dns/records        {name, type}
+
+GET    /internal/v1/domains/recipient-access
+POST   /internal/v1/domains/recipient-access                     {recipient, action, reason?}  (upsert)
+DELETE /internal/v1/domains/recipient-access/:recipient
 ```
+
+The `recipient-access` routes are registered *before* the `/:domain`
+routes above, on purpose — an unqualified `:domain` placeholder would
+otherwise greedily match the literal path segment `recipient-access`
+too (Mojolicious tries routes in registration order), routing to
+`domains#show` with `domain=recipient-access` instead of
+`recipient_access#list`. `:recipient` needs the same dot-truncation
+placeholder fix as `:domain` (a real address always has one).
 
 Auth: every route requires a valid bearer token, verified via
 `Homelab::Common::AuthClient::introspect()` (the `authenticated_email`
@@ -145,6 +157,11 @@ homelab-cli dns domains disable example.org
 homelab-cli dns records list example.org
 homelab-cli dns records add example.org --name example.org --type A --value 203.0.113.10
 homelab-cli dns records delete example.org --name example.org --type A
+
+homelab-cli dns recipient-access list
+homelab-cli dns recipient-access block bad@example.org --reason spam
+homelab-cli dns recipient-access allow vip@example.org
+homelab-cli dns recipient-access remove bad@example.org
 ```
 
 ## Gotchas (real bugs found building this)
@@ -171,6 +188,23 @@ homelab-cli dns records delete example.org --name example.org --type A
   through unchanged. Caught by a real `homelab-cli dns records add
   ... --type TXT` call — directly relevant to this package's future
   SPF/DKIM work, since both are TXT records.
+- **A literal route segment can lose to an earlier catch-all
+  placeholder.** `/internal/v1/domains/recipient-access` needed its
+  routes registered *before* `/internal/v1/domains/:domain` — Mojolicious
+  matches routes in registration order, so the placeholder would
+  otherwise have matched the literal segment first. Worth remembering
+  for any future route added under `/domains/`.
+- **`subprocess.run(["ssh", host, "cmd", "arg with spaces"])` doesn't
+  survive the trip.** OpenSSH joins every trailing argv element with a
+  plain space and hands the whole thing to the remote shell as one
+  string to re-tokenize — a space inside one Python-side argument
+  silently becomes two words on the far side. Caught by
+  `tests/e2e/test_postfix_mail.py`'s own new recipient-access test
+  (a `--reason "e2e test"` argument), not by inspection — same root
+  cause already documented in `postfix/script/homelab-postfix-bootstrap-role`'s
+  comments, now bitten a second time in test code instead of shipped
+  code. `shlex.quote()` each piece, or join into one pre-quoted command
+  string, when a remote CLI argument might contain whitespace.
 
 ## Testing
 

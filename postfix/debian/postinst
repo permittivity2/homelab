@@ -7,6 +7,7 @@ SHARE_DIR=/usr/share/homelab-postfix
 MAP_CF=/etc/postfix/pgsql-virtual-mailbox.cf
 DOMAINS_CF=/etc/postfix/pgsql-virtual-domains.cf
 DOVECOT_SASL_DROPIN=/etc/dovecot/conf.d/92-homelab-postfix-sasl.conf
+RECIPIENT_ACCESS_CF=/etc/postfix/pgsql-recipient-access.cf
 MASTER_CF=/etc/postfix/master.cf
 
 case "$1" in
@@ -152,6 +153,44 @@ case "$1" in
                 echo "           Confirm homelab-domain-admin is installed, migrated, and has this domain seeded (mail_enabled, active), then re-run 'dpkg-reconfigure homelab-postfix'."
                 echo "           Leaving virtual_mailbox_domains at its static value ($MAIL_DOMAIN) -- mail flow is unaffected."
             fi
+        fi
+
+        # --- Recipient allow/block: live domainadmin.recipient_access
+        # lookup, backing Postfix's own check_recipient_access ---
+        # Reuses the same credential as $MAP_CF/$DOMAINS_CF above (one
+        # role, one password, no new secret to mint).
+        if [ -f "$MAP_CF" ] && [ -n "$MAP_DB_USER" ] && [ ! -f "$RECIPIENT_ACCESS_CF" ]; then
+            sed \
+                -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
+                -e "s#__DB_PORT__#6432#g" \
+                -e "s#__DB_NAME__#homelab#g" \
+                -e "s#__DB_USER__#$MAP_DB_USER#g" \
+                -e "s#__DB_PASS__#$MAP_DB_PASS#g" \
+                "$SHARE_DIR/config/pgsql-recipient-access.cf.template" > "$RECIPIENT_ACCESS_CF"
+            chmod 640 "$RECIPIENT_ACCESS_CF"
+            chgrp postfix "$RECIPIENT_ACCESS_CF" 2>/dev/null || true
+            echo "  wrote $RECIPIENT_ACCESS_CF"
+        fi
+
+        # Wire it into smtpd_recipient_restrictions via read-modify-append
+        # -- never clobber whatever's already there by hand. Positioned
+        # FIRST (before permit_mynetworks/permit_sasl_authenticated, not
+        # just before reject_unauth_destination): check_recipient_access
+        # must be able to REJECT a blocked recipient even for a
+        # mynetworks/SASL-authenticated sender, and permit_mynetworks/
+        # permit_sasl_authenticated return an immediate terminal OK that
+        # would otherwise skip this check entirely for exactly the
+        # senders most likely to be trusted enough to reach a blocked
+        # recipient in the first place.
+        if [ -f "$RECIPIENT_ACCESS_CF" ]; then
+            CURRENT_RESTRICTIONS="$(postconf -h smtpd_recipient_restrictions 2>/dev/null || true)"
+            case "$CURRENT_RESTRICTIONS" in
+                *"check_recipient_access pgsql:$RECIPIENT_ACCESS_CF"*) ;;
+                *)
+                    postconf -e "smtpd_recipient_restrictions = check_recipient_access pgsql:$RECIPIENT_ACCESS_CF, $CURRENT_RESTRICTIONS"
+                    echo "  added check_recipient_access to smtpd_recipient_restrictions"
+                    ;;
+            esac
         fi
 
         # Start postfix FIRST -- it creates /var/spool/postfix/private/,

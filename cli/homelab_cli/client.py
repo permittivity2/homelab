@@ -152,6 +152,18 @@ class Client:
             json={"name": name, "type": type_},
         )
 
+    def dns_list_recipient_access(self, token):
+        return self._request("GET", "/api/v1/domains/recipient-access", headers=self._auth(token))
+
+    def dns_set_recipient_access(self, token, recipient, action, reason=None):
+        body = {"recipient": recipient, "action": action}
+        if reason:
+            body["reason"] = reason
+        return self._request("POST", "/api/v1/domains/recipient-access", headers=self._auth(token), json=body)
+
+    def dns_delete_recipient_access(self, token, recipient):
+        return self._request("DELETE", f"/api/v1/domains/recipient-access/{recipient}", headers=self._auth(token))
+
     # --- Mail, via homelab-api's /api/v1/mail/* gateway ->
     # homelab-mailbridge (see ../../mailbridge/README.md). No more
     # imaplib/smtplib here at all -- these are plain HTTP calls, same

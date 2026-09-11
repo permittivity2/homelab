@@ -110,6 +110,21 @@ sub startup ($self) {
     my $r = $self->routes;
     $r->get('/internal/v1/domains')            ->to('domains#list');
     $r->post('/internal/v1/domains')           ->to('domains#create');
+
+    # Registered BEFORE the /:domain catch-all routes below on purpose --
+    # Mojolicious tries routes in registration order, and an unqualified
+    # :domain placeholder would otherwise greedily match the literal path
+    # segment "recipient-access" too (domain="recipient-access"), routing
+    # to domains#show instead of recipient_access#list. Same
+    # :recipient-truncates-at-the-first-dot risk as :domain elsewhere in
+    # this file applies here too -- a real email address always has one
+    # ("user@test.forge.name") -- so this needs the identical
+    # placeholder-regex override, applied up front this time rather than
+    # found by a failing CLI call again.
+    $r->get('/internal/v1/domains/recipient-access')                             ->to('recipient_access#list');
+    $r->post('/internal/v1/domains/recipient-access')                            ->to('recipient_access#upsert');
+    $r->delete('/internal/v1/domains/recipient-access/:recipient' => [recipient => qr/[^\/]+/])->to('recipient_access#delete_entry');
+
     $r->get('/internal/v1/domains/:domain'    => [domain => qr/[^\/]+/])->to('domains#show');
     $r->patch('/internal/v1/domains/:domain'  => [domain => qr/[^\/]+/])->to('domains#update');
     $r->delete('/internal/v1/domains/:domain' => [domain => qr/[^\/]+/])->to('domains#disable');
