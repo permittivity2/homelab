@@ -37,6 +37,37 @@ extra to configure for them.
 
 `configure` with no flags at all just prints the current configuration.
 
+## Machine-readable output (`-j`/`--json`)
+
+Every command supports `-j`/`--json`: instead of the human-formatted
+table/message, it prints the real API response as one JSON payload on
+stdout (a failure becomes `{"error": "..."}` on stderr instead of the
+usual plaintext line, still exit code 1) — meant for piping into `jq`
+or another script, not for a human to read directly.
+
+```bash
+homelab-cli -j dns domains list | jq -r '.[].domain_name'
+homelab-cli -j sessions list | jq -r '.[] | select(.current) | .jti'
+```
+
+**It's a global flag, so it goes before the subcommand** —
+`homelab-cli -j dns domains list`, not `homelab-cli dns domains list
+-j`. This follows from how argparse's own parent/subparser split
+works (the subcommands are separate parsers that never see a flag
+defined on the top-level one) and isn't worth working around.
+
+JSON mode always mirrors the real field names/types the API actually
+returned — never a table's derived display value (e.g. `send_enabled:
+false` stays a boolean, it doesn't become the string `"receive-only"`;
+a session's full `jti` isn't truncated the way `sessions list`'s table
+shortens it for readability). `login` is the one deliberate exception:
+its JSON output is `{"success": true, "email": "..."}`, not the raw
+token/refresh_token — those are already written to `session.yml`
+(`0600`) and have no reason to also land on stdout for a shell
+history, log, or captured pipeline to pick up. Download commands
+(`drive download`, `jobs download`) likewise never print file bytes —
+just `{"downloaded_to": "...", "size_bytes": N}`.
+
 Session (`token`/`refresh_token`) is stored `0600` in
 `~/.config/homelab-cli/session.yml`, separate from the non-secret
 `api_base` in `config.yml` in the same directory — same "local CLI
