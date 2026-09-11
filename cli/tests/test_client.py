@@ -187,6 +187,38 @@ def test_mail_allowed_senders_builds_correct_path(client):
     assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/domains/mail-aliases/mine")
 
 
+def test_mail_block_posts_recipient_and_action(client):
+    with patch("requests.request", return_value=_mock_response(201, {"recipient": "x@y.com"})) as m:
+        client.mail_block("t", "x@y.com")
+    assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/domains/recipient-access/mine")
+    assert m.call_args.kwargs["json"] == {"recipient": "x@y.com", "action": "REJECT"}
+
+
+def test_mail_block_includes_reason_when_given(client):
+    with patch("requests.request", return_value=_mock_response(201, {})) as m:
+        client.mail_block("t", "x@y.com", reason="spam")
+    assert m.call_args.kwargs["json"] == {"recipient": "x@y.com", "action": "REJECT", "reason": "spam"}
+
+
+def test_mail_unblock_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.mail_unblock("t", "x@y.com")
+    assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/domains/recipient-access/mine/x@y.com")
+
+
+def test_mail_blocked_no_search(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.mail_blocked("t")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/domains/recipient-access/mine")
+    assert m.call_args.kwargs["params"] == {}
+
+
+def test_mail_blocked_with_search(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.mail_blocked("t", q="spam")
+    assert m.call_args.kwargs["params"] == {"q": "spam"}
+
+
 def test_api_base_trailing_slash_is_stripped():
     c = Client("http://localhost:3000/")
     with patch("requests.request", return_value=_mock_response(200, {})) as m:

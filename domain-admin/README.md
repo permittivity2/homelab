@@ -94,6 +94,11 @@ split-role pattern as every other feature — see `../CLAUDE.md`):
   high-value target without removing that requirement. Only the public
   key, selector, state, and timestamps are ever stored here.
 - `domainadmin.recipient_access` — per-recipient mail allow/block.
+  `user_email` (nullable) distinguishes admin-created/global rows
+  (`NULL`, the only kind before this column existed) from self-service
+  rows a user created for one of their own addresses via `POST
+  .../recipient-access/mine` — see "Self-service address blocking"
+  below.
 - `domainadmin.pending_restart` — the debounce table described above.
 
 ## DKIM key rotation
@@ -196,9 +201,13 @@ POST   /internal/v1/domains/:domain/dkim/:selector/activate
 POST   /internal/v1/domains/:domain/dkim/:selector/retire
 DELETE /internal/v1/domains/:domain/dkim/:selector      (cancel a still-'pending' rotation)
 
-GET    /internal/v1/domains/recipient-access
-POST   /internal/v1/domains/recipient-access                     {recipient, action, reason?}  (upsert)
-DELETE /internal/v1/domains/recipient-access/:recipient
+GET    /internal/v1/domains/recipient-access[?user=<email>]      (site_admin)
+POST   /internal/v1/domains/recipient-access                     {recipient, action, reason?}  (upsert, site_admin)
+DELETE /internal/v1/domains/recipient-access/:recipient          (site_admin)
+
+GET    /internal/v1/domains/recipient-access/mine[?q=<substring>]  (self-service -- any authenticated user)
+POST   /internal/v1/domains/recipient-access/mine                {recipient, action, reason?}  (upsert, self-service)
+DELETE /internal/v1/domains/recipient-access/mine/:recipient     (self-service -- own rows only)
 ```
 
 The `recipient-access` routes are registered *before* the `/:domain`
@@ -226,6 +235,63 @@ Gateway route added to `homelab-api` (`api/lib/Homelab/API/App.pm`):
 `/api/v1/domains/*` → this service, `strip_prefix => '/api/v1/domains'`,
 `backend_prefix => '/internal/v1'`.
 
+## Self-service address blocking
+
+`/mine` (JWT-only, no `site_admin` requirement — `authenticated_email_
+any` in `App.pm`, the same self-service tier `mail-aliases/mine`
+already established) lets any user block/unblock/list *their own*
+entries in the exact same `domainadmin.recipient_access` table/
+`check_recipient_access` enforcement the admin-only routes above
+already use — no new subsystem, just an ownership layer on top of
+something already shipped.
+
+**This is address blocking, not sender blocking.** `recipient_access`
+was investigated as a candidate to model production Roundcube's
+`recipient_blocking` plugin on — despite that plugin's name, it turned
+out to reject ALL mail to one specific address a user owns, regardless
+of who sends it (useful for burning a single-use masked address, e.g.
+`namecheap20240520@forge.name`, once it starts getting spammed) — not
+a per-sender block. `check_recipient_access` already matches this
+exactly: it's keyed purely on the real SMTP `RCPT TO` Postfix received
+(never a parsed `To:`/`Cc:` header, which is attacker-controlled,
+unverified text), evaluated once per `RCPT TO`, so a multi-recipient
+message is judged correctly per-recipient with no extra design needed.
+
+Two guards run in `RecipientAccess::create_mine` before every upsert,
+both hard rejections (400/403), not warnings:
+
+- **Ownership** (`_owns_recipient`) — `recipient` must be the caller's
+  own login address, or covered by a `domainadmin.mail_aliases` grant
+  where `destination` is the caller (exact-address grant, or the
+  recipient's domain matches a catch-all `@domain` grant of theirs) —
+  same resolution `MailAliases::mine` already computes for listing,
+  reused here as a boolean check. Anything else is a 403.
+- **Self-block** (`_is_own_exact_address`) — rejects (400) blocking the
+  caller's own login address, or an *exact* (non-catch-all) mail_alias
+  address that routes to them. `recipient_access` is blanket — it
+  rejects mail from every sender — so blocking your own address would
+  permanently cut off ALL mail there, including anything account/
+  security-related, not just spam. A catch-all *domain* grant they own
+  is never rejected by this guard: there's no single address at risk
+  in `@forge.name` itself, only in a specific address under it, which
+  the guard independently catches the moment THAT address is the one
+  being blocked.
+
+Production's own equivalent plugin (`recipient_blocking.php`) opens a
+*second*, separate raw DB connection straight from Roundcube's
+web-facing PHP, using the same shared `dovecot_user` credential
+Postfix/Dovecot's own services use — no API layer, no scoped role, no
+audit boundary beyond whatever that PHP code happens to check. This
+design deliberately does not repeat that: every self-service block
+goes through this service's existing narrow Postgres role and JWT
+auth, the same as every other write in this codebase.
+
+`pgsql-recipient-access.cf.template` (in `../postfix/config/`) also
+now appends `reason` to `action` in its query response (`REJECT no
+longer accepting mail here` instead of a bare `REJECT`), so a rejected
+sender actually sees why — the column was always stored but never
+reached Postfix before this.
+
 ## CLI
 
 ```bash
@@ -249,7 +315,15 @@ homelab-cli dns recipient-access list
 homelab-cli dns recipient-access block bad@example.org --reason spam
 homelab-cli dns recipient-access allow vip@example.org
 homelab-cli dns recipient-access remove bad@example.org
+
+homelab-cli mail block someone@your-domain.org --reason "no longer active"
+homelab-cli mail unblock someone@your-domain.org
+homelab-cli mail blocked [--search someone]
 ```
+
+`mail block`/`unblock`/`blocked` are the self-service counterpart to
+`dns recipient-access` above — same table, same enforcement, scoped to
+the caller's own addresses only (see "Self-service address blocking").
 
 ## Gotchas (real bugs found building this)
 

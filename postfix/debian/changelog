@@ -1,3 +1,16 @@
+homelab-postfix (0.1.9) unstable; urgency=medium
+
+  * Release v0.1.9
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 15:23:05 -0500
+
+homelab-postfix (0.1.9) unstable; urgency=medium
+
+  * pgsql-recipient-access.cf.template: append reason to the rejection
+    message
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 15:22:59 -0500
+
 homelab-postfix (0.1.8) unstable; urgency=medium
 
   * Release v0.1.8

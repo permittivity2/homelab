@@ -668,6 +668,50 @@ def cmd_mail_allowed_senders(args):
     return 0
 
 
+def cmd_mail_block(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().mail_block(session["token"], args.recipient, reason=args.reason)
+    except ApiError as e:
+        print(f"Could not block {args.recipient}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Blocked {args.recipient} -- no mail will be accepted there until unblocked")
+    return 0
+
+
+def cmd_mail_unblock(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        _client().mail_unblock(session["token"], args.recipient)
+    except ApiError as e:
+        print(f"Could not unblock {args.recipient}: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Unblocked {args.recipient}")
+    return 0
+
+
+def cmd_mail_blocked(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        entries = _client().mail_blocked(session["token"], q=args.search)
+    except ApiError as e:
+        print(f"Could not list blocked addresses: {e.message}", file=sys.stderr)
+        return 1
+    if not entries:
+        print("(no blocked addresses)")
+        return 0
+    for e in entries:
+        reason = f"  ({e['reason']})" if e.get("reason") else ""
+        print(f"{e['recipient']}{reason}")
+    return 0
+
+
 # --- drive: homelab-api's /api/v1/drive/* gateway -> homelab-drive's
 # own JSON API (see ../../drive/README.md's "JSON API" section). -------
 
@@ -1117,6 +1161,19 @@ def build_parser():
 
     p = mail_sub.add_parser("allowed-senders", help="List the domains/addresses you're currently authorized to send as")
     p.set_defaults(func=cmd_mail_allowed_senders)
+
+    p = mail_sub.add_parser("block", help="Reject ALL future mail to one of your own addresses (not sender-blocking -- see 'mail blocked')")
+    p.add_argument("recipient", help="An address you own (your login address is never allowed here -- see 'mail allowed-senders')")
+    p.add_argument("--reason", help="Shown to the sender in the rejection")
+    p.set_defaults(func=cmd_mail_block)
+
+    p = mail_sub.add_parser("unblock", help="Undo a previous 'mail block'")
+    p.add_argument("recipient")
+    p.set_defaults(func=cmd_mail_unblock)
+
+    p = mail_sub.add_parser("blocked", help="List addresses you've blocked")
+    p.add_argument("--search", help="Only show addresses containing this substring")
+    p.set_defaults(func=cmd_mail_blocked)
 
     drive = sub.add_parser("drive", help="File storage, via homelab-api's drive gateway")
     drive_sub = drive.add_subparsers(dest="drive_command", required=True)

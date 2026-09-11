@@ -150,6 +150,14 @@ sub startup ($self) {
     # ("user@test.forge.name") -- so this needs the identical
     # placeholder-regex override, applied up front this time rather than
     # found by a failing CLI call again.
+    # /mine registered before the plain list/upsert routes and well
+    # before the :recipient catch-all below, same "mine" ---
+    # self-service tier established by mail-aliases/mine, reused here
+    # (see App.pm's authenticated_email_any helper and README.md's
+    # "Self-service address blocking" section).
+    $r->get('/internal/v1/domains/recipient-access/mine')                        ->to('recipient_access#list_mine');
+    $r->post('/internal/v1/domains/recipient-access/mine')                       ->to('recipient_access#create_mine');
+    $r->delete('/internal/v1/domains/recipient-access/mine/:recipient' => [recipient => qr/[^\/]+/])->to('recipient_access#delete_mine');
     $r->get('/internal/v1/domains/recipient-access')                             ->to('recipient_access#list');
     $r->post('/internal/v1/domains/recipient-access')                            ->to('recipient_access#upsert');
     $r->delete('/internal/v1/domains/recipient-access/:recipient' => [recipient => qr/[^\/]+/])->to('recipient_access#delete_entry');

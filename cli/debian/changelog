@@ -1,3 +1,15 @@
+homelab-cli (0.3.15) unstable; urgency=medium
+
+  * Release v0.3.15
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 15:23:06 -0500
+
+homelab-cli (0.3.15) unstable; urgency=medium
+
+  * mail block/unblock/blocked: self-service address blocking
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 15:22:59 -0500
+
 homelab-cli (0.3.14) unstable; urgency=medium
 
   * Release v0.3.14

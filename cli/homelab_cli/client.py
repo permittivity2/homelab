@@ -288,6 +288,26 @@ class Client:
     def mail_allowed_senders(self, token):
         return self._request("GET", "/api/v1/domains/mail-aliases/mine", headers=self._auth(token))
 
+    # Self-service recipient blocking -- "reject ALL mail to one of MY
+    # OWN addresses, regardless of who sends it" (not sender-blocking;
+    # see ../../domain-admin/README.md's "Self-service address
+    # blocking" section for why). Same /mine self-service tier as
+    # mail_allowed_senders above -- server-side enforces both that the
+    # address is actually one of the caller's own, and that it isn't
+    # their own account address (that would cut off ALL mail there).
+    def mail_block(self, token, recipient, reason=None):
+        body = {"recipient": recipient, "action": "REJECT"}
+        if reason:
+            body["reason"] = reason
+        return self._request("POST", "/api/v1/domains/recipient-access/mine", headers=self._auth(token), json=body)
+
+    def mail_unblock(self, token, recipient):
+        return self._request("DELETE", f"/api/v1/domains/recipient-access/mine/{recipient}", headers=self._auth(token))
+
+    def mail_blocked(self, token, q=None):
+        params = {"q": q} if q else {}
+        return self._request("GET", "/api/v1/domains/recipient-access/mine", headers=self._auth(token), params=params)
+
     # --- Jobs, via homelab-api's /api/v1/jobs/* gateway -> homelab-worker
     # (see ../../worker/README.md). A generic background-job engine --
     # zip-and-download (submitted by homelab-drive, not this CLI) is the

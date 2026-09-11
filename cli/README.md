@@ -64,7 +64,11 @@ expired -- run `homelab-cli login` again" instead of a confusing raw
 ```bash
 homelab-cli mail list [--mailbox INBOX] [--limit 20]
 homelab-cli mail read <uid> [--mailbox INBOX]
-homelab-cli mail send --to you@example.com --subject "Hi" --body "..."
+homelab-cli mail send --to you@example.com --subject "Hi" --body "..." [--from you@another-domain.org]
+homelab-cli mail allowed-senders
+homelab-cli mail block someone@your-domain.org [--reason "no longer active"]
+homelab-cli mail unblock someone@your-domain.org
+homelab-cli mail blocked [--search someone]
 ```
 
 Plain HTTP calls to `homelab-api`'s `/api/v1/mail/*` gateway now — no
@@ -75,6 +79,25 @@ built; see `../mailbridge/README.md` for the protocol-level details
 (and the still-relevant known gap: dovecot/postfix serve a self-signed
 cert on the real IMAP/SMTP ports, so TLS verification is relaxed
 there, same as before — just enforced in Perl now, not Python).
+
+`mail send --from`/`mail allowed-senders` back onto `homelab-domain-
+admin`'s multi-domain send-as grants (`dns mail-aliases`, admin-side) —
+see `../domain-admin/README.md`.
+
+`mail block`/`unblock`/`blocked` are self-service **address**
+blocking, not sender-blocking: blocking `someone@your-domain.org`
+rejects ALL future mail to that one exact address, from anyone, at the
+mail server itself — useful for burning a single-use masked address
+(a signup confirmation, a throwaway alias) without touching any other
+address you own. You can only block an address `mail allowed-senders`
+already shows you're authorized to receive at, and never your own
+account's login address (that would cut off all mail to it, including
+anything account-related) — the server enforces both, not just this
+CLI. These are the self-service counterpart to the admin-only `dns
+recipient-access block/allow/remove` below — see
+`../domain-admin/README.md`'s "Self-service address blocking" section
+for the full mechanism (same `check_recipient_access` Postfix
+enforcement either way, just scoped to your own addresses here).
 
 ## File storage (`drive`)
 

@@ -1,3 +1,16 @@
+homelab-domain-admin (0.1.8) unstable; urgency=medium
+
+  * Release v0.1.8
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 15:23:01 -0500
+
+homelab-domain-admin (0.1.8) unstable; urgency=medium
+
+  * Self-service address blocking (recipient-access/mine): own-address
+    ownership check, self-block guard, ?user= admin filter
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 15:22:59 -0500
+
 homelab-domain-admin (0.1.7) unstable; urgency=medium
 
   * Release v0.1.7

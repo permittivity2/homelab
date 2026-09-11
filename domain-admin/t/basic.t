@@ -203,6 +203,91 @@ $mine = $t->tx->res->json;
 ok(!(grep { $_ eq $alias_pattern } @{ $mine->{send}{domains} }), 'no longer under send.domains once send_enabled=false');
 ok((grep { $_ eq $alias_pattern } @{ $mine->{receive_only}{domains} }), 'moved to receive_only.domains instead -- still receiving, just not sending');
 
+# --- Self-service address blocking: recipient-access/mine -- "reject
+# ALL mail to one of MY OWN addresses" (not sender-blocking), scoped to
+# addresses the caller actually owns via the mail_aliases catch-all
+# grant just created above ($alias_pattern -> $email), which is still
+# active at this point in the file (its own cleanup DELETE is below). ---
+my $owned_address   = "someone\@$alias_domain";               # covered by the still-active catch-all
+my $unowned_address = 'nobody@unrelated-domain.invalid';
+my $exact_alias_addr = 'exact-alias-test-' . time . '-' . $$ . "\@$alias_domain";
+
+# An exact (non-catch-all) grant too, so the self-block guard's OTHER
+# trigger (not just the login address) has something real to reject.
+$t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => {
+    source_pattern => $exact_alias_addr, destination => $email,
+})->status_is(201, 'exact (non-catch-all) mail_alias grant, for the self-block-guard test below');
+
+# JWT-only -- $plain_auth is the same token from before site_admin was
+# ever granted, proving this route needs no site_admin role, same as
+# mail-aliases/mine.
+$t->get_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth)
+  ->status_is(200, 'recipient-access/mine works without site_admin');
+is_deeply($t->tx->res->json, [], 'nothing blocked yet');
+
+$t->post_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth => json => {
+    recipient => $unowned_address, action => 'REJECT',
+})->status_is(403, 'cannot block an address you do not own');
+
+$t->post_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth => json => {
+    recipient => $email, action => 'REJECT',
+})->status_is(400, 'cannot block your own login address -- would cut off ALL mail there, including account-related mail');
+
+$t->post_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth => json => {
+    recipient => $exact_alias_addr, action => 'REJECT',
+})->status_is(400, 'cannot block an exact mail_alias address that routes to you either -- same self-lockout risk');
+
+# The catch-all DOMAIN grant itself is fine to "use" (block a specific
+# address under it) -- there's no single address at risk in '@domain'
+# itself, only in a concrete address under it, already covered above.
+$t->post_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth => json => {
+    recipient => $owned_address, action => 'REJECT', reason => 'test block',
+})->status_is(201, 'blocking a specific address under an owned catch-all domain succeeds')
+  ->json_is('/recipient', $owned_address)->json_is('/user_email', $email);
+
+$t->get_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth)->status_is(200);
+ok((grep { $_->{recipient} eq $owned_address } @{ $t->tx->res->json }), 'newly-blocked address appears in /mine');
+
+$t->get_ok('/internal/v1/domains/recipient-access/mine?q=' . substr($owned_address, 0, 6) => $plain_auth)
+  ->status_is(200);
+ok((grep { $_->{recipient} eq $owned_address } @{ $t->tx->res->json }), 'substring search finds it');
+$t->get_ok('/internal/v1/domains/recipient-access/mine?q=definitely-not-a-match-xyz' => $plain_auth)
+  ->status_is(200);
+is(scalar(@{ $t->tx->res->json }), 0, 'search with no match returns empty, not an error');
+
+# The pre-existing site_admin global list still sees it, and the new
+# ?user= filter scopes to just this user.
+$t->get_ok('/internal/v1/domains/recipient-access' => $auth)->status_is(200);
+ok((grep { $_->{recipient} eq $owned_address } @{ $t->tx->res->json }), 'site_admin global list also sees the self-service row');
+$t->get_ok("/internal/v1/domains/recipient-access?user=$email" => $auth)->status_is(200);
+ok((grep { $_->{recipient} eq $owned_address } @{ $t->tx->res->json }), '?user= filter finds this user\'s block');
+
+# --- Isolation: a second, unrelated user must never see or be able to
+# delete this user's self-service block. ---
+my $email2    = 'e2e-domain-admin-2-' . time . '-' . $$ . '@test.mailmasker.org';
+my $password2 = 'DomainAdminTest2Bb!!';
+$ua->post("$api_base/api/v1/auth/register" => json => { email => $email2, password => $password2 });
+my $login_tx2 = $ua->post("$api_base/api/v1/auth/login" => json => { email => $email2, password => $password2 });
+my $jwt2      = $login_tx2->res->json('/token');
+ok($jwt2, 'got a real JWT for the second test user') or BAIL_OUT('cannot continue without a real login');
+my $auth2 = { Authorization => "Bearer $jwt2" };
+
+$t->get_ok('/internal/v1/domains/recipient-access/mine' => $auth2)->status_is(200);
+is_deeply($t->tx->res->json, [], "a different user's /mine never shows the first user's block");
+
+$t->delete_ok("/internal/v1/domains/recipient-access/mine/$owned_address" => $auth2)
+  ->status_is(404, "a different user cannot delete another user's self-service block, even knowing the exact address");
+
+$t->delete_ok("/internal/v1/domains/recipient-access/mine/$owned_address" => $plain_auth)
+  ->status_is(200)->json_is('/ok', 1);
+$t->delete_ok("/internal/v1/domains/recipient-access/mine/$owned_address" => $plain_auth)
+  ->status_is(404, 'deleting an already-gone entry is a clean 404');
+
+$t->post_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth => json => { action => 'REJECT' })
+  ->status_is(400, 'recipient is required');
+
+$t->get_ok('/internal/v1/domains/recipient-access/mine')->status_is(401, 'no Authorization header -> 401, same as every other route');
+
 $t->patch_ok('/internal/v1/domains/mail-aliases/nonexistent-pattern' => $auth => json => { send_enabled => \1 })
   ->status_is(404);
 $t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json => {})
