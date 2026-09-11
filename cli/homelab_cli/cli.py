@@ -1196,7 +1196,16 @@ def main(argv=None):
     # parse_args() below exactly as before.
     argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
-    return args.func(args) or 0
+    try:
+        return args.func(args) or 0
+    except KeyboardInterrupt:
+        # Most commonly hit at a getpass.getpass() password prompt
+        # (cmd_login/cmd_register) or mid-network-call -- both would
+        # otherwise propagate as a raw traceback all the way through the
+        # installed console-script wrapper. 130 is the conventional
+        # 128+SIGINT exit code a calling script would expect.
+        print("\nAborted.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

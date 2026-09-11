@@ -1,3 +1,16 @@
+homelab-cli (0.3.14) unstable; urgency=medium
+
+  * Release v0.3.14
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 13:32:34 -0500
+
+homelab-cli (0.3.14) unstable; urgency=medium
+
+  * Trap KeyboardInterrupt (Ctrl-C) cleanly in main() instead of a raw
+    traceback
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 13:32:32 -0500
+
 homelab-cli (0.3.13) unstable; urgency=medium
 
   * Release v0.3.13
