@@ -39,6 +39,15 @@ sub startup ($self) {
     $r->post('/api/v1/auth/refresh'  => sub ($c) { $self->_refresh($c) });
     $r->post('/api/v1/auth/logout'   => sub ($c) { $self->_logout($c) });
 
+    # Session visibility/revocation -- JWT-only for the caller's own
+    # (?user= honored only for site_admin, see _sessions_scope_target
+    # below). Two DELETE routes coexist fine (no *capture wildcard
+    # involved, unlike the gateway routes above) since one has a jti path
+    # segment and the other doesn't.
+    $r->get('/api/v1/auth/sessions'          => sub ($c) { $self->_sessions_list($c) });
+    $r->delete('/api/v1/auth/sessions'       => sub ($c) { $self->_sessions_revoke_others($c) });
+    $r->delete('/api/v1/auth/sessions/:jti'  => sub ($c) { $self->_sessions_revoke($c) });
+
     # --- Service registry (see Homelab::Common::Registry — this is what
     # every OTHER feature's register()/lookup() calls hit) ------------
     $r->post('/api/v1/registry/register' => sub ($c) { $self->_registry_register($c) });
@@ -227,6 +236,19 @@ sub _login ($self, $c) {
     }
     $self->_log_attempt(ip => $ip, email => $email, endpoint => 'login', success => 1);
 
+    # Session device/IP metadata (see migrations/007-session-metadata.sql).
+    # client_user_agent/client_ip are optional caller-supplied overrides --
+    # homelab-sso's authorize_submit passes the REAL submitting browser's
+    # own values here, since without them this row would record sso's own
+    # backend HTTP client (the actual caller of THIS endpoint), not the
+    # browser sitting behind it. Not a new trust boundary: whoever's
+    # calling already had to supply a valid password for $email, so the
+    # worst a lie here does is make that same account's OWN session-list
+    # entry cosmetically wrong -- never an auth bypass.
+    my $user_agent = $body->{client_user_agent} // $c->req->headers->user_agent;
+    $user_agent = 'unknown' unless defined $user_agent && length $user_agent;
+    my $ip_address = $body->{client_ip} // $ip;
+
     my $jti = generate_jti();
     my ($jwt, $expires_in) = generate_jwt($email, secret => $self->config->{jwt}{secret}, expires_in => $self->config->{jwt}{expiry_seconds}, jti => $jti);
     my $refresh_token = generate_refresh_token();
@@ -237,8 +259,9 @@ sub _login ($self, $c) {
         $user->{id}, $refresh_token, $refresh_ttl_days,
     )->hash;
     $self->pg->db->query(
-        q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at) VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'))},
-        $jti, $user->{id}, $refresh_row->{id}, $expires_in,
+        q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at, user_agent, ip_address, first_seen_at)
+          VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'), ?, ?, NOW())},
+        $jti, $user->{id}, $refresh_row->{id}, $expires_in, $user_agent, $ip_address,
     );
 
     return $c->render(json => {
@@ -296,6 +319,21 @@ sub _refresh ($self, $c) {
     )->hash;
     return $c->render(json => { error => 'invalid or expired refresh_token' }, status => 401) unless $row;
 
+    # Carry the OLD session's device/IP metadata forward rather than
+    # recapturing it here -- see migrations/007-session-metadata.sql.
+    # Deliberate, not a shortcut: a refresh can happen many hops from any
+    # live browser request (sso's own silent-refresh fast path, or a BFF
+    # like drive relaying a refresh_token grant), so "this request's own
+    # user_agent/remote_address" is frequently just another backend
+    # service, not meaningful browser/device info -- carrying the
+    # ORIGINAL login's values forward keeps a long-refreshed session
+    # correctly attributed to whatever actually logged in, and is also
+    # what makes first_seen_at mean "since when", not "as of this refresh".
+    my $old_session = $self->pg->db->query(
+        'SELECT user_agent, ip_address, first_seen_at FROM api.sessions WHERE refresh_token_id = ? AND revoked = FALSE',
+        $row->{id},
+    )->hash // {};
+
     # Rotate: revoke the old token, issue a new one — a stolen, already-
     # used refresh token becomes immediately useless to an attacker on
     # the legitimate client's next refresh. Also revoke the OLD jti's
@@ -315,8 +353,10 @@ sub _refresh ($self, $c) {
         $row->{user_id}, $new_refresh_token, $refresh_ttl_days,
     )->hash;
     $self->pg->db->query(
-        q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at) VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'))},
+        q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at, user_agent, ip_address, first_seen_at)
+          VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'), ?, ?, COALESCE(?, NOW()))},
         $jti, $row->{user_id}, $new_refresh_row->{id}, $expires_in,
+        $old_session->{user_agent}, $old_session->{ip_address}, $old_session->{first_seen_at},
     );
 
     return $c->render(json => {
@@ -391,6 +431,150 @@ sub _authenticated_user ($self, $c) {
     return undef unless $session && !$session->{revoked};
 
     return $self->pg->db->query('SELECT id, email FROM api.users WHERE email = ?', $payload->{email})->hash;
+}
+
+# Like _authenticated_user above, but also returns the token's own
+# jti -- the /auth/sessions routes need it to mark which listed row is
+# the caller's own currently-in-use session. Deliberately a SEPARATE
+# helper rather than widening _authenticated_user's own return shape:
+# that sub is called in scalar context (`my $user = ...`) by
+# _require_site_admin, and `return ($user, $jti)` evaluated in scalar
+# context returns the LAST element (comma operator), not $user -- would
+# have silently broken every existing site_admin route.
+# Renders 401 itself and returns () on failure, so callers can do
+# `my ($user, $jti) = $self->_authenticate($c) or return;` (an empty
+# list assigned to a 2-element my() list is a 0-count assignment in
+# boolean context, so `or return` correctly fires).
+sub _authenticate ($self, $c) {
+    my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+    unless ($jwt) {
+        $c->render(json => { error => 'authentication required' }, status => 401);
+        return ();
+    }
+
+    my $payload = verify_jwt($jwt, secret => $self->config->{jwt}{secret});
+    unless ($payload) {
+        $c->render(json => { error => 'authentication required' }, status => 401);
+        return ();
+    }
+
+    my $session = $self->pg->db->query(
+        'SELECT revoked FROM api.sessions WHERE jti = ?', $payload->{jti} // '',
+    )->hash;
+    unless ($session && !$session->{revoked}) {
+        $c->render(json => { error => 'authentication required' }, status => 401);
+        return ();
+    }
+
+    my $user = $self->pg->db->query('SELECT id, email FROM api.users WHERE email = ?', $payload->{email})->hash;
+    unless ($user) {
+        $c->render(json => { error => 'authentication required' }, status => 401);
+        return ();
+    }
+    return ($user, $payload->{jti});
+}
+
+# Resolves which user_id a /auth/sessions call should act on: the
+# caller's own by default, or (only for a site_admin caller) whatever
+# ?user=<email> asks for. A non-admin explicitly passing ?user= gets a
+# clean 403 -- same "attempt the call, let the server decide, no
+# confusing silently-scoped-down result" convention as every other
+# ?user=/?destination=-style admin-visibility param in this ecosystem
+# (see homelab-domain-admin's MailAliases/RecipientAccess). Renders the
+# error itself and returns undef on failure.
+sub _sessions_scope_target ($self, $c, $caller) {
+    my $target_email = $c->param('user');
+    return $caller unless defined $target_email && length $target_email;
+
+    my $has_role = $self->pg->db->query(
+        q{SELECT 1 FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+          WHERE ur.user_id = ? AND r.name = 'site_admin'},
+        $caller->{id},
+    )->hash;
+    unless ($has_role) {
+        $c->render(json => { error => 'site_admin role required' }, status => 403);
+        return undef;
+    }
+
+    my $target = $self->pg->db->query('SELECT id, email FROM api.users WHERE email = ?', $target_email)->hash;
+    unless ($target) {
+        $c->render(json => { error => 'user not found' }, status => 404);
+        return undef;
+    }
+    return $target;
+}
+
+# GET /api/v1/auth/sessions[?user=<email>] -- every non-revoked,
+# non-expired session for the target user, newest-first. `current: true`
+# marks whichever row is the JWT the caller is USING RIGHT NOW to make
+# this very call -- lets a client warn before revoking its own live
+# session out from under itself.
+sub _sessions_list ($self, $c) {
+    my ($caller, $jti) = $self->_authenticate($c) or return;
+    my $target = $self->_sessions_scope_target($c, $caller) or return;
+
+    my $rows = $self->pg->db->query(
+        q{SELECT jti, user_agent, ip_address, first_seen_at, expires_at
+          FROM api.sessions
+          WHERE user_id = ? AND revoked = FALSE AND expires_at > NOW()
+          ORDER BY first_seen_at DESC NULLS LAST, created_at DESC},
+        $target->{id},
+    )->hashes->to_array;
+
+    $_->{current} = ($_->{jti} eq $jti) ? \1 : \0 for @$rows;
+    return $c->render(json => $rows);
+}
+
+# DELETE /api/v1/auth/sessions/:jti[?user=<email>] -- the actual "force
+# re-login" action. Revokes BOTH the session row and its refresh_token
+# row in one call -- revoking only the session would be silently undone
+# by homelab-cli's own 401-refresh-retry (client.py's _send): a stale-
+# but-not-actually-revoked refresh_token would just mint the caller a
+# brand new, perfectly valid session on their very next request, making
+# this entire endpoint a no-op against the client this ecosystem already
+# ships. Scoped to $target->{id} in the WHERE clause itself (not checked
+# after the fact) so this can never revoke another user's session even
+# by jti guess.
+sub _sessions_revoke ($self, $c) {
+    my ($caller, undef) = $self->_authenticate($c) or return;
+    my $target = $self->_sessions_scope_target($c, $caller) or return;
+
+    my $row = $self->pg->db->query(
+        q{SELECT jti, refresh_token_id FROM api.sessions
+          WHERE jti = ? AND user_id = ? AND revoked = FALSE},
+        $c->stash('jti'), $target->{id},
+    )->hash;
+    return $c->render(json => { error => 'session not found' }, status => 404) unless $row;
+
+    $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE jti = ?', $row->{jti});
+    $self->pg->db->query('UPDATE api.refresh_tokens SET revoked = TRUE WHERE id = ?', $row->{refresh_token_id})
+        if $row->{refresh_token_id};
+
+    return $c->render(json => { ok => \1 });
+}
+
+# DELETE /api/v1/auth/sessions?except_current=true -- "log out
+# everywhere else." Always scoped to the CALLER's own account (no
+# ?user= support -- a site_admin wanting to kill a different user's
+# other sessions can already do that one at a time via _sessions_revoke,
+# which is the safer, auditable primitive; a bulk "nuke everyone else's
+# sessions" admin action isn't something this was asked for).
+sub _sessions_revoke_others ($self, $c) {
+    my ($caller, $jti) = $self->_authenticate($c) or return;
+    return $c->render(json => { error => 'except_current=true is required' }, status => 400)
+        unless ($c->param('except_current') // '') eq 'true';
+
+    my $rows = $self->pg->db->query(
+        q{SELECT jti, refresh_token_id FROM api.sessions
+          WHERE user_id = ? AND revoked = FALSE AND jti != ?},
+        $caller->{id}, $jti,
+    )->hashes->to_array;
+    for my $row (@$rows) {
+        $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE jti = ?', $row->{jti});
+        $self->pg->db->query('UPDATE api.refresh_tokens SET revoked = TRUE WHERE id = ?', $row->{refresh_token_id})
+            if $row->{refresh_token_id};
+    }
+    return $c->render(json => { ok => \1, revoked => scalar(@$rows) });
 }
 
 # Renders 401/403 itself and returns undef on failure, so callers can

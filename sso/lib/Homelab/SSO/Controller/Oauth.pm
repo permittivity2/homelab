@@ -179,7 +179,16 @@ sub authorize_submit ($c) {
 
     return $render_form_error->('Email and password are required.') unless $email && $password;
 
-    my $result = login($email, $password, api_base => $c->app->api_base);
+    # client_user_agent/client_ip: this app's own directly-observed
+    # values from the real browser's form submission, right here, right
+    # now -- relayed through so homelab-api's session tracking records
+    # the actual browser/device, not this backend's own server-to-server
+    # call to it (see Homelab::Common::AuthClient::login's own comment).
+    my $result = login(
+        $email, $password, api_base => $c->app->api_base,
+        client_user_agent => $c->req->headers->user_agent,
+        client_ip         => $c->tx->remote_address,
+    );
     unless ($result->{success}) {
         my $msg = ($result->{_status} // 0) == 429
             ? 'Too many login attempts. Please wait 15 minutes.'

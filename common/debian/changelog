@@ -1,3 +1,16 @@
+homelab-common (0.1.13) unstable; urgency=medium
+
+  * Release v0.1.13
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 16:20:19 -0500
+
+homelab-common (0.1.13) unstable; urgency=medium
+
+  * AuthClient::login gains optional client_user_agent/client_ip
+    passthrough (for homelab-sso to relay the real browser's values)
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 16:20:17 -0500
+
 homelab-common (0.1.12) unstable; urgency=medium
 
   * Release v0.1.12

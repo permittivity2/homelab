@@ -6,7 +6,19 @@ homelab-api's own /api/v1/drive/* and /api/v1/mail/* gateway routes
 instead, which resolve the real backend via the service registry
 server-side -- so there's only ever one class, one base URL, here."""
 
+import platform
+
 import requests
+
+from . import __version__
+
+# A real, identifiable User-Agent instead of the requests library's own
+# generic default ("python-requests/x.y.z") -- homelab-api's session
+# tracking (see api/migrations/007-session-metadata.sql) stores whatever
+# User-Agent it receives, so a CLI-originated session should read
+# clearly as "this is the CLI" in `homelab-cli sessions list`, not blend
+# into whatever a browser's own UA string looks like.
+DEFAULT_USER_AGENT = f"homelab-cli/{__version__} ({platform.system()} {platform.release()})"
 
 
 class ApiError(Exception):
@@ -40,6 +52,12 @@ class Client:
     # _request() (JSON calls) and the streaming download methods below
     # can share this retry behavior instead of each reimplementing it.
     def _send(self, method, path, timeout=None, **kwargs):
+        # setdefault, not a plain assignment -- a caller-supplied
+        # User-Agent (none currently exist, but this stays correct if
+        # one ever does) is never clobbered.
+        headers = dict(kwargs.get("headers") or {})
+        headers.setdefault("User-Agent", DEFAULT_USER_AGENT)
+        kwargs = dict(kwargs, headers=headers)
         try:
             resp = requests.request(method, f"{self.api_base}{path}", timeout=timeout or self.timeout, **kwargs)
         except requests.exceptions.RequestException as e:
@@ -117,6 +135,24 @@ class Client:
 
     def logout(self, refresh_token):
         return self._request("POST", "/api/v1/auth/logout", json={"refresh_token": refresh_token})
+
+    # Session visibility/revocation -- see api/migrations/007-session-
+    # metadata.sql and App.pm's _sessions_* handlers. `user` is honored
+    # server-side only for a site_admin caller (a clean 403 otherwise,
+    # not a silently-scoped-down result -- same convention as every
+    # other ?user=/?destination= admin-visibility param in this CLI).
+    def sessions_list(self, token, user=None):
+        params = {"user": user} if user else {}
+        return self._request("GET", "/api/v1/auth/sessions", headers=self._auth(token), params=params)
+
+    def sessions_revoke(self, token, jti, user=None):
+        params = {"user": user} if user else {}
+        return self._request("DELETE", f"/api/v1/auth/sessions/{jti}", headers=self._auth(token), params=params)
+
+    def sessions_revoke_others(self, token):
+        return self._request(
+            "DELETE", "/api/v1/auth/sessions", headers=self._auth(token), params={"except_current": "true"},
+        )
 
     def registry_lookup(self, feature_name):
         return self._request("GET", f"/api/v1/registry/{feature_name}")

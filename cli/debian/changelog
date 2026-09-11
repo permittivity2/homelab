@@ -1,3 +1,16 @@
+homelab-cli (0.3.16) unstable; urgency=medium
+
+  * Release v0.3.16
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 16:14:54 -0500
+
+homelab-cli (0.3.16) unstable; urgency=medium
+
+  * Add 'sessions list/revoke' (device/IP tracking, force re-login);
+    identify the CLI with a real User-Agent
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 16:14:47 -0500
+
 homelab-cli (0.3.15) unstable; urgency=medium
 
   * Release v0.3.15

@@ -6,7 +6,7 @@ construction and the post-domain-creation SPF/DMARC nudge."""
 
 from unittest.mock import MagicMock
 
-from homelab_cli.cli import _build_dmarc_value, _build_spf_value, _nudge_spf_dmarc
+from homelab_cli.cli import _build_dmarc_value, _build_spf_value, _nudge_spf_dmarc, summarize_user_agent
 from homelab_cli.client import ApiError
 
 
@@ -136,3 +136,54 @@ def test_nudge_swallows_api_error_and_prints_nothing(capsys):
     client.dns_list_records.side_effect = ApiError(502, "zone not ready")
     _nudge_spf_dmarc(client, "tok", "forge.name")
     assert capsys.readouterr().out == ""
+
+
+# --- summarize_user_agent: display-only heuristic for `sessions list`
+# (see api/migrations/007-session-metadata.sql -- the raw UA is always
+# what's actually stored; this is purely presentational). ---
+
+def test_summarize_firefox_desktop_linux():
+    raw = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+    assert summarize_user_agent(raw) == "Firefox / Linux / Desktop"
+
+
+def test_summarize_safari_macos_desktop():
+    raw = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+    assert summarize_user_agent(raw) == "Safari / macOS / Desktop"
+
+
+def test_summarize_mobile_safari_ios():
+    raw = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+    assert summarize_user_agent(raw) == "Safari / iOS / Mobile"
+
+
+def test_summarize_edge_not_misreported_as_chrome():
+    """Edge's own UA string contains 'Chrome/...' too -- the Edge marker
+    must be checked first or every Edge session would misreport as
+    Chrome."""
+    raw = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 Edg/120.0"
+    assert summarize_user_agent(raw) == "Edge / Windows / Desktop"
+
+
+def test_summarize_homelab_cli_own_user_agent():
+    assert summarize_user_agent("homelab-cli/0.3.16 (Linux 6.8.0)") == "homelab-cli / Linux / Desktop"
+
+
+def test_summarize_curl_recognized():
+    assert summarize_user_agent("curl/8.5.0") == "curl / Desktop"
+
+
+def test_summarize_unrecognized_string_returned_unchanged():
+    assert summarize_user_agent("SomeWeirdBot/1.0") == "SomeWeirdBot/1.0"
+
+
+def test_summarize_unknown_returned_unchanged():
+    """The literal 'unknown' the server stores for a missing/empty
+    header (see App.pm's _login) matches no browser/OS pattern, so it
+    falls through to the raw-string path -- no special-casing needed."""
+    assert summarize_user_agent("unknown") == "unknown"
+
+
+def test_summarize_empty_or_none_returned_unchanged():
+    assert summarize_user_agent("") == ""
+    assert summarize_user_agent(None) is None

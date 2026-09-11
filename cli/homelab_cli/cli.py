@@ -870,6 +870,108 @@ def cmd_jobs_download(args):
     return 0
 
 
+# --- sessions: which devices/locations currently hold a valid login for
+# this account, and the ability to kill one (force re-login) -- see
+# api/migrations/007-session-metadata.sql and App.pm's _sessions_*
+# handlers. `--user` is honored server-side only for a site_admin
+# caller, same "attempt the call, let the server decide" convention as
+# every other admin-visibility flag in this CLI (no client-side role
+# check here either). ---
+
+# Small, dependency-free heuristic for a friendlier "Firefox / macOS /
+# Desktop"-style summary of a raw User-Agent string, for `sessions list`
+# display only -- the RAW string is what's actually stored server-side
+# (see the plan/migration for why: no parsing loss in the data, only in
+# what's shown). Order matters within each list: e.g. Edge and OPR both
+# contain "Chrome" in their own UA strings, so they must be checked
+# before the bare "Chrome" match or they'd misreport as Chrome.
+_UA_BROWSERS = [
+    ("homelab-cli/", "homelab-cli"), ("Edg/", "Edge"), ("OPR/", "Opera"), ("Firefox/", "Firefox"),
+    ("Chrome/", "Chrome"), ("Safari/", "Safari"), ("python-requests/", "python-requests"),
+    ("curl/", "curl"),
+]
+_UA_OSES = [
+    ("iPhone", "iOS"), ("iPad", "iPadOS"), ("Android", "Android"),
+    ("Windows", "Windows"), ("Mac OS X", "macOS"), ("Linux", "Linux"),
+]
+_UA_MOBILE_MARKERS = ("Mobile", "iPhone", "Android")
+
+
+def summarize_user_agent(raw):
+    """Best-effort "Browser / OS / Device" summary of a raw User-Agent
+    string for display; returns the raw string unchanged (this also
+    naturally covers the literal 'unknown' value the server stores for a
+    missing/empty header) when nothing recognizable is found."""
+    if not raw:
+        return raw
+    browser = next((name for marker, name in _UA_BROWSERS if marker in raw), None)
+    os_name = next((name for marker, name in _UA_OSES if marker in raw), None)
+    if not browser and not os_name:
+        return raw
+    device = "Mobile" if any(m in raw for m in _UA_MOBILE_MARKERS) else "Desktop"
+    return " / ".join(part for part in (browser, os_name, device) if part)
+
+
+def cmd_sessions_list(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        sessions = _client().sessions_list(session["token"], user=args.user)
+    except ApiError as e:
+        print(f"Could not list sessions: {e.message}", file=sys.stderr)
+        return 1
+    if not sessions:
+        print("(no active sessions)")
+        return 0
+    for s in sessions:
+        marker = "  (this session)" if s.get("current") else ""
+        ua = summarize_user_agent(s.get("user_agent"))
+        print(f"{s['jti']}  {ua}  {s.get('ip_address')}  since {s.get('first_seen_at')}{marker}")
+    return 0
+
+
+def cmd_sessions_revoke(args):
+    session = _require_session()
+    if not session:
+        return 1
+
+    if args.all_others:
+        try:
+            result = _client().sessions_revoke_others(session["token"])
+        except ApiError as e:
+            print(f"Could not revoke other sessions: {e.message}", file=sys.stderr)
+            return 1
+        print(f"Revoked {result.get('revoked', 0)} other session(s).")
+        return 0
+
+    if not args.jti:
+        print("Either a jti or --all-others is required.", file=sys.stderr)
+        return 1
+
+    current = None
+    if not args.user:
+        # Only need this lookup to print the "you just revoked the
+        # session you're using" warning -- a site_admin revoking someone
+        # ELSE's session (args.user set) can't possibly be revoking its
+        # own current one, so skip the extra call in that case.
+        try:
+            current = next(
+                (s["jti"] for s in _client().sessions_list(session["token"]) if s.get("current")), None,
+            )
+        except ApiError:
+            pass
+    try:
+        _client().sessions_revoke(session["token"], args.jti, user=args.user)
+    except ApiError as e:
+        print(f"Could not revoke session: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Revoked session {args.jti}")
+    if current and args.jti == current:
+        print("Note: that was the session this very command just used -- your next command will need to log in again.")
+    return 0
+
+
 # --- admin: homelab-api's site_admin-gated endpoints (api/README.md's
 # "Admin endpoints" section). No client-side role check here on
 # purpose — these just attempt the call and surface whatever the server
@@ -1222,6 +1324,19 @@ def build_parser():
     p.add_argument("job_id")
     p.add_argument("--output", help="Destination path (defaults to the job's own output_name)")
     p.set_defaults(func=cmd_jobs_download)
+
+    sessions = sub.add_parser("sessions", help="See and revoke active login sessions (device/IP tracking)")
+    sessions_sub = sessions.add_subparsers(dest="sessions_command", required=True)
+
+    p = sessions_sub.add_parser("list", help="List active sessions (your own by default; --user requires site_admin)")
+    p.add_argument("--user", help="List this user's sessions instead of your own (site_admin only)")
+    p.set_defaults(func=cmd_sessions_list)
+
+    p = sessions_sub.add_parser("revoke", help="Revoke a session (force re-login) -- by jti, or --all-others")
+    p.add_argument("jti", nargs="?", help="The session to revoke (see 'sessions list')")
+    p.add_argument("--all-others", action="store_true", help="Revoke every OTHER session of yours, keep this one")
+    p.add_argument("--user", help="Revoke this user's session instead of your own (site_admin only)")
+    p.set_defaults(func=cmd_sessions_revoke)
 
     admin = sub.add_parser("admin", help="Administrative commands (site_admin role required)")
     admin_sub = admin.add_subparsers(dest="admin_command", required=True)

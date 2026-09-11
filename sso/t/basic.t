@@ -51,8 +51,17 @@ $t->post_ok('/oauth/authorize' => form => {
     email => $email, password => 'definitely-wrong',
 })->status_is(200)->content_like(qr/failed|Log in/i);
 
-# --- Correct credentials: redirected back to the client with a code ---
-$t->post_ok('/oauth/authorize' => form => {
+# --- Correct credentials: redirected back to the client with a code.
+# Sent with a distinctive User-Agent so the check further down (after
+# the code exchange yields an access_token) can prove homelab-api's
+# session tracking recorded THIS request's own real values -- the
+# browser submitting the form directly to this app -- rather than
+# whatever this app's own backend Homelab::Common::AuthClient::login()
+# HTTP client would otherwise send when relaying to homelab-api
+# server-to-server. See App.pm's authorize_submit and
+# api/migrations/007-session-metadata.sql. ---
+my $real_browser_ua = 'sso-basic.t-real-browser-agent/1.0';
+$t->post_ok('/oauth/authorize' => { 'User-Agent' => $real_browser_ua } => form => {
     client_id => $client_id, redirect_uri => $redirect_uri, state => 'xyz',
     email => $email, password => $password,
 })->status_is(302);
@@ -100,6 +109,23 @@ $t->post_ok('/oauth/token' => form => {
 
 my $access_token  = $t->tx->res->json('/access_token');
 my $refresh_token = $t->tx->res->json('/refresh_token');
+
+# --- THE actual point of this whole addition: ask homelab-api directly
+# (its own /api/v1/auth/sessions, the same real endpoint homelab-cli's
+# `sessions list` calls) what it recorded for this session, and confirm
+# it's the real browser's own UA sent to /oauth/authorize above -- NOT
+# this app's own backend HTTP client's default UA, which is what would
+# have been recorded without the client_user_agent/client_ip passthrough
+# in authorize_submit. ---
+{
+    my $api_ua = Mojo::UserAgent->new;
+    my $tx = $api_ua->get($t->app->api_base . '/api/v1/auth/sessions', { Authorization => "Bearer $access_token" });
+    is($tx->result->code, 200, 'homelab-api accepts the token this app obtained on the browser\'s behalf');
+    my ($session) = grep { $_->{current} } @{ $tx->result->json };
+    ok($session, 'exactly one session is marked current for this token');
+    is($session->{user_agent}, $real_browser_ua,
+        'homelab-api recorded the REAL submitting browser\'s User-Agent, relayed through authorize_submit -- not this app\'s own backend HTTP client\'s');
+}
 
 # --- The code is one-time use — replaying it must fail ---
 $t->post_ok('/oauth/token' => form => {

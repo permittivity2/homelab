@@ -578,3 +578,67 @@ def test_401_on_an_unauthenticated_call_never_attempts_refresh(client):
             client.login("a@b.com", "wrong")
     assert m.call_count == 1
     assert exc_info.value.message == "invalid email or password"
+
+
+# --- User-Agent: every request identifies itself as homelab-cli instead
+# of requests' own generic default, so a CLI-originated session reads
+# clearly in `sessions list` (see api/migrations/007-session-metadata.sql). ---
+
+def test_every_request_sends_an_identifiable_user_agent(client):
+    with patch("requests.request", return_value=_mock_response(200, {"email": "a@b.com"})) as m:
+        client.introspect("the-jwt")
+    ua = m.call_args.kwargs["headers"]["User-Agent"]
+    assert ua.startswith("homelab-cli/")
+
+
+def test_caller_supplied_user_agent_is_never_clobbered(client):
+    with patch("requests.request", return_value=_mock_response(200, {})) as m:
+        client._request("GET", "/whatever", headers={"User-Agent": "custom-ua"})
+    assert m.call_args.kwargs["headers"]["User-Agent"] == "custom-ua"
+
+
+# --- Sessions: list/revoke, via homelab-api's /api/v1/auth/sessions
+# (see api/migrations/007-session-metadata.sql and App.pm's
+# _sessions_* handlers). ---
+
+def test_sessions_list_no_user_by_default(client):
+    with patch("requests.request", return_value=_mock_response(200, [{"jti": "abc", "current": True}])) as m:
+        result = client.sessions_list("the-jwt")
+    assert result[0]["jti"] == "abc"
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/auth/sessions")
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer the-jwt"
+    assert m.call_args.kwargs["params"] == {}
+
+
+def test_sessions_list_passes_user_when_given(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.sessions_list("the-jwt", user="other@b.com")
+    assert m.call_args.kwargs["params"] == {"user": "other@b.com"}
+
+
+def test_sessions_list_non_admin_user_raises_403(client):
+    with patch("requests.request", return_value=_mock_response(403, {"error": "site_admin role required"})):
+        with pytest.raises(ApiError) as exc_info:
+            client.sessions_list("the-jwt", user="other@b.com")
+    assert exc_info.value.status_code == 403
+
+
+def test_sessions_revoke_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.sessions_revoke("the-jwt", "abc123")
+    assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/auth/sessions/abc123")
+    assert m.call_args.kwargs["params"] == {}
+
+
+def test_sessions_revoke_passes_user_when_given(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.sessions_revoke("the-jwt", "abc123", user="other@b.com")
+    assert m.call_args.kwargs["params"] == {"user": "other@b.com"}
+
+
+def test_sessions_revoke_others_sends_except_current_true(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True, "revoked": 3})) as m:
+        result = client.sessions_revoke_others("the-jwt")
+    assert result["revoked"] == 3
+    assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/auth/sessions")
+    assert m.call_args.kwargs["params"] == {"except_current": "true"}

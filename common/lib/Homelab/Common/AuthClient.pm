@@ -35,11 +35,23 @@ sub introspect {
 # themselves rather than this module deciding what counts as an error,
 # since e.g. a 409 on registration and a 401 on login mean different
 # things to different callers.
+#
+# Optional client_user_agent/client_ip: this call is itself server-to-
+# server (this module's own Mojo::UserAgent, running inside e.g.
+# homelab-sso's backend) — without these, homelab-api's session-
+# tracking (migrations/007-session-metadata.sql) would record THIS
+# module's own request, not the real browser sitting behind the caller.
+# homelab-sso's authorize_submit passes the actual submitting browser's
+# own headers/remote_address through here for exactly that reason.
 sub login {
     my ($email, $password, %opts) = @_;
     my $api_base = $opts{api_base} // die "login(): api_base required\n";
 
-    my $tx  = $UA->post("$api_base/api/v1/auth/login", json => { email => $email, password => $password });
+    my %payload = (email => $email, password => $password);
+    $payload{client_user_agent} = $opts{client_user_agent} if defined $opts{client_user_agent};
+    $payload{client_ip}         = $opts{client_ip}         if defined $opts{client_ip};
+
+    my $tx  = $UA->post("$api_base/api/v1/auth/login", json => \%payload);
     my $err = $tx->error;
     return { success => 0, error => $err->{message} // 'connection error', _status => 0 }
         if $err && !$err->{code};
