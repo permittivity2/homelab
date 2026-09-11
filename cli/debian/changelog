@@ -1,3 +1,17 @@
+homelab-cli (0.3.17) unstable; urgency=medium
+
+  * Release v0.3.17
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 16:29:08 -0500
+
+homelab-cli (0.3.17) unstable; urgency=medium
+
+  * Rewrite 'sessions list' as an aligned table with short IDs;
+    'sessions revoke' accepts a unique ID prefix; fix missing device/IP
+    displaying as literal 'None'
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 16:29:06 -0500
+
 homelab-cli (0.3.16) unstable; urgency=medium
 
   * Release v0.3.16

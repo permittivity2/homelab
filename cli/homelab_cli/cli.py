@@ -2,6 +2,7 @@
 
 import argparse
 import getpass
+import re
 import sys
 from pathlib import Path
 
@@ -899,9 +900,10 @@ _UA_MOBILE_MARKERS = ("Mobile", "iPhone", "Android")
 
 def summarize_user_agent(raw):
     """Best-effort "Browser / OS / Device" summary of a raw User-Agent
-    string for display; returns the raw string unchanged (this also
-    naturally covers the literal 'unknown' value the server stores for a
-    missing/empty header) when nothing recognizable is found."""
+    string for display; returns the raw string unchanged when nothing
+    recognizable is found. Callers are responsible for the missing-value
+    case (None, or the literal 'unknown' the server stores for a missing/
+    empty header) -- this function only handles real UA strings."""
     if not raw:
         return raw
     browser = next((name for marker, name in _UA_BROWSERS if marker in raw), None)
@@ -910,6 +912,43 @@ def summarize_user_agent(raw):
         return raw
     device = "Mobile" if any(m in raw for m in _UA_MOBILE_MARKERS) else "Desktop"
     return " / ".join(part for part in (browser, os_name, device) if part)
+
+
+_SESSION_ID_LEN = 12
+_TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})(?:\.\d+)?(.*)$")
+
+
+def _short_session_id(jti):
+    return jti[:_SESSION_ID_LEN]
+
+
+def _format_session_timestamp(raw):
+    """Drops sub-second precision from a Postgres timestamptz string for
+    display (e.g. '2026-09-11 16:24:50.074436-05' -> '2026-09-11
+    16:24:50-05') without reinterpreting the timezone -- whatever offset
+    the server already reported is kept as-is, not converted."""
+    if not raw:
+        return "unknown"
+    m = _TIMESTAMP_RE.match(raw)
+    if not m:
+        return raw
+    return (m.group(1).replace("T", " ") + m.group(2)).strip()
+
+
+def _print_table(headers, rows):
+    """Minimal aligned-column table printer -- no new dependency, this
+    CLI's tables are always small (a user's own session count, a domain's
+    DNS records, etc.), so a full library like `tabulate` would be
+    overkill for what's really just consistent column padding."""
+    widths = [
+        max(len(str(h)), max((len(str(r[i])) for r in rows), default=0))
+        for i, h in enumerate(headers)
+    ]
+    def fmt(cells):
+        return "  ".join(str(c).ljust(w) for c, w in zip(cells, widths)).rstrip()
+    print(fmt(headers))
+    for r in rows:
+        print(fmt(r))
 
 
 def cmd_sessions_list(args):
@@ -924,10 +963,24 @@ def cmd_sessions_list(args):
     if not sessions:
         print("(no active sessions)")
         return 0
+    rows = []
     for s in sessions:
-        marker = "  (this session)" if s.get("current") else ""
-        ua = summarize_user_agent(s.get("user_agent"))
-        print(f"{s['jti']}  {ua}  {s.get('ip_address')}  since {s.get('first_seen_at')}{marker}")
+        ua = s.get("user_agent")
+        # None (a session created before device/IP tracking existed --
+        # _refresh carries a NULL forward indefinitely until a real
+        # re-login captures a fresh value) displays the same as the
+        # server's own 'unknown' sentinel for a missing header -- never
+        # the literal Python "None".
+        device = summarize_user_agent(ua) if ua else "unknown"
+        rows.append([
+            _short_session_id(s["jti"]),
+            device,
+            s.get("ip_address") or "unknown",
+            _format_session_timestamp(s.get("first_seen_at")),
+            "*" if s.get("current") else "",
+        ])
+    _print_table(["ID", "DEVICE", "IP ADDRESS", "SINCE", ""], rows)
+    print(f"(* = this session; 'sessions revoke' accepts a unique ID prefix, {_SESSION_ID_LEN} chars shown above is enough)")
     return 0
 
 
@@ -946,28 +999,42 @@ def cmd_sessions_revoke(args):
         return 0
 
     if not args.jti:
-        print("Either a jti or --all-others is required.", file=sys.stderr)
+        print("Either a jti (or a prefix of one) or --all-others is required.", file=sys.stderr)
         return 1
 
-    current = None
-    if not args.user:
-        # Only need this lookup to print the "you just revoked the
-        # session you're using" warning -- a site_admin revoking someone
-        # ELSE's session (args.user set) can't possibly be revoking its
-        # own current one, so skip the extra call in that case.
-        try:
-            current = next(
-                (s["jti"] for s in _client().sessions_list(session["token"]) if s.get("current")), None,
-            )
-        except ApiError:
-            pass
+    # Always resolve against a fresh list rather than trusting a
+    # possibly-abbreviated jti the caller typed straight from a prior
+    # `sessions list` -- this is also how the "you just revoked the
+    # session you're using" warning below gets a reliable answer
+    # (server-computed `current`, not a second, separately-fetched call
+    # to match jtis by hand).
     try:
-        _client().sessions_revoke(session["token"], args.jti, user=args.user)
+        sessions = _client().sessions_list(session["token"], user=args.user)
+    except ApiError as e:
+        print(f"Could not resolve session ID: {e.message}", file=sys.stderr)
+        return 1
+
+    matches = [s for s in sessions if s["jti"] == args.jti or s["jti"].startswith(args.jti)]
+    exact = [s for s in matches if s["jti"] == args.jti]
+    if exact:
+        matches = exact  # a full jti always wins, even over an astronomically unlikely prefix collision
+    if not matches:
+        print(f"No session found matching '{args.jti}'.", file=sys.stderr)
+        return 1
+    if len(matches) > 1:
+        print(f"'{args.jti}' matches {len(matches)} sessions -- use more characters:", file=sys.stderr)
+        for s in matches:
+            print(f"  {_short_session_id(s['jti'])}", file=sys.stderr)
+        return 1
+
+    target = matches[0]
+    try:
+        _client().sessions_revoke(session["token"], target["jti"], user=args.user)
     except ApiError as e:
         print(f"Could not revoke session: {e.message}", file=sys.stderr)
         return 1
-    print(f"Revoked session {args.jti}")
-    if current and args.jti == current:
+    print(f"Revoked session {_short_session_id(target['jti'])}")
+    if target.get("current"):
         print("Note: that was the session this very command just used -- your next command will need to log in again.")
     return 0
 
@@ -1333,7 +1400,7 @@ def build_parser():
     p.set_defaults(func=cmd_sessions_list)
 
     p = sessions_sub.add_parser("revoke", help="Revoke a session (force re-login) -- by jti, or --all-others")
-    p.add_argument("jti", nargs="?", help="The session to revoke (see 'sessions list')")
+    p.add_argument("jti", nargs="?", help="The session's ID, or a unique prefix of one (see 'sessions list')")
     p.add_argument("--all-others", action="store_true", help="Revoke every OTHER session of yours, keep this one")
     p.add_argument("--user", help="Revoke this user's session instead of your own (site_admin only)")
     p.set_defaults(func=cmd_sessions_revoke)
