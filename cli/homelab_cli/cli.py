@@ -221,8 +221,8 @@ def cmd_registry_list(args):
     if not results:
         print("(no features registered)")
         return 0
-    for entry in results:
-        print(f"{entry['feature_name']}: {entry['host']}:{entry['port']}")
+    rows = [[r["feature_name"], r["host"], r["port"]] for r in results]
+    _print_table(["FEATURE", "HOST", "PORT"], rows)
     return 0
 
 
@@ -245,6 +245,7 @@ def cmd_dns_domains_list(args):
     if not domains:
         print("(no domains)")
         return 0
+    rows = []
     for d in domains:
         state = "active" if d["active"] else "disabled"
         flags = []
@@ -252,7 +253,8 @@ def cmd_dns_domains_list(args):
             flags.append("mail")
         if d["dns_managed"]:
             flags.append("dns")
-        print(f"{d['domain_name']}  ({state}; {', '.join(flags) or 'no flags'})")
+        rows.append([d["domain_name"], state, ", ".join(flags) or "none"])
+    _print_table(["DOMAIN", "STATUS", "FLAGS"], rows)
     return 0
 
 
@@ -328,9 +330,8 @@ def cmd_dns_records_list(args):
     if not records:
         print("(no records)")
         return 0
-    for r in records:
-        values = ", ".join(r["content"])
-        print(f"{r['name']}  {r['type']}  {r['ttl']}  {values}")
+    rows = [[r["name"], r["type"], r["ttl"], ", ".join(r["content"])] for r in records]
+    _print_table(["NAME", "TYPE", "TTL", "VALUE"], rows)
     return 0
 
 
@@ -403,9 +404,8 @@ def cmd_dns_dkim_list(args):
     if not selectors:
         print("(no selectors)")
         return 0
-    for s in selectors:
-        extra = f"  retire_after={s['retire_after']}" if s.get("retire_after") else ""
-        print(f"{s['selector']}  {s['state']}{extra}")
+    rows = [[s["selector"], s["state"], s.get("retire_after") or ""] for s in selectors]
+    _print_table(["SELECTOR", "STATE", "RETIRE AFTER"], rows)
     return 0
 
 
@@ -460,9 +460,8 @@ def cmd_dns_recipient_access_list(args):
     if not entries:
         print("(no entries)")
         return 0
-    for e in entries:
-        reason = f"  ({e['reason']})" if e.get("reason") else ""
-        print(f"{e['recipient']}  {e['action']}{reason}")
+    rows = [[e["recipient"], e["action"], e.get("reason") or ""] for e in entries]
+    _print_table(["RECIPIENT", "ACTION", "REASON"], rows)
     return 0
 
 
@@ -532,17 +531,19 @@ def cmd_dns_mail_aliases_list(args):
     if not session:
         return 1
     try:
-        rows = _client().dns_list_mail_aliases(session["token"], destination=args.user)
+        entries = _client().dns_list_mail_aliases(session["token"], destination=args.user)
     except ApiError as e:
         print(f"Could not list mail aliases: {e.message}", file=sys.stderr)
         return 1
-    if not rows:
+    if not entries:
         print("(no entries)")
         return 0
-    for r in rows:
+    rows = []
+    for r in entries:
         state = "active" if r["active"] else "inactive"
         send = "send+receive" if r["send_enabled"] else "receive-only"
-        print(f"{r['source_pattern']}  -> {r['destination']}  {state}  {send}")
+        rows.append([r["source_pattern"], r["destination"], state, send])
+    _print_table(["SOURCE", "DESTINATION", "STATUS", "SEND"], rows)
     return 0
 
 
@@ -601,8 +602,8 @@ def cmd_mail_list(args):
     if not messages:
         print("(no messages)")
         return 0
-    for m in messages:
-        print(f"[{m['uid']}] {m['date']}  {m['from']}  {m['subject']}")
+    rows = [[m["uid"], m["date"], m["from"], m["subject"]] for m in messages]
+    _print_table(["UID", "DATE", "FROM", "SUBJECT"], rows)
     return 0
 
 
@@ -707,9 +708,8 @@ def cmd_mail_blocked(args):
     if not entries:
         print("(no blocked addresses)")
         return 0
-    for e in entries:
-        reason = f"  ({e['reason']})" if e.get("reason") else ""
-        print(f"{e['recipient']}{reason}")
+    rows = [[e["recipient"], e.get("reason") or ""] for e in entries]
+    _print_table(["RECIPIENT", "REASON"], rows)
     return 0
 
 
@@ -730,10 +730,12 @@ def cmd_drive_list(args):
     if not folders and not files:
         print("(empty)")
         return 0
+    rows = []
     for f in folders:
-        print(f"[dir  {f['id']}]  {f['name']}/")
+        rows.append(["dir", f["id"], f["name"] + "/", "", ""])
     for f in files:
-        print(f"[file {f['id']}]  {f['uploaded_at']}  {f['size_bytes']:>10} bytes  {f['filename']}")
+        rows.append(["file", f["id"], f["filename"], f"{f['size_bytes']} bytes", f["uploaded_at"]])
+    _print_table(["TYPE", "ID", "NAME", "SIZE", "UPLOADED"], rows)
     return 0
 
 
@@ -829,10 +831,14 @@ def cmd_jobs_list(args):
     if not jobs:
         print("(no jobs)")
         return 0
+    rows = []
     for j in jobs:
-        size = f"  {j['output_size_bytes']} bytes" if j.get("output_size_bytes") else ""
-        extra = f"  ({j['error_message']})" if j.get("error_message") else ""
-        print(f"[{j['id']}] {j['type']}  {j['state']}  {j['user_email']}  {j['created_at']}{size}{extra}")
+        size = f"{j['output_size_bytes']} bytes" if j.get("output_size_bytes") else ""
+        rows.append([
+            j["id"], j["type"], j["state"], j["user_email"], j["created_at"],
+            size, j.get("error_message") or "",
+        ])
+    _print_table(["ID", "TYPE", "STATE", "USER", "CREATED", "SIZE", "ERROR"], rows)
     return 0
 
 
@@ -1053,10 +1059,14 @@ def cmd_admin_users_list(args):
     except ApiError as e:
         print(f"Could not list users: {e.message}", file=sys.stderr)
         return 1
-    for u in users:
-        roles = ", ".join(u["roles"])
-        active = "active" if u["active"] else "inactive"
-        print(f"[{u['id']}] {u['email']}  ({active})  roles: {roles}")
+    if not users:
+        print("(no users)")
+        return 0
+    rows = [
+        [u["id"], u["email"], "active" if u["active"] else "inactive", ", ".join(u["roles"])]
+        for u in users
+    ]
+    _print_table(["ID", "EMAIL", "STATUS", "ROLES"], rows)
     return 0
 
 

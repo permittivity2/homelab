@@ -1,3 +1,17 @@
+homelab-cli (0.3.18) unstable; urgency=medium
+
+  * Release v0.3.18
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 17:43:59 -0500
+
+homelab-cli (0.3.18) unstable; urgency=medium
+
+  * Reformat every 'list'-style CLI command as an aligned table
+    (registry, dns domains/records/dkim/recipient-access/mail-aliases,
+    mail list/blocked, drive list, jobs list, admin users list)
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 17:43:54 -0500
+
 homelab-cli (0.3.17) unstable; urgency=medium
 
   * Release v0.3.17
