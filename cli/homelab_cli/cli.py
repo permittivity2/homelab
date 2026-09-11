@@ -529,6 +529,70 @@ def cmd_drive_delete(args):
     return 0
 
 
+# --- jobs: homelab-api's /api/v1/jobs/* gateway -> homelab-worker (see
+# ../../worker/README.md). Not nested under `drive` even though the
+# zip-download feature is what submits jobs today -- homelab-worker is
+# deliberately generic, and future job types (SHA1 hashing, image
+# resizing, a full-account export bundle, ...) won't be drive-specific
+# either. Same "just attempt the call and let the server decide" pattern
+# as `admin` below -- `--all` is only honored server-side for a
+# site_admin account (a clean 403 for anyone else), never guessed at
+# client-side. ---
+
+def cmd_jobs_list(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        jobs = _client().jobs_list(session["token"], all_users=args.all, type=args.type, state=args.state)
+    except ApiError as e:
+        print(f"Could not list jobs: {e.message}", file=sys.stderr)
+        return 1
+    if not jobs:
+        print("(no jobs)")
+        return 0
+    for j in jobs:
+        size = f"  {j['output_size_bytes']} bytes" if j.get("output_size_bytes") else ""
+        extra = f"  ({j['error_message']})" if j.get("error_message") else ""
+        print(f"[{j['id']}] {j['type']}  {j['state']}  {j['user_email']}  {j['created_at']}{size}{extra}")
+    return 0
+
+
+def cmd_jobs_show(args):
+    session = _require_session()
+    if not session:
+        return 1
+    try:
+        j = _client().jobs_get(session["token"], args.job_id)
+    except ApiError as e:
+        print(f"Could not show job: {e.message}", file=sys.stderr)
+        return 1
+    for key in ("id", "type", "state", "user_email", "output_name", "output_size_bytes",
+                "error_message", "created_at", "started_at", "completed_at"):
+        print(f"{key}: {j.get(key)}")
+    return 0
+
+
+def cmd_jobs_download(args):
+    session = _require_session()
+    if not session:
+        return 1
+    client = _client()
+    try:
+        job = client.jobs_get(session["token"], args.job_id)
+    except ApiError as e:
+        print(f"Could not look up job: {e.message}", file=sys.stderr)
+        return 1
+    dest = args.output or job.get("output_name") or f"job-{args.job_id}.bin"
+    try:
+        client.jobs_download(session["token"], args.job_id, dest)
+    except ApiError as e:
+        print(f"Download failed: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Downloaded to {dest}")
+    return 0
+
+
 # --- admin: homelab-api's site_admin-gated endpoints (api/README.md's
 # "Admin endpoints" section). No client-side role check here on
 # purpose — these just attempt the call and surface whatever the server
@@ -750,6 +814,24 @@ def build_parser():
     p = drive_sub.add_parser("rmdir", help="Delete a folder, and everything inside it")
     p.add_argument("folder_id")
     p.set_defaults(func=cmd_drive_rmdir)
+
+    jobs = sub.add_parser("jobs", help="Background job status, via homelab-api's jobs gateway -> homelab-worker")
+    jobs_sub = jobs.add_subparsers(dest="jobs_command", required=True)
+
+    p = jobs_sub.add_parser("list", help="List jobs (your own by default; --all requires site_admin)")
+    p.add_argument("--all", action="store_true", help="List every user's jobs, not just your own (site_admin only)")
+    p.add_argument("--type", help="Filter by job type (e.g. zip)")
+    p.add_argument("--state", choices=["pending", "running", "completed", "failed"], help="Filter by state")
+    p.set_defaults(func=cmd_jobs_list)
+
+    p = jobs_sub.add_parser("show", help="Show one job's full detail")
+    p.add_argument("job_id")
+    p.set_defaults(func=cmd_jobs_show)
+
+    p = jobs_sub.add_parser("download", help="Download a finished job's output artifact")
+    p.add_argument("job_id")
+    p.add_argument("--output", help="Destination path (defaults to the job's own output_name)")
+    p.set_defaults(func=cmd_jobs_download)
 
     admin = sub.add_parser("admin", help="Administrative commands (site_admin role required)")
     admin_sub = admin.add_subparsers(dest="admin_command", required=True)

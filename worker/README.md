@@ -230,20 +230,23 @@ the cap. This is a soft resource guideline, not a security boundary, so
 this design accepts that rare, small overshoot rather than adding
 cross-worker serialization for it.
 
-## What this release does and doesn't include
+## What's wired up
 
-This release is the standalone `homelab-worker` package only -- the
-generic engine, the `zip` job type, and its own internal API. **Not**
-included, per the approved plan's phasing (separate, later work):
+This package was built and shipped standalone first (the generic
+engine, the `zip` job type, its own internal API, independently
+testable via `t/basic.t` against nothing but its own
+`/internal/v1/jobs/*` API), per the approved plan's phasing. The rest
+has since landed too:
 
-- `homelab-api`'s `/api/v1/jobs/*` gateway route.
+- `homelab-api`'s `/api/v1/jobs/*` gateway route (`../api/README.md`'s
+  gateway section) -- what `homelab-cli`'s `jobs` command tree talks to.
 - `homelab-drive`'s bulk-select UI, manifest-resolution CTE, and
-  zip-job/bulk-delete proxy routes.
-- `homelab-cli`'s `jobs list/show/download` command tree.
-
-Until those land, this service is fully functional and independently
-testable (see `t/basic.t`) via its own `/internal/v1/jobs/*` API
-directly, but nothing in the rest of the ecosystem calls it yet.
+  zip-job/bulk-delete proxy routes (`../drive/README.md`'s "Bulk select:
+  delete and zip download" section) -- talks to this service directly
+  (not through the gateway above), forwarding the user's own JWT as
+  described in "The auth hand-off" below.
+- `homelab-cli`'s `jobs list/show/download` command tree
+  (`../cli/README.md`).
 
 ## Testing
 

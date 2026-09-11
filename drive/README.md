@@ -288,6 +288,117 @@ the actual bytes/status codes/disk state the backend produces
 an actual click/keypress (no browser-automation tooling in this
 project) — worth a real browser check after touching this code.
 
+## Bulk select: delete and zip download
+
+Checkboxes on both the folder sidebar (`<li>` rows) and the file table
+(`<tr>` rows) — kept as two separate widgets sharing one selection state
+(a `Selection` JS module, same object-literal-API shape as `Lightbox`),
+not merged into one list; merging risked breaking the mobile slide-in
+drawer for no functional gain. A bulk toolbar appears once anything is
+selected, offering **Delete** (synchronous) and **Download as zip**
+(async — see below).
+
+**Delete** (`POST /bulk/delete`, + `/api/v1/bulk/delete`) is a plain
+loop over `_delete_file`/`_delete_folder` — both already do the real
+work correctly (DB row + on-disk blob + derivatives + ownership check)
+and are fast enough for this without any background job. **Folders are
+processed before files**: a file that lives inside a selected folder is
+already gone by the time its own individual delete is attempted, and
+reports `not_found` there — an accepted, expected outcome under this
+app's existing indistinguishable-404 convention (see the JSON API
+section above), not a bug, and it's what makes the deleted/not_found
+split deterministic regardless of what order the request's two id
+arrays happen to list things in.
+
+**Zip download is different — it does NOT build the archive in this
+process.** The first design draft did exactly that (`Mojo::IOLoop->subprocess`
+forked inside this app) and was explicitly rejected during planning:
+zip-building isn't really a `drive` concern, and any future "this could
+take a while" need in this ecosystem (SHA1 hashing, image resizing,
+video transcoding, a full-account export bundling chats/emails/files)
+would have had to reinvent the same in-process mechanism again. Instead
+there's a new, separate, centralized service, `homelab-worker`
+(`../worker/README.md`), that may run on a completely different host
+and knows nothing about `drive`'s schema at all — it just fetches N
+URLs (each with its own forwarded auth header) and bundles them into a
+zip.
+
+### Resolving a selection into a manifest
+
+Storage here is **flat** — every file's bytes live at
+`storage_path/<uuid>`, with no on-disk mirroring of the logical folder
+tree (see "Folders" above) — so a zip can't just archive real
+directories. `_resolve_manifest()` turns a selection (`file_ids` +
+`folder_ids`) into a flat list of `{id, uuid, zip_path}`, one per real
+file, via a recursive CTE over `drive.folders`/`drive.files` that
+concatenates folder names into a path as it walks down. Two real edge
+cases, both handled:
+
+- **A folder *and* a file already inside it both selected** — collapses
+  to *one* entry. Folder-derived entries are resolved into `%by_id`
+  first; the individually-selected-file pass then skips any id already
+  present, so the nested path always wins over the flat one.
+- **Duplicate filenames within one folder** — `drive.files` has no
+  `UNIQUE(folder_id, filename)` constraint, so two files can legitimately
+  share a name there. `_dedupe_zip_path()` renames on collision with a
+  numbered suffix (`notes.txt` → `notes (01).txt`), applied across the
+  *whole* resolved manifest (one shared "seen" set), not reset per
+  folder.
+
+A `file_ids`/`folder_ids` entry that isn't actually owned by the caller
+simply doesn't match either query's `user_email = ?` filter and is
+silently dropped from the manifest — same indistinguishable-404-style
+convention as everywhere else in this file, not a separate error path.
+
+### The auth hand-off to homelab-worker
+
+This app is a cookie-session BFF that never exposes a raw JWT to its own
+browser JS — but it already holds one server-side (`$c->session('token')`,
+set at SSO login, re-verified via `introspect()` on every request via
+`_current_email`/`_current_auth`). It's the *same kind* of token
+`homelab-cli` sends as `Authorization: Bearer`, and it's already
+accepted by this app's own `GET /api/v1/files/:id`. So `create_zip_job`
+forwards that exact token as every manifest entry's `auth_header`, and
+`homelab-worker` presents it back to `public_base_url . "/api/v1/files/$id"`
+(a static config value — see `config/drive.example.yml` — deliberately
+*not* derived from the incoming request's `Host` header, since whatever
+built the manifest and whatever `homelab-worker` actually fetches from
+must agree exactly) to fetch each file, which re-verifies it the normal
+way. No new auth primitive needed anywhere in this hand-off.
+
+**Explicit, acknowledged tradeoff** (see `../worker/README.md` for the
+full writeup): this is the user's real, full-scope session JWT, not a
+narrow "fetch this one file" credential — `homelab-api` has no
+token-narrowing capability today. The token only ever lives in the
+job's `input` JSONB on `homelab-worker`'s own side for as long as the
+job is pending/running, bounded by the JWT's own ~30-minute expiry, and
+this app's own `zip_job_status`/`download_zip` proxies never see or
+relay it back out (they relay `homelab-worker`'s *response*, which never
+includes raw `input` either — see `Controller::Jobs::_public_row`
+there).
+
+### Zip job routes — thin proxies, not the implementation
+
+`POST /zip-jobs` (+ `/api/v1/zip-jobs`) resolves the manifest, submits
+it to `homelab-worker` (`Homelab::Common::Registry::lookup`, then a
+direct HTTP `POST /internal/v1/jobs` — not `Homelab::Common::Proxy::forward`,
+since this needs to *build* a new request with the resolved manifest
++forwarded JWT, not relay the incoming one unchanged) and hands the
+resulting job id straight back. `GET /zip-jobs/:id` and
+`GET /zip-jobs/:id/download` (+ `/api/v1/...` equivalents) are pure
+pass-throughs to `homelab-worker`'s own `GET /internal/v1/jobs/:id`
+and `.../download` — this app stores nothing at all about a zip job
+beyond what's needed to make each forwarding call; ownership/`site_admin`
+visibility is enforced entirely worker-side.
+
+The frontend polls `GET /zip-jobs/:id` every 2 seconds while
+`state` is `pending`/`running`, then swaps in a real
+`<a href="/zip-jobs/:id/download" download>` link once `completed` (or
+shows the job's `error_message` if `failed`) — deliberately a plain
+link, not an auto-triggered `fetch()`+blob download: a large archive
+held entirely in memory as a blob is a real crash risk on mobile, and a
+plain link keeps HTTP `Range`-resume for free.
+
 ## Mobile layout
 
 Built desktop-first, with no responsive handling at all until a user
@@ -426,4 +537,12 @@ real (self-generated, no external fixture needed) JPEG gets both
 derivatives on disk and served correctly, a non-image upload gets
 neither (and isn't itself broken by the attempt), cross-user isolation
 on the two new routes, and that deleting a file also unlinks its
-derivatives, not just the original.
+derivatives, not just the original. `t/bulk.t` covers bulk select: mixed
+files+folders delete (including the folder-containing-a-selected-file
+`not_found` case), manifest resolution (nested folders, the
+folder+nested-file dedup case, the duplicate-filename case), and a real
+end-to-end zip job — submit, poll through `homelab-worker`'s real
+claim/run cycle, download, and unzip to confirm the archive's actual
+folder structure and file contents match the original selection exactly
+— which additionally needs a real, already-registered, reachable
+`homelab-worker` (see `../worker/README.md`).

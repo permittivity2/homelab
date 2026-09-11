@@ -106,6 +106,19 @@ sub startup ($self) {
     $r->any('/api/v1/domains' => sub ($c) { $self->_gateway($c, 'homelab-domain-admin', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
     $r->any('/api/v1/domains/*capture' => sub ($c) { $self->_gateway($c, 'homelab-domain-admin', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
 
+    # homelab-worker's own routes are already /internal/v1/jobs/... --
+    # same strip-"/api/v1"-then-reprepend-"/internal/v1" transform as
+    # /api/v1/domains above (client /api/v1/jobs -> backend
+    # /internal/v1/jobs, "jobs" intact both sides), and the same
+    # two-routes-not-one requirement for the same reason (a *capture
+    # wildcard never matches the bare "/api/v1/jobs" with nothing after
+    # it -- see t/gateway.t). homelab-drive itself talks to
+    # homelab-worker directly (not through this gateway) when building a
+    # zip job's manifest and forwarding the user's JWT -- this route is
+    # for homelab-cli's own `jobs list/show/download` commands.
+    $r->any('/api/v1/jobs' => sub ($c) { $self->_gateway($c, 'homelab-worker', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+    $r->any('/api/v1/jobs/*capture' => sub ($c) { $self->_gateway($c, 'homelab-worker', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+
     return;
 }
 

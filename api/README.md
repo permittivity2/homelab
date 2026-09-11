@@ -87,7 +87,7 @@ self-service "become the first admin" endpoint by design — the first
 same as `test-admin@test.mailmasker.org` was granted. This is what
 `homelab-cli admin` talks to.
 
-## Client-facing gateway (`/api/v1/drive/*`, `/api/v1/mail/*`, `/api/v1/domains/*`)
+## Client-facing gateway (`/api/v1/drive/*`, `/api/v1/mail/*`, `/api/v1/domains/*`, `/api/v1/jobs/*`)
 
 **This app is the only address a client (`homelab-cli`, or any
 third-party script) ever needs** — like Shopify's API or GitHub's SSH
@@ -95,10 +95,11 @@ interface, not a "know every feature's own address" design. Added
 2026-09-09 after exactly that complaint: the CLI briefly needed 6
 separate addresses (one per feature) before this existed.
 
-`/api/v1/drive/*`, `/api/v1/mail/*`, and `/api/v1/domains/*` forward the
+`/api/v1/drive/*`, `/api/v1/mail/*`, `/api/v1/domains/*`, and
+`/api/v1/jobs/*` forward the
 request (method, path, query, `Authorization` header, body — including
 real multipart file uploads) to `homelab-drive`, `homelab-mailbridge`,
-and `homelab-domain-admin` respectively, resolving each one's
+`homelab-domain-admin`, and `homelab-worker` respectively, resolving each one's
 *internal* address via the service registry server-side
 (`$self->registry->lookup(...)` — direct in-process DB access, not an
 HTTP round trip to itself) and relaying the response straight back.
@@ -141,6 +142,16 @@ character after its own leading `/`, so it never matches the bare
 `/api/v1/domains` (list/create) — only `/api/v1/domains/<something>`.
 Drive/mail never hit this because they have no bare top-level resource
 with nothing after the prefix.
+
+`homelab-worker`'s own routes are `/internal/v1/jobs/...`, same
+strip-`/api/v1`-then-reprepend-`/internal/v1` transform as domains
+above, and the same two-route requirement (`/api/v1/jobs` plus
+`/api/v1/jobs/*capture`) for the same bare-path reason. Note that
+`homelab-drive` itself talks to `homelab-worker` *directly* (not
+through this gateway) when it submits a zip job and forwards the
+caller's JWT for the worker to fetch files with — this gateway route
+exists for `homelab-cli`'s own `jobs list/show/download` commands, see
+`../worker/README.md` and `../cli/README.md`.
 
 ## Testing
 

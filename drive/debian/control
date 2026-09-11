@@ -16,7 +16,7 @@ Depends: perl (>= 5.36),
          libimage-magick-perl,
          libfile-libmagic-perl,
          adduser
-Recommends: homelab-database, homelab-pgbouncer, homelab-api, homelab-sso
+Recommends: homelab-database, homelab-pgbouncer, homelab-api, homelab-sso, homelab-worker
 Description: File storage web UI for the homelab-* ecosystem
  A BFF-style Mojolicious app: browsers talk only to this app, never
  directly to homelab-api or homelab-sso. Login is delegated entirely to

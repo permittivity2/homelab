@@ -12,6 +12,17 @@
 homelab_api:
   base_url: https://login.test.mailmasker.org   # wherever homelab-api is actually reachable
 
+# This instance's own PUBLIC address, as another service (specifically
+# homelab-worker, building a zip job's manifest -- see README.md's "Bulk
+# delete + zip download" section) would reach it. Deliberately a static
+# config value, not derived from the incoming request's Host header /
+# MOJO_REVERSE_PROXY handling -- whatever built the manifest and
+# whatever homelab-worker actually fetches from must agree exactly, and
+# a static value is simpler to reason about (and test) than trusting
+# proxy headers for a URL handed to a THIRD service, not just rendered
+# back to the same browser that sent the request.
+public_base_url: https://drive.test.mailmasker.org
+
 # homelab-sso is the only place a user ever types a password. This app
 # redirects here for /login and /logout; postinst prompts for base_url
 # and client_secret via debconf (the secret must match exactly what

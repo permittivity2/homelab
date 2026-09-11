@@ -28,6 +28,10 @@ Every top-level directory is its own Debian package / Perl (or, for
 - **`webproxy/`** (nginx), **`haproxy/`** — edge/routing.
 - **`drive/`**, **`backup-client/`**, **`backup-server/`** —
   storage/ops.
+- **`worker/`** — `homelab-worker`, a generic, host-independent
+  background-job engine (long-running work like zip-building, submitted
+  over HTTP by any other feature) — see its own README for the job-type
+  extension model.
 - **`dhcp/`**, **`chat/`**, **`call/`** — extensibility proof: minimal
   scaffolded stubs proving a brand-new feature type needs no core
   changes to join the ecosystem. Not fully built out — see each
@@ -41,9 +45,14 @@ Every top-level directory is its own Debian package / Perl (or, for
 - **Synchronous calls** between features go over plain HTTP, with the
   destination looked up from a small service-registry table (never
   hardcoded IPs).
-- **Asynchronous/fan-out work** goes through a Postgres-backed job
-  queue ([Minion](https://metacpan.org/pod/Minion)) — durable, and
-  needs no infrastructure beyond the Postgres you already have.
+- **Asynchronous/fan-out work** goes through a durable, Postgres-backed
+  job mechanism (`SELECT ... FOR UPDATE SKIP LOCKED` + a
+  `Mojo::IOLoop->recurring` timer, not a separate queue library) —
+  needs no infrastructure beyond the Postgres you already have. Long-
+  running work (e.g. building a zip archive) is submitted to
+  `homelab-worker`, a small, generic, host-independent job-runner
+  service rather than run in-process inside whatever feature needs it —
+  see `worker/README.md`.
 - **Each feature owns a narrow Postgres schema**, with two roles: a
   CRUD-only runtime role (what the running service holds) and a
   separate CRUD+DDL migration role (used only transiently at

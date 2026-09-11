@@ -10,9 +10,11 @@ WriteMakefile(
     LICENSE      => 'agpl_3',
     INSTALLDIRS  => 'vendor',
     PREREQ_PM    => {
-        'Mojolicious' => '9.0',
-        'YAML::XS'    => '0.0',
-        'Mojo::Pg'    => '4.0',
+        'Mojolicious'   => '9.0',
+        'YAML::XS'      => '0.0',
+        'Mojo::Pg'      => '4.0',
+        'File::LibMagic' => '0.0',
+        'Image::Magick' => '0.0',
     },
     TEST_REQUIRES => {
         'Test::More' => '1.3',

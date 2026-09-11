@@ -105,6 +105,28 @@ Backed by `homelab-domain-admin` through `homelab-api`'s
 also covers DKIM rotation and per-recipient mail allow/block once those
 land (their `dns` subcommands don't exist yet).
 
+## Background jobs (`jobs`)
+
+```bash
+homelab-cli jobs list [--all] [--type zip] [--state pending|running|completed|failed]
+homelab-cli jobs show <job-id>
+homelab-cli jobs download <job-id> [--output <path>]
+```
+
+Not nested under `drive`, even though `drive`'s bulk "download as zip"
+feature is the only thing that submits a job today — `homelab-worker`
+(`../worker/README.md`) is a deliberately generic background-job engine,
+and future job types won't be drive-specific either; this CLI's
+`list`/`show`/`download` work the same regardless of job type.
+
+`list` shows your own jobs by default; `--all` requests every user's
+jobs, honored server-side only for a `site_admin` account (a clean
+`403` otherwise, not a silently-scoped-down result — same "just attempt
+the call and surface whatever the server decides" approach as `admin`,
+below). `download` defaults its destination filename to the job's own
+`output_name` when `--output` is omitted. Backed by `homelab-worker`
+through `homelab-api`'s `/api/v1/jobs/*` gateway.
+
 ## Administration (`admin`)
 
 ```bash

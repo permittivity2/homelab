@@ -130,6 +130,28 @@
   .file-actions button:hover { color: #d1453b; border-color: #d1453b; }
   .empty-state { padding: 2rem; text-align: center; color: #9aa0ab; font-size: 0.9rem; }
 
+  /* ── Bulk select: delete + zip download ── */
+  .select-checkbox { width: 17px; height: 17px; cursor: pointer; accent-color: #3562d4; vertical-align: middle; }
+  .folder-list li .select-checkbox { margin-right: 0.5rem; }
+  th.select-col, td.select-col { width: 2rem; text-align: center; padding-right: 0; }
+
+  .bulk-toolbar {
+    display: none; align-items: center; gap: 0.75rem; background: #eaf0fd; border: 1px solid #b9cdf5;
+    border-radius: 8px; padding: 0.6rem 1rem; margin-bottom: 1.25rem; font-size: 0.85rem; color: #1a1a1a;
+  }
+  .bulk-toolbar.active { display: flex; flex-wrap: wrap; }
+  .bulk-toolbar .count { font-weight: 600; }
+  .bulk-toolbar button { padding: 0.4rem 0.8rem; border: none; border-radius: 5px; cursor: pointer; font-size: 0.85rem; }
+  .bulk-toolbar .btn-zip { background: #3562d4; color: #fff; }
+  .bulk-toolbar .btn-zip:hover { background: #2a4fb0; }
+  .bulk-toolbar .btn-delete { background: #d1453b; color: #fff; }
+  .bulk-toolbar .btn-delete:hover { background: #ad342c; }
+  .bulk-toolbar .btn-clear { background: none; border: 1px solid #b9cdf5; color: #1a1a1a; }
+  .bulk-toolbar .zip-status { display: flex; align-items: center; gap: 0.4rem; }
+  .bulk-toolbar .zip-status a { color: #1f9d55; font-weight: 600; text-decoration: none; }
+  .bulk-toolbar .zip-status a:hover { text-decoration: underline; }
+  .bulk-toolbar .zip-status .zip-error { color: #d1453b; }
+
   .file-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 4px; vertical-align: middle; margin-right: 0.5rem; cursor: pointer; }
 
   /* ── Image lightbox / slideshow ── */
@@ -177,6 +199,8 @@
     td a, .folder-list a { color: #e6e8eb; }
     form.new-folder input[type=text] { background: #16181d; border-color: #2c2f37; color: #e6e8eb; }
     .folder-list li.drag-over, main.drag-over { background: rgba(53, 98, 212, 0.15); }
+    .bulk-toolbar { background: #1c2333; border-color: #33436b; color: #e6e8eb; }
+    .bulk-toolbar .btn-clear { border-color: #33436b; color: #e6e8eb; }
   }
 
   /* ── Mobile (phone/small-tablet) layout ──
@@ -242,6 +266,9 @@
     #files-table { min-width: 560px; }
     .file-actions button { min-height: 40px; padding: 0.4rem 0.7rem; }
 
+    .select-checkbox { width: 20px; height: 20px; }
+    .bulk-toolbar button { min-height: 40px; }
+
     .lightbox-controls button, .lightbox-btn { font-size: 22px; padding: 8px 10px; }
     .lightbox-nav { width: 42px; height: 42px; font-size: 26px; }
   }
@@ -280,6 +307,7 @@
 % }
 % for my $f (@$folders) {
       <li data-folder-id="<%= $f->{id} %>">
+        <input type="checkbox" class="select-checkbox" data-kind="folder" data-id="<%= $f->{id} %>" data-name="<%= $f->{name} %>" aria-label="Select <%= $f->{name} %>">
         <a href="/folders/<%= $f->{id} %>">📁 <%= $f->{name} %></a>
         <form method="post" action="/folders/<%= $f->{id} %>/delete"
               onsubmit="return confirm('Delete \'<%= $f->{name} %>\' and everything inside it?')">
@@ -315,6 +343,14 @@
       <span class="drop-tip">or drag files/folders here or onto a folder</span>
     </form>
 
+    <div class="bulk-toolbar" id="bulk-toolbar">
+      <span class="count"><span id="bulk-count">0</span> selected</span>
+      <button type="button" class="btn-zip" id="bulk-zip">Download as zip</button>
+      <button type="button" class="btn-delete" id="bulk-delete">Delete</button>
+      <button type="button" class="btn-clear" id="bulk-clear">Clear selection</button>
+      <span class="zip-status" id="zip-status"></span>
+    </div>
+
 % if (!@$files && !@$folders) {
     <div class="empty-state">This folder is empty. Upload a file or create a folder to get started.</div>
 % } else {
@@ -322,6 +358,7 @@
     <table id="files-table">
       <thead>
         <tr>
+          <th class="select-col"></th>
           <th data-sort="name">Name</th>
           <th data-sort="size">Size</th>
           <th data-sort="type">Type</th>
@@ -334,6 +371,7 @@
 %   my $is_image = ($f->{mime_type} // '') =~ m{^image/};
       <tr data-id="<%= $f->{id} %>" data-name="<%= lc($f->{filename}) %>" data-filename="<%= $f->{filename} %>"
           data-size="<%= $f->{size_bytes} %>" data-type="<%= lc($f->{mime_type} // '') %>" data-date="<%= $f->{uploaded_at} %>">
+        <td class="select-col"><input type="checkbox" class="select-checkbox" data-kind="file" data-id="<%= $f->{id} %>" data-name="<%= $f->{filename} %>" aria-label="Select <%= $f->{filename} %>"></td>
         <td>
 % if ($is_image) {
           <img src="/files/<%= $f->{id} %>/thumbnail" class="file-thumb" loading="lazy" alt=""
@@ -941,6 +979,154 @@ var Lightbox = (function () {
     aside.classList.contains('open') ? closeDrawer() : openDrawer();
   });
   backdrop.addEventListener('click', closeDrawer);
+})();
+</script>
+
+<script>
+// Bulk select: delete + zip download -- checkboxes on BOTH the folder
+// sidebar (<li>) and the file table (<tr>) feed one shared selection
+// state here (kept as two separate widgets rather than merging them
+// into one list/table, to avoid breaking the mobile slide-in drawer
+// behavior for no functional gain -- see README.md's "Bulk select"
+// section). Same object-literal-API IIFE shape as the Lightbox module
+// above. Zip-building itself does NOT happen in this process -- see
+// App.pm's create_zip_job/zip_job_status/download_zip, which just proxy
+// to the separate homelab-worker service; this script only talks to
+// this page's own /bulk/delete and /zip-jobs routes via fetch() with
+// credentials: 'same-origin', same pattern the drag-and-drop upload
+// script above already uses.
+var Selection = (function () {
+  'use strict';
+
+  var selected = new Map(); // "kind:id" -> {kind, id, name}
+  var pollTimer = null;
+
+  function checkboxes() {
+    return Array.prototype.slice.call(document.querySelectorAll('.select-checkbox'));
+  }
+
+  function key(kind, id) { return kind + ':' + id; }
+
+  function idsOfKind(kind) {
+    var ids = [];
+    selected.forEach(function (v) { if (v.kind === kind) ids.push(v.id); });
+    return ids;
+  }
+
+  function stopPoll() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function render() {
+    var toolbar = document.getElementById('bulk-toolbar');
+    var count = document.getElementById('bulk-count');
+    if (!toolbar || !count) return;
+    count.textContent = selected.size;
+    toolbar.classList.toggle('active', selected.size > 0);
+    if (selected.size === 0) {
+      var status = document.getElementById('zip-status');
+      if (status) status.innerHTML = '';
+      stopPoll();
+    }
+  }
+
+  function onCheckboxChange(cb) {
+    var kind = cb.dataset.kind, id = cb.dataset.id, name = cb.dataset.name || '';
+    if (cb.checked) selected.set(key(kind, id), { kind: kind, id: id, name: name });
+    else selected.delete(key(kind, id));
+    render();
+  }
+
+  function clear() {
+    checkboxes().forEach(function (cb) { cb.checked = false; });
+    selected.clear();
+    render();
+  }
+
+  async function doDelete() {
+    if (!selected.size) return;
+    if (!confirm('Delete ' + selected.size + ' selected item(s)? This cannot be undone.')) return;
+    var body = { file_ids: idsOfKind('file'), folder_ids: idsOfKind('folder') };
+    var resp;
+    try {
+      resp = await fetch('/bulk/delete', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+    } catch (e) {
+      alert('Could not reach the server.');
+      return;
+    }
+    if (!resp.ok) { alert('Delete failed.'); return; }
+    location.reload();
+  }
+
+  function pollJob(id, status) {
+    stopPoll();
+    pollTimer = setInterval(async function () {
+      var resp;
+      try {
+        resp = await fetch('/zip-jobs/' + id, { credentials: 'same-origin' });
+      } catch (e) {
+        return; // transient network hiccup -- just try again next tick
+      }
+      if (!resp.ok) {
+        stopPoll();
+        if (status) status.innerHTML = '<span class="zip-error">Lost track of the zip job.</span>';
+        return;
+      }
+      var job = await resp.json();
+      if (job.state === 'completed') {
+        stopPoll();
+        if (status) {
+          status.innerHTML = '<a href="/zip-jobs/' + id + '/download" download>Download '
+            + (job.output_name || 'zip') + '</a>';
+        }
+      } else if (job.state === 'failed') {
+        stopPoll();
+        if (status) status.innerHTML = '<span class="zip-error">Zip failed: ' + (job.error_message || 'unknown error') + '</span>';
+      } else if (status) {
+        status.innerHTML = '<span class="spinner"></span> Building zip… (' + job.state + ')';
+      }
+    }, 2000);
+  }
+
+  async function doZip() {
+    if (!selected.size) return;
+    var status = document.getElementById('zip-status');
+    var body = { file_ids: idsOfKind('file'), folder_ids: idsOfKind('folder') };
+    if (status) status.innerHTML = '<span class="spinner"></span> Building zip…';
+
+    var resp;
+    try {
+      resp = await fetch('/zip-jobs', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+    } catch (e) {
+      if (status) status.innerHTML = '<span class="zip-error">Could not reach the server.</span>';
+      return;
+    }
+    if (!resp.ok) {
+      var err = await resp.json().catch(function () { return {}; });
+      if (status) status.innerHTML = '<span class="zip-error">' + (err.error || 'Could not start zip job.') + '</span>';
+      return;
+    }
+    var job = await resp.json();
+    pollJob(job.id, status);
+  }
+
+  checkboxes().forEach(function (cb) {
+    cb.addEventListener('change', function () { onCheckboxChange(cb); });
+  });
+  var zipBtn = document.getElementById('bulk-zip');
+  var deleteBtn = document.getElementById('bulk-delete');
+  var clearBtn = document.getElementById('bulk-clear');
+  if (zipBtn) zipBtn.addEventListener('click', doZip);
+  if (deleteBtn) deleteBtn.addEventListener('click', doDelete);
+  if (clearBtn) clearBtn.addEventListener('click', clear);
+
+  return { clear: clear };
 })();
 </script>
 </body>

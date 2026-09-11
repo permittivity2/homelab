@@ -194,6 +194,39 @@ class Client:
     def mail_send(self, token, to, subject, body):
         return self._request("POST", "/api/v1/mail/send", headers=self._auth(token), json={"to": to, "subject": subject, "body": body})
 
+    # --- Jobs, via homelab-api's /api/v1/jobs/* gateway -> homelab-worker
+    # (see ../../worker/README.md). A generic background-job engine --
+    # zip-and-download (submitted by homelab-drive, not this CLI) is the
+    # only job type today, but this client (and the `jobs` command tree
+    # in cli.py) is deliberately type-agnostic: list/show/download work
+    # the same way regardless of what kind of job it is. ---
+    def jobs_list(self, token, all_users=False, type=None, state=None):
+        params = {}
+        if all_users:
+            params["all"] = 1
+        if type:
+            params["type"] = type
+        if state:
+            params["state"] = state
+        return self._request("GET", "/api/v1/jobs", headers=self._auth(token), params=params)
+
+    def jobs_get(self, token, job_id):
+        return self._request("GET", f"/api/v1/jobs/{job_id}", headers=self._auth(token))
+
+    def jobs_download(self, token, job_id, dest_path):
+        try:
+            resp = requests.get(
+                f"{self.api_base}/api/v1/jobs/{job_id}/download", headers=self._auth(token),
+                timeout=60, stream=True,
+            )
+        except requests.exceptions.RequestException as e:
+            raise ApiError(0, str(e)) from e
+        if not resp.ok:
+            raise ApiError(resp.status_code, _error_message(resp))
+        with open(dest_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                f.write(chunk)
+
 
 def _error_message(resp):
     try:

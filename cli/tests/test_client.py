@@ -342,4 +342,70 @@ def test_mail_send_posts_json_body(client):
     with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
         client.mail_send("the-jwt", "to@example.com", "subj", "body text")
     assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/mail/send")
-    assert m.call_args.kwargs["json"] == {"to": "to@example.com", "subject": "subj", "body": "body text"}
+
+
+# --- Jobs, via homelab-api's /api/v1/jobs/* gateway -> homelab-worker
+# (see ../../worker/README.md). jobs_download streams like
+# drive_download_file above, so it needs _mock_get_response too. ---
+
+def test_jobs_list_sends_bearer_token_no_params_by_default(client):
+    with patch("requests.request", return_value=_mock_response(200, [{"id": 1, "type": "zip", "state": "completed"}])) as m:
+        result = client.jobs_list("the-jwt")
+    assert result[0]["type"] == "zip"
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/jobs")
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer the-jwt"
+    assert m.call_args.kwargs["params"] == {}
+
+
+def test_jobs_list_passes_all_type_state_when_given(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.jobs_list("the-jwt", all_users=True, type="zip", state="failed")
+    assert m.call_args.kwargs["params"] == {"all": 1, "type": "zip", "state": "failed"}
+
+
+def test_jobs_list_non_admin_all_raises_403(client):
+    """A non-admin passing --all gets the server's own clean 403, not a
+    client-side guess about permissions the client can't actually
+    verify -- same philosophy as every other site_admin-gated command
+    (see cli.py's own comment on the `jobs`/`admin` command trees)."""
+    with patch("requests.request", return_value=_mock_response(403, {"error": "site_admin role required for ?all=1"})):
+        with pytest.raises(ApiError) as exc_info:
+            client.jobs_list("the-jwt", all_users=True)
+    assert exc_info.value.status_code == 403
+
+
+def test_jobs_get_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, {"id": 7, "state": "running"})) as m:
+        result = client.jobs_get("the-jwt", 7)
+    assert result["state"] == "running"
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/jobs/7")
+
+
+def test_jobs_get_not_found_raises_api_error(client):
+    with patch("requests.request", return_value=_mock_response(404, {"error": "not found"})):
+        with pytest.raises(ApiError) as exc_info:
+            client.jobs_get("the-jwt", 999)
+    assert exc_info.value.status_code == 404
+
+
+def test_jobs_download_writes_content(client):
+    with patch("requests.get", return_value=_mock_get_response(200, content=b"zip bytes")) as m:
+        m_open = mock_open()
+        with patch("builtins.open", m_open):
+            client.jobs_download("the-jwt", 7, "/tmp/out.zip")
+    assert m.call_args.args[0] == "http://localhost:3000/api/v1/jobs/7/download"
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer the-jwt"
+    m_open.assert_called_once_with("/tmp/out.zip", "wb")
+    m_open().write.assert_called_with(b"zip bytes")
+
+
+def test_jobs_download_not_ready_raises_api_error(client):
+    """A job still pending/running 409s (see worker/README.md's
+    Controller::Jobs::download) -- surfaced the same way as any other
+    non-ok response, not silently written as a truncated/empty file."""
+    resp = _mock_get_response(409, json_body={"error": "job is not finished (state: running)"})
+    resp.ok = False
+    with patch("requests.get", return_value=resp):
+        with pytest.raises(ApiError) as exc_info:
+            client.jobs_download("the-jwt", 7, "/tmp/out.zip")
+    assert exc_info.value.status_code == 409

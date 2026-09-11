@@ -18,6 +18,7 @@ has 'sso_client_id';
 has 'sso_client_secret';
 has 'sso_redirect_uri';
 has 'image_config';
+has 'public_base_url';
 
 sub startup ($self) {
     # Installed via EXE_FILES to /usr/bin/homelab-drive, with no
@@ -44,6 +45,7 @@ sub startup ($self) {
     $self->storage_path($config->{storage}{path} // '/var/lib/homelab/drive-storage');
     make_path($self->storage_path);
     $self->image_config($config->{image} // {});
+    $self->public_base_url($config->{public_base_url} // die "config: public_base_url is required\n");
 
     my $sso = $config->{sso} // die "config: sso.* is required (see config/drive.example.yml)\n";
     $self->sso_base($sso->{base_url} // die "config: sso.base_url is required\n");
@@ -81,6 +83,24 @@ sub startup ($self) {
     $r->get('/files/:id/thumbnail')      ->to('drive#thumbnail');
     $r->get('/files/:id/slideshow-image')->to('drive#slideshow_image');
 
+    # --- Bulk select: delete (synchronous, see _delete_file/_delete_folder
+    # below -- both are already fast enough for a loop, no job needed) and
+    # zip-and-download (async, via homelab-worker -- see
+    # README.md's "Bulk delete + zip download" section and
+    # ../../CLAUDE.md/the approved plan for why zip-building does NOT run
+    # in-process here). Dual-mounted under /api/v1/... too, same
+    # Bearer-or-cookie handling as every other route in this file
+    # (_current_auth checks the Authorization header first). ---
+    $r->post('/bulk/delete')        ->to('drive#bulk_delete');
+    $r->post('/api/v1/bulk/delete') ->to('drive#bulk_delete');
+
+    $r->post('/zip-jobs')             ->to('drive#create_zip_job');
+    $r->get('/zip-jobs/:id')          ->to('drive#zip_job_status');
+    $r->get('/zip-jobs/:id/download') ->to('drive#download_zip');
+    $r->post('/api/v1/zip-jobs')             ->to('drive#create_zip_job');
+    $r->get('/api/v1/zip-jobs/:id')          ->to('drive#zip_job_status');
+    $r->get('/api/v1/zip-jobs/:id/download') ->to('drive#download_zip');
+
     # --- JSON API (Bearer-token authenticated, e.g. homelab-cli or any
     # third-party script -- see README.md and ../../CLAUDE.md). Not
     # session-cookie-based like the browser routes above: a CLI holds
@@ -112,8 +132,19 @@ use File::LibMagic;
 use File::Path qw(make_path);
 use Image::Magick;
 use Mojo::URL;
+use Mojo::UserAgent;
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::Common::SSOClient qw(exchange_code);
+use Homelab::Common::Registry qw(lookup);
+
+# Separate from any UA Homelab::Common::* modules keep internally --
+# used only for the two homelab-worker hand-offs below (submitting/
+# polling/downloading a zip job). request_timeout is generous: job
+# creation itself is fast (worker just inserts a row), but this UA is
+# also reused for a browser-initiated ->download_zip() pass-through,
+# which streams a potentially large finished archive back through this
+# process.
+my $WORKER_UA = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 60);
 
 my $MAGIC = File::LibMagic->new;
 
@@ -132,11 +163,25 @@ my $MAGIC = File::LibMagic->new;
 # holding its own homelab-api JWT directly -- no session/cookie
 # involved at all for a CLI client).
 sub _current_email ($c) {
+    my ($email) = _current_auth($c);
+    return $email;
+}
+
+# Same as _current_email above, but also hands back the raw JWT itself
+# -- needed for the zip-job hand-off to homelab-worker (see
+# create_zip_job below and README.md's "the auth hand-off" section):
+# the worker fetches each manifest entry from THIS app's own
+# /api/v1/files/:id using this exact forwarded token, so it has to be
+# the real, still-valid JWT _current_email() already verified above,
+# not re-derived some other way. Returns (undef, undef) on any auth
+# failure, same "caller renders its own 401" convention as
+# _current_email.
+sub _current_auth ($c) {
     my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
     $jwt //= $c->session('token');
-    return undef unless $jwt;
+    return (undef, undef) unless $jwt;
     my $result = introspect($jwt, api_base => $c->app->api_base);
-    return $result ? $result->{email} : undef;
+    return $result ? ($result->{email}, $jwt) : (undef, undef);
 }
 
 # Walks the parent chain from the given folder up to the root,
@@ -720,6 +765,267 @@ sub api_delete ($c) {
     my ($deleted) = _delete_file($c, $email, $c->param('id'));
     return $c->render(json => { error => 'not found' }, status => 404) unless $deleted;
     return $c->render(json => { ok => \1 });
+}
+
+# --- Bulk select: delete + zip-and-download -----------------------
+
+# POST /bulk/delete (+ /api/v1/bulk/delete) {file_ids: [...], folder_ids: [...]}
+# Both _delete_file/_delete_folder already do the real work correctly
+# (DB row + on-disk blob + derivatives + ownership check, folder version
+# already recursive) and are fast enough for a synchronous loop over a
+# selection -- no job/worker involvement needed here at all, matching
+# the approved plan: only zip-building was ever called out as
+# potentially slow. Folders are processed BEFORE files (not just an
+# arbitrary choice -- see README.md): a file that lives inside a
+# selected folder is already gone by the time its own individual
+# delete is attempted, and reports as "not_found" there -- an accepted,
+# expected outcome under this file's existing indistinguishable-404
+# convention, not a bug, and it makes the split deterministic regardless
+# of what order the two arrays happen to list ids in.
+sub bulk_delete ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $body       = $c->req->json // {};
+    my $file_ids   = ref $body->{file_ids}   eq 'ARRAY' ? $body->{file_ids}   : [];
+    my $folder_ids = ref $body->{folder_ids} eq 'ARRAY' ? $body->{folder_ids} : [];
+
+    my (@folders_deleted, @folders_not_found, @files_deleted, @files_not_found);
+
+    for my $id (@$folder_ids) {
+        my ($ok) = _delete_folder($c, $email, $id);
+        push @{ $ok ? \@folders_deleted : \@folders_not_found }, $id;
+    }
+    for my $id (@$file_ids) {
+        my ($ok) = _delete_file($c, $email, $id);
+        push @{ $ok ? \@files_deleted : \@files_not_found }, $id;
+    }
+
+    return $c->render(json => {
+        files   => { deleted => \@files_deleted,   not_found => \@files_not_found },
+        folders => { deleted => \@folders_deleted, not_found => \@folders_not_found },
+        counts  => {
+            deleted   => scalar(@files_deleted) + scalar(@folders_deleted),
+            not_found => scalar(@files_not_found) + scalar(@folders_not_found),
+        },
+    });
+}
+
+# Turns a numbered fallback path's own extension-splitting into a small
+# helper: "name.ext" -> ("name", ".ext"); "name" (no dot, or a dot only
+# inside an earlier path segment) -> ("name", ""). Deliberately not a
+# backtracking regex trying to do this in one shot -- anchoring "the
+# LAST dot, but only if it's after the last slash" cleanly needs the
+# slash-aware [^.\/]+ character class either way, and doing the split as
+# two plain statements is easier to get right than a single regex
+# capturing both pieces at once.
+sub _split_ext ($path) {
+    my ($ext) = $path =~ /(\.[^.\/]+)$/;
+    return (defined $ext) ? (substr($path, 0, -length($ext)), $ext) : ($path, '');
+}
+
+# Renames a zip_path on collision with a numbered suffix (e.g.
+# "notes.txt" -> "notes (01).txt") -- drive.files has no
+# UNIQUE(folder_id, filename), so two files can legitimately share a
+# name in one folder (see README.md's manifest-resolution section), and
+# the flat archive being built has no folders of its own to keep them
+# apart the way the real folder tree does. $seen is shared across the
+# WHOLE resolved manifest (not reset per folder), so a collision between
+# two entries that came from entirely different source folders is still
+# caught.
+sub _dedupe_zip_path ($seen, $path) {
+    unless ($seen->{$path}) {
+        $seen->{$path} = 1;
+        return $path;
+    }
+    my ($base, $ext) = _split_ext($path);
+    my $n = 1;
+    my $candidate;
+    do {
+        $candidate = sprintf('%s (%02d)%s', $base, $n, $ext);
+        $n++;
+    } while ($seen->{$candidate});
+    $seen->{$candidate} = 1;
+    return $candidate;
+}
+
+# Resolves a bulk selection (folder_ids + file_ids, both possibly empty)
+# into a flat manifest of [{id, uuid, zip_path}] -- one entry per real
+# file, exactly what create_zip_job below turns into a homelab-worker
+# zip job's `entries`. Storage is flat (storage_path/<uuid>, see
+# README.md's "Key finding" section) -- there is no on-disk folder tree
+# to just archive directly, so zip_path here is what reconstructs one
+# inside the finished .zip.
+#
+# Two real edge cases, both handled:
+#  1. A folder AND a file already inside it both selected -> ONE entry,
+#     folder-nested path wins. %by_id is populated from folder
+#     resolution FIRST; the file-id pass below skips any id already
+#     present, so an individually-selected duplicate never overwrites
+#     the nested-path version.
+#  2. drive.files has no UNIQUE(folder_id, filename) -- two files can
+#     legitimately share a name in one folder. _dedupe_zip_path is
+#     applied across the WHOLE resolved list (one shared %seen_path),
+#     not just within one folder's own contents.
+#
+# A folder_id/file_id the caller doesn't actually own simply doesn't
+# match either query's `user_email = ?` filter and is silently dropped
+# -- same indistinguishable-404-style convention as every other
+# ownership check in this file, not a separate error path.
+sub _resolve_manifest ($c, $email, $file_ids, $folder_ids) {
+    my %by_id;   # drive.files.id => {id, uuid, zip_path}
+
+    if (@$folder_ids) {
+        my $placeholders = join(',', ('?') x scalar @$folder_ids);
+        my $rows = $c->app->pg->db->query(
+            qq{WITH RECURSIVE subtree AS (
+                SELECT id, name FROM drive.folders WHERE id IN ($placeholders) AND user_email = ?
+                UNION ALL
+                SELECT f.id, s.name || '/' || f.name
+                FROM drive.folders f JOIN subtree s ON f.parent_folder_id = s.id
+                WHERE f.user_email = ?
+              )
+              SELECT fi.id, fi.uuid, s.name || '/' || fi.filename AS zip_path
+              FROM drive.files fi JOIN subtree s ON fi.folder_id = s.id
+              WHERE fi.user_email = ?},
+            @$folder_ids, $email, $email, $email,
+        )->hashes;
+        for my $row (@$rows) {
+            $by_id{ $row->{id} } = { id => $row->{id}, uuid => $row->{uuid}, zip_path => $row->{zip_path} };
+        }
+    }
+
+    if (@$file_ids) {
+        my $placeholders = join(',', ('?') x scalar @$file_ids);
+        my $rows = $c->app->pg->db->query(
+            qq{SELECT id, uuid, filename AS zip_path FROM drive.files WHERE id IN ($placeholders) AND user_email = ?},
+            @$file_ids, $email,
+        )->hashes;
+        for my $row (@$rows) {
+            next if $by_id{ $row->{id} };   # already covered via a selected ancestor folder -- nested path wins, see above
+            $by_id{ $row->{id} } = { id => $row->{id}, uuid => $row->{uuid}, zip_path => $row->{zip_path} };
+        }
+    }
+
+    my %seen_path;
+    my @manifest;
+    # Sorted by id for a deterministic archive order -- which entry
+    # "wins" an unrenamed zip_path on collision is otherwise arbitrary
+    # either way (both files really exist and really get archived, just
+    # one of them gets the numbered-suffix name).
+    for my $id (sort { $a <=> $b } keys %by_id) {
+        my $entry = $by_id{$id};
+        push @manifest, {
+            id => $entry->{id}, uuid => $entry->{uuid},
+            zip_path => _dedupe_zip_path(\%seen_path, $entry->{zip_path}),
+        };
+    }
+    return \@manifest;
+}
+
+# Looks up homelab-worker's own address via the service registry --
+# undef if it's not currently registered/reachable, same "the caller
+# decides how to render that" convention as _gateway() in
+# homelab-api/lib/Homelab/API/App.pm (this app has no direct in-process
+# registry DB access the way homelab-api does, so it's always the real
+# HTTP lookup, not a shortcut).
+sub _worker_entry ($c) {
+    my $entry = eval { lookup('homelab-worker', api_base => $c->app->api_base) };
+    return ($entry && $entry->{host} && $entry->{port}) ? $entry : undef;
+}
+
+# POST /zip-jobs (+ /api/v1/zip-jobs) {file_ids: [...], folder_ids: [...]}
+# Resolves the selection into a manifest (above), builds the generic
+# zip-job payload homelab-worker expects (see ../../worker/README.md),
+# and submits it with the caller's OWN forwarded JWT as every entry's
+# auth_header -- explained at length in README.md's "the auth hand-off"
+# section: this app has no narrower credential to hand out instead, and
+# the worker fetches each entry back from THIS app's own
+# /api/v1/files/:id using exactly that token, re-verified there the
+# normal way. Drive itself never builds the zip or stores anything about
+# the job beyond forwarding this one call -- homelab-worker owns all of
+# that.
+sub create_zip_job ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $body       = $c->req->json // {};
+    my $file_ids   = ref $body->{file_ids}   eq 'ARRAY' ? $body->{file_ids}   : [];
+    my $folder_ids = ref $body->{folder_ids} eq 'ARRAY' ? $body->{folder_ids} : [];
+    return $c->render(json => { error => 'file_ids and/or folder_ids must be provided' }, status => 400)
+        unless @$file_ids || @$folder_ids;
+
+    my $manifest = _resolve_manifest($c, $email, $file_ids, $folder_ids);
+    return $c->render(json => { error => 'nothing found to zip' }, status => 400) unless @$manifest;
+
+    my $entry = _worker_entry($c);
+    return $c->render(json => { error => 'homelab-worker is not currently available' }, status => 502) unless $entry;
+
+    (my $email_slug = $email) =~ s/[^A-Za-z0-9]+/-/g;
+    my $output_name = "drive-export-$email_slug-" . time . '.zip';
+    my @job_entries = map {
+        {
+            fetch_url   => $c->app->public_base_url . "/api/v1/files/$_->{id}",
+            auth_header => "Bearer $jwt",
+            zip_path    => $_->{zip_path},
+        }
+    } @$manifest;
+
+    my $tx = $WORKER_UA->post(
+        "http://$entry->{host}:$entry->{port}/internal/v1/jobs" => { Authorization => "Bearer $jwt" }
+            => json => { type => 'zip', input => { output_name => $output_name, entries => \@job_entries } },
+    );
+    unless ($tx->res->code) {
+        return $c->render(json => { error => 'homelab-worker is not reachable' }, status => 504);
+    }
+    return $c->render(json => $tx->res->json, status => $tx->res->code);
+}
+
+# GET /zip-jobs/:id (+ /api/v1/zip-jobs/:id) -- thin proxy to
+# homelab-worker's own GET /internal/v1/jobs/:id, relayed as-is
+# (ownership/site_admin visibility is enforced worker-side, see
+# ../../worker/README.md -- drive doesn't duplicate that check here).
+sub zip_job_status ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $entry = _worker_entry($c);
+    return $c->render(json => { error => 'homelab-worker is not currently available' }, status => 502) unless $entry;
+
+    my $id = $c->param('id');
+    my $tx = $WORKER_UA->get("http://$entry->{host}:$entry->{port}/internal/v1/jobs/$id" => { Authorization => "Bearer $jwt" });
+    unless ($tx->res->code) {
+        return $c->render(json => { error => 'homelab-worker is not reachable' }, status => 504);
+    }
+    return $c->render(json => $tx->res->json, status => $tx->res->code);
+}
+
+# GET /zip-jobs/:id/download (+ /api/v1/zip-jobs/:id/download) -- thin
+# proxy to homelab-worker's own download route, streaming the finished
+# archive's bytes straight through (Content-Type/Content-Disposition
+# relayed unchanged, so the browser sees the real filename homelab-worker
+# set). A non-200 from the worker (still running, failed, not found/not
+# owned) is relayed as JSON, same shape as every other error response
+# this app renders.
+sub download_zip ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $entry = _worker_entry($c);
+    return $c->render(json => { error => 'homelab-worker is not currently available' }, status => 502) unless $entry;
+
+    my $id = $c->param('id');
+    my $tx = $WORKER_UA->get("http://$entry->{host}:$entry->{port}/internal/v1/jobs/$id/download" => { Authorization => "Bearer $jwt" });
+    unless ($tx->res->code) {
+        return $c->render(json => { error => 'homelab-worker is not reachable' }, status => 504);
+    }
+    if ($tx->res->code != 200) {
+        return $c->render(json => ($tx->res->json // { error => 'download failed' }), status => $tx->res->code);
+    }
+
+    $c->res->headers->content_type($tx->res->headers->content_type) if $tx->res->headers->content_type;
+    $c->res->headers->content_disposition($tx->res->headers->content_disposition) if $tx->res->headers->content_disposition;
+    return $c->render(data => $tx->res->body);
 }
 
 1;
