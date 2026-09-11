@@ -25,6 +25,78 @@ def _client():
     return Client(cfgmod.load_config()["api_base"])
 
 
+# SPF's real qualifier characters, keyed by the friendly --all value --
+# see cmd_dns_spf_set. Default is "softfail" (~all), never "fail"
+# (-all) -- a hard fail is the kind of thing that should be a deliberate
+# admin choice, not a CLI default.
+_SPF_QUALIFIERS = {"pass": "+", "neutral": "?", "softfail": "~", "fail": "-"}
+
+
+def _build_spf_value(all_qualifier, includes):
+    parts = ["v=spf1", "mx"]
+    for inc in includes or []:
+        parts.append(f"include:{inc}")
+    parts.append(f"{_SPF_QUALIFIERS[all_qualifier]}all")
+    return " ".join(parts)
+
+
+def _build_dmarc_value(policy, rua, pct):
+    tags = ["v=DMARC1", f"p={policy}"]
+    if rua:
+        tags.append("rua=" + ",".join(f"mailto:{addr}" for addr in rua))
+    if pct is not None:
+        tags.append(f"pct={pct}")
+    return "; ".join(tags)
+
+
+def _nudge_spf_dmarc(client, token, domain_name):
+    """Best-effort UX nicety, called right after a domain gains a real DNS
+    zone (dns domains add / dns mail-aliases add): checks for an existing
+    SPF (TXT at the zone apex starting "v=spf1") and DMARC (TXT at
+    _dmarc.<domain> starting "v=DMARC1") record, and prints a one-line
+    suggestion for whichever is missing -- most admins know they need a
+    TXT record for these but not what belongs in it, so pointing at the
+    dedicated commands (rather than expecting them to hand-write SPF/
+    DMARC syntax via `dns records add`) is the actual point here.
+    Deliberately swallows any error: a transient API hiccup or a zone
+    that isn't fully queryable in the same instant it was created must
+    never make domain/alias creation look like it failed."""
+    try:
+        records = client.dns_list_records(token, domain_name)
+    except ApiError:
+        return
+    # Two PowerDNS wire-format quirks confirmed against a real deployed
+    # zone (not just by reading the code) -- both need normalizing
+    # before comparing against the plain values this module builds:
+    #   1. rrset names always come back as FQDNs with a trailing dot
+    #      (Dns.pm's list_records passes PowerDNS's own response
+    #      straight through unmodified).
+    #   2. TXT content values come back as the literal wire-format
+    #      quoted string, e.g. content == ["\"v=spf1 mx ~all\""] -- a
+    #      naive `v.startswith("v=spf1")` against that always fails
+    #      (it starts with a literal `"` character), which would make
+    #      this nudge claim SPF/DMARC are missing even right after
+    #      `dns spf set`/`dns dmarc set` just created them.
+    def _unquoted(value):
+        return value[1:-1] if value.startswith('"') and value.endswith('"') else value
+
+    dmarc_name = f"_dmarc.{domain_name}"
+    has_spf = any(
+        r["name"].rstrip(".") == domain_name and r["type"] == "TXT"
+        and any(_unquoted(v).startswith("v=spf1") for v in r["content"])
+        for r in records
+    )
+    has_dmarc = any(
+        r["name"].rstrip(".") == dmarc_name and r["type"] == "TXT"
+        and any(_unquoted(v).startswith("v=DMARC1") for v in r["content"])
+        for r in records
+    )
+    if not has_spf:
+        print(f"  tip: no SPF record found for {domain_name} -- run 'homelab-cli dns spf set {domain_name}' to add one")
+    if not has_dmarc:
+        print(f"  tip: no DMARC record found for {domain_name} -- run 'homelab-cli dns dmarc set {domain_name}' to add one")
+
+
 def _require_session():
     """Returns the saved session dict, or None (after printing a clear
     error) if there isn't one. Every command below that needs to already
@@ -163,8 +235,9 @@ def cmd_dns_domains_add(args):
     session = _require_session()
     if not session:
         return 1
+    client = _client()
     try:
-        result = _client().dns_add_domain(
+        result = client.dns_add_domain(
             session["token"], args.domain_name,
             mail_enabled=args.mail_enabled, dns_managed=args.dns_managed,
             nameservers=args.ns,
@@ -173,6 +246,8 @@ def cmd_dns_domains_add(args):
         print(f"Could not add domain: {e.message}", file=sys.stderr)
         return 1
     print(f"Added: {result['domain_name']} (id {result['id']})")
+    if args.dns_managed:
+        _nudge_spf_dmarc(client, session["token"], args.domain_name)
     return 0
 
 
@@ -259,6 +334,35 @@ def cmd_dns_records_delete(args):
         print(f"Could not delete record: {e.message}", file=sys.stderr)
         return 1
     print(f"Deleted {args.name} {args.type}")
+    return 0
+
+
+def cmd_dns_spf_set(args):
+    session = _require_session()
+    if not session:
+        return 1
+    value = _build_spf_value(args.all, args.include)
+    try:
+        _client().dns_add_record(session["token"], args.domain_name, args.domain_name, "TXT", [value])
+    except ApiError as e:
+        print(f"Could not set SPF record: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Set SPF for {args.domain_name}: {value}")
+    return 0
+
+
+def cmd_dns_dmarc_set(args):
+    session = _require_session()
+    if not session:
+        return 1
+    value = _build_dmarc_value(args.policy, args.rua, args.pct)
+    record_name = f"_dmarc.{args.domain_name}"
+    try:
+        _client().dns_add_record(session["token"], args.domain_name, record_name, "TXT", [value])
+    except ApiError as e:
+        print(f"Could not set DMARC record: {e.message}", file=sys.stderr)
+        return 1
+    print(f"Set DMARC for {args.domain_name}: {value}")
     return 0
 
 
@@ -380,12 +484,21 @@ def cmd_dns_mail_aliases_add(args):
     session = _require_session()
     if not session:
         return 1
+    client = _client()
     try:
-        _client().dns_add_mail_alias(session["token"], args.source_pattern, args.destination, send_enabled=args.send_enabled)
+        client.dns_add_mail_alias(session["token"], args.source_pattern, args.destination, send_enabled=args.send_enabled)
     except ApiError as e:
         print(f"Could not add mail alias: {e.message}", file=sys.stderr)
         return 1
     print(f"Added {args.source_pattern} -> {args.destination}")
+    # source_pattern is either "@forge.name" (catch-all) or
+    # "sales@forge.name" (exact address) -- either way, the bare domain
+    # is everything after the last "@". mail-aliases add always creates
+    # a real DNS zone for a new domain (dns_managed=true, see
+    # MailAliases.pm), so unlike dns_domains_add there's no --no-dns
+    # case to skip here.
+    domain_name = args.source_pattern.rsplit("@", 1)[-1]
+    _nudge_spf_dmarc(client, session["token"], domain_name)
     return 0
 
 
@@ -819,6 +932,27 @@ def build_parser():
     p.add_argument("--name", required=True)
     p.add_argument("--type", required=True)
     p.set_defaults(func=cmd_dns_records_delete)
+
+    spf = dns_sub.add_parser("spf", help="SPF record, built for you from a couple of friendly flags")
+    spf_sub = spf.add_subparsers(dest="dns_spf_command", required=True)
+
+    p = spf_sub.add_parser("set", help="Create or replace the domain's SPF record")
+    p.add_argument("domain_name")
+    p.add_argument("--all", choices=sorted(_SPF_QUALIFIERS), default="softfail",
+                    help="What to do with mail from a server NOT covered above (default: softfail -- mark suspicious, don't hard-reject)")
+    p.add_argument("--include", action="append", help="Also authorize this domain's own SPF senders (repeatable, e.g. a marketing/helpdesk tool)")
+    p.set_defaults(func=cmd_dns_spf_set)
+
+    dmarc = dns_sub.add_parser("dmarc", help="DMARC record, built for you from a couple of friendly flags")
+    dmarc_sub = dmarc.add_subparsers(dest="dns_dmarc_command", required=True)
+
+    p = dmarc_sub.add_parser("set", help="Create or replace the domain's DMARC record")
+    p.add_argument("domain_name")
+    p.add_argument("--policy", choices=["none", "quarantine", "reject"], default="none",
+                    help="What a receiver should do with mail that fails DMARC (default: none -- monitor only, safest starting point)")
+    p.add_argument("--rua", action="append", help="Email address to receive aggregate reports (repeatable)")
+    p.add_argument("--pct", type=int, choices=range(1, 101), metavar="1-100", help="Only apply the policy to this percentage of mail (omit to apply to all of it)")
+    p.set_defaults(func=cmd_dns_dmarc_set)
 
     dkim = dns_sub.add_parser("dkim", help="DKIM key rotation")
     dkim_sub = dkim.add_subparsers(dest="dns_dkim_command", required=True)

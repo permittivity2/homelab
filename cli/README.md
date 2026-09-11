@@ -96,14 +96,43 @@ homelab-cli dns domains disable example.org
 homelab-cli dns records list example.org
 homelab-cli dns records add example.org --name example.org --type A --value 203.0.113.10
 homelab-cli dns records delete example.org --name example.org --type A
+
+homelab-cli dns spf set example.org
+homelab-cli dns spf set example.org --all fail --include sendgrid.net
+homelab-cli dns dmarc set example.org
+homelab-cli dns dmarc set example.org --policy quarantine --rua postmaster@example.org
 ```
 
 `site_admin` role required server-side (same "just attempt the call and
 surface whatever the server decides" approach as `admin`, below).
 Backed by `homelab-domain-admin` through `homelab-api`'s
 `/api/v1/domains/*` gateway — see `../domain-admin/README.md`, which
-also covers DKIM rotation and per-recipient mail allow/block once those
-land (their `dns` subcommands don't exist yet).
+also covers DKIM rotation, per-recipient mail allow/block, and
+multi-domain send-as grants (`dns dkim`, `dns recipient-access`, `dns
+mail-aliases` — all already landed, not documented in this file yet).
+
+`dns spf set`/`dns dmarc set` are a thin, friendlier layer over `dns
+records add` — they build the correct TXT record value from a couple
+of flags (SPF's real `+`/`?`/`~`/`-` qualifiers behind `--all
+pass/neutral/softfail/fail`, DMARC's `p=`/`rua=`/`pct=` tags behind
+`--policy`/`--rua`/`--pct`) instead of expecting an admin to already
+know that syntax — most people running a mail server don't, and
+getting it wrong is easy to do silently. Defaults are the safe,
+conservative choice in both cases: SPF's `--all` defaults to
+`softfail` (`~all`, mark suspicious — never hard-reject by default),
+DMARC's `--policy` defaults to `none` (monitor only). Neither record
+has key material or a rotation lifecycle the way DKIM does, so there's
+no separate state machine here — running `set` again just replaces
+the existing record (same upsert semantics as `dns records add`
+itself).
+
+`dns domains add` (when it creates a DNS zone) and `dns mail-aliases
+add` (which always does) each print a one-line nudge afterward for
+whichever of SPF/DMARC isn't set up yet for that domain, pointing at
+the commands above — a check, never a blocker; domain/alias creation
+still succeeds either way, and the check itself fails silently if the
+zone isn't queryable yet rather than making creation look like it
+failed.
 
 ## Background jobs (`jobs`)
 
