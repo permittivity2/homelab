@@ -1720,8 +1720,8 @@ def build_parser():
 
     p = audit_sub.add_parser("list", help="List audit entries (your own by default; --user requires audit.view/site_admin)")
     p.add_argument("--user", help="List this user's audit entries instead of your own (audit.view/site_admin only)")
-    p.add_argument("--since", help="Only entries at/after this timestamp")
-    p.add_argument("--until", help="Only entries at/before this timestamp")
+    p.add_argument("--since", help="Only entries at/after this timestamp, e.g. '2026-09-11' or '2026-09-11 16:00:00-05' (passed straight to Postgres, so any timestamp it accepts works)")
+    p.add_argument("--until", help="Only entries at/before this timestamp -- same format as --since")
     p.add_argument("--action", help="Only entries matching this action name (e.g. file.delete)")
     p.set_defaults(func=cmd_audit_list)
 

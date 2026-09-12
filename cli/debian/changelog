@@ -1,3 +1,15 @@
+homelab-cli (0.3.22) unstable; urgency=medium
+
+  * Release v0.3.22
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 22:34:04 -0500
+
+homelab-cli (0.3.22) unstable; urgency=medium
+
+  * audit list: add timestamp format examples to --since/--until help
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 22:34:00 -0500
+
 homelab-cli (0.3.21) unstable; urgency=medium
 
   * Release v0.3.21
