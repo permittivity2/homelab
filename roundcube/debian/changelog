@@ -1,3 +1,45 @@
+homelab-roundcube (0.1.7) unstable; urgency=medium
+
+  * Release v0.1.7
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 14:06:20 -0500
+
+homelab-roundcube (0.1.7) unstable; urgency=medium
+
+  * recipient_blocking: fix a real, reproducible failure of every AJAX
+    action (block/unblock/list) found only by an actual end-to-end
+    browser-session test, not by inspection -- Debian's roundcube-core
+    ships no vendor/autoload.php; GuzzleHttp\Client is only ever loaded
+    within a request by rcmail_oauth.php's own conditional include, and
+    only when that file's code actually runs (e.g. IMAP/SMTP connection
+    setup), never guaranteed for a plugin's own standalone action. Now
+    loads Guzzle itself the same way, and logs (rather than silently
+    swallowing) any \Throwable from the API call
+  * recipient_blocking: add one bounded retry for pure transport-level
+    API failures -- php-fpm here has no `curl` extension loaded, so
+    Guzzle falls back to its plain PHP-stream handler (no connection
+    pooling/retry of its own); confirmed by repeated live testing this
+    occasionally hits a bare ECONNREFUSED against homelab-api under this
+    environment's real concurrent load even though the very next attempt
+    succeeds. A real 4xx/5xx response is never retried, only a true
+    transport failure (no response at all)
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 13:42:19 -0500
+
+homelab-roundcube (0.1.5) unstable; urgency=medium
+
+  * Add recipient_blocking plugin: block/unblock one of your own
+    addresses from the message toolbar and Settings; calls homelab-api's
+    existing self-service recipient-access API using the same JWT
+    already used for IMAP/SMTP, no new credential
+  * postinst: symlink the new plugin into /var/lib/roundcube/plugins/
+    (Debian's roundcube-core resolves plugins there, not directly under
+    /usr/share/roundcube/plugins/ where the package installs them) --
+    without this every page request 500s with "Failed to load plugin
+    file"; postrm removes the symlink on package removal
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 13:35:43 -0500
+
 homelab-roundcube (0.1.4) unstable; urgency=medium
 
   * Release v0.1.4

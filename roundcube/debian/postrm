@@ -14,6 +14,7 @@ case "$1" in
         # admin action, same reasoning as every other package here).
         rm -f "$CONFIG_FILE" "$BOOTSTRAP_MARKER"
         rm -f "$NGINX_VHOST_ENABLED" "$NGINX_VHOST"
+        rm -f /var/lib/roundcube/plugins/recipient_blocking
 
         if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
             systemctl reload-or-restart nginx 2>/dev/null || true

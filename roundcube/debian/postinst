@@ -25,6 +25,21 @@ case "$1" in
         db_get homelab-roundcube/product_name || true;   PRODUCT_NAME="${RET:-Homelab Webmail}"
         db_get homelab-roundcube/sso_base_url || true;      SSO_BASE_URL="${RET:-http://127.0.0.1:2502}"
         db_get homelab-roundcube/sso_client_secret || true; SSO_CLIENT_SECRET="$RET"
+        db_get homelab-roundcube/api_base_url || true;      API_BASE_URL="${RET:-http://127.0.0.1:3000}"
+
+        # Debian's roundcube-core does NOT scan /usr/share/roundcube/
+        # plugins/ directly -- rcube_plugin_api::load_plugin() actually
+        # resolves plugins against /var/lib/roundcube/plugins/, which
+        # Debian's own packaging populates as a directory of symlinks
+        # BACK into /usr/share/roundcube/plugins/ (confirmed empirically:
+        # the two vendor-bundled plugins jqueryui/filesystem_attachments
+        # are wired up exactly this way, and without this symlink a real
+        # request logs "Failed to load plugin file /var/lib/roundcube/
+        # plugins/recipient_blocking/recipient_blocking.php" and every
+        # single page 500s). A third-party plugin package has to create
+        # its own symlink the same way -- roundcube-core's own postinst
+        # has no idea this package's plugin exists at build time.
+        ln -sf /usr/share/roundcube/plugins/recipient_blocking /var/lib/roundcube/plugins/recipient_blocking
 
         if [ -z "$SSO_CLIENT_SECRET" ]; then
             echo "  WARNING: no sso_client_secret was provided -- homelab-roundcube will not"
@@ -102,6 +117,7 @@ case "$1" in
                 -e "s#__CIPHER_KEY__#$CIPHER_KEY#g" \
                 -e "s#__SSO_BASE_URL__#$SSO_BASE_URL#g" \
                 -e "s#__SSO_CLIENT_SECRET__#$SSO_CLIENT_SECRET#g" \
+                -e "s#__API_BASE_URL__#$API_BASE_URL#g" \
                 "$SHARE_DIR/config/config.inc.php.template" > "$CONFIG_FILE"
             chown root:www-data "$CONFIG_FILE"
             chmod 640 "$CONFIG_FILE"

@@ -48,3 +48,15 @@ Description: Shared secret for this app's "roundcube" OAuth client:
  rotate it). Unlike homelab-sso's own client secrets, there's no
  sensible default to auto-generate here -- this app is the consumer of
  a secret homelab-sso mints, not the minter.
+
+Template: homelab-roundcube/api_base_url
+Type: string
+Default: http://127.0.0.1:3000
+Description: Base URL where homelab-api is reachable:
+ Used only by the recipient_blocking plugin (block/unblock one of your
+ own addresses from the message toolbar / Settings -> Blocked
+ Addresses), which calls homelab-api's own /api/v1/domains/recipient-
+ access/mine self-service endpoints using the same JWT this app's
+ native OAuth login already holds in $_SESSION['oauth_token'] for
+ IMAP/SMTP -- no separate credential. Same-host loopback by default,
+ like sso_base_url above.

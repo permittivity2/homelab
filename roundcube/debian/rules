@@ -15,6 +15,17 @@ override_dh_install:
 		debian/homelab-roundcube/usr/share/homelab-roundcube/script/homelab-roundcube-patch-php85-compat
 	install -D -m 755 script/homelab-roundcube-patch-oauth-sso \
 		debian/homelab-roundcube/usr/share/homelab-roundcube/script/homelab-roundcube-patch-oauth-sso
+	# Ships into roundcube-core's OWN real plugin directory (not this
+	# package's usr/share/homelab-roundcube/ config/script storage above)
+	# -- Roundcube only ever loads plugins from /usr/share/roundcube/
+	# plugins/, so that's where this has to land for $config['plugins']
+	# = ['recipient_blocking'] (config.inc.php.template) to find it.
+	install -D -m 644 plugins/recipient_blocking/recipient_blocking.php \
+		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/recipient_blocking.php
+	install -D -m 644 plugins/recipient_blocking/recipient_blocking.js \
+		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/recipient_blocking.js
+	install -D -m 644 plugins/recipient_blocking/localization/en_US.inc \
+		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/localization/en_US.inc
 
 override_dh_auto_build:
 	# Nothing to compile
