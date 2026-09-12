@@ -24,6 +24,8 @@ override_dh_install:
 		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/recipient_blocking.php
 	install -D -m 644 plugins/recipient_blocking/recipient_blocking.js \
 		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/recipient_blocking.js
+	install -D -m 644 plugins/recipient_blocking/recipient_blocking.css \
+		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/recipient_blocking.css
 	install -D -m 644 plugins/recipient_blocking/localization/en_US.inc \
 		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/localization/en_US.inc
 

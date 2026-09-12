@@ -16,6 +16,23 @@
  * register_handler, set_env, Guzzle's Client -- already a real,
  * in-use dependency of rcmail_oauth.php, not a new one introduced
  * here).
+ *
+ * IMPORTANT cross-frame gotcha (confirmed live, not assumed -- this is
+ * exactly the kind of thing that only surfaces once running for real):
+ * Elastic's message preview renders in an <iframe> (`_framed=1`,
+ * program/js/app.js's show_message), but the toolbar this plugin's
+ * button lives in (skins/elastic/templates/includes/mail-menu.html's
+ * #mailtoolbar) is part of the OUTER window's own document, not the
+ * framed one. message_headers_output only ever fires while rendering
+ * the framed preview, so anything it set_env()'s stays trapped in the
+ * iframe's own separate rcmail.env -- it never reaches the outer
+ * window where the button and its rcmail.register_command(...) call
+ * actually need to live. See recipient_blocking.js's own header
+ * comment for how this is bridged (parent.rcmail, the same pattern
+ * roundcube-core itself uses at program/js/app.js:325-328/552-553).
+ * `recipient_blocking_available` is therefore decided once, here in
+ * init(), from session state alone -- it does NOT depend on any
+ * message ever being previewed.
  */
 class recipient_blocking extends rcube_plugin
 {
@@ -33,6 +50,7 @@ class recipient_blocking extends rcube_plugin
             $this->register_action('plugin.block_recipient', [$this, 'action_block_recipient']);
             $this->register_action('plugin.unblock_recipient', [$this, 'action_unblock_recipient']);
             $this->include_script('recipient_blocking.js');
+            $this->include_stylesheet('recipient_blocking.css');
             // These specific labels are read client-side via rcmail.gettext()
             // for dynamic post-load UI updates (button state after a click) --
             // add_button()'s own label/title attribs are resolved server-side
@@ -40,9 +58,18 @@ class recipient_blocking extends rcube_plugin
             // up later does.
             $this->rc->output->add_label(
                 'recipient_blocking.blocklabel', 'recipient_blocking.blocktitle',
-                'recipient_blocking.alreadyblocked', 'recipient_blocking.ssorequired',
+                'recipient_blocking.blocktitlewithaddress', 'recipient_blocking.alreadyblocked',
+                'recipient_blocking.alreadyblockedtitle', 'recipient_blocking.ssorequired',
                 'recipient_blocking.blocking'
             );
+
+            // Session-wide fact (is there an OAuth JWT at all), not
+            // per-message -- set here so the OUTER window's own toolbar
+            // button can be registered/enabled on its very first page
+            // load, without waiting on a framed preview to ever exist.
+            // See the class doc-comment above for why this can't live
+            // in message_headers_output instead.
+            $this->rc->output->set_env('recipient_blocking_available', !empty($this->current_token()));
 
             // Harmless to register unconditionally -- container resolution
             // means this only ever renders on a template that actually has
@@ -188,99 +215,175 @@ class recipient_blocking extends rcube_plugin
     }
 
     /**
-     * Extracts a bare email address from a raw header value that may be
-     * "Name <addr@example.com>", a bare address, or a comma-separated
-     * list (only the first entry is used -- see plan/README for why a
-     * single representative address is the deliberate scope here).
+     * Extracts every bare email address from a raw header value, which
+     * may be "Name <addr@example.com>", a bare address, or a comma-
+     * separated list of any mix of those (real example that motivated
+     * this: a single To: header with three plain comma-separated
+     * addresses, all owned by the same mailbox via a domain catch-all
+     * grant -- a single-address extraction silently dropped two of
+     * three). Case-insensitively deduped; order of first appearance
+     * preserved.
+     *
+     * @return string[]
      */
-    private function extract_address($raw)
+    private function extract_addresses($raw)
     {
         if (empty($raw)) {
-            return null;
+            return [];
         }
-        $raw = is_array($raw) ? reset($raw) : $raw;
-        $first = trim(explode(',', $raw)[0]);
-        if (preg_match('/<([^>]+)>/', $first, $m)) {
-            return trim($m[1]);
+        $raw = is_array($raw) ? implode(',', $raw) : $raw;
+
+        $addresses = [];
+        $seen = [];
+        foreach (explode(',', $raw) as $entry) {
+            $entry = trim($entry);
+            if ($entry === '') {
+                continue;
+            }
+            $address = preg_match('/<([^>]+)>/', $entry, $m) ? trim($m[1]) : $entry;
+            $key = strtolower($address);
+            if ($address !== '' && !isset($seen[$key])) {
+                $seen[$key] = true;
+                $addresses[] = $address;
+            }
         }
-        return $first !== '' ? $first : null;
+        return $addresses;
     }
 
     // -----------------------------------------------------------------
     // Message view: toolbar button + already-blocked indicator
     // -----------------------------------------------------------------
 
+    /**
+     * Fires only while rendering the framed preview document (confirmed
+     * live -- see the class doc-comment) -- computes the per-message
+     * candidate address list and each one's already-blocked state, and
+     * leaves it in THIS document's own rcmail.env as
+     * `recipient_candidates` (array of {address, blocked}).
+     * recipient_blocking.js's own init handler is what bridges this up
+     * to the outer window's button; nothing here talks to the outer
+     * window directly. Empty array when no address is derivable,
+     * matching the "nothing to block" state the outer window otherwise
+     * defaults to.
+     */
     public function message_headers_output($args)
     {
         $token = $this->current_token();
-        $this->rc->output->set_env('recipient_blocking_available', !empty($token));
-
         if (empty($token)) {
             return $args;
         }
 
         $headers = $args['headers'];
         // Delivered-To is an MTA-added trace header recording the real
-        // final delivery address -- more reliable than To: when present.
-        // Falls back to To: otherwise (the honest ceiling once mail has
-        // already landed in the mailbox -- envelope data doesn't survive
-        // IMAP delivery, so there is nothing better to inspect here).
+        // final delivery address -- more reliable than To: when present
+        // (may itself list more than one address). Falls back to
+        // enumerating every address in To: otherwise (the honest ceiling
+        // once mail has already landed in the mailbox -- envelope data
+        // doesn't survive IMAP delivery, so there is nothing better to
+        // inspect here).
         $delivered_to = $headers->others['delivered-to'] ?? null;
-        $address = $this->extract_address($delivered_to) ?: $this->extract_address($headers->to ?? null);
+        $addresses = $this->extract_addresses($delivered_to);
+        if (empty($addresses)) {
+            $addresses = $this->extract_addresses($headers->to ?? null);
+        }
 
-        if (empty($address)) {
-            $this->rc->output->set_env('recipient_blocking_available', false);
+        if (empty($addresses)) {
+            $this->rc->output->set_env('recipient_candidates', []);
             return $args;
         }
 
-        $this->rc->output->set_env('recipient_to_block', $address);
-
-        // Fail OPEN: any lookup failure just leaves the button in its
-        // normal enabled state -- never blocks message rendering, never
-        // shows a broken button, on the strength of an unrelated read.
-        $already_blocked = false;
-        $result = $this->api_request('GET', '/api/v1/domains/recipient-access/mine', $token, null, ['q' => $address]);
+        // Fail OPEN: any lookup failure just leaves every candidate in
+        // its normal blockable state -- never blocks message rendering,
+        // never shows a broken button, on the strength of an unrelated
+        // read. One bulk fetch of the caller's full blocked list (same
+        // call the Settings page already makes, no `q` filter) rather
+        // than one lookup per candidate address -- cheaper, and doesn't
+        // scale with how many addresses are on the message.
+        $blocked_lookup = [];
+        $result = $this->api_request('GET', '/api/v1/domains/recipient-access/mine', $token);
         if ($result && $result['status'] == 200 && is_array($result['body'])) {
             foreach ($result['body'] as $row) {
-                if (isset($row['recipient']) && strcasecmp($row['recipient'], $address) === 0) {
-                    $already_blocked = true;
-                    break;
+                if (isset($row['recipient'])) {
+                    $blocked_lookup[strtolower($row['recipient'])] = true;
                 }
             }
         }
-        $this->rc->output->set_env('recipient_already_blocked', $already_blocked);
+
+        $candidates = [];
+        foreach ($addresses as $address) {
+            $candidates[] = [
+                'address' => $address,
+                'blocked' => isset($blocked_lookup[strtolower($address)]),
+            ];
+        }
+        $this->rc->output->set_env('recipient_candidates', $candidates);
 
         return $args;
     }
 
+    /**
+     * `recipients` arrives as a real PHP array whenever the client posts
+     * more than one -- same array-through-POST mechanism roundcube-core
+     * itself already relies on for multi-message actions (e.g. app.js's
+     * `data._uid = [...]` for mark/delete/move), just a new field name;
+     * confirmed rcube_utils::get_input_value() passes an array value
+     * through as an array, not just a scalar.
+     */
     public function action_block_recipient()
     {
         $token = $this->current_token();
-        $recipient = rcube_utils::get_input_value('recipient', rcube_utils::INPUT_POST);
+        $recipients = (array) rcube_utils::get_input_value('recipients', rcube_utils::INPUT_POST);
+        $recipients = array_values(array_unique(array_filter(array_map('trim', $recipients))));
 
         if (empty($token)) {
             $this->rc->output->show_message($this->gettext('nooauthtoken'), 'error');
             $this->rc->output->send();
             return;
         }
-        if (empty($recipient)) {
+        if (empty($recipients)) {
             $this->rc->output->show_message($this->gettext('norecipient'), 'error');
             $this->rc->output->send();
             return;
         }
 
-        $result = $this->api_request(
-            'POST', '/api/v1/domains/recipient-access/mine', $token,
-            ['recipient' => $recipient, 'action' => 'REJECT']
-        );
+        $blocked = [];
+        $failed = [];
+        foreach ($recipients as $recipient) {
+            $result = $this->api_request(
+                'POST', '/api/v1/domains/recipient-access/mine', $token,
+                ['recipient' => $recipient, 'action' => 'REJECT']
+            );
+            if ($result && in_array($result['status'], [200, 201])) {
+                $blocked[] = $recipient;
+            }
+            else {
+                $failed[] = $recipient;
+            }
+        }
 
-        if ($result && in_array($result['status'], [200, 201])) {
-            $this->rc->output->show_message($this->gettext('blockedok'), 'confirmation');
-            $this->rc->output->command('plugin.recipient_blocking_set_state', ['recipient' => $recipient, 'blocked' => true]);
+        if (!empty($blocked) && empty($failed)) {
+            $this->rc->output->show_message(
+                $this->gettext(['name' => 'blockedok', 'vars' => ['address' => implode(', ', $blocked)]]),
+                'confirmation'
+            );
+        }
+        elseif (!empty($blocked) && !empty($failed)) {
+            $this->rc->output->show_message(
+                $this->gettext(['name' => 'partialblockresult', 'vars' => [
+                    'blocked' => implode(', ', $blocked), 'failed' => implode(', ', $failed),
+                ]]),
+                'warning'
+            );
         }
         else {
-            $message = ($result && !empty($result['body']['error'])) ? $result['body']['error'] : $this->gettext('blockfailed');
-            $this->rc->output->show_message($message, 'error');
+            $this->rc->output->show_message(
+                $this->gettext(['name' => 'blockfailed', 'vars' => ['address' => implode(', ', $failed)]]),
+                'error'
+            );
+        }
+
+        if (!empty($blocked)) {
+            $this->rc->output->command('plugin.recipient_blocking_set_state', ['blocked' => $blocked]);
         }
 
         $this->rc->output->send();
@@ -302,8 +405,11 @@ class recipient_blocking extends rcube_plugin
         );
 
         if ($result && $result['status'] == 200) {
-            $this->rc->output->show_message($this->gettext('unblockedok'), 'confirmation');
-            $this->rc->output->command('plugin.recipient_blocking_set_state', ['recipient' => $recipient, 'blocked' => false]);
+            $this->rc->output->show_message(
+                $this->gettext(['name' => 'unblockedok', 'vars' => ['address' => $recipient]]),
+                'confirmation'
+            );
+            $this->rc->output->command('plugin.recipient_blocking_set_state', ['unblocked' => [$recipient]]);
             if ($this->rc->task == 'settings') {
                 $this->rc->output->command('plugin.recipient_blocking_remove_row', $recipient);
             }

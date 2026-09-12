@@ -1,0 +1,41 @@
+/*
+ * Icon for the toolbar Block button, matching core Elastic buttons
+ * (Reply/Forward/Delete) exactly: a CSS :before pseudo-element using
+ * Elastic's self-hosted "Icons" webfont (Font Awesome 5.9), the same
+ * mechanism core itself uses for this button family -- confirmed
+ * against the real installed skin, not a new/invented approach. No
+ * color is set: it inherits currentColor from .menu.toolbar a, which
+ * already tracks light/dark theme on its own.
+ *
+ * \f05e is Font Awesome's "ban" glyph (@fa-var-ban) -- already present
+ * in the installed font file, unused elsewhere in this skin, and reads
+ * unambiguously as "block".
+ */
+.menu a.button-block-recipient:before {
+    display: block;
+    float: left;
+    margin: 0 .25rem 0 0;
+    width: 1.18em;
+    height: 1em;
+    font-size: 1.25em;
+    font-family: 'Icons';
+    font-style: normal;
+    font-weight: 900;
+    text-decoration: inherit;
+    text-align: center;
+    speak: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    content: "\f05e";
+}
+
+/* Core applies a toolbar-specific size/position override for this same
+   button family (vs. the dropdown-menu-item sizing above) -- restated
+   here (not relied on via cascade) so this matches native buttons
+   exactly regardless of stylesheet load order. */
+.menu.toolbar a.button-block-recipient:before {
+    height: 1.75rem !important;
+    float: none !important;
+    width: auto !important;
+    margin: 0 !important;
+}

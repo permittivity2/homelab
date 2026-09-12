@@ -1,3 +1,78 @@
+homelab-roundcube (0.1.9) unstable; urgency=medium
+
+  * Release v0.1.9
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 16:36:52 -0500
+
+homelab-roundcube (0.1.9) unstable; urgency=medium
+
+  * recipient_blocking: fix a real bug found via live testing -- a
+    message with multiple comma-separated addresses on its To: header
+    (e.g. several addresses under the same domain catch-all grant) only
+    ever had the FIRST one blocked; extract_address() explicitly took
+    only explode(',', $raw)[0]. Now extracts and blocks every address
+    found (Delivered-To if present, all instances, otherwise every
+    address in To:), one API call per address -- confirmed the backend
+    itself needed no change, its per-address ownership check already
+    passes for each address independently, sequential calls already
+    worked, the plugin just never made more than one
+  * recipient_blocking: add a real toolbar icon (Font Awesome's "ban"
+    glyph, already present in Elastic's self-hosted icon font, unused
+    elsewhere in this skin) via a small plugin-owned CSS file loaded
+    with include_stylesheet() -- no build step, matches the exact
+    mechanism core's own Reply/Forward/Delete buttons use so it
+    inherits theme color automatically. Also the mobile-layout fix: the
+    icon is what was missing at narrow widths, not a separate
+    breakpoint issue
+  * recipient_blocking: the tooltip and post-block/unblock toast now
+    name the actual address(es) involved instead of a generic sentence
+    -- server-side via Roundcube's real gettext `vars` substitution
+    mechanism, client-side (which has no such support) via manual
+    string replacement using the same $address-style placeholder token
+    for consistency
+  * recipient_blocking: the already-blocked check for a message's
+    address list is now one bulk fetch of the caller's full blocked
+    list per message render instead of one lookup per candidate address
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 16:36:34 -0500
+
+homelab-roundcube (0.1.8) unstable; urgency=medium
+
+  * Release v0.1.8
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 15:52:00 -0500
+
+homelab-roundcube (0.1.8) unstable; urgency=medium
+
+  * recipient_blocking: fix the toolbar Block button being permanently
+    disabled for every message, found only by a real end-to-end browser
+    test (confirmed via nginx access logs -- every plugin.block_recipient
+    POST on record was from scripted testing, none from a real browser
+    click, in Brave and Chrome alike). Root cause: Elastic's message
+    preview renders in an <iframe>, but the toolbar the button lives in
+    is part of the outer window's own document; message_headers_output
+    (which computed the address/already-blocked state) only ever fires
+    while rendering the framed preview, so that state stayed trapped in
+    the iframe's own separate rcmail.env and never reached the outer
+    window where rcmail.register_command(...) needed to run. Now: the
+    session-wide "is SSO available" check moved to init() (no longer
+    waits on any preview), and the framed preview pushes its per-message
+    state up to the outer window via parent.rcmail (the same pattern
+    roundcube-core itself already uses for this exact iframe/parent
+    split)
+  * recipient_blocking: clear the block target immediately on any
+    message-list selection change (drop to zero, jump to multiple, or a
+    new single selection whose preview hasn't loaded yet) instead of
+    leaving the button pointing at a message that's been moved, deleted,
+    or is no longer in view -- moving/archiving the previewed message is
+    routine, not an edge case, and this is an action whose entire point
+    is blocking a sender's future mail, so stale state here is a real
+    correctness issue, not a cosmetic one. Also guards against an
+    out-of-order async preview load clobbering newer state by checking
+    the previewed message's uid before applying a sync
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 15:51:34 -0500
+
 homelab-roundcube (0.1.7) unstable; urgency=medium
 
   * Release v0.1.7
