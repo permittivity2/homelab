@@ -1,3 +1,16 @@
+homelab-domain-admin (0.1.10) unstable; urgency=medium
+
+  * Release v0.1.10
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 21:54:26 -0500
+
+homelab-domain-admin (0.1.10) unstable; urgency=medium
+
+  * Instrument recipient-access and mail-aliases controllers with audit-
+    trail entries (admin and self-service tiers)
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 21:54:15 -0500
+
 homelab-domain-admin (0.1.9) unstable; urgency=medium
 
   * Release v0.1.9

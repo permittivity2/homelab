@@ -9,11 +9,14 @@ User=homelab
 Group=homelab
 WorkingDirectory=/var/lib/homelab
 Environment="HOMELAB_WORKER_CONFIG=/etc/homelab/worker/config.yml"
-# Never fronted by homelab-webproxy and never reached by a browser --
-# only homelab-api's own gateway route (and any other internal caller)
-# talks to this, over plain internal HTTP (see README.md). No
-# MOJO_REVERSE_PROXY needed for the same reason mailbridge/domain-admin
-# don't need it: there is no proxy in front of this one.
+# Never fronted by homelab-webproxy and never reached by a browser
+# directly -- but homelab-api's own gateway (/api/v1/jobs/*,
+# Homelab::Common::Proxy::forward()) IS itself a proxy hop, and that
+# forward() call now sends X-Forwarded-For/X-Real-IP for exactly this
+# reason. Without trusting it here too, $c->tx->remote_address would
+# resolve to homelab-api's own loopback address instead of the real
+# client.
+Environment="MOJO_REVERSE_PROXY=1"
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-worker
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-worker
 TimeoutStopSec=10

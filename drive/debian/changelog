@@ -1,3 +1,16 @@
+homelab-drive (0.1.23) unstable; urgency=medium
+
+  * Release v0.1.23
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 21:54:28 -0500
+
+homelab-drive (0.1.23) unstable; urgency=medium
+
+  * Add MOJO_REVERSE_PROXY=1 so gateway-mediated and direct-webproxy
+    requests both resolve the real client IP
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 21:54:15 -0500
+
 homelab-drive (0.1.22) unstable; urgency=medium
 
   * Release v0.1.22

@@ -29,7 +29,11 @@ $app->routes->get('/api/v1/registry/:feature' => sub {
 });
 $app->routes->get('/files' => sub {
     my $c = shift;
-    $c->render(json => { auth => $c->req->headers->authorization, ok => \1 });
+    $c->render(json => {
+        auth => $c->req->headers->authorization, ok => \1,
+        x_forwarded_for => $c->req->headers->header('X-Forwarded-For'),
+        x_real_ip       => $c->req->headers->header('X-Real-IP'),
+    });
 });
 $app->routes->post('/files' => sub {
     my $c = shift;
@@ -105,6 +109,17 @@ $t->get_ok('/gateway/files' => { Authorization => 'Bearer test-jwt-123' })
   ->status_is(200)
   ->json_is('/auth', 'Bearer test-jwt-123', 'Authorization header forwarded through unchanged')
   ->json_is('/ok', 1);
+
+# Real bug found while wiring up the audit trail: forward() is itself a
+# second proxy hop (gateway -> backend), but was never setting these --
+# every backend service's own $c->tx->remote_address (used for audit
+# logging, rate-limiting, etc.) silently resolved to homelab-api's own
+# loopback address instead of the real client. Asserting the header is
+# actually SET and matches what this in-process request's own
+# remote_address resolves to (not asserting a specific real-world IP,
+# which Test::Mojo's in-process transport doesn't have one of).
+ok($t->tx->res->json('/x_forwarded_for'), 'forward() sets X-Forwarded-For on the outgoing request to the backend');
+is($t->tx->res->json('/x_forwarded_for'), $t->tx->res->json('/x_real_ip'), 'X-Forwarded-For and X-Real-IP carry the same value');
 
 $t->post_ok('/gateway/files' => json => { filename => 'x.txt' })
   ->status_is(201, 'backend status code relayed through, not flattened to 200')

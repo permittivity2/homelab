@@ -123,6 +123,28 @@ $t->delete_ok("/internal/v1/domains/$zone/dns/records" => $auth => json => { nam
 
 $t->delete_ok("/internal/v1/domains/$zone" => $auth)->status_is(200, 'soft-disable never touches the PowerDNS zone itself');
 
+# homelab-audit's own consumer timer drains audit.queue asynchronously
+# in a genuinely separate service/process -- unlike homelab-audit's OWN
+# test suite (which can call ->app->_drain_queue directly), this file
+# has no way to force a drain, so verifying an entry means polling the
+# real read API (through homelab-api's gateway, same $auth already used
+# for every site_admin call in this file) for a few seconds rather than
+# asserting immediately.
+sub _wait_for_audit_entry {
+    my (%want) = @_;
+    for (1 .. 10) {
+        my $tx = $ua->get("$api_base/api/v1/audit/log?user=" . $want{user_email} => $auth);
+        my $entries = eval { $tx->res->json } // [];
+        for my $e (@$entries) {
+            next unless ($e->{action}      // '') eq ($want{action}      // '');
+            next unless ($e->{resource_id} // '') eq ($want{resource_id} // '');
+            return $e;
+        }
+        sleep 1;
+    }
+    return undef;
+}
+
 # --- Recipient allow/block ---
 my $recipient = 'homelab-domain-admin-test-' . time . '-' . $$ . '@invalid.example';
 
@@ -131,6 +153,9 @@ $t->get_ok('/internal/v1/domains/recipient-access' => $auth)
 
 $t->post_ok('/internal/v1/domains/recipient-access' => $auth => json => { recipient => $recipient, action => 'REJECT', reason => 'test' })
   ->status_is(201)->json_is('/action', 'REJECT')->json_is('/reason', 'test');
+
+ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.block', resource_id => $recipient),
+    'admin block enqueues a recipient_access.block audit entry');
 
 $t->get_ok('/internal/v1/domains/recipient-access' => $auth)
   ->status_is(200)
@@ -141,8 +166,14 @@ $t->get_ok('/internal/v1/domains/recipient-access' => $auth)
 $t->post_ok('/internal/v1/domains/recipient-access' => $auth => json => { recipient => $recipient, action => 'OK' })
   ->status_is(201)->json_is('/action', 'OK', 'posting the same recipient again updates the row instead of erroring');
 
+ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.allow', resource_id => $recipient),
+    'admin allow (action=OK) enqueues a recipient_access.allow audit entry, not .block');
+
 $t->delete_ok("/internal/v1/domains/recipient-access/$recipient" => $auth)
   ->status_is(200)->json_is('/ok', 1);
+
+ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.remove', resource_id => $recipient),
+    'admin delete enqueues a recipient_access.remove audit entry');
 
 $t->delete_ok("/internal/v1/domains/recipient-access/$recipient" => $auth)
   ->status_is(404, 'deleting an already-gone entry is a clean 404, not a 500');
@@ -163,6 +194,9 @@ $t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => {
   ->json_is('/source_pattern', $alias_pattern)->json_is('/destination', $email)
   ->json_is('/active', 1)->json_is('/send_enabled', 1);
 
+ok(_wait_for_audit_entry(user_email => $email, action => 'mail_alias.create', resource_id => $alias_pattern),
+    'mail-alias create enqueues a mail_alias.create audit entry');
+
 $t->get_ok("/internal/v1/domains/$alias_domain" => $auth)
   ->status_is(200, 'creating a mail-alias for a brand-new domain auto-creates its domainadmin.domains row')
   ->json_is('/mail_enabled', 0, 'auto-created as DKIM/DNS-eligible but NOT a virtual_mailbox_domain')
@@ -181,6 +215,9 @@ $t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => {
 $t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json => { send_enabled => \1 })
   ->status_is(200)->json_is('/send_enabled', 1);
 
+ok(_wait_for_audit_entry(user_email => $email, action => 'mail_alias.enable_send', resource_id => $alias_pattern),
+    'send_enabled=true enqueues mail_alias.enable_send');
+
 # /mine is the one self-service exception in this whole service --
 # $plain_auth is the SAME token from before site_admin was ever
 # granted (still a valid JWT, just not site_admin), proving this route
@@ -197,6 +234,9 @@ is(scalar(@{ $mine->{receive_only}{domains} }), 0, 'nothing under receive_only y
 $t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json => { send_enabled => \0 })
   ->status_is(200)->json_is('/send_enabled', 0)
   ->json_is('/active', 1, 'active is untouched by the send_enabled toggle -- inbound routing keeps working');
+
+ok(_wait_for_audit_entry(user_email => $email, action => 'mail_alias.disable_send', resource_id => $alias_pattern),
+    'send_enabled=false enqueues mail_alias.disable_send, a distinct action from enable_send');
 
 $t->get_ok('/internal/v1/domains/mail-aliases/mine' => $plain_auth)->status_is(200);
 $mine = $t->tx->res->json;
@@ -245,6 +285,9 @@ $t->post_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth => json 
 })->status_is(201, 'blocking a specific address under an owned catch-all domain succeeds')
   ->json_is('/recipient', $owned_address)->json_is('/user_email', $email);
 
+ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.block', resource_id => $owned_address),
+    'self-service block enqueues a recipient_access.block audit entry, same action name as the admin tier');
+
 $t->get_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth)->status_is(200);
 ok((grep { $_->{recipient} eq $owned_address } @{ $t->tx->res->json }), 'newly-blocked address appears in /mine');
 
@@ -280,6 +323,10 @@ $t->delete_ok("/internal/v1/domains/recipient-access/mine/$owned_address" => $au
 
 $t->delete_ok("/internal/v1/domains/recipient-access/mine/$owned_address" => $plain_auth)
   ->status_is(200)->json_is('/ok', 1);
+
+ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.remove', resource_id => $owned_address),
+    'self-service unblock enqueues a recipient_access.remove audit entry');
+
 $t->delete_ok("/internal/v1/domains/recipient-access/mine/$owned_address" => $plain_auth)
   ->status_is(404, 'deleting an already-gone entry is a clean 404');
 
@@ -295,6 +342,10 @@ $t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json
 
 $t->delete_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth)
   ->status_is(200)->json_is('/ok', 1);
+
+ok(_wait_for_audit_entry(user_email => $email, action => 'mail_alias.remove', resource_id => $alias_pattern),
+    'mail-alias delete enqueues a mail_alias.remove audit entry');
+
 $t->delete_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth)
   ->status_is(404, 'deleting an already-gone entry is a clean 404, not a 500');
 

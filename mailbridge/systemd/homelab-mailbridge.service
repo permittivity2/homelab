@@ -9,10 +9,15 @@ User=homelab
 Group=homelab
 WorkingDirectory=/var/lib/homelab
 Environment="HOMELAB_MAILBRIDGE_CONFIG=/etc/homelab/mailbridge/config.yml"
-# Never fronted by homelab-webproxy and never reached by a browser --
-# only homelab-api's own gateway routes call this, over plain internal
-# HTTP (see README.md). No MOJO_REVERSE_PROXY needed for the same
-# reason drive/sso need it: there is no proxy in front of this one.
+# Never fronted by homelab-webproxy and never reached by a browser
+# directly -- but homelab-api's own gateway (/api/v1/mail/*,
+# Homelab::Common::Proxy::forward()) IS itself a proxy hop, and that
+# forward() call now sends X-Forwarded-For/X-Real-IP for exactly this
+# reason. Without trusting it here too, $c->tx->remote_address would
+# resolve to homelab-api's own loopback address instead of the real
+# client -- caught while wiring up the audit trail, where every
+# gateway-mediated mail.send entry was recording the wrong IP.
+Environment="MOJO_REVERSE_PROXY=1"
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-mailbridge
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-mailbridge
 TimeoutStopSec=10

@@ -1,3 +1,16 @@
+homelab-common (0.1.16) unstable; urgency=medium
+
+  * Release v0.1.16
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 21:54:20 -0500
+
+homelab-common (0.1.16) unstable; urgency=medium
+
+  * Gateway forward() now sets X-Forwarded-For/X-Real-IP on the outgoing
+    request to backend services
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 21:54:15 -0500
+
 homelab-common (0.1.15) unstable; urgency=medium
 
   * Release v0.1.15

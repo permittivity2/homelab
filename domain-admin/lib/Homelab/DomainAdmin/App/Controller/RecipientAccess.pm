@@ -1,5 +1,17 @@
 package Homelab::DomainAdmin::App::Controller::RecipientAccess;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
+use Homelab::Common::AuditClient qw(enqueue);
+
+# Postfix's own action vocabulary is free text (REJECT/OK/DISCARD/DEFER/
+# a literal "550 ..." string -- see 003-recipient-access.sql), but the
+# audit trail wants a small, stable action_type catalog rather than one
+# row per distinct string ever typed. 'OK' is the only real "allow"
+# value either CLI tier ever sends (dns_set_recipient_access via
+# recipient-access allow); anything else reads as block-shaped for
+# audit purposes, same as it does for Postfix's own enforcement.
+sub _recipient_access_action_name ($action) {
+    return (uc($action // '') eq 'OK') ? 'recipient_access.allow' : 'recipient_access.block';
+}
 
 # GET /internal/v1/domains/recipient-access[?user=<email>]
 # Site_admin-only, unchanged -- ?user= is new: support/troubleshooting
@@ -41,17 +53,31 @@ sub upsert ($c) {
           RETURNING *},
         $recipient, $action, $body->{reason}, $email,
     )->hash;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        action => _recipient_access_action_name($action), resource_type => 'recipient_access',
+        resource_id => $recipient, source_service => 'homelab-domain-admin',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { tier => 'admin', action => $action, reason => $body->{reason} },
+    );
     return $c->render(json => $row, status => 201);
 }
 
 # DELETE /internal/v1/domains/recipient-access/:recipient
 sub delete_entry ($c) {
-    $c->authenticated_email or return;
+    my $email = $c->authenticated_email or return;
     my $row = $c->app->pg->db->query(
         'DELETE FROM domainadmin.recipient_access WHERE recipient = ? RETURNING *',
         $c->stash('recipient'),
     )->hash;
     return $c->render(json => { error => 'not found' }, status => 404) unless $row;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        action => 'recipient_access.remove', resource_type => 'recipient_access',
+        resource_id => $c->stash('recipient'), source_service => 'homelab-domain-admin',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { tier => 'admin' },
+    );
     return $c->render(json => { ok => \1 });
 }
 
@@ -122,6 +148,13 @@ sub create_mine ($c) {
           RETURNING *},
         $recipient, $action, $body->{reason}, $email, $email,
     )->hash;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        action => _recipient_access_action_name($action), resource_type => 'recipient_access',
+        resource_id => $recipient, source_service => 'homelab-domain-admin',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { tier => 'self_service', action => $action, reason => $body->{reason} },
+    );
     return $c->render(json => $row, status => 201);
 }
 
@@ -158,6 +191,13 @@ sub delete_mine ($c) {
         $email, $c->stash('recipient'),
     )->hash;
     return $c->render(json => { error => 'not found' }, status => 404) unless $row;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        action => 'recipient_access.remove', resource_type => 'recipient_access',
+        resource_id => $c->stash('recipient'), source_service => 'homelab-domain-admin',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { tier => 'self_service' },
+    );
     return $c->render(json => { ok => \1 });
 }
 

@@ -124,6 +124,20 @@ sub forward {
     $tx->req->method($c->req->method);
     $tx->req->url($target);
     $tx->req->content($c->req->content);
+    # Explicitly set, not relied on via header reuse from $c->req->content
+    # above: $c->tx->remote_address is only correctly resolved to the
+    # real originating client in the first place because homelab-api's
+    # own systemd unit sets MOJO_REVERSE_PROXY=1 (trusting homelab-
+    # webproxy's X-Forwarded-For on THAT hop) -- but this forward() call
+    # is itself a SECOND proxy hop, gateway -> backend service, and
+    # nothing was setting these headers for it. Every backend this is
+    # used with now sets MOJO_REVERSE_PROXY=1 too (see each one's own
+    # systemd unit), so this is what makes ITS OWN $c->tx->remote_address
+    # resolve correctly in turn -- audit-log entries for gateway-mediated
+    # actions (drive deletes, mail sends, domain/DKIM changes) were
+    # recording homelab-api's own loopback address before this fix.
+    $tx->req->headers->header('X-Forwarded-For' => $c->tx->remote_address);
+    $tx->req->headers->header('X-Real-IP'       => $c->tx->remote_address);
     $tx = $UA->start($tx);
 
     unless ($tx->res->code) {

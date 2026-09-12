@@ -1,5 +1,6 @@
 package Homelab::DomainAdmin::App::Controller::MailAliases;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
+use Homelab::Common::AuditClient qw(enqueue);
 
 # GET /internal/v1/domains/mail-aliases[?destination=<email>]
 sub list ($c) {
@@ -72,6 +73,12 @@ sub create ($c) {
           RETURNING *},
         $source_pattern, $destination, $send_enabled, $email,
     )->hash;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'), action => 'mail_alias.create',
+        resource_type => 'mail_alias', resource_id => $source_pattern, source_service => 'homelab-domain-admin',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { destination => $destination, send_enabled => ($send_enabled ? \1 : \0) },
+    );
     return $c->render(json => $row, status => 201);
 }
 
@@ -80,7 +87,7 @@ sub create ($c) {
 # (inbound routing), see README.md for why this has to be a separate
 # flag from the one governing whether the alias exists at all.
 sub update ($c) {
-    $c->authenticated_email or return;
+    my $email = $c->authenticated_email or return;
     my $body = $c->req->json // {};
     return $c->render(json => { error => 'send_enabled is required' }, status => 400)
         unless exists $body->{send_enabled};
@@ -91,6 +98,13 @@ sub update ($c) {
         $send_enabled, $c->stash('source_pattern'),
     )->hash;
     return $c->render(json => { error => 'not found' }, status => 404) unless $row;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        action => ($send_enabled ? 'mail_alias.enable_send' : 'mail_alias.disable_send'),
+        resource_type => 'mail_alias', resource_id => $c->stash('source_pattern'),
+        source_service => 'homelab-domain-admin', ip_address => $c->tx->remote_address,
+        user_agent => $c->req->headers->user_agent,
+    );
     return $c->render(json => $row);
 }
 
@@ -98,12 +112,18 @@ sub update ($c) {
 # revocation (stops both inbound routing and outbound authorization).
 # Use the PATCH toggle above instead for a temporary suspension.
 sub delete_entry ($c) {
-    $c->authenticated_email or return;
+    my $email = $c->authenticated_email or return;
     my $row = $c->app->pg->db->query(
         'DELETE FROM domainadmin.mail_aliases WHERE source_pattern = ? RETURNING *',
         $c->stash('source_pattern'),
     )->hash;
     return $c->render(json => { error => 'not found' }, status => 404) unless $row;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'), action => 'mail_alias.remove',
+        resource_type => 'mail_alias', resource_id => $c->stash('source_pattern'),
+        source_service => 'homelab-domain-admin', ip_address => $c->tx->remote_address,
+        user_agent => $c->req->headers->user_agent,
+    );
     return $c->render(json => { ok => \1 });
 }
 
