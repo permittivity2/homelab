@@ -6,7 +6,7 @@ construction and the post-domain-creation SPF/DMARC nudge."""
 
 from unittest.mock import MagicMock
 
-from homelab_cli.cli import _build_dmarc_value, _build_spf_value, _nudge_spf_dmarc, summarize_user_agent
+from homelab_cli.cli import _build_dmarc_value, _build_mx_value, _build_spf_value, _nudge_missing_dns_records, summarize_user_agent
 from homelab_cli.client import ApiError
 
 
@@ -66,7 +66,7 @@ def test_dmarc_full_combination_tag_order():
     assert value == "v=DMARC1; p=reject; rua=mailto:a@b.com,mailto:c@d.com; pct=50"
 
 
-# --- SPF/DMARC nudge -----------------------------------------------------
+# --- MX/SPF/DMARC nudge ---------------------------------------------------
 # dns_list_records' real backend (Dns.pm's list_records) passes PowerDNS's
 # own rrset names straight through, which always carry a trailing dot
 # (confirmed by reading domain-admin/lib/.../PowerDNS.pm's _fqdn) -- every
@@ -77,42 +77,60 @@ def _record(name, type_, content):
     return {"name": name, "type": type_, "content": content}
 
 
-def test_nudge_prints_both_when_nothing_present(capsys):
+_MX_RECORD = _record("forge.name.", "MX", ["10 mail.test.mailmasker.org."])
+_SPF_RECORD = _record("forge.name.", "TXT", ['"v=spf1 mx ~all"'])
+_DMARC_RECORD = _record("_dmarc.forge.name.", "TXT", ['"v=DMARC1; p=none"'])
+
+
+def test_nudge_prints_all_three_when_nothing_present(capsys):
     client = MagicMock()
     client.dns_list_records.return_value = []
-    _nudge_spf_dmarc(client, "tok", "forge.name")
+    _nudge_missing_dns_records(client, "tok", "forge.name")
     out = capsys.readouterr().out
+    assert "no MX record found for forge.name" in out
+    assert "dns mx set forge.name" in out
     assert "no SPF record found for forge.name" in out
     assert "dns spf set forge.name" in out
     assert "no DMARC record found for forge.name" in out
     assert "dns dmarc set forge.name" in out
 
 
-def test_nudge_prints_nothing_when_both_present(capsys):
+def test_nudge_prints_nothing_when_all_three_present(capsys):
     # Deliberately using PowerDNS's real wire-format quoting for TXT
     # content (content == ['"v=spf1 mx ~all"'], literal quote chars) --
     # confirmed against a real deployed zone, not just assumed. An
-    # earlier version of _nudge_spf_dmarc compared unquoted and always
+    # earlier version of this nudge compared unquoted and always
     # reported both as missing even right after they'd just been set;
-    # this fixture shape is what would have caught that.
+    # this fixture shape is what would have caught that. MX content is
+    # NOT a quoted character-string type, so no quoting on that one.
     client = MagicMock()
-    client.dns_list_records.return_value = [
-        _record("forge.name.", "TXT", ['"v=spf1 mx ~all"']),
-        _record("_dmarc.forge.name.", "TXT", ['"v=DMARC1; p=none"']),
-    ]
-    _nudge_spf_dmarc(client, "tok", "forge.name")
+    client.dns_list_records.return_value = [_MX_RECORD, _SPF_RECORD, _DMARC_RECORD]
+    _nudge_missing_dns_records(client, "tok", "forge.name")
     assert capsys.readouterr().out == ""
 
 
 def test_nudge_prints_only_the_missing_one(capsys):
     client = MagicMock()
-    client.dns_list_records.return_value = [
-        _record("forge.name.", "TXT", ['"v=spf1 mx ~all"']),
-    ]
-    _nudge_spf_dmarc(client, "tok", "forge.name")
+    client.dns_list_records.return_value = [_MX_RECORD, _SPF_RECORD]
+    _nudge_missing_dns_records(client, "tok", "forge.name")
     out = capsys.readouterr().out
+    assert "MX" not in out
     assert "SPF" not in out
     assert "no DMARC record found for forge.name" in out
+
+
+def test_nudge_prints_mx_when_only_mx_missing(capsys):
+    """The specific gap that motivated adding this check: SPF/DMARC set
+    up correctly, but no MX -- mail silently deferred/timed out with
+    nothing about the domain/alias setup itself looking wrong."""
+    client = MagicMock()
+    client.dns_list_records.return_value = [_SPF_RECORD, _DMARC_RECORD]
+    _nudge_missing_dns_records(client, "tok", "forge.name")
+    out = capsys.readouterr().out
+    assert "no MX record found for forge.name" in out
+    assert "dns mx set forge.name" in out
+    assert "SPF" not in out
+    assert "DMARC" not in out
 
 
 def test_nudge_ignores_unrelated_txt_records_at_the_same_name(capsys):
@@ -121,9 +139,10 @@ def test_nudge_ignores_unrelated_txt_records_at_the_same_name(capsys):
     an SPF record."""
     client = MagicMock()
     client.dns_list_records.return_value = [
+        _MX_RECORD,
         _record("forge.name.", "TXT", ['"some-other-verification-token"']),
     ]
-    _nudge_spf_dmarc(client, "tok", "forge.name")
+    _nudge_missing_dns_records(client, "tok", "forge.name")
     out = capsys.readouterr().out
     assert "no SPF record found for forge.name" in out
 
@@ -134,8 +153,18 @@ def test_nudge_swallows_api_error_and_prints_nothing(capsys):
     command that already succeeded."""
     client = MagicMock()
     client.dns_list_records.side_effect = ApiError(502, "zone not ready")
-    _nudge_spf_dmarc(client, "tok", "forge.name")
+    _nudge_missing_dns_records(client, "tok", "forge.name")
     assert capsys.readouterr().out == ""
+
+
+# --- _build_mx_value -------------------------------------------------------
+
+def test_build_mx_value_appends_trailing_dot():
+    assert _build_mx_value(10, "mail.test.mailmasker.org") == "10 mail.test.mailmasker.org."
+
+
+def test_build_mx_value_leaves_existing_trailing_dot_alone():
+    assert _build_mx_value(10, "mail.test.mailmasker.org.") == "10 mail.test.mailmasker.org."
 
 
 # --- summarize_user_agent: display-only heuristic for `sessions list`

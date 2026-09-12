@@ -75,18 +75,41 @@ def _build_dmarc_value(policy, rua, pct):
     return "; ".join(tags)
 
 
-def _nudge_spf_dmarc(client, token, domain_name):
+# The shared mail hostname every domain in this deployment routes
+# through once it has any real mail flow at all -- same value
+# `homelab-postfix`'s own debconf default uses, and the exact host
+# `test.mailmasker.org`'s own already-working MX points at. A domain's
+# OWN apex A record is irrelevant to mail delivery once a real MX
+# exists (RFC 5321's implicit-MX-from-A fallback only applies with NO
+# MX record at all) -- pointing at this shared, already-correctly-
+# resolvable host means a brand new domain's own placeholder A record
+# (whatever homelab-domain-admin's zone creation happens to seed) never
+# needs to be touched for mail to work.
+_DEFAULT_MX_HOST = "mail.test.mailmasker.org"
+
+
+def _build_mx_value(priority, host):
+    if not host.endswith("."):
+        host += "."
+    return f"{priority} {host}"
+
+
+def _nudge_missing_dns_records(client, token, domain_name):
     """Best-effort UX nicety, called right after a domain gains a real DNS
     zone (dns domains add / dns mail-aliases add): checks for an existing
-    SPF (TXT at the zone apex starting "v=spf1") and DMARC (TXT at
-    _dmarc.<domain> starting "v=DMARC1") record, and prints a one-line
-    suggestion for whichever is missing -- most admins know they need a
-    TXT record for these but not what belongs in it, so pointing at the
-    dedicated commands (rather than expecting them to hand-write SPF/
-    DMARC syntax via `dns records add`) is the actual point here.
-    Deliberately swallows any error: a transient API hiccup or a zone
-    that isn't fully queryable in the same instant it was created must
-    never make domain/alias creation look like it failed."""
+    MX record, SPF (TXT at the zone apex starting "v=spf1"), and DMARC
+    (TXT at _dmarc.<domain> starting "v=DMARC1") record, and prints a
+    one-line suggestion for whichever is missing -- most admins know they
+    need these but not what belongs in them, so pointing at the dedicated
+    commands (rather than expecting them to hand-write the records via
+    `dns records add`) is the actual point here. A missing MX specifically
+    was a real, confusing failure mode caught live: mail to a freshly
+    zone-created domain silently deferred/timed out (Postfix fell back to
+    the zone's own placeholder apex A record) with nothing about the
+    mail-alias setup itself looking wrong. Deliberately swallows any
+    error: a transient API hiccup or a zone that isn't fully queryable in
+    the same instant it was created must never make domain/alias creation
+    look like it failed."""
     try:
         records = client.dns_list_records(token, domain_name)
     except ApiError:
@@ -102,11 +125,14 @@ def _nudge_spf_dmarc(client, token, domain_name):
     #      naive `v.startswith("v=spf1")` against that always fails
     #      (it starts with a literal `"` character), which would make
     #      this nudge claim SPF/DMARC are missing even right after
-    #      `dns spf set`/`dns dmarc set` just created them.
+    #      `dns spf set`/`dns dmarc set` just created them. MX content
+    #      isn't a quoted character-string type, so no unquoting needed
+    #      there -- existence of the record (any value) is enough.
     def _unquoted(value):
         return value[1:-1] if value.startswith('"') and value.endswith('"') else value
 
     dmarc_name = f"_dmarc.{domain_name}"
+    has_mx = any(r["name"].rstrip(".") == domain_name and r["type"] == "MX" for r in records)
     has_spf = any(
         r["name"].rstrip(".") == domain_name and r["type"] == "TXT"
         and any(_unquoted(v).startswith("v=spf1") for v in r["content"])
@@ -117,6 +143,8 @@ def _nudge_spf_dmarc(client, token, domain_name):
         and any(_unquoted(v).startswith("v=DMARC1") for v in r["content"])
         for r in records
     )
+    if not has_mx:
+        print(f"  tip: no MX record found for {domain_name} -- mail to it will silently fail to deliver; run 'homelab-cli dns mx set {domain_name}' to add one")
     if not has_spf:
         print(f"  tip: no SPF record found for {domain_name} -- run 'homelab-cli dns spf set {domain_name}' to add one")
     if not has_dmarc:
@@ -327,7 +355,7 @@ def cmd_dns_domains_add(args):
         return 0
     print(f"Added: {result['domain_name']} (id {result['id']})")
     if args.dns_managed:
-        _nudge_spf_dmarc(client, session["token"], args.domain_name)
+        _nudge_missing_dns_records(client, session["token"], args.domain_name)
     return 0
 
 
@@ -425,6 +453,22 @@ def cmd_dns_records_delete(args):
     if _emit(args, result or {"success": True}):
         return 0
     print(f"Deleted {args.name} {args.type}")
+    return 0
+
+
+def cmd_dns_mx_set(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    value = _build_mx_value(args.priority, args.host)
+    try:
+        result = _client().dns_add_record(session["token"], args.domain_name, args.domain_name, "MX", [value])
+    except ApiError as e:
+        _emit_error(args, f"Could not set MX record: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Set MX for {args.domain_name}: {value}")
     return 0
 
 
@@ -609,7 +653,7 @@ def cmd_dns_mail_aliases_add(args):
     # MailAliases.pm), so unlike dns_domains_add there's no --no-dns
     # case to skip here.
     domain_name = args.source_pattern.rsplit("@", 1)[-1]
-    _nudge_spf_dmarc(client, session["token"], domain_name)
+    _nudge_missing_dns_records(client, session["token"], domain_name)
     return 0
 
 
@@ -1531,6 +1575,16 @@ def build_parser():
     p.add_argument("--name", required=True)
     p.add_argument("--type", required=True)
     p.set_defaults(func=cmd_dns_records_delete)
+
+    mx = dns_sub.add_parser("mx", help="MX record, built for you from a couple of friendly flags")
+    mx_sub = mx.add_subparsers(dest="dns_mx_command", required=True)
+
+    p = mx_sub.add_parser("set", help="Create or replace the domain's MX record")
+    p.add_argument("domain_name")
+    p.add_argument("--host", default=_DEFAULT_MX_HOST,
+                    help=f"Mail server this domain routes through (default: {_DEFAULT_MX_HOST}, the shared mail host every domain here already uses)")
+    p.add_argument("--priority", type=int, default=10, help="MX priority (default: 10 -- fine unless you're adding a second, backup MX)")
+    p.set_defaults(func=cmd_dns_mx_set)
 
     spf = dns_sub.add_parser("spf", help="SPF record, built for you from a couple of friendly flags")
     spf_sub = spf.add_subparsers(dest="dns_spf_command", required=True)

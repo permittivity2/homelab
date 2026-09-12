@@ -1,3 +1,17 @@
+homelab-cli (0.3.24) unstable; urgency=medium
+
+  * Release v0.3.24
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 14:42:36 -0500
+
+homelab-cli (0.3.24) unstable; urgency=medium
+
+  * Add 'dns mx set' + nudge for a missing MX record on dns
+    domains/mail-aliases add (a real, just-hit failure mode: mail
+    silently deferred with no MX, nothing else looking wrong)
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 14:42:30 -0500
+
 homelab-cli (0.3.23) unstable; urgency=medium
 
   * Release v0.3.23
