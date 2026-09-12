@@ -126,4 +126,41 @@ $t->get_ok('/internal/v1/audit/log' => $auth)
 my $entries = $t->tx->res->json;
 ok((grep { ($_->{resource_id} // '') eq '43' } @$entries), 'the GOOD row after the bad one still made it into audit.entries');
 
+# --- list() logs its OWN reads (see the module's comment for why: the
+# whole point is reconstructing EVERYTHING that happened with an
+# account, including a possibly-compromised account checking its own
+# history) -- self-scoped case first, since that needs no special
+# capability. Drain twice: once to flush whatever's already queued from
+# the calls above so it can't be mistaken for THIS section's own
+# entries, then again after the call under test. ---
+$t->app->_drain_queue;
+
+$t->get_ok('/internal/v1/audit/log?since=2000-01-01' => $auth)->status_is(200);
+$t->app->_drain_queue;
+
+$t->get_ok('/internal/v1/audit/log' => $auth)->status_is(200);
+my $self_view_entries = $t->tx->res->json;
+my ($self_view) = grep { $_->{action} eq 'audit.view' } @$self_view_entries;
+ok($self_view, 'a self-scoped audit list call enqueues its own audit.view entry')
+    or diag explain $self_view_entries;
+is($self_view->{user_email},   $email, 'self-view entry is keyed on the account whose data was viewed');
+is($self_view->{resource_id},  $email, 'resource_id also names that same account');
+is($self_view->{resource_type}, 'audit_query', 'resource_type is audit_query');
+ok($self_view->{jti}, 'the viewing session\'s own jti is recorded');
+is($self_view->{detail}{viewed_by}, $email, 'detail.viewed_by names the actual viewer (same as user_email here, since this was a self-view)');
+ok($self_view->{detail}{queried_as_self}, 'detail.queried_as_self is true for a self-scoped view');
+is($self_view->{detail}{since}, '2000-01-01', 'the since filter used is recorded in detail, from the EARLIER call under test');
+
+# --- The reliability contract this whole design rests on: enqueue()
+# has no eval/best-effort wrapper anywhere, including inside list()
+# itself -- a failure must propagate, not be swallowed. Proven directly
+# against the same function list() calls, with the same kind of
+# precondition violation (a required field missing) enqueue() already
+# guards against -- this is the exact mechanism that would turn into a
+# real request failure if it fired inside a live request. ---
+eval {
+    enqueue($t->app->pg->db, action => 'audit.view', source_service => 'homelab-audit');    # missing required user_email
+};
+like($@, qr/user_email is required/, 'enqueue() dies on a missing required field -- the same no-silent-failure contract list() itself relies on');
+
 done_testing();

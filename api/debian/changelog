@@ -1,3 +1,16 @@
+homelab-api (0.1.14) unstable; urgency=medium
+
+  * Release v0.1.14
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 11:06:37 -0500
+
+homelab-api (0.1.14) unstable; urgency=medium
+
+  * _sessions_list logs its own reads (sessions.view), same reasoning as
+    homelab-audit's own list()
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 11:06:26 -0500
+
 homelab-api (0.1.13) unstable; urgency=medium
 
   * Release v0.1.13

@@ -571,6 +571,21 @@ sub _sessions_list ($self, $c) {
     )->hashes->to_array;
 
     $_->{current} = ($_->{jti} eq $jti) ? \1 : \0 for @$rows;
+
+    # This view is itself an audited action -- same reasoning as
+    # homelab-audit's own list() (see that module's comment): keyed on
+    # the account whose sessions were viewed (user_email/resource_id =
+    # $target->{email}), not the viewer, so pulling "everything that
+    # happened with account X" surfaces "someone checked X's active
+    # sessions" regardless of who did it. detail.viewed_by keeps the
+    # actor directly readable without a jti/session cross-reference.
+    enqueue(
+        $self->pg->db, user_email => $target->{email}, jti => $jti, action => 'sessions.view',
+        resource_type => 'user_sessions', resource_id => $target->{email}, source_service => 'homelab-api',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { viewed_by => $caller->{email}, queried_as_self => ($target->{email} eq $caller->{email}) ? \1 : \0 },
+    );
+
     return $c->render(json => $rows);
 }
 

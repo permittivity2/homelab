@@ -2,6 +2,7 @@ package Homelab::Audit::App::Controller::Audit;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 
 use Mojo::JSON qw(decode_json);
+use Homelab::Common::AuditClient qw(enqueue);
 
 # GET /internal/v1/audit/log?user=<email>&since=<ts>&until=<ts>&action=<name>
 # Self-scoped by default: a caller with no audit.view capability can
@@ -12,36 +13,54 @@ use Mojo::JSON qw(decode_json);
 # (site_admin always has it; see App.pm's authenticated_email_any +
 # introspect capability check) may query any user, or omit ?user=
 # entirely for everyone.
+#
+# This endpoint logs its OWN reads (see the enqueue() call below) --
+# not an oversight, a deliberate design point reached by discussion:
+# the whole reason this feature exists is to reconstruct EVERYTHING
+# that happened with an account, including a compromised account
+# checking its own history, so a self-scoped view is exactly as
+# forensically relevant as a cross-user one. No self-vs-cross-user
+# exception here.
 sub list ($c) {
-    my ($email, $has_capability) = $c->authenticated_email_any or return;
+    my ($email, $has_capability, $jti) = $c->authenticated_email_any or return;
 
     my $requested_user = $c->param('user');
     if (defined $requested_user && $requested_user ne $email && !$has_capability) {
         return $c->render(json => { error => 'audit.view capability required to query another user' }, status => 403);
     }
 
+    my $since  = $c->param('since');
+    my $until  = $c->param('until');
+    my $action = $c->param('action');
+
     my @where;
     my @bind;
+    # Also determines what THIS call's own audit entry (below) is keyed
+    # on: a single target_email when one is in effect, or undef/'all'
+    # when a capability-holder omitted ?user= to see everyone's.
+    my $target_email;
     if ($has_capability) {
         if (defined $requested_user) {
             push @where, 'e.user_email = ?';
             push @bind, $requested_user;
+            $target_email = $requested_user;
         }
     }
     else {
         push @where, 'e.user_email = ?';
         push @bind, $email;
+        $target_email = $email;
     }
 
-    if (my $since = $c->param('since')) {
+    if ($since) {
         push @where, 'e.occurred_at >= ?';
         push @bind, $since;
     }
-    if (my $until = $c->param('until')) {
+    if ($until) {
         push @where, 'e.occurred_at <= ?';
         push @bind, $until;
     }
-    if (my $action = $c->param('action')) {
+    if ($action) {
         push @where, 'at.name = ?';
         push @bind, $action;
     }
@@ -70,6 +89,41 @@ sub list ($c) {
     for my $row (@$rows) {
         $row->{detail} = decode_json($row->{detail}) if defined $row->{detail};
     }
+
+    # This view of the audit log is itself an audited action (see the
+    # module comment above). Keyed on the ACCOUNT that was viewed
+    # (user_email/resource_id = $target_email), not the viewer -- so
+    # that pulling "everything that happened with account X" (?user=X)
+    # surfaces "someone looked at X's history" regardless of who that
+    # was, which is exactly the point for the compromised-account case
+    # this feature exists for. The viewer is never lost, though: `jti`
+    # identifies the exact session, and detail.viewed_by names them
+    # directly so a human doesn't have to cross-reference a session
+    # table just to answer "who looked at my stuff." The all-users case
+    # (a capability holder omitting ?user=) has no single account to
+    # attribute this to, so it falls back to the viewer themselves --
+    # the only sensible choice when there's no target at all.
+    my %detail = (viewed_by => $email);
+    if (defined $target_email) {
+        $detail{queried_as_self} = ($target_email eq $email) ? \1 : \0;
+    }
+    else {
+        $detail{scope} = 'all';
+    }
+    $detail{since}         = $since  if defined $since;
+    $detail{until}         = $until  if defined $until;
+    $detail{action_filter} = $action if defined $action;
+
+    enqueue(
+        $c->app->pg->db,
+        user_email => $target_email // $email,
+        action => 'audit.view', resource_type => 'audit_query',
+        (defined $target_email ? (resource_id => $target_email) : ()),
+        jti => $jti, source_service => 'homelab-audit',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => \%detail,
+    );
+
     return $c->render(json => $rows);
 }
 

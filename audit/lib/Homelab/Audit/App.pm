@@ -64,7 +64,7 @@ sub startup ($self) {
             $c->render(json => { error => 'not logged in' }, status => 401);
             return ();
         }
-        return ($result->{email}, $result->{has_capability} ? 1 : 0);
+        return ($result->{email}, $result->{has_capability} ? 1 : 0, $result->{jti});
     });
 
     my $r = $self->routes;

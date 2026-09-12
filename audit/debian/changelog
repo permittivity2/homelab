@@ -1,3 +1,16 @@
+homelab-audit (0.1.3) unstable; urgency=medium
+
+  * Release v0.1.3
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 11:06:31 -0500
+
+homelab-audit (0.1.3) unstable; urgency=medium
+
+  * list() logs its own reads (audit.view) -- self-scoped and cross-user
+    views both count, per the compromised-account-forensics discussion
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 11:06:26 -0500
+
 homelab-audit (0.1.2) unstable; urgency=medium
 
   * Release v0.1.2

@@ -120,6 +120,19 @@ ok((grep { $_->{jti} } @$admin_view), 'site_admin can list another user\'s sessi
     or diag explain $admin_view;
 ok(!(grep { $_->{current} } @$admin_view), 'none of THOSE rows are marked current -- current is relative to the caller\'s own token, not the viewed user\'s');
 
+# --- _sessions_list logs its OWN reads too (same reasoning as
+# homelab-audit's own list(), see that file's comment) -- enqueue() has
+# no eval/best-effort wrapper, so if the call above had the wrong field
+# names or a missing required value, EVERY sessions-list assertion in
+# this file would already be failing with a 500 instead of the 200s
+# checked throughout -- that's real, if implicit, coverage of the
+# reliability contract. This repo's own schema-isolation design means
+# homelab-api's role is INSERT-only on audit.queue (no SELECT), so the
+# actual CONTENT landing correctly in audit.entries is verified during
+# real end-to-end testing via homelab-audit's own read API, not from
+# here -- this service genuinely cannot read what it just wrote, by
+# design, the same way it can't read any other service's schema. ---
+
 # --- Revoke: the actual "force re-login" property. Must survive the
 # CLI's own 401-refresh-retry -- i.e. killing the refresh_token too, not
 # just flipping the session's revoked flag. ---
