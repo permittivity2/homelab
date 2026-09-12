@@ -128,10 +128,10 @@ sub _drain_queue ($self) {
                 ? $self->_find_or_create_id('resource_types', $p->{resource_type}) : undef;
             $db->query(
                 q{INSERT INTO audit.entries
-                    (occurred_at, user_email, jti, action_type_id, resource_type_id,
+                    (occurred_at, actor_email, affected_user, jti, action_type_id, resource_type_id,
                      resource_id, source_service, ip_address, user_agent, detail)
-                  VALUES (COALESCE(?::timestamptz, NOW()), ?, ?, ?, ?, ?, ?, ?, ?, ?)},
-                $p->{occurred_at}, $p->{user_email}, $p->{jti}, $action_type_id, $resource_type_id,
+                  VALUES (COALESCE(?::timestamptz, NOW()), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)},
+                $p->{occurred_at}, $p->{actor_email}, $p->{affected_user}, $p->{jti}, $action_type_id, $resource_type_id,
                 $p->{resource_id}, $p->{source_service}, $p->{ip_address}, $p->{user_agent},
                 $p->{detail} ? { json => $p->{detail} } : undef,
             );

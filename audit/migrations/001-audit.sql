@@ -17,8 +17,9 @@ CREATE TABLE IF NOT EXISTS audit.queue (
     id          BIGSERIAL PRIMARY KEY,
     enqueued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     payload     JSONB NOT NULL
-    -- payload shape: {user_email, jti, action, resource_type, resource_id,
-    --                 source_service, ip_address, user_agent, detail, occurred_at}
+    -- payload shape: {actor_email, affected_user, jti, action, resource_type,
+    --                 resource_id, source_service, ip_address, user_agent,
+    --                 detail, occurred_at}
 );
 CREATE INDEX IF NOT EXISTS idx_audit_queue_enqueued_at ON audit.queue (enqueued_at);
 
@@ -44,10 +45,21 @@ CREATE TABLE IF NOT EXISTS audit.resource_types (
 -- App.pm's _ensure_partitions) -- this migration only creates the
 -- parent (partitioned) table plus the first partition, so a fresh
 -- install has somewhere to write from minute one.
+-- actor_email (who performed the action) and affected_user (whose
+-- account this action is about) are deliberately separate columns, not
+-- one overloaded field -- for the overwhelming majority of actions
+-- they're the same value (a user acting on their own stuff), but they
+-- genuinely differ for the small set of admin-on-behalf-of-someone-else
+-- actions (granting user X a role, revoking user X's session, granting
+-- a mail-alias that routes to user X). ?user= (goal 1: "what did I do")
+-- filters on actor_email; ?affecting= (goal 2: "everything that touched
+-- this account, including admin actions on it") filters on
+-- affected_user. See README.md for the full reasoning.
 CREATE TABLE IF NOT EXISTS audit.entries (
     id                BIGSERIAL,
     occurred_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    user_email        TEXT NOT NULL,
+    actor_email       TEXT NOT NULL,
+    affected_user     TEXT NOT NULL,
     jti               TEXT,
     action_type_id    SMALLINT NOT NULL REFERENCES audit.action_types(id),
     resource_type_id  SMALLINT REFERENCES audit.resource_types(id),
@@ -59,9 +71,10 @@ CREATE TABLE IF NOT EXISTS audit.entries (
     PRIMARY KEY (id, occurred_at)
 ) PARTITION BY RANGE (occurred_at);
 
-CREATE INDEX IF NOT EXISTS idx_audit_entries_user_time ON audit.entries (user_email, occurred_at);
-CREATE INDEX IF NOT EXISTS idx_audit_entries_time      ON audit.entries (occurred_at);
-CREATE INDEX IF NOT EXISTS idx_audit_entries_jti        ON audit.entries (jti) WHERE jti IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_entries_actor_time    ON audit.entries (actor_email, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_audit_entries_affected_time ON audit.entries (affected_user, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_audit_entries_time          ON audit.entries (occurred_at);
+CREATE INDEX IF NOT EXISTS idx_audit_entries_jti           ON audit.entries (jti) WHERE jti IS NOT NULL;
 
 -- First partition (current month), idempotent, so a fresh install can
 -- accept writes immediately -- the timer keeps this and the next

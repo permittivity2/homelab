@@ -895,7 +895,7 @@ sub delete_file ($c) {
     my $id = $c->param('id');
     my ($ok, $folder_id) = _delete_file($c, $email, $id);
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $jti, action => 'file.delete',
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $jti, action => 'file.delete',
         resource_type => 'drive.file', resource_id => $id, source_service => 'homelab-drive',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
     ) if $ok;
@@ -912,7 +912,7 @@ sub api_delete ($c) {
     my ($deleted) = _delete_file($c, $email, $id);
     return $c->render(json => { error => 'not found' }, status => 404) unless $deleted;
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $jti, action => 'file.delete',
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $jti, action => 'file.delete',
         resource_type => 'drive.file', resource_id => $id, source_service => 'homelab-drive',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
     );
@@ -955,7 +955,7 @@ sub bulk_delete ($c) {
 
     if (@files_deleted || @folders_deleted) {
         enqueue(
-            $c->app->pg->db, user_email => $email, jti => $jti, action => 'file.delete.bulk',
+            $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $jti, action => 'file.delete.bulk',
             resource_type => 'drive.file', source_service => 'homelab-drive',
             ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
             detail => { file_ids => \@files_deleted, folder_ids => \@folders_deleted },

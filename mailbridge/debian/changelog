@@ -1,3 +1,15 @@
+homelab-mailbridge (0.1.6) unstable; urgency=medium
+
+  * Release v0.1.6
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:52 -0500
+
+homelab-mailbridge (0.1.6) unstable; urgency=medium
+
+  * Audit: actor_email/affected_user field rename
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:40 -0500
+
 homelab-mailbridge (0.1.5) unstable; urgency=medium
 
   * Release v0.1.5

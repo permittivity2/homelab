@@ -1,3 +1,15 @@
+homelab-drive (0.1.24) unstable; urgency=medium
+
+  * Release v0.1.24
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:54 -0500
+
+homelab-drive (0.1.24) unstable; urgency=medium
+
+  * Audit: actor_email/affected_user field rename
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:40 -0500
+
 homelab-drive (0.1.23) unstable; urgency=medium
 
   * Release v0.1.23

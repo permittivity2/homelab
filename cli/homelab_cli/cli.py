@@ -1197,7 +1197,8 @@ def cmd_audit_list(args):
         return 1
     try:
         entries = _client().audit_list(
-            session["token"], user=args.user, since=args.since, until=args.until, action=args.action,
+            session["token"], user=args.user, affecting=args.affecting,
+            since=args.since, until=args.until, action=args.action,
         )
     except ApiError as e:
         _emit_error(args, f"Could not list audit entries: {e.message}")
@@ -1211,13 +1212,14 @@ def cmd_audit_list(args):
     for e in entries:
         rows.append([
             _format_session_timestamp(e.get("occurred_at")),
-            e.get("user_email") or "",
+            e.get("actor_email") or "",
+            e.get("affected_user") or "",
             e.get("action") or "",
             e.get("resource_type") or "",
             e.get("resource_id") or "",
             e.get("ip_address") or "unknown",
         ])
-    _print_table(["WHEN", "USER", "ACTION", "RESOURCE TYPE", "RESOURCE ID", "IP ADDRESS"], rows)
+    _print_table(["WHEN", "ACTOR", "AFFECTED", "ACTION", "RESOURCE TYPE", "RESOURCE ID", "IP ADDRESS"], rows)
     return 0
 
 
@@ -1718,8 +1720,9 @@ def build_parser():
     audit = sub.add_parser("audit", help="Query the system-wide audit trail")
     audit_sub = audit.add_subparsers(dest="audit_command", required=True)
 
-    p = audit_sub.add_parser("list", help="List audit entries (your own by default; --user requires audit.view/site_admin)")
-    p.add_argument("--user", help="List this user's audit entries instead of your own (audit.view/site_admin only)")
+    p = audit_sub.add_parser("list", help="List audit entries (your own by default; --user/--affecting require audit.view/site_admin for anyone else)")
+    p.add_argument("--user", help="Only entries where this user was the ACTOR -- 'what did this account do' (audit.view/site_admin required for anyone but yourself)")
+    p.add_argument("--affecting", help="Only entries AFFECTING this user's account, including actions an admin took on it -- 'everything that touched this account' (audit.view/site_admin required for anyone but yourself)")
     p.add_argument("--since", help="Only entries at/after this timestamp, e.g. '2026-09-11' or '2026-09-11 16:00:00-05' (passed straight to Postgres, so any timestamp it accepts works)")
     p.add_argument("--until", help="Only entries at/before this timestamp -- same format as --since")
     p.add_argument("--action", help="Only entries matching this action name (e.g. file.delete)")

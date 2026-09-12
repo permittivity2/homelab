@@ -1,3 +1,16 @@
+homelab-cli (0.3.23) unstable; urgency=medium
+
+  * Release v0.3.23
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:56 -0500
+
+homelab-cli (0.3.23) unstable; urgency=medium
+
+  * audit list: add --affecting filter, rename USER column to
+    ACTOR/AFFECTED
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:40 -0500
+
 homelab-cli (0.3.22) unstable; urgency=medium
 
   * Release v0.3.22

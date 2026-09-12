@@ -49,19 +49,23 @@ my ($stranger, $stranger_auth) = _register_and_login('stranger');
 # --- Auth required ---
 $t->get_ok('/internal/v1/audit/log')->status_is(401, 'no Authorization header -> 401');
 
-# --- Self-scoping: a plain user sees only their own entries, and can't
-# ask for someone else's ---
+# --- Self-scoping: a plain user sees only their own entries by
+# default, and can't ask for someone else's on EITHER filter ---
 $t->get_ok('/internal/v1/audit/log' => $auth)->status_is(200)->json_is('', []);
 $t->get_ok("/internal/v1/audit/log?user=$stranger" => $auth)
-  ->status_is(403, 'a non-capability caller cannot query another user, even by name');
+  ->status_is(403, 'a non-capability caller cannot query another user\'s actor_email, even by name');
+$t->get_ok("/internal/v1/audit/log?affecting=$stranger" => $auth)
+  ->status_is(403, 'nor another user\'s affected_user -- same gating on both filters');
 
 # --- The actual write->drain->read round trip: enqueue via
 # AuditClient::enqueue (the same call every producing service makes),
 # then invoke the consumer's drain method DIRECTLY rather than waiting
 # on the real 5s wall-clock timer, then confirm it shows up correctly
-# normalized in a real read. ---
+# normalized in a real read. actor_email/affected_user genuinely differ
+# here -- $email did something, $stranger's account is what it was
+# about (the admin-on-behalf-of-another-account case). ---
 enqueue(
-    $t->app->pg->db, user_email => $email, jti => 'test-jti-123', action => 'file.delete',
+    $t->app->pg->db, actor_email => $email, affected_user => $stranger, jti => 'test-jti-123', action => 'file.delete',
     resource_type => 'drive.file', resource_id => '42', source_service => 'homelab-drive',
     ip_address => '203.0.113.5', user_agent => 'homelab-cli/9.9.9 (Test)',
     detail => { filename => 'secret-plans.pdf' },
@@ -80,23 +84,36 @@ $t->get_ok('/internal/v1/audit/log' => $auth)
   ->json_is('/0/action', 'file.delete')
   ->json_is('/0/resource_type', 'drive.file')
   ->json_is('/0/resource_id', '42')
-  ->json_is('/0/user_email', $email)
+  ->json_is('/0/actor_email', $email)
   ->json_is('/0/jti', 'test-jti-123')
   ->json_is('/0/ip_address', '203.0.113.5')
   ->json_is('/0/detail/filename', 'secret-plans.pdf');
 
-# The stranger's own view is unaffected by the owner's entry -- NOT
-# asserted as empty: registering/logging in is itself a real audited
-# action (by design, auth.login is one of the first-pass instrumented
-# actions), so the stranger's own login legitimately produces an entry
-# of their own the moment anything drains the queue, `_drain_queue`
+# --- The whole point of affected_user: $stranger never did anything
+# themselves, but this entry is genuinely about their account, so it
+# must surface under ?affecting=$stranger for a capability holder --
+# the concrete proof of the redesign's actual goal 2 (incident
+# response: "everything that touched this account, including admin
+# actions on it"). Needs a real audit.view-capable account; $email
+# itself has no capability, so this specific check happens later once
+# one is available (see the "affecting=, with capability" section
+# below) -- noted here only to keep the narrative next to the write it
+# verifies. ---
+
+# The stranger's own ?user= view is unaffected by the owner's entry --
+# NOT asserted as empty: registering/logging in is itself a real
+# audited action (by design, auth.login is one of the first-pass
+# instrumented actions), so the stranger's own login legitimately
+# produces an entry of their own (as BOTH actor and affected_user, a
+# self-action) the moment anything drains the queue, `_drain_queue`
 # above included (it drains every pending row, not just the owner's).
-# What actually matters for cross-user isolation is that the OWNER's
-# file.delete entry never leaks into the stranger's view.
+# What actually matters for cross-user isolation on ?user= is that the
+# OWNER's file.delete entry (actor_email = $email) never leaks into the
+# stranger's ?user= view, even though the stranger IS its affected_user.
 $t->get_ok('/internal/v1/audit/log' => $stranger_auth)->status_is(200);
 my $stranger_entries = $t->tx->res->json;
 ok(!(grep { ($_->{resource_id} // '') eq '42' } @$stranger_entries),
-    "stranger's view never contains the owner's file.delete entry");
+    "stranger's own ?user= view never contains the owner's file.delete entry (that's an ?affecting= question, not a ?user= one)");
 
 # --- Drain resilience: a malformed queue row (missing the required
 # `action` field _find_or_create_id needs) must not wedge the whole
@@ -110,10 +127,10 @@ ok(!(grep { ($_->{resource_id} // '') eq '42' } @$stranger_entries),
 # a bad payload. ---
 $t->app->pg->db->query(
     q{INSERT INTO audit.queue (payload) VALUES (?)},
-    { json => { user_email => $email, source_service => 'homelab-drive' } },    # no `action`
+    { json => { actor_email => $email, affected_user => $email, source_service => 'homelab-drive' } },    # no `action`
 );
 enqueue(
-    $t->app->pg->db, user_email => $email, jti => 'test-jti-456', action => 'file.delete',
+    $t->app->pg->db, actor_email => $email, affected_user => $email, jti => 'test-jti-456', action => 'file.delete',
     resource_type => 'drive.file', resource_id => '43', source_service => 'homelab-drive',
 );
 $t->app->_drain_queue;
@@ -126,41 +143,71 @@ $t->get_ok('/internal/v1/audit/log' => $auth)
 my $entries = $t->tx->res->json;
 ok((grep { ($_->{resource_id} // '') eq '43' } @$entries), 'the GOOD row after the bad one still made it into audit.entries');
 
-# --- list() logs its OWN reads (see the module's comment for why: the
-# whole point is reconstructing EVERYTHING that happened with an
-# account, including a possibly-compromised account checking its own
-# history) -- self-scoped case first, since that needs no special
-# capability. Drain twice: once to flush whatever's already queued from
-# the calls above so it can't be mistaken for THIS section's own
-# entries, then again after the call under test. ---
+# --- Simplified redesign: list() no longer logs its OWN reads (that
+# was the piece that overcomplicated the original design -- see the
+# plan's "What's being removed" section). Confirm it's genuinely gone,
+# not just untested: neither of the two `list()` calls made against
+# $auth so far should have produced an 'audit.view' entry anywhere in
+# $auth's own trail. ---
 $t->app->_drain_queue;
-
-$t->get_ok('/internal/v1/audit/log?since=2000-01-01' => $auth)->status_is(200);
-$t->app->_drain_queue;
-
 $t->get_ok('/internal/v1/audit/log' => $auth)->status_is(200);
-my $self_view_entries = $t->tx->res->json;
-my ($self_view) = grep { $_->{action} eq 'audit.view' } @$self_view_entries;
-ok($self_view, 'a self-scoped audit list call enqueues its own audit.view entry')
-    or diag explain $self_view_entries;
-is($self_view->{user_email},   $email, 'self-view entry is keyed on the account whose data was viewed');
-is($self_view->{resource_id},  $email, 'resource_id also names that same account');
-is($self_view->{resource_type}, 'audit_query', 'resource_type is audit_query');
-ok($self_view->{jti}, 'the viewing session\'s own jti is recorded');
-is($self_view->{detail}{viewed_by}, $email, 'detail.viewed_by names the actual viewer (same as user_email here, since this was a self-view)');
-ok($self_view->{detail}{queried_as_self}, 'detail.queried_as_self is true for a self-scoped view');
-is($self_view->{detail}{since}, '2000-01-01', 'the since filter used is recorded in detail, from the EARLIER call under test');
+my $no_self_log_entries = $t->tx->res->json;
+ok(!(grep { $_->{action} eq 'audit.view' } @$no_self_log_entries),
+    'list() no longer enqueues its own reads -- the reverted self-referential logging stays reverted');
+
+# --- ?affecting=, with real capability: the actual proof of goal 2.
+# Grant $auth's own account (the "owner") the audit.view capability --
+# this reaches into homelab-api's OWN `api` schema, which homelab-
+# audit's narrowly-scoped runtime role has NO grant on at all (same
+# schema isolation as everywhere else in this ecosystem -- confirmed
+# for real: $t->app->pg->db, i.e. homelab_audit_runtime, gets "permission
+# denied for schema api" if you try). OS-level peer auth via
+# `sudo -u postgres psql` (list-form exec, no shell interpolation of
+# the SQL) is the same fallback tier every bootstrap script in this
+# repo already uses when a feature-scoped role isn't enough -- same
+# pattern domain-admin/t/basic.t already uses for its own site_admin
+# grant, just reached from this test file instead.
+{
+    my $role_name = 'e2e-audit-capability-' . time . '-' . $$;
+    my $sql = "INSERT INTO api.roles (name, protected) VALUES ('$role_name', false) ON CONFLICT (name) DO NOTHING;\n"
+        . "INSERT INTO api.permissions (name) VALUES ('audit.view') ON CONFLICT (name) DO NOTHING;\n"
+        . "INSERT INTO api.role_permissions (role_id, permission_id) "
+        . "SELECT r.id, p.id FROM api.roles r, api.permissions p WHERE r.name = '$role_name' AND p.name = 'audit.view' "
+        . "ON CONFLICT DO NOTHING;\n"
+        . "INSERT INTO api.user_roles (user_id, role_id) "
+        . "SELECT u.id, r.id FROM api.users u, api.roles r WHERE u.email = '$email' AND r.name = '$role_name' "
+        . "ON CONFLICT DO NOTHING;";
+    system('sudo', '-u', 'postgres', 'psql', '-d', 'homelab', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-c', $sql);
+    die "could not grant audit.view to $email for testing (needs passwordless sudo to postgres) -- see t/basic.t\n" if $? != 0;
+}
+
+$t->get_ok("/internal/v1/audit/log?affecting=$stranger" => $auth)->status_is(200);
+my $affecting_entries = $t->tx->res->json;
+my ($affecting_hit) = grep { ($_->{resource_id} // '') eq '42' } @$affecting_entries;
+ok($affecting_hit, '?affecting= (now with capability) surfaces the earlier entry where $stranger was the affected_user, even though $email was the actor')
+    or diag explain $affecting_entries;
+is($affecting_hit->{actor_email}, $email, 'that entry still correctly names $email as the actor');
+
+$t->get_ok("/internal/v1/audit/log?user=$email" => $auth)->status_is(200);
+my $user_entries = $t->tx->res->json;
+ok((grep { ($_->{resource_id} // '') eq '42' } @$user_entries),
+    '?user=$email (actor filter, now with capability, same as self-default) also finds it -- $email really was the actor');
+
+$t->get_ok("/internal/v1/audit/log?user=$email&affecting=$email" => $auth)->status_is(200);
+ok(!(grep { ($_->{resource_id} // '') eq '42' } @{ $t->tx->res->json }),
+    'combining both filters as $email/$email correctly EXCLUDES the cross-account entry (its affected_user is $stranger, not $email)');
 
 # --- The reliability contract this whole design rests on: enqueue()
-# has no eval/best-effort wrapper anywhere, including inside list()
-# itself -- a failure must propagate, not be swallowed. Proven directly
-# against the same function list() calls, with the same kind of
-# precondition violation (a required field missing) enqueue() already
-# guards against -- this is the exact mechanism that would turn into a
-# real request failure if it fired inside a live request. ---
+# has no eval/best-effort wrapper anywhere -- a failure must propagate,
+# not be swallowed. ---
 eval {
-    enqueue($t->app->pg->db, action => 'audit.view', source_service => 'homelab-audit');    # missing required user_email
+    enqueue($t->app->pg->db, action => 'file.delete', source_service => 'homelab-drive', affected_user => 'x@example.com');    # missing required actor_email
 };
-like($@, qr/user_email is required/, 'enqueue() dies on a missing required field -- the same no-silent-failure contract list() itself relies on');
+like($@, qr/actor_email is required/, 'enqueue() dies on a missing required actor_email');
+
+eval {
+    enqueue($t->app->pg->db, action => 'file.delete', source_service => 'homelab-drive', actor_email => 'x@example.com');    # missing required affected_user
+};
+like($@, qr/affected_user is required/, 'enqueue() dies on a missing required affected_user');
 
 done_testing();

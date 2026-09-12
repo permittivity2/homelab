@@ -1,3 +1,27 @@
+homelab-api (0.1.16) unstable; urgency=medium
+
+  * Audit: session.revoke was never actually enqueued despite the
+    comment above _sessions_revoke_others calling it "the safer,
+    auditable primitive" -- a site_admin revoking someone else's
+    session left zero trail. Both single-session and
+    ?except_current=true revoke now enqueue session.revoke with the
+    correct actor/affected_user split.
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:29:59 -0500
+
+homelab-api (0.1.15) unstable; urgency=medium
+
+  * Release v0.1.15
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:49 -0500
+
+homelab-api (0.1.15) unstable; urgency=medium
+
+  * Audit: actor_email/affected_user split for role grant/revoke; revert
+    sessions.view self-logging
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:40 -0500
+
 homelab-api (0.1.14) unstable; urgency=medium
 
   * Release v0.1.14

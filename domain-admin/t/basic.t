@@ -132,8 +132,12 @@ $t->delete_ok("/internal/v1/domains/$zone" => $auth)->status_is(200, 'soft-disab
 # asserting immediately.
 sub _wait_for_audit_entry {
     my (%want) = @_;
+    # Filters by actor_email (?user=) OR affected_user (?affecting=),
+    # whichever the caller passed -- lets this same helper prove both
+    # sides of the actor/affected_user split, not just the actor one.
+    my $query = defined $want{actor_email} ? ('user=' . $want{actor_email}) : ('affecting=' . $want{affected_user});
     for (1 .. 10) {
-        my $tx = $ua->get("$api_base/api/v1/audit/log?user=" . $want{user_email} => $auth);
+        my $tx = $ua->get("$api_base/api/v1/audit/log?$query" => $auth);
         my $entries = eval { $tx->res->json } // [];
         for my $e (@$entries) {
             next unless ($e->{action}      // '') eq ($want{action}      // '');
@@ -154,7 +158,7 @@ $t->get_ok('/internal/v1/domains/recipient-access' => $auth)
 $t->post_ok('/internal/v1/domains/recipient-access' => $auth => json => { recipient => $recipient, action => 'REJECT', reason => 'test' })
   ->status_is(201)->json_is('/action', 'REJECT')->json_is('/reason', 'test');
 
-ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.block', resource_id => $recipient),
+ok(_wait_for_audit_entry(actor_email => $email, action => 'recipient_access.block', resource_id => $recipient),
     'admin block enqueues a recipient_access.block audit entry');
 
 $t->get_ok('/internal/v1/domains/recipient-access' => $auth)
@@ -166,13 +170,13 @@ $t->get_ok('/internal/v1/domains/recipient-access' => $auth)
 $t->post_ok('/internal/v1/domains/recipient-access' => $auth => json => { recipient => $recipient, action => 'OK' })
   ->status_is(201)->json_is('/action', 'OK', 'posting the same recipient again updates the row instead of erroring');
 
-ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.allow', resource_id => $recipient),
+ok(_wait_for_audit_entry(actor_email => $email, action => 'recipient_access.allow', resource_id => $recipient),
     'admin allow (action=OK) enqueues a recipient_access.allow audit entry, not .block');
 
 $t->delete_ok("/internal/v1/domains/recipient-access/$recipient" => $auth)
   ->status_is(200)->json_is('/ok', 1);
 
-ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.remove', resource_id => $recipient),
+ok(_wait_for_audit_entry(actor_email => $email, action => 'recipient_access.remove', resource_id => $recipient),
     'admin delete enqueues a recipient_access.remove audit entry');
 
 $t->delete_ok("/internal/v1/domains/recipient-access/$recipient" => $auth)
@@ -194,8 +198,32 @@ $t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => {
   ->json_is('/source_pattern', $alias_pattern)->json_is('/destination', $email)
   ->json_is('/active', 1)->json_is('/send_enabled', 1);
 
-ok(_wait_for_audit_entry(user_email => $email, action => 'mail_alias.create', resource_id => $alias_pattern),
+ok(_wait_for_audit_entry(actor_email => $email, action => 'mail_alias.create', resource_id => $alias_pattern),
     'mail-alias create enqueues a mail_alias.create audit entry');
+
+# --- The actual point of the audit trail's actor/affected_user split:
+# a site_admin ($email) granting a mail-alias that routes to SOMEONE
+# ELSE is exactly the admin-on-behalf-of-another-account case
+# affected_user exists for. $email (site_admin) always holds audit.view
+# unconditionally, so this needs no separate capability grant. ---
+{
+    my $other_domain  = 'homelab-domain-admin-mailalias-other-' . time . '-' . $$ . '.invalid';
+    my $other_pattern = "\@$other_domain";
+    my $other_dest    = 'e2e-mailalias-affected-' . time . '-' . $$ . '@test.mailmasker.org';
+
+    $t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => {
+        source_pattern => $other_pattern, destination => $other_dest,
+    })->status_is(201);
+
+    my $affected_hit = _wait_for_audit_entry(affected_user => $other_dest, action => 'mail_alias.create', resource_id => $other_pattern);
+    ok($affected_hit, '?affecting=<destination> finds the grant, even though the destination account never acted itself');
+    is($affected_hit->{actor_email}, $email, 'that same entry correctly names the site_admin as the actor, not the destination');
+
+    my $actor_hit = _wait_for_audit_entry(actor_email => $email, action => 'mail_alias.create', resource_id => $other_pattern);
+    is($actor_hit->{affected_user}, $other_dest, '...and ?user=<actor> for the same entry confirms affected_user is the destination, not the actor');
+
+    $t->delete_ok("/internal/v1/domains/mail-aliases/$other_pattern" => $auth)->status_is(200);
+}
 
 $t->get_ok("/internal/v1/domains/$alias_domain" => $auth)
   ->status_is(200, 'creating a mail-alias for a brand-new domain auto-creates its domainadmin.domains row')
@@ -215,7 +243,7 @@ $t->post_ok('/internal/v1/domains/mail-aliases' => $auth => json => {
 $t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json => { send_enabled => \1 })
   ->status_is(200)->json_is('/send_enabled', 1);
 
-ok(_wait_for_audit_entry(user_email => $email, action => 'mail_alias.enable_send', resource_id => $alias_pattern),
+ok(_wait_for_audit_entry(actor_email => $email, action => 'mail_alias.enable_send', resource_id => $alias_pattern),
     'send_enabled=true enqueues mail_alias.enable_send');
 
 # /mine is the one self-service exception in this whole service --
@@ -235,7 +263,7 @@ $t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json
   ->status_is(200)->json_is('/send_enabled', 0)
   ->json_is('/active', 1, 'active is untouched by the send_enabled toggle -- inbound routing keeps working');
 
-ok(_wait_for_audit_entry(user_email => $email, action => 'mail_alias.disable_send', resource_id => $alias_pattern),
+ok(_wait_for_audit_entry(actor_email => $email, action => 'mail_alias.disable_send', resource_id => $alias_pattern),
     'send_enabled=false enqueues mail_alias.disable_send, a distinct action from enable_send');
 
 $t->get_ok('/internal/v1/domains/mail-aliases/mine' => $plain_auth)->status_is(200);
@@ -285,7 +313,7 @@ $t->post_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth => json 
 })->status_is(201, 'blocking a specific address under an owned catch-all domain succeeds')
   ->json_is('/recipient', $owned_address)->json_is('/user_email', $email);
 
-ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.block', resource_id => $owned_address),
+ok(_wait_for_audit_entry(actor_email => $email, action => 'recipient_access.block', resource_id => $owned_address),
     'self-service block enqueues a recipient_access.block audit entry, same action name as the admin tier');
 
 $t->get_ok('/internal/v1/domains/recipient-access/mine' => $plain_auth)->status_is(200);
@@ -324,7 +352,7 @@ $t->delete_ok("/internal/v1/domains/recipient-access/mine/$owned_address" => $au
 $t->delete_ok("/internal/v1/domains/recipient-access/mine/$owned_address" => $plain_auth)
   ->status_is(200)->json_is('/ok', 1);
 
-ok(_wait_for_audit_entry(user_email => $email, action => 'recipient_access.remove', resource_id => $owned_address),
+ok(_wait_for_audit_entry(actor_email => $email, action => 'recipient_access.remove', resource_id => $owned_address),
     'self-service unblock enqueues a recipient_access.remove audit entry');
 
 $t->delete_ok("/internal/v1/domains/recipient-access/mine/$owned_address" => $plain_auth)
@@ -343,7 +371,7 @@ $t->patch_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth => json
 $t->delete_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth)
   ->status_is(200)->json_is('/ok', 1);
 
-ok(_wait_for_audit_entry(user_email => $email, action => 'mail_alias.remove', resource_id => $alias_pattern),
+ok(_wait_for_audit_entry(actor_email => $email, action => 'mail_alias.remove', resource_id => $alias_pattern),
     'mail-alias delete enqueues a mail_alias.remove audit entry');
 
 $t->delete_ok("/internal/v1/domains/mail-aliases/$alias_pattern" => $auth)

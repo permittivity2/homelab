@@ -45,7 +45,7 @@ sub create ($c) {
         $domain_name, $mail_enabled, $dns_managed, $email,
     )->hash;
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'), action => 'domain.create',
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $c->stash('current_jti'), action => 'domain.create',
         resource_type => 'domain', resource_id => $domain_name, source_service => 'homelab-domain-admin',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
         detail => { mail_enabled => ($mail_enabled ? \1 : \0), dns_managed => ($dns_managed ? \1 : \0) },

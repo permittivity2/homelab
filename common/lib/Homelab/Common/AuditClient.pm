@@ -24,23 +24,33 @@ our @EXPORT_OK = qw(enqueue);
 # mutation should pass the SAME transaction handle they're already
 # using for it.
 #
-# enqueue($db, user_email => ..., action => 'file.delete', resource_type => 'drive.file',
-#         resource_id => $id, jti => $jti, source_service => 'homelab-drive',
-#         ip_address => ..., user_agent => ..., detail => { ... })
+# enqueue($db, actor_email => ..., affected_user => ..., action => 'file.delete',
+#         resource_type => 'drive.file', resource_id => $id, jti => $jti,
+#         source_service => 'homelab-drive', ip_address => ..., user_agent => ...,
+#         detail => { ... })
 #
-# %fields required: user_email, action, source_service. Everything else
-# is optional (jti/resource_type/resource_id/ip_address/user_agent/
-# detail/occurred_at) -- a system-initiated entry has no jti, a bare
-# action might have no specific resource, etc.
+# actor_email is WHO performed the action; affected_user is WHOSE
+# account it's about -- the same value for the overwhelming majority of
+# actions (a user acting on their own stuff), genuinely different only
+# for admin-on-behalf-of-someone-else actions (granting user X a role,
+# revoking user X's session, granting a mail-alias that routes to user
+# X). Callers must pass both explicitly, even when equal -- there is no
+# implicit default, so nobody accidentally omits the field that matters
+# for the "everything that touched this account" query.
+#
+# %fields required: actor_email, affected_user, action, source_service.
+# Everything else is optional (jti/resource_type/resource_id/ip_address/
+# user_agent/detail/occurred_at) -- a system-initiated entry has no jti,
+# a bare action might have no specific resource, etc.
 sub enqueue {
     my ($db, %fields) = @_;
     die "AuditClient::enqueue(): db handle required\n" unless $db;
-    for my $required (qw(user_email action source_service)) {
+    for my $required (qw(actor_email affected_user action source_service)) {
         die "AuditClient::enqueue(): $required is required\n" unless defined $fields{$required} && length $fields{$required};
     }
 
     my %payload = map { $_ => $fields{$_} } grep { defined $fields{$_} } qw(
-        user_email jti action resource_type resource_id source_service
+        actor_email affected_user jti action resource_type resource_id source_service
         ip_address user_agent detail occurred_at
     );
 

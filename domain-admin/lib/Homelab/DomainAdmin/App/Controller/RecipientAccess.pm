@@ -54,7 +54,7 @@ sub upsert ($c) {
         $recipient, $action, $body->{reason}, $email,
     )->hash;
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $c->stash('current_jti'),
         action => _recipient_access_action_name($action), resource_type => 'recipient_access',
         resource_id => $recipient, source_service => 'homelab-domain-admin',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
@@ -72,7 +72,7 @@ sub delete_entry ($c) {
     )->hash;
     return $c->render(json => { error => 'not found' }, status => 404) unless $row;
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $c->stash('current_jti'),
         action => 'recipient_access.remove', resource_type => 'recipient_access',
         resource_id => $c->stash('recipient'), source_service => 'homelab-domain-admin',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
@@ -149,7 +149,7 @@ sub create_mine ($c) {
         $recipient, $action, $body->{reason}, $email, $email,
     )->hash;
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $c->stash('current_jti'),
         action => _recipient_access_action_name($action), resource_type => 'recipient_access',
         resource_id => $recipient, source_service => 'homelab-domain-admin',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
@@ -192,7 +192,7 @@ sub delete_mine ($c) {
     )->hash;
     return $c->render(json => { error => 'not found' }, status => 404) unless $row;
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $c->stash('current_jti'),
         action => 'recipient_access.remove', resource_type => 'recipient_access',
         resource_id => $c->stash('recipient'), source_service => 'homelab-domain-admin',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,

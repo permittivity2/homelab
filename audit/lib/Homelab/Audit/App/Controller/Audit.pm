@@ -2,72 +2,84 @@ package Homelab::Audit::App::Controller::Audit;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 
 use Mojo::JSON qw(decode_json);
-use Homelab::Common::AuditClient qw(enqueue);
 
-# GET /internal/v1/audit/log?user=<email>&since=<ts>&until=<ts>&action=<name>
-# Self-scoped by default: a caller with no audit.view capability can
-# only ever see their own user_email, regardless of what ?user= they
-# pass -- same "clean 403, never a silently-narrowed result" convention
-# as every other admin-visibility split this session (mail-aliases'
-# ?destination=, sessions' ?user=). A caller WITH the capability
-# (site_admin always has it; see App.pm's authenticated_email_any +
-# introspect capability check) may query any user, or omit ?user=
-# entirely for everyone.
+# GET /internal/v1/audit/log?user=<email>&affecting=<email>&since=<ts>&until=<ts>&action=<name>
 #
-# This endpoint logs its OWN reads (see the enqueue() call below) --
-# not an oversight, a deliberate design point reached by discussion:
-# the whole reason this feature exists is to reconstruct EVERYTHING
-# that happened with an account, including a compromised account
-# checking its own history, so a self-scoped view is exactly as
-# forensically relevant as a cross-user one. No self-vs-cross-user
-# exception here.
+# Two independent filters, answering the two things this trail exists
+# for:
+#   ?user=      -- filters on actor_email: "what did THIS ACCOUNT do"
+#                  (self-troubleshooting/support).
+#   ?affecting= -- filters on affected_user: "everything that touched
+#                  THIS ACCOUNT," including admin actions performed ON
+#                  it (role grants, session revokes, mail-alias grants
+#                  routed to it) -- the incident-response case: a
+#                  compromised account's OWN actions already show up
+#                  under ?user=, but an admin's actions on that account
+#                  only show up under ?affecting=.
+# Both are self-scoped by default: a caller with no audit.view
+# capability can only ever see their own email on either filter,
+# regardless of what they pass -- same "clean 403, never a silently-
+# narrowed result" convention as every other admin-visibility split
+# this session (mail-aliases' ?destination=, sessions' ?user=). A
+# caller WITH the capability (site_admin always has it) may query any
+# user on either filter, or omit both entirely for everyone.
 sub list ($c) {
-    my ($email, $has_capability, $jti) = $c->authenticated_email_any or return;
+    my ($email, $has_capability) = $c->authenticated_email_any or return;
 
-    my $requested_user = $c->param('user');
-    if (defined $requested_user && $requested_user ne $email && !$has_capability) {
-        return $c->render(json => { error => 'audit.view capability required to query another user' }, status => 403);
+    my $requested_actor    = $c->param('user');
+    my $requested_affected = $c->param('affecting');
+    for my $requested ($requested_actor, $requested_affected) {
+        if (defined $requested && $requested ne $email && !$has_capability) {
+            return $c->render(json => { error => 'audit.view capability required to query another user' }, status => 403);
+        }
     }
-
-    my $since  = $c->param('since');
-    my $until  = $c->param('until');
-    my $action = $c->param('action');
 
     my @where;
     my @bind;
-    # Also determines what THIS call's own audit entry (below) is keyed
-    # on: a single target_email when one is in effect, or undef/'all'
-    # when a capability-holder omitted ?user= to see everyone's.
-    my $target_email;
     if ($has_capability) {
-        if (defined $requested_user) {
-            push @where, 'e.user_email = ?';
-            push @bind, $requested_user;
-            $target_email = $requested_user;
+        if (defined $requested_actor) {
+            push @where, 'e.actor_email = ?';
+            push @bind, $requested_actor;
+        }
+        if (defined $requested_affected) {
+            push @where, 'e.affected_user = ?';
+            push @bind, $requested_affected;
         }
     }
     else {
-        push @where, 'e.user_email = ?';
-        push @bind, $email;
-        $target_email = $email;
+        # No capability: force both filters to the caller's own email
+        # whenever either was actually requested, so `?user=me` and
+        # `?affecting=me` both work (and combine) exactly like a
+        # capability holder's would, just pinned to one identity. If
+        # neither was requested at all, default to "my own actions" --
+        # the more common of the two questions for a non-privileged
+        # caller.
+        if (defined $requested_actor || defined $requested_affected) {
+            push(@where, 'e.actor_email = ?'),    push(@bind, $email) if defined $requested_actor;
+            push(@where, 'e.affected_user = ?'), push(@bind, $email) if defined $requested_affected;
+        }
+        else {
+            push @where, 'e.actor_email = ?';
+            push @bind, $email;
+        }
     }
 
-    if ($since) {
+    if (my $since = $c->param('since')) {
         push @where, 'e.occurred_at >= ?';
         push @bind, $since;
     }
-    if ($until) {
+    if (my $until = $c->param('until')) {
         push @where, 'e.occurred_at <= ?';
         push @bind, $until;
     }
-    if ($action) {
+    if (my $action = $c->param('action')) {
         push @where, 'at.name = ?';
         push @bind, $action;
     }
 
     my $where_sql = @where ? ('WHERE ' . join(' AND ', @where)) : '';
     my $rows = $c->app->pg->db->query(
-        qq{SELECT e.id, e.occurred_at, e.user_email, e.jti, at.name AS action,
+        qq{SELECT e.id, e.occurred_at, e.actor_email, e.affected_user, e.jti, at.name AS action,
                   rt.name AS resource_type, e.resource_id, e.source_service,
                   e.ip_address, e.user_agent, e.detail
            FROM audit.entries e
@@ -89,40 +101,6 @@ sub list ($c) {
     for my $row (@$rows) {
         $row->{detail} = decode_json($row->{detail}) if defined $row->{detail};
     }
-
-    # This view of the audit log is itself an audited action (see the
-    # module comment above). Keyed on the ACCOUNT that was viewed
-    # (user_email/resource_id = $target_email), not the viewer -- so
-    # that pulling "everything that happened with account X" (?user=X)
-    # surfaces "someone looked at X's history" regardless of who that
-    # was, which is exactly the point for the compromised-account case
-    # this feature exists for. The viewer is never lost, though: `jti`
-    # identifies the exact session, and detail.viewed_by names them
-    # directly so a human doesn't have to cross-reference a session
-    # table just to answer "who looked at my stuff." The all-users case
-    # (a capability holder omitting ?user=) has no single account to
-    # attribute this to, so it falls back to the viewer themselves --
-    # the only sensible choice when there's no target at all.
-    my %detail = (viewed_by => $email);
-    if (defined $target_email) {
-        $detail{queried_as_self} = ($target_email eq $email) ? \1 : \0;
-    }
-    else {
-        $detail{scope} = 'all';
-    }
-    $detail{since}         = $since  if defined $since;
-    $detail{until}         = $until  if defined $until;
-    $detail{action_filter} = $action if defined $action;
-
-    enqueue(
-        $c->app->pg->db,
-        user_email => $target_email // $email,
-        action => 'audit.view', resource_type => 'audit_query',
-        (defined $target_email ? (resource_id => $target_email) : ()),
-        jti => $jti, source_service => 'homelab-audit',
-        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
-        detail => \%detail,
-    );
 
     return $c->render(json => $rows);
 }

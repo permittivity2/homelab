@@ -165,7 +165,7 @@ sub rotate ($c) {
         $domain_row->{id}, $selector, $public_key, $email,
     )->hash;
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'), action => 'dkim.rotate',
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $c->stash('current_jti'), action => 'dkim.rotate',
         resource_type => 'domain', resource_id => $domain, source_service => 'homelab-domain-admin',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
         detail => { selector => $selector },

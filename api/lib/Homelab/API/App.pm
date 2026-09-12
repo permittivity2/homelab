@@ -292,7 +292,7 @@ sub _login ($self, $c) {
     );
 
     enqueue(
-        $self->pg->db, user_email => $email, jti => $jti, action => 'auth.login',
+        $self->pg->db, actor_email => $email, affected_user => $email, jti => $jti, action => 'auth.login',
         resource_type => 'user', resource_id => $user->{id}, source_service => 'homelab-api',
         ip_address => $ip_address, user_agent => $user_agent,
     );
@@ -572,20 +572,6 @@ sub _sessions_list ($self, $c) {
 
     $_->{current} = ($_->{jti} eq $jti) ? \1 : \0 for @$rows;
 
-    # This view is itself an audited action -- same reasoning as
-    # homelab-audit's own list() (see that module's comment): keyed on
-    # the account whose sessions were viewed (user_email/resource_id =
-    # $target->{email}), not the viewer, so pulling "everything that
-    # happened with account X" surfaces "someone checked X's active
-    # sessions" regardless of who did it. detail.viewed_by keeps the
-    # actor directly readable without a jti/session cross-reference.
-    enqueue(
-        $self->pg->db, user_email => $target->{email}, jti => $jti, action => 'sessions.view',
-        resource_type => 'user_sessions', resource_id => $target->{email}, source_service => 'homelab-api',
-        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
-        detail => { viewed_by => $caller->{email}, queried_as_self => ($target->{email} eq $caller->{email}) ? \1 : \0 },
-    );
-
     return $c->render(json => $rows);
 }
 
@@ -614,6 +600,18 @@ sub _sessions_revoke ($self, $c) {
     $self->pg->db->query('UPDATE api.refresh_tokens SET revoked = TRUE WHERE id = ?', $row->{refresh_token_id})
         if $row->{refresh_token_id};
 
+    # actor_email/affected_user genuinely differ here whenever a
+    # site_admin revokes a DIFFERENT user's session via ?user= -- the
+    # exact "admin action on someone else's account" case affected_user
+    # exists for (this comment block already called this "the safer,
+    # auditable primitive"; it wasn't actually enqueuing anything until
+    # now).
+    enqueue(
+        $self->pg->db, actor_email => $caller->{email}, affected_user => $target->{email},
+        jti => $self->_jwt_jti($c), action => 'session.revoke',
+        resource_type => 'session', resource_id => $row->{jti}, source_service => 'homelab-api',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+    );
     return $c->render(json => { ok => \1 });
 }
 
@@ -637,6 +635,16 @@ sub _sessions_revoke_others ($self, $c) {
         $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE jti = ?', $row->{jti});
         $self->pg->db->query('UPDATE api.refresh_tokens SET revoked = TRUE WHERE id = ?', $row->{refresh_token_id})
             if $row->{refresh_token_id};
+    }
+    # Always self-scoped (see comment above) -- actor and affected_user
+    # are always the same account here, one entry per session killed.
+    for my $row (@$rows) {
+        enqueue(
+            $self->pg->db, actor_email => $caller->{email}, affected_user => $caller->{email},
+            jti => $jti, action => 'session.revoke',
+            resource_type => 'session', resource_id => $row->{jti}, source_service => 'homelab-api',
+            ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        );
     }
     return $c->render(json => { ok => \1, revoked => scalar(@$rows) });
 }
@@ -701,7 +709,7 @@ sub _admin_grant_role ($self, $c) {
     my $role    = ($c->req->json // {})->{role};
     return $c->render(json => { error => 'role is required' }, status => 400) unless $role;
 
-    my $target = $self->pg->db->query('SELECT id FROM api.users WHERE id = ?', $user_id)->hash;
+    my $target = $self->pg->db->query('SELECT id, email FROM api.users WHERE id = ?', $user_id)->hash;
     return $c->render(json => { error => 'user not found' }, status => 404) unless $target;
 
     my $role_row = $self->pg->db->query('SELECT id FROM api.roles WHERE name = ?', $role)->hash;
@@ -711,8 +719,14 @@ sub _admin_grant_role ($self, $c) {
         'INSERT INTO api.user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
         $user_id, $role_row->{id},
     );
+    # actor is the admin performing the grant; affected_user is whoever
+    # is RECEIVING the role -- these genuinely differ (the whole reason
+    # affected_user exists as its own field), so a query for "everything
+    # that touched $target's account" (?affecting=) surfaces this even
+    # though $target never acted themselves.
     enqueue(
-        $self->pg->db, user_email => $admin->{email}, jti => $self->_jwt_jti($c), action => 'role.grant',
+        $self->pg->db, actor_email => $admin->{email}, affected_user => $target->{email},
+        jti => $self->_jwt_jti($c), action => 'role.grant',
         resource_type => 'user', resource_id => $user_id, source_service => 'homelab-api',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
         detail => { role => $role },
@@ -727,13 +741,24 @@ sub _admin_revoke_role ($self, $c) {
     my $user_id = $c->param('id');
     my $role    = $c->param('role');
 
+    # api.users is untouched by the DELETE below, so this lookup is safe
+    # either side of it -- done first here just to keep the "resolve
+    # affected_user" step visually next to $user_id's own definition.
+    # Falls back to a synthetic identifier rather than skipping the
+    # audit entry outright if $user_id doesn't resolve to a real row
+    # (e.g. a stale/garbage id) -- affected_user is a required field,
+    # and the revoke attempt itself still happened either way.
+    my $target = $self->pg->db->query('SELECT email FROM api.users WHERE id = ?', $user_id)->hash;
+    my $affected_user = $target ? $target->{email} : "user_id:$user_id";
+
     $self->pg->db->query(
         q{DELETE FROM api.user_roles WHERE user_id = ?
           AND role_id = (SELECT id FROM api.roles WHERE name = ?)},
         $user_id, $role,
     );
     enqueue(
-        $self->pg->db, user_email => $admin->{email}, jti => $self->_jwt_jti($c), action => 'role.revoke',
+        $self->pg->db, actor_email => $admin->{email}, affected_user => $affected_user,
+        jti => $self->_jwt_jti($c), action => 'role.revoke',
         resource_type => 'user', resource_id => $user_id, source_service => 'homelab-api',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
         detail => { role => $role },

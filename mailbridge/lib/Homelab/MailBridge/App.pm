@@ -293,7 +293,7 @@ sub send_message ($c) {
     # (502), even though the mail already left the building. Accepted
     # tradeoff, same as everywhere else this pattern is used.
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $jti, action => 'mail.send',
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $jti, action => 'mail.send',
         resource_type => 'mail.message', source_service => 'homelab-mailbridge',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
         detail => { to => $to, from => $from, subject => $subject },

@@ -1,3 +1,16 @@
+homelab-common (0.1.17) unstable; urgency=medium
+
+  * Release v0.1.17
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:47 -0500
+
+homelab-common (0.1.17) unstable; urgency=medium
+
+  * AuditClient::enqueue(): rename user_email to actor_email, add
+    required affected_user
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:40 -0500
+
 homelab-common (0.1.16) unstable; urgency=medium
 
   * Release v0.1.16

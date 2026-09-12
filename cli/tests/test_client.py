@@ -699,3 +699,40 @@ def test_sessions_revoke_others_sends_except_current_true(client):
     assert result["revoked"] == 3
     assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/auth/sessions")
     assert m.call_args.kwargs["params"] == {"except_current": "true"}
+
+
+# --- Audit: /api/v1/audit/log, via homelab-audit -- two independent
+# filters, `user` (actor_email, "what did this account do") and
+# `affecting` (affected_user, "everything that touched this account,
+# including admin actions on it"). ---
+
+def test_audit_list_no_filters_by_default(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.audit_list("the-jwt")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/audit/log")
+    assert m.call_args.kwargs["params"] == {}
+
+
+def test_audit_list_passes_user_and_affecting_independently(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.audit_list("the-jwt", user="admin@b.com")
+    assert m.call_args.kwargs["params"] == {"user": "admin@b.com"}
+
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.audit_list("the-jwt", affecting="victim@b.com")
+    assert m.call_args.kwargs["params"] == {"affecting": "victim@b.com"}
+
+
+def test_audit_list_combines_affecting_with_since_and_action(client):
+    with patch("requests.request", return_value=_mock_response(200, [])) as m:
+        client.audit_list("the-jwt", affecting="victim@b.com", since="2026-09-01", action="role.grant")
+    assert m.call_args.kwargs["params"] == {
+        "affecting": "victim@b.com", "since": "2026-09-01", "action": "role.grant",
+    }
+
+
+def test_audit_list_non_capability_cross_user_raises_403(client):
+    with patch("requests.request", return_value=_mock_response(403, {"error": "audit.view capability required to query another user"})):
+        with pytest.raises(ApiError) as exc_info:
+            client.audit_list("the-jwt", affecting="someone-else@b.com")
+    assert exc_info.value.status_code == 403

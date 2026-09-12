@@ -154,14 +154,20 @@ class Client:
             "DELETE", "/api/v1/auth/sessions", headers=self._auth(token), params={"except_current": "true"},
         )
 
-    # Self-scoped by default (server-side) -- `user` is only honored for
-    # a caller holding the audit.view capability (site_admin always
-    # does), same "clean 403, never a silently-narrowed result"
-    # convention as sessions_list/dns_list_mail_aliases above.
-    def audit_list(self, token, user=None, since=None, until=None, action=None):
+    # Self-scoped by default (server-side) -- `user`/`affecting` are only
+    # honored for a caller holding the audit.view capability (site_admin
+    # always does), same "clean 403, never a silently-narrowed result"
+    # convention as sessions_list/dns_list_mail_aliases above. `user`
+    # filters on actor_email ("what did this account do"); `affecting`
+    # filters on affected_user ("everything that touched this account,
+    # including admin actions on it") -- see homelab-audit's own README
+    # for why these are two separate, combinable filters.
+    def audit_list(self, token, user=None, affecting=None, since=None, until=None, action=None):
         params = {}
         if user:
             params["user"] = user
+        if affecting:
+            params["affecting"] = affecting
         if since:
             params["since"] = since
         if until:

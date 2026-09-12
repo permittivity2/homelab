@@ -73,8 +73,14 @@ sub create ($c) {
           RETURNING *},
         $source_pattern, $destination, $send_enabled, $email,
     )->hash;
+    # actor is whoever's making this API call; affected_user is the
+    # GRANT'S DESTINATION -- a site_admin routing mail for someone else
+    # is exactly the admin-on-behalf-of-another-account case
+    # affected_user exists for, so ?affecting=<destination> surfaces
+    # this grant even though the destination user never acted themselves.
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'), action => 'mail_alias.create',
+        $c->app->pg->db, actor_email => $email, affected_user => $destination,
+        jti => $c->stash('current_jti'), action => 'mail_alias.create',
         resource_type => 'mail_alias', resource_id => $source_pattern, source_service => 'homelab-domain-admin',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
         detail => { destination => $destination, send_enabled => ($send_enabled ? \1 : \0) },
@@ -99,7 +105,8 @@ sub update ($c) {
     )->hash;
     return $c->render(json => { error => 'not found' }, status => 404) unless $row;
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'),
+        $c->app->pg->db, actor_email => $email, affected_user => $row->{destination},
+        jti => $c->stash('current_jti'),
         action => ($send_enabled ? 'mail_alias.enable_send' : 'mail_alias.disable_send'),
         resource_type => 'mail_alias', resource_id => $c->stash('source_pattern'),
         source_service => 'homelab-domain-admin', ip_address => $c->tx->remote_address,
@@ -119,7 +126,8 @@ sub delete_entry ($c) {
     )->hash;
     return $c->render(json => { error => 'not found' }, status => 404) unless $row;
     enqueue(
-        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'), action => 'mail_alias.remove',
+        $c->app->pg->db, actor_email => $email, affected_user => $row->{destination},
+        jti => $c->stash('current_jti'), action => 'mail_alias.remove',
         resource_type => 'mail_alias', resource_id => $c->stash('source_pattern'),
         source_service => 'homelab-domain-admin', ip_address => $c->tx->remote_address,
         user_agent => $c->req->headers->user_agent,
