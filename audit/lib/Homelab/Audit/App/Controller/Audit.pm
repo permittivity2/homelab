@@ -1,6 +1,8 @@
 package Homelab::Audit::App::Controller::Audit;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 
+use Mojo::JSON qw(decode_json);
+
 # GET /internal/v1/audit/log?user=<email>&since=<ts>&until=<ts>&action=<name>
 # Self-scoped by default: a caller with no audit.view capability can
 # only ever see their own user_email, regardless of what ?user= they
@@ -53,10 +55,21 @@ sub list ($c) {
            JOIN audit.action_types at ON at.id = e.action_type_id
            LEFT JOIN audit.resource_types rt ON rt.id = e.resource_type_id
            $where_sql
-           ORDER BY e.occurred_at DESC
+           ORDER BY e.occurred_at DESC, e.id DESC
            LIMIT 500},
         @bind,
     )->hashes->to_array;
+    # Mojo::Pg's automatic {json => ...} encoding on the way IN has no
+    # symmetric automatic decode on the way OUT -- ->hashes returns the
+    # raw JSONB text representation as a plain Perl string, which
+    # $c->render(json => ...) would then re-encode as a JSON *string*
+    # value (e.g. "{\"filename\":...}") instead of a nested object,
+    # breaking any caller that expects to navigate into it. Confirmed
+    # by an actual failing JSON Pointer assertion against a real row,
+    # not just by reading Mojo::Pg's docs.
+    for my $row (@$rows) {
+        $row->{detail} = decode_json($row->{detail}) if defined $row->{detail};
+    }
     return $c->render(json => $rows);
 }
 

@@ -13,7 +13,20 @@ unless ($ENV{HOMELAB_AUDIT_CONFIG}) {
 
 use lib 'lib';
 use Mojo::UserAgent;
-use Homelab::Common::AuditClient qw(enqueue);
+
+# NOT a top-level `use` -- Homelab::Common::AuditClient only exists via
+# the separately-packaged homelab-common (not installed on a bare CI
+# runner, which never sets HOMELAB_AUDIT_CONFIG and always takes the
+# skip_all above). `use` is processed at compile time regardless of its
+# position relative to that runtime skip check, so it would still try
+# to load the module and abort the whole file before skip_all's exit
+# ever ran -- same class of bug already hit once with `use Archive::Zip`
+# in worker/t/basic.t. Every other package's own t/basic.t avoids this
+# the same way: nothing Homelab::Common::* is ever `use`d at the top of
+# the file, only reached via Test::Mojo->new('ClassName')'s runtime
+# string-based require, which never executes in the skipped case either.
+require Homelab::Common::AuditClient;
+Homelab::Common::AuditClient->import(qw(enqueue));
 
 my $t = Test::Mojo->new('Homelab::Audit::App');
 my $api_base = $t->app->api_base;
@@ -72,8 +85,18 @@ $t->get_ok('/internal/v1/audit/log' => $auth)
   ->json_is('/0/ip_address', '203.0.113.5')
   ->json_is('/0/detail/filename', 'secret-plans.pdf');
 
-# The stranger's own (empty) view is unaffected by the owner's entry.
-$t->get_ok('/internal/v1/audit/log' => $stranger_auth)->status_is(200)->json_is('', []);
+# The stranger's own view is unaffected by the owner's entry -- NOT
+# asserted as empty: registering/logging in is itself a real audited
+# action (by design, auth.login is one of the first-pass instrumented
+# actions), so the stranger's own login legitimately produces an entry
+# of their own the moment anything drains the queue, `_drain_queue`
+# above included (it drains every pending row, not just the owner's).
+# What actually matters for cross-user isolation is that the OWNER's
+# file.delete entry never leaks into the stranger's view.
+$t->get_ok('/internal/v1/audit/log' => $stranger_auth)->status_is(200);
+my $stranger_entries = $t->tx->res->json;
+ok(!(grep { ($_->{resource_id} // '') eq '42' } @$stranger_entries),
+    "stranger's view never contains the owner's file.delete entry");
 
 # --- Drain resilience: a malformed queue row (missing the required
 # `action` field _find_or_create_id needs) must not wedge the whole

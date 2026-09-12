@@ -1,3 +1,19 @@
+homelab-audit (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 20:00:40 -0500
+
+homelab-audit (0.1.2) unstable; urgency=medium
+
+  * Fix t/basic.t CI failure (compile-time use of a sibling package's
+    module before the skip check); fix non-deterministic read ordering
+    (ORDER BY occurred_at DESC, id DESC); fix detail JSONB not being
+    decoded before re-serializing as JSON; fix test's incorrect empty-
+    list assumption for a user who has genuinely logged in
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 20:00:35 -0500
+
 homelab-audit (0.1.1) unstable; urgency=medium
 
   * Release v0.1.1
