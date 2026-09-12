@@ -146,6 +146,17 @@ def test_json_admin_users_list_keeps_real_types_not_joined_strings(capsys):
     assert out[0]["roles"] == ["user", "site_admin"]  # not ", "-joined into one string
 
 
+def test_json_admin_roles_list_keeps_real_array_and_boolean(capsys):
+    roles = [{"name": "auditor", "protected": False, "permissions": ["audit.view"]}]
+    with patch("requests.request", return_value=_mock_response(200, roles)):
+        code = main(["-j", "admin", "roles", "list"])
+    assert code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == roles
+    assert out[0]["protected"] is False  # not the string "no"
+    assert out[0]["permissions"] == ["audit.view"]  # not ", "-joined, and not "(none)" when empty elsewhere
+
+
 def test_json_sessions_list_keeps_full_jti_and_raw_user_agent(capsys):
     """The human table truncates jti to 12 chars and runs user_agent
     through summarize_user_agent() for display -- JSON mode must see

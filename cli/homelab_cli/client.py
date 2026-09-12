@@ -171,6 +171,31 @@ class Client:
     def admin_revoke_role(self, token, user_id, role):
         return self._request("DELETE", f"/api/v1/admin/users/{user_id}/roles/{role}", headers=self._auth(token))
 
+    def admin_list_roles(self, token):
+        return self._request("GET", "/api/v1/admin/roles", headers=self._auth(token))
+
+    def admin_create_role(self, token, name, description=None):
+        body = {"name": name}
+        if description:
+            body["description"] = description
+        return self._request("POST", "/api/v1/admin/roles", headers=self._auth(token), json=body)
+
+    def admin_delete_role(self, token, name):
+        return self._request("DELETE", f"/api/v1/admin/roles/{name}", headers=self._auth(token))
+
+    def admin_list_permissions(self, token):
+        return self._request("GET", "/api/v1/admin/permissions", headers=self._auth(token))
+
+    def admin_grant_permission(self, token, role, permission):
+        return self._request(
+            "POST", f"/api/v1/admin/roles/{role}/permissions/{permission}", headers=self._auth(token),
+        )
+
+    def admin_revoke_permission(self, token, role, permission):
+        return self._request(
+            "DELETE", f"/api/v1/admin/roles/{role}/permissions/{permission}", headers=self._auth(token),
+        )
+
     # --- Drive, via homelab-api's /api/v1/drive/* gateway (see
     # ../../drive/README.md's own /api/v1/files/folders shape -- these
     # paths are that same API with a /drive/ prefix added by the

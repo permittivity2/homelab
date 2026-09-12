@@ -1,3 +1,17 @@
+homelab-api (0.1.12) unstable; urgency=medium
+
+  * Release v0.1.12
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:03:58 -0500
+
+homelab-api (0.1.12) unstable; urgency=medium
+
+  * Add role_permissions: role/permission CRUD, has_capability
+    (site_admin unconditional, additive capability grants for new
+    roles), introspect() now returns jti + optional ?capability= check
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:03:53 -0500
+
 homelab-api (0.1.11) unstable; urgency=medium
 
   * Release v0.1.11

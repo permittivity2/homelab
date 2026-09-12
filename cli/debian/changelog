@@ -1,3 +1,16 @@
+homelab-cli (0.3.20) unstable; urgency=medium
+
+  * Release v0.3.20
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:04:04 -0500
+
+homelab-cli (0.3.20) unstable; urgency=medium
+
+  * Add 'admin roles'/'admin permissions' commands; grant-role/revoke-
+    role no longer hard-restrict to the two built-in roles
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:03:53 -0500
+
 homelab-cli (0.3.19) unstable; urgency=medium
 
   * Release v0.3.19

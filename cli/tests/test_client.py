@@ -257,6 +257,63 @@ def test_admin_revoke_role_builds_correct_path():
     assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/admin/users/5/roles/site_admin")
 
 
+def test_admin_list_roles_sends_bearer_token(client):
+    with patch("requests.request", return_value=_mock_response(
+        200, [{"name": "site_admin", "protected": True, "permissions": []}],
+    )) as m:
+        result = client.admin_list_roles("the-jwt")
+    assert result[0]["name"] == "site_admin"
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer the-jwt"
+
+
+def test_admin_create_role_posts_name_and_optional_description():
+    c = Client("http://localhost:3000")
+    with patch("requests.request", return_value=_mock_response(201, {"name": "auditor"})) as m:
+        c.admin_create_role("the-jwt", "auditor")
+    assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/admin/roles")
+    assert m.call_args.kwargs["json"] == {"name": "auditor"}
+
+    with patch("requests.request", return_value=_mock_response(201, {"name": "auditor"})) as m:
+        c.admin_create_role("the-jwt", "auditor", description="can view the audit log")
+    assert m.call_args.kwargs["json"] == {"name": "auditor", "description": "can view the audit log"}
+
+
+def test_admin_delete_role_builds_correct_path():
+    c = Client("http://localhost:3000")
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        c.admin_delete_role("the-jwt", "auditor")
+    assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/admin/roles/auditor")
+
+
+def test_admin_delete_role_protected_raises_api_error():
+    c = Client("http://localhost:3000")
+    with patch("requests.request", return_value=_mock_response(400, {"error": "'user' is a protected role and cannot be deleted"})):
+        with pytest.raises(ApiError) as exc_info:
+            c.admin_delete_role("the-jwt", "user")
+    assert exc_info.value.status_code == 400
+
+
+def test_admin_list_permissions_sends_bearer_token(client):
+    with patch("requests.request", return_value=_mock_response(200, [{"name": "audit.view", "description": "..."}])) as m:
+        result = client.admin_list_permissions("the-jwt")
+    assert result[0]["name"] == "audit.view"
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer the-jwt"
+
+
+def test_admin_grant_permission_builds_correct_path():
+    c = Client("http://localhost:3000")
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        c.admin_grant_permission("the-jwt", "auditor", "audit.view")
+    assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/admin/roles/auditor/permissions/audit.view")
+
+
+def test_admin_revoke_permission_builds_correct_path():
+    c = Client("http://localhost:3000")
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        c.admin_revoke_permission("the-jwt", "auditor", "audit.view")
+    assert m.call_args.args[:2] == ("DELETE", "http://localhost:3000/api/v1/admin/roles/auditor/permissions/audit.view")
+
+
 # --- Drive, via homelab-api's own /api/v1/drive/* gateway -- same
 # Client, same base URL as everything else above (no more separate
 # DriveClient/drive_base: see ../README.md). Most of these go through

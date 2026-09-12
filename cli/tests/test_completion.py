@@ -73,14 +73,32 @@ def test_completes_nested_subcommands_three_levels_deep(monkeypatch):
     assert completions >= {"list", "grant-role", "revoke-role"}
 
 
-def test_completes_known_roles_for_grant_role(monkeypatch):
-    # The role positional's choices=KNOWN_ROLES (see cli.py) gets free
-    # completion from argparse's own choices= handling -- no custom
-    # completer function needed for this. >= (not ==) because -h/--help
-    # legitimately also complete at this position, same as any other.
+def test_grant_role_does_not_restrict_completion_to_known_roles(monkeypatch):
+    # `admin roles add` (added alongside role_permissions) means the
+    # real set of roles is no longer just KNOWN_ROLES's two built-ins --
+    # choices=KNOWN_ROLES was REMOVED from this positional on purpose
+    # (see cli.py's comment at the grant-role/revoke-role parsers), so
+    # there is no longer a fixed completion list here at all -- argparse
+    # falls back to file-path-style completion for a plain, unconstrained
+    # positional, which is not useful but also not wrong. This test
+    # exists to catch a future regression (choices= creeping back in)
+    # rather than to assert on the (uninteresting) exact fallback set.
     completions = set(_completions(monkeypatch, "homelab-cli admin users grant-role 5 "))
-    assert completions >= set(KNOWN_ROLES)
-    assert completions - set(KNOWN_ROLES) <= {"-h", "--help"}
+    assert not (set(KNOWN_ROLES) <= completions - {"-h", "--help"} and completions - set(KNOWN_ROLES) <= {"-h", "--help"}), (
+        "grant-role's role argument should not be hard-restricted to KNOWN_ROLES any more -- "
+        "a custom role created via 'admin roles add' must be grantable too"
+    )
+
+
+def test_custom_role_name_accepted_by_grant_role(monkeypatch):
+    # The actual behavior that matters: a role name that isn't one of
+    # the two built-ins parses fine and would reach the server -- the
+    # server (not argparse) is what decides whether it's real, same
+    # "just attempt the call, let the server decide" philosophy already
+    # used for admin users/dns/mail commands throughout this file.
+    parser = build_parser()
+    args = parser.parse_args(["admin", "users", "grant-role", "5", "some-custom-role"])
+    assert args.role == "some-custom-role"
 
 
 def test_normal_parsing_unaffected_by_autocomplete_wiring():
@@ -95,7 +113,12 @@ def test_normal_parsing_unaffected_by_autocomplete_wiring():
     assert args.role == "site_admin"
 
 
-def test_invalid_role_rejected_before_any_network_call():
+def test_unknown_role_name_no_longer_rejected_client_side():
+    # Superseded by role_permissions/`admin roles add`: an arbitrary
+    # role name must NOT be rejected at parse time any more, since it
+    # might be a real, just-created custom role -- rejecting a truly
+    # unknown one is now exclusively the server's job (a clean 400/404),
+    # matching every other "just attempt the call" command in this file.
     parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["admin", "users", "grant-role", "5", "not-a-real-role"])
+    args = parser.parse_args(["admin", "users", "grant-role", "5", "not-a-real-role"])
+    assert args.role == "not-a-real-role"

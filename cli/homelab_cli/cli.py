@@ -1242,6 +1242,107 @@ def cmd_admin_revoke_role(args):
     return 0
 
 
+def cmd_admin_roles_list(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        roles = _client().admin_list_roles(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not list roles: {e.message}")
+        return 1
+    if _emit(args, roles):
+        return 0
+    if not roles:
+        print("(no roles)")
+        return 0
+    rows = [
+        [r["name"], "yes" if r["protected"] else "no", ", ".join(r["permissions"]) or "(none)"]
+        for r in roles
+    ]
+    _print_table(["NAME", "PROTECTED", "PERMISSIONS"], rows)
+    return 0
+
+
+def cmd_admin_roles_add(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client().admin_create_role(session["token"], args.name, description=args.description)
+    except ApiError as e:
+        _emit_error(args, f"Could not create role: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Created role '{args.name}'")
+    return 0
+
+
+def cmd_admin_roles_remove(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client().admin_delete_role(session["token"], args.name)
+    except ApiError as e:
+        _emit_error(args, f"Could not remove role: {e.message}")
+        return 1
+    if _emit(args, result or {"success": True}):
+        return 0
+    print(f"Removed role '{args.name}'")
+    return 0
+
+
+def cmd_admin_permissions_list(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        permissions = _client().admin_list_permissions(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not list permissions: {e.message}")
+        return 1
+    if _emit(args, permissions):
+        return 0
+    if not permissions:
+        print("(no permissions)")
+        return 0
+    rows = [[p["name"], p.get("description") or ""] for p in permissions]
+    _print_table(["NAME", "DESCRIPTION"], rows)
+    return 0
+
+
+def cmd_admin_roles_grant_permission(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client().admin_grant_permission(session["token"], args.role, args.permission)
+    except ApiError as e:
+        _emit_error(args, f"Could not grant permission: {e.message}")
+        return 1
+    if _emit(args, result or {"success": True}):
+        return 0
+    print(f"Granted '{args.permission}' to role '{args.role}'")
+    return 0
+
+
+def cmd_admin_roles_revoke_permission(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client().admin_revoke_permission(session["token"], args.role, args.permission)
+    except ApiError as e:
+        _emit_error(args, f"Could not revoke permission: {e.message}")
+        return 1
+    if _emit(args, result or {"success": True}):
+        return 0
+    print(f"Revoked '{args.permission}' from role '{args.role}'")
+    return 0
+
+
 # Both DESCRIPTION and EPILOG below are surfaced twice: directly in
 # `homelab-cli --help`, and again in the generated man page's
 # DESCRIPTION/EXAMPLES sections (see debian/rules -- argparse-manpage
@@ -1586,15 +1687,51 @@ def build_parser():
     p = users_sub.add_parser("list", help="List every user and their roles")
     p.set_defaults(func=cmd_admin_users_list)
 
+    # No choices=KNOWN_ROLES here (there used to be one) -- `admin roles
+    # add` below means the set of real roles is no longer just the two
+    # built-ins, so a hard client-side choices= constraint would reject
+    # granting a legitimate custom role before the request ever reaches
+    # the server. Same "just attempt the call, let the server decide"
+    # philosophy already used everywhere else in this file.
     p = users_sub.add_parser("grant-role", help="Grant a role to a user")
     p.add_argument("user_id")
-    p.add_argument("role", choices=KNOWN_ROLES)
+    p.add_argument("role")
     p.set_defaults(func=cmd_admin_grant_role)
 
     p = users_sub.add_parser("revoke-role", help="Revoke a role from a user")
     p.add_argument("user_id")
-    p.add_argument("role", choices=KNOWN_ROLES)
+    p.add_argument("role")
     p.set_defaults(func=cmd_admin_revoke_role)
+
+    roles = admin_sub.add_parser("roles", help="Role & permission management")
+    roles_sub = roles.add_subparsers(dest="admin_roles_command", required=True)
+
+    p = roles_sub.add_parser("list", help="List every role, whether it's protected, and its granted permissions")
+    p.set_defaults(func=cmd_admin_roles_list)
+
+    p = roles_sub.add_parser("add", help="Create a new role")
+    p.add_argument("name")
+    p.add_argument("--description")
+    p.set_defaults(func=cmd_admin_roles_add)
+
+    p = roles_sub.add_parser("remove", help="Delete a role ('user'/'site_admin' are protected and cannot be removed)")
+    p.add_argument("name")
+    p.set_defaults(func=cmd_admin_roles_remove)
+
+    p = roles_sub.add_parser("grant-permission", help="Grant a capability to a role")
+    p.add_argument("role")
+    p.add_argument("permission")
+    p.set_defaults(func=cmd_admin_roles_grant_permission)
+
+    p = roles_sub.add_parser("revoke-permission", help="Revoke a capability from a role")
+    p.add_argument("role")
+    p.add_argument("permission")
+    p.set_defaults(func=cmd_admin_roles_revoke_permission)
+
+    permissions = admin_sub.add_parser("permissions", help="Capability catalog")
+    permissions_sub = permissions.add_subparsers(dest="admin_permissions_command", required=True)
+    p = permissions_sub.add_parser("list", help="List the known capability catalog")
+    p.set_defaults(func=cmd_admin_permissions_list)
 
     return parser
 

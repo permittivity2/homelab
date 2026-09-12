@@ -63,6 +63,26 @@ sub startup ($self) {
     $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
     $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
 
+    # --- Role/permission management (fast-follow to 003-rbac.sql's own
+    # "no per-endpoint role_permissions table yet" comment -- see
+    # migrations/008-role-permissions.sql and _has_capability below).
+    # Still deliberately site_admin-only, same as the routes above: role/
+    # permission management is itself an admin action. [role/permission
+    # => qr/[^\/]+/] matches this file's existing placeholder-dot-
+    # truncation fix elsewhere in this codebase (Mojolicious's default
+    # :name pattern excludes "." for format-detection reservation, which
+    # would otherwise silently truncate a capability like "audit.view"
+    # to "audit") -- applied here proactively, not after hitting the
+    # same bug a second time. ---------------------------------------
+    $r->get('/api/v1/admin/roles'    => sub ($c) { $self->_admin_list_roles($c) });
+    $r->post('/api/v1/admin/roles'   => sub ($c) { $self->_admin_create_role($c) });
+    $r->delete('/api/v1/admin/roles/:name' => [name => qr/[^\/]+/] => sub ($c) { $self->_admin_delete_role($c) });
+    $r->get('/api/v1/admin/permissions' => sub ($c) { $self->_admin_list_permissions($c) });
+    $r->post('/api/v1/admin/roles/:role/permissions/:permission' => [role => qr/[^\/]+/, permission => qr/[^\/]+/]
+        => sub ($c) { $self->_admin_grant_permission($c) });
+    $r->delete('/api/v1/admin/roles/:role/permissions/:permission' => [role => qr/[^\/]+/, permission => qr/[^\/]+/]
+        => sub ($c) { $self->_admin_revoke_permission($c) });
+
     # --- Gateway: the ONLY address a client (homelab-cli, or any
     # third-party script) should ever need -- see ../../CLAUDE.md's "one
     # API" design notes and Homelab::Common::Proxy's own docs. Auth is
@@ -303,7 +323,23 @@ sub _introspect ($self, $c) {
           JOIN api.users u ON u.id = ur.user_id WHERE u.email = ?}, $payload->{email},
     )->hashes->map(sub { $_->{name} })->to_array;
 
-    return $c->render(json => { email => $payload->{email}, exp => $payload->{exp}, roles => $roles });
+    my $response = { email => $payload->{email}, exp => $payload->{exp}, roles => $roles, jti => $payload->{jti} };
+
+    # Optional ?capability=<name> -- how a DIFFERENT service (which has
+    # no direct grant on api.role_permissions/api.permissions, and never
+    # will per this ecosystem's "no shared cross-schema access" norm)
+    # asks "does this caller have capability X" without homelab-api
+    # needing to expose a whole new endpoint for it. Reuses the same
+    # introspect() call every service already makes on every request --
+    # see _has_capability below for the actual site_admin-always-wins
+    # plus role_permissions logic. Ignored by every existing caller that
+    # doesn't pass it, same additive precedent as `roles`/`jti` above.
+    if (my $capability = $c->param('capability')) {
+        my $user = $self->pg->db->query('SELECT id FROM api.users WHERE email = ?', $payload->{email})->hash;
+        $response->{has_capability} = ($user && $self->_has_capability($user->{id}, $capability)) ? \1 : \0;
+    }
+
+    return $c->render(json => $response);
 }
 
 sub _refresh ($self, $c) {
@@ -649,6 +685,133 @@ sub _admin_revoke_role ($self, $c) {
         q{DELETE FROM api.user_roles WHERE user_id = ?
           AND role_id = (SELECT id FROM api.roles WHERE name = ?)},
         $user_id, $role,
+    );
+    return $c->render(json => { ok => \1 });
+}
+
+# Capability check used both locally (nothing in THIS service gates on
+# it yet -- see migrations/008-role-permissions.sql's comment on why
+# role/permission management itself stays site_admin-only, not
+# capability-gated) and remotely, via _introspect's optional
+# ?capability= param, by other services (starting with homelab-audit's
+# read path). site_admin is an unconditional, hardcoded yes regardless
+# of role_permissions -- deliberately: making site_admin's own
+# capabilities configurable through this table would mean a single bad
+# DELETE (or a role_permissions row silently missing after a fresh
+# install) could lock every admin out of the very system meant to fix
+# it. This is additive infrastructure for defining new, LESSER roles
+# with a named subset of capabilities -- it never constrains what
+# site_admin can do, and no existing hardcoded site_admin check
+# anywhere in this ecosystem is expected to switch to it.
+sub _has_capability ($self, $user_id, $name) {
+    my $is_admin = $self->pg->db->query(
+        q{SELECT 1 FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+          WHERE ur.user_id = ? AND r.name = 'site_admin'},
+        $user_id,
+    )->hash;
+    return 1 if $is_admin;
+
+    my $has_perm = $self->pg->db->query(
+        q{SELECT 1 FROM api.user_roles ur
+          JOIN api.role_permissions rp ON rp.role_id = ur.role_id
+          JOIN api.permissions p ON p.id = rp.permission_id
+          WHERE ur.user_id = ? AND p.name = ?},
+        $user_id, $name,
+    )->hash;
+    return $has_perm ? 1 : 0;
+}
+
+# GET /api/v1/admin/roles -- every role, with its granted permission
+# names and whether it's deletable.
+sub _admin_list_roles ($self, $c) {
+    $self->_require_site_admin($c) or return;
+
+    my $roles = $self->pg->db->query(
+        'SELECT id, name, description, protected, created_at FROM api.roles ORDER BY id',
+    )->hashes;
+    my $perms_by_role = $self->pg->db->query(
+        q{SELECT rp.role_id, p.name FROM api.role_permissions rp
+          JOIN api.permissions p ON p.id = rp.permission_id},
+    )->hashes;
+    my %perms;
+    push @{ $perms{ $_->{role_id} } }, $_->{name} for @$perms_by_role;
+
+    return $c->render(json => [
+        map { { %$_, permissions => ($perms{ $_->{id} } // []) } } @$roles,
+    ]);
+}
+
+# POST /api/v1/admin/roles {name, description?} -- new roles are never
+# protected (only 'user'/'site_admin', seeded that way once, ever are).
+sub _admin_create_role ($self, $c) {
+    $self->_require_site_admin($c) or return;
+
+    my $body = $c->req->json // {};
+    my $name = $body->{name};
+    return $c->render(json => { error => 'name is required' }, status => 400) unless $name;
+
+    my $row = eval {
+        $self->pg->db->query(
+            'INSERT INTO api.roles (name, description) VALUES (?, ?) RETURNING id, name, description, protected, created_at',
+            $name, $body->{description},
+        )->hash;
+    };
+    return $c->render(json => { error => "role '$name' already exists" }, status => 409) if $@;
+    return $c->render(json => { %$row, permissions => [] }, status => 201);
+}
+
+# DELETE /api/v1/admin/roles/:name -- 400s on protected = true instead
+# of silently no-op'ing, so a caller can't mistake "refused" for "done".
+sub _admin_delete_role ($self, $c) {
+    $self->_require_site_admin($c) or return;
+
+    my $name = $c->stash('name');
+    my $role = $self->pg->db->query('SELECT id, protected FROM api.roles WHERE name = ?', $name)->hash;
+    return $c->render(json => { error => 'role not found' }, status => 404) unless $role;
+    return $c->render(json => { error => "'$name' is a protected role and cannot be deleted" }, status => 400)
+        if $role->{protected};
+
+    $self->pg->db->query('DELETE FROM api.roles WHERE id = ?', $role->{id});
+    return $c->render(json => { ok => \1 });
+}
+
+# GET /api/v1/admin/permissions -- the known capability catalog. Seeded/
+# extended by code (migrations), never user-created free text here --
+# there's no POST for this on purpose, a permission only means anything
+# once some route actually checks for it.
+sub _admin_list_permissions ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    return $c->render(json => $self->pg->db->query(
+        'SELECT id, name, description FROM api.permissions ORDER BY name',
+    )->hashes->to_array);
+}
+
+# POST /api/v1/admin/roles/:role/permissions/:permission
+sub _admin_grant_permission ($self, $c) {
+    $self->_require_site_admin($c) or return;
+
+    my ($role_name, $perm_name) = ($c->stash('role'), $c->stash('permission'));
+    my $role = $self->pg->db->query('SELECT id FROM api.roles WHERE name = ?', $role_name)->hash;
+    return $c->render(json => { error => "unknown role: $role_name" }, status => 404) unless $role;
+    my $perm = $self->pg->db->query('SELECT id FROM api.permissions WHERE name = ?', $perm_name)->hash;
+    return $c->render(json => { error => "unknown permission: $perm_name" }, status => 404) unless $perm;
+
+    $self->pg->db->query(
+        'INSERT INTO api.role_permissions (role_id, permission_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
+        $role->{id}, $perm->{id},
+    );
+    return $c->render(json => { ok => \1 });
+}
+
+# DELETE /api/v1/admin/roles/:role/permissions/:permission
+sub _admin_revoke_permission ($self, $c) {
+    $self->_require_site_admin($c) or return;
+
+    my ($role_name, $perm_name) = ($c->stash('role'), $c->stash('permission'));
+    $self->pg->db->query(
+        q{DELETE FROM api.role_permissions WHERE role_id = (SELECT id FROM api.roles WHERE name = ?)
+          AND permission_id = (SELECT id FROM api.permissions WHERE name = ?)},
+        $role_name, $perm_name,
     );
     return $c->render(json => { ok => \1 });
 }
