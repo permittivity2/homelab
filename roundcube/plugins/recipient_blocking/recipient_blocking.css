@@ -39,3 +39,18 @@
     width: auto !important;
     margin: 0 !important;
 }
+
+/*
+ * Icon for the "Blocked Addresses" taskbar button (the plugin's own
+ * top-level task, a peer of Mail/Contacts/Settings). Unlike the message
+ * toolbar button above, no property overrides are needed here beyond
+ * the glyph itself -- #taskmenu's own CSS (confirmed real, in the same
+ * compiled stylesheet) already generically sizes/positions every icon
+ * under it, exactly the way it does for Mail/Contacts/Settings's own
+ * per-class :before rules (e.g. ".menu a.mail:before { content:
+ * \f0e0; }"). Reuses the same glyph as the Block button above -- same
+ * concept, two surfaces.
+ */
+.menu a.button-blockedaddresses:before {
+    content: "\f05e";
+}

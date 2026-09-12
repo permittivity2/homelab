@@ -36,7 +36,17 @@
  */
 class recipient_blocking extends rcube_plugin
 {
-    public $task = 'mail|settings';
+    // Empty -- always active, every task, including tasks this plugin
+    // knows nothing about (e.g. login, before auth). Needed because the
+    // taskbar icon (added unconditionally below) has to render no
+    // matter which page the user is currently on, and because
+    // register_task() below has to run every request for the new
+    // 'blockedaddresses' task to be recognized when the user actually
+    // navigates to it. Safe the same way the toolbar button already
+    // was: container resolution makes add_button() a no-op on any
+    // template that doesn't have the container it targets (e.g. the
+    // login page has no 'taskbar' container at all).
+    public $task = '';
 
     private $rc;
 
@@ -44,6 +54,47 @@ class recipient_blocking extends rcube_plugin
     {
         $this->rc = rcube::get_instance();
         $this->add_texts('localization', true);
+
+        // Own top-level task, so "Blocked Addresses" gets its own
+        // taskbar icon instead of being buried in Settings (kept there
+        // too, for now -- both coexist). Deliberately calling the raw
+        // rcube_plugin_api method here instead of rcube_plugin's own
+        // register_task() wrapper: that wrapper's only real effect is
+        // `$this->mytask = $task`, and rcube_plugin::register_action()
+        // unconditionally uses $this->mytask (once set) to prefix EVERY
+        // subsequent register_action() call from this plugin -- which
+        // would silently break the existing mail/settings actions below
+        // (they need the plain "plugin." prefix, not "blockedaddresses.").
+        // Confirmed by reading both methods' real implementations, not
+        // assumed. The new task's own actions further down are
+        // registered the same low-level way, passing the task
+        // explicitly, so nothing here relies on $this->mytask at all.
+        $this->api->register_task('blockedaddresses', $this->ID);
+
+        // Same "harmless to register unconditionally" reasoning as the
+        // message-toolbar button below: this only ever renders on a
+        // template that actually has a 'taskbar' container (every
+        // mail/settings/addressbook/blockedaddresses page does; the
+        // login page doesn't). class/classsel (not class/classact) is
+        // the pairing core's own Mail/Contacts/Settings taskbar buttons
+        // use -- confirmed in skins/elastic/templates/includes/menu.html
+        // -- deliberately NOT classact, which would trigger core's
+        // "buttons with a class/classact pair start disabled until JS
+        // enables them" behavior (rcmail_output_html::button()) that
+        // the message-toolbar button needs but a plain nav link doesn't.
+        $this->add_button(
+            [
+                'command'  => 'blockedaddresses',
+                'id'       => 'blockedaddresses-taskbutton',
+                'type'     => 'link',
+                'class'    => 'button-blockedaddresses',
+                'classsel' => 'button-blockedaddresses selected',
+                'label'    => 'recipient_blocking.blockedaddresses',
+                'title'    => 'recipient_blocking.blockedaddresses',
+                'innerclass' => 'inner',
+            ],
+            'taskbar'
+        );
 
         if ($this->rc->task == 'mail') {
             $this->add_hook('message_headers_output', [$this, 'message_headers_output']);
@@ -100,6 +151,29 @@ class recipient_blocking extends rcube_plugin
             // skin template of its own at all.
             $this->register_handler('plugin.body', [$this, 'blockedaddresses_body']);
             $this->include_script('recipient_blocking.js');
+            $this->rc->output->add_label('recipient_blocking.unblocking');
+        }
+
+        if ($this->rc->task == 'blockedaddresses') {
+            // Same body/handler/JS as the Settings-tab version above --
+            // this task exists purely to put the identical page behind
+            // its own taskbar icon, not to duplicate any logic. Action
+            // names/keys are registered explicitly against this task
+            // (rcube_plugin_api::register_action()'s real $task-prefix
+            // behavior: "$task.$action", confirmed by reading it, not
+            // assumed) so they match what the framework actually looks
+            // up -- 'index' because rcmail's own dispatch defaults a
+            // plugin task's action to literally "index" when the URL has
+            // no _action at all (confirmed in program/include/rcmail.php),
+            // and 'plugin.blockedaddresses' because the existing search
+            // form's JS (shared, unchanged below) always submits to that
+            // literal action name regardless of which task it's on.
+            $this->api->register_action('index', $this->ID, [$this, 'action_blockedaddresses'], 'blockedaddresses');
+            $this->api->register_action('plugin.blockedaddresses', $this->ID, [$this, 'action_blockedaddresses'], 'blockedaddresses');
+            $this->api->register_action('plugin.unblock_recipient', $this->ID, [$this, 'action_unblock_recipient'], 'blockedaddresses');
+            $this->register_handler('plugin.body', [$this, 'blockedaddresses_body']);
+            $this->include_script('recipient_blocking.js');
+            $this->include_stylesheet('recipient_blocking.css');
             $this->rc->output->add_label('recipient_blocking.unblocking');
         }
     }
@@ -410,7 +484,7 @@ class recipient_blocking extends rcube_plugin
                 'confirmation'
             );
             $this->rc->output->command('plugin.recipient_blocking_set_state', ['unblocked' => [$recipient]]);
-            if ($this->rc->task == 'settings') {
+            if (in_array($this->rc->task, ['settings', 'blockedaddresses'], true)) {
                 $this->rc->output->command('plugin.recipient_blocking_remove_row', $recipient);
             }
         }

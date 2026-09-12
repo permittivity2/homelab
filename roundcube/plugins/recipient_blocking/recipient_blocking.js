@@ -186,7 +186,11 @@ rcmail.addEventListener('init', function () {
         });
     }
 
-    if (rcmail.task == 'settings') {
+    // Same page (list/search/unblock), shared between the Settings tab
+    // and the plugin's own taskbar-level task -- both render it via the
+    // identical blockedaddresses_body() PHP method, so this JS doesn't
+    // need to know or care which one it's currently running under.
+    if (rcmail.task == 'settings' || rcmail.task == 'blockedaddresses') {
         $(document).on('click', '#blockedaddresseslist .unblock-button', function () {
             var recipient = $(this).data('recipient');
             if (!recipient) {

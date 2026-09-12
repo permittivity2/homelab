@@ -1,8 +1,32 @@
-homelab-roundcube (0.1.9) unstable; urgency=medium
+homelab-roundcube (0.1.10) unstable; urgency=medium
 
-  * Release v0.1.9
+  * Release v0.1.10
 
- -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 16:36:52 -0500
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 17:21:55 -0500
+
+homelab-roundcube (0.1.10) unstable; urgency=medium
+
+  * recipient_blocking: EXPERIMENTAL -- give "Blocked Addresses" its own
+    taskbar icon (a peer of Mail/Contacts/Settings) instead of only
+    being reachable as a buried Settings tab, per direction. Registers
+    a real new Roundcube task via rcube_plugin_api::register_task() (a
+    genuine, generically-wired plugin API -- the same mechanism real
+    Kolab plugins like calendar/tasklist use, confirmed against the
+    actual installed core, not a hack) and reuses the exact same
+    list/search/unblock page and PHP methods the Settings tab already
+    uses -- no duplicated logic, just a second way to reach it. The
+    Settings tab itself is left in place, unchanged, for now
+  * recipient_blocking: real gotcha worth flagging for future
+    maintenance -- rcube_plugin::register_task()'s wrapper sets
+    $this->mytask, which rcube_plugin::register_action() then
+    unconditionally uses to prefix every SUBSEQUENT register_action()
+    call from the same plugin instance. Calling the wrapper as the
+    "obvious" way to add the new task would have silently broken the
+    existing mail/settings actions (wrong prefix). Worked around by
+    calling the lower-level rcube_plugin_api methods directly wherever
+    task-scoping actually matters, leaving $this->mytask untouched
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 17:21:39 -0500
 
 homelab-roundcube (0.1.9) unstable; urgency=medium
 
