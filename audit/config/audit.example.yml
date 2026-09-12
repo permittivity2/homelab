@@ -1,0 +1,41 @@
+# Homelab Audit Configuration
+#
+# System-wide audit trail: a small consumer service draining audit.queue
+# (a durable staging table every OTHER homelab-* service INSERTs into
+# directly, via a narrow INSERT-only Postgres grant -- see README.md)
+# into the real, normalized, partitioned audit.entries fact table. This
+# service never sits on the write path -- only the read query
+# (/internal/v1/audit/log, fronted by homelab-api's /api/v1/audit/*
+# gateway route) and the drain timer.
+
+homelab_api:
+  base_url: https://api.test.mailmasker.org
+
+# RUNTIME connection -- CRUD only, no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_audit_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection -- direct to Postgres, bypassing pgbouncer. Only
+# used by homelab-audit-migrate at install/upgrade time.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_audit_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+# What this instance announces itself as in homelab-api's service
+# registry -- host/port only; nothing external ever connects to this
+# directly, only homelab-api's own gateway route.
+registry:
+  host: 127.0.0.1
+  port: 2513
+
+server:
+  listen: "http://127.0.0.1:2513"
+  workers: 2
+  pid_file: /var/lib/homelab/audit-hypnotoad.pid

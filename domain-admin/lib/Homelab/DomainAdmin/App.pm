@@ -85,6 +85,13 @@ sub startup ($self) {
             $c->render(json => { error => 'site_admin role required' }, status => 403);
             return undef;
         }
+        # Stashed, not returned -- changing this helper's return shape
+        # to a list would silently break every existing single-scalar
+        # caller (`my $email = $c->authenticated_email or return;`
+        # evaluated in scalar context takes the LAST list element via
+        # the comma operator, not the first). Audit call sites read
+        # $c->stash('current_jti') instead.
+        $c->stash(current_jti => $result->{jti});
         return $result->{email};
     });
 
@@ -105,6 +112,7 @@ sub startup ($self) {
             $c->render(json => { error => 'not logged in' }, status => 401);
             return undef;
         }
+        $c->stash(current_jti => $result->{jti});
         return $result->{email};
     });
 

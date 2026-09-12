@@ -1,0 +1,24 @@
+Template: homelab-audit/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-audit/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
+Template: homelab-audit/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url — every capability
+ check this app performs introspects the caller's JWT here.
+
+Template: homelab-audit/listen_port
+Type: string
+Default: 2513
+Description: Port for homelab-audit to listen on:

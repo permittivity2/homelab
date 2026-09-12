@@ -271,6 +271,7 @@ use Mojo::UserAgent;
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::Common::SSOClient qw(exchange_code);
 use Homelab::Common::Registry qw(lookup);
+use Homelab::Common::AuditClient qw(enqueue);
 
 # Separate from any UA Homelab::Common::* modules keep internally --
 # used only for the two homelab-worker hand-offs below (submitting/
@@ -316,7 +317,11 @@ sub _current_auth ($c) {
     $jwt //= $c->session('token');
     return (undef, undef) unless $jwt;
     my $result = introspect($jwt, api_base => $c->app->api_base);
-    return $result ? ($result->{email}, $jwt) : (undef, undef);
+    # Third value (jti) is new, for the audit trail -- every existing
+    # 2-variable caller (and _current_email's 1-variable one) silently
+    # ignores it via list destructuring, same additive-return-list
+    # precedent used throughout this codebase.
+    return $result ? ($result->{email}, $jwt, $result->{jti}) : (undef, undef, undef);
 }
 
 # Walks the parent chain from the given folder up to the root,
@@ -884,21 +889,33 @@ sub _delete_file ($c, $email, $id) {
 }
 
 sub delete_file ($c) {
-    my $email = _current_email($c);
+    my ($email, undef, $jti) = _current_auth($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
 
-    my (undef, $folder_id) = _delete_file($c, $email, $c->param('id'));
+    my $id = $c->param('id');
+    my ($ok, $folder_id) = _delete_file($c, $email, $id);
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $jti, action => 'file.delete',
+        resource_type => 'drive.file', resource_id => $id, source_service => 'homelab-drive',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+    ) if $ok;
     return $c->redirect_to($folder_id ? "/folders/$folder_id" : '/');
 }
 
 # DELETE /api/v1/files/:id -- Bearer-authed equivalent of the browser
 # delete form above.
 sub api_delete ($c) {
-    my $email = _current_email($c);
+    my ($email, undef, $jti) = _current_auth($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
 
-    my ($deleted) = _delete_file($c, $email, $c->param('id'));
+    my $id = $c->param('id');
+    my ($deleted) = _delete_file($c, $email, $id);
     return $c->render(json => { error => 'not found' }, status => 404) unless $deleted;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $jti, action => 'file.delete',
+        resource_type => 'drive.file', resource_id => $id, source_service => 'homelab-drive',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+    );
     return $c->render(json => { ok => \1 });
 }
 
@@ -918,7 +935,7 @@ sub api_delete ($c) {
 # convention, not a bug, and it makes the split deterministic regardless
 # of what order the two arrays happen to list ids in.
 sub bulk_delete ($c) {
-    my $email = _current_email($c);
+    my ($email, undef, $jti) = _current_auth($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
 
     my $body       = $c->req->json // {};
@@ -936,6 +953,14 @@ sub bulk_delete ($c) {
         push @{ $ok ? \@files_deleted : \@files_not_found }, $id;
     }
 
+    if (@files_deleted || @folders_deleted) {
+        enqueue(
+            $c->app->pg->db, user_email => $email, jti => $jti, action => 'file.delete.bulk',
+            resource_type => 'drive.file', source_service => 'homelab-drive',
+            ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+            detail => { file_ids => \@files_deleted, folder_ids => \@folders_deleted },
+        );
+    }
     return $c->render(json => {
         files   => { deleted => \@files_deleted,   not_found => \@files_not_found },
         folders => { deleted => \@folders_deleted, not_found => \@folders_not_found },

@@ -1,3 +1,55 @@
+homelab-drive (0.1.22) unstable; urgency=medium
+
+  * Release v0.1.22
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:43:46 -0500
+
+homelab-drive (0.1.22) unstable; urgency=medium
+
+  * Release v0.1.22
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:42:10 -0500
+
+homelab-drive (0.1.22) unstable; urgency=medium
+
+  * Fix: enqueue() from Homelab::Common::AuditClient was imported into
+    the wrong package -- App.pm declares Homelab::Drive::App at the top
+    but all the route handlers (delete_file, api_delete, bulk_delete)
+    live in a second package, Homelab::Drive::App::Controller::Drive,
+    further down the same file. Perl `use` imports are scoped to the
+    package active at the point of the `use`, not file-global, so the
+    import needs to live in the second package block too -- the exact
+    same class of bug this file already has a comment warning about
+    (see the note above the controller package's own imports).
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:36:32 -0500
+
+homelab-drive (0.1.21) unstable; urgency=medium
+
+  * Release v0.1.21
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:36:32 -0500
+
+homelab-drive (0.1.21) unstable; urgency=medium
+
+  * Fix: api_delete (the JSON API route homelab-cli actually uses)
+    wasn't instrumented for the audit trail -- only the browser form
+    route was
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:36:32 -0500
+
+homelab-drive (0.1.20) unstable; urgency=medium
+
+  * Release v0.1.20
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:28:23 -0500
+
+homelab-drive (0.1.20) unstable; urgency=medium
+
+  * Instrument file delete and bulk delete for the audit trail
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:27:24 -0500
+
 homelab-drive (0.1.19) unstable; urgency=medium
 
   * Release v0.1.19

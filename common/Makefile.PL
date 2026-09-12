@@ -28,6 +28,7 @@ WriteMakefile(
     EXE_FILES    => [
         'script/homelab-bootstrap-app-role',
         'script/homelab-bootstrap-pgbouncer-entry',
+        'script/homelab-audit-grant-queue-insert',
     ],
     DIR          => [],
     dist         => { COMPRESS => 'gzip -9f', SUFFIX => '.gz' },

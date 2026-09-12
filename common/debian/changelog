@@ -1,3 +1,37 @@
+homelab-common (0.1.15) unstable; urgency=medium
+
+  * Release v0.1.15
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:43:41 -0500
+
+homelab-common (0.1.15) unstable; urgency=medium
+
+  * Release v0.1.15
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:31:25 -0500
+
+homelab-common (0.1.15) unstable; urgency=medium
+
+  * Fix homelab-audit-grant-queue-insert: also grant USAGE on
+    audit.queue_id_seq (INSERT on the table alone isn't enough for a
+    BIGSERIAL column)
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:31:25 -0500
+
+homelab-common (0.1.14) unstable; urgency=medium
+
+  * Release v0.1.14
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:28:07 -0500
+
+homelab-common (0.1.14) unstable; urgency=medium
+
+  * Add Homelab::Common::AuditClient (system-wide audit trail write
+    path); AuthClient::introspect gains an optional capability param;
+    new homelab-audit-grant-queue-insert bootstrap script
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:27:24 -0500
+
 homelab-common (0.1.13) unstable; urgency=medium
 
   * Release v0.1.13

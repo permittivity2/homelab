@@ -1,0 +1,20 @@
+#!/usr/bin/env perl
+# Applies homelab-audit's own migrations/*.sql via the migrate role.
+# Same template as homelab-worker-migrate -- see that file's comment.
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(migrate_dbh);
+use Homelab::Common::Migrate qw(run_migrations);
+
+my $config = load_config('HOMELAB_AUDIT_CONFIG', '/etc/homelab/audit/config.yml');
+my $dbh    = migrate_dbh(%{ $config->{database_migrate} });
+
+my $migrations_dir = $ENV{HOMELAB_AUDIT_MIGRATIONS_DIR} // '/usr/share/homelab-audit/migrations';
+my $applied = run_migrations(dbh => $dbh, schema => 'audit', migrations_dir => $migrations_dir);
+
+print "homelab-audit: applied $applied migration(s)\n";

@@ -20,8 +20,18 @@ $app->routes->get('/api/v1/auth/introspect' => sub {
     my $c = shift;
     my ($token) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
     return $c->render(json => { error => 'Token required' }, status => 401) unless $token;
-    return $c->render(json => { email => 'user@test.mailmasker.org', exp => time + 900 })
-        if $token eq 'valid-token';
+    if ($token eq 'valid-token') {
+        my $response = { email => 'user@test.mailmasker.org', exp => time + 900 };
+        # Mirrors homelab-api 0.1.12's real ?capability= extension --
+        # this fake only ever says yes for 'audit.view', to prove
+        # AuthClient::introspect() actually appends the param (not that
+        # any particular capability logic is right, that's homelab-api's
+        # own test's job).
+        if (defined(my $capability = $c->param('capability'))) {
+            $response->{has_capability} = ($capability eq 'audit.view') ? \1 : \0;
+        }
+        return $c->render(json => $response);
+    }
     return $c->render(json => { error => 'invalid or expired token' }, status => 401);
 });
 $app->routes->post('/api/v1/auth/login' => sub {
@@ -78,6 +88,13 @@ is($result->{email}, 'user@test.mailmasker.org', 'returns the right email');
 ok(!introspect('bogus-token', api_base => $api_base), 'introspect() returns undef for an invalid token, not dying');
 ok(!introspect(undef, api_base => $api_base), 'introspect() returns undef for no token at all, without making a request');
 ok(!introspect('valid-token', api_base => 'http://127.0.0.1:1'), 'introspect() returns undef (not dies) on a transport failure — an unreachable homelab-api must not crash the caller');
+
+my $with_cap = introspect('valid-token', api_base => $api_base, capability => 'audit.view');
+ok($with_cap->{has_capability}, 'optional capability opt is appended as a real query param homelab-api can see');
+my $without_cap = introspect('valid-token', api_base => $api_base, capability => 'some.other.thing');
+ok(!$without_cap->{has_capability}, 'a different capability name correctly comes back false, not just always-true');
+my $no_cap_param = introspect('valid-token', api_base => $api_base);
+ok(!exists $no_cap_param->{has_capability}, 'omitting capability entirely means no has_capability key at all -- unchanged for every existing caller');
 
 my $login_ok = login('user@test.mailmasker.org', 'correct-password', api_base => $api_base);
 ok($login_ok->{success}, 'login() reports success for correct credentials');

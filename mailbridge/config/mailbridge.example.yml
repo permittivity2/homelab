@@ -8,6 +8,18 @@
 homelab_api:
   base_url: https://api.test.mailmasker.org
 
+# RUNTIME connection -- CRUD only, no DDL, and the ONLY thing this app
+# actually uses it for is INSERT on audit.queue (see homelab-audit's
+# README.md) for the mail-send audit trail. This app still has no
+# tables/schema of its own -- `mailbridge` exists only because the
+# standard two-role bootstrap always pairs a role with a schema.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_mailbridge_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
 # The real IMAP/SMTP addresses -- this is the ONE place these need to
 # be configured now; homelab-cli no longer needs to know them at all.
 mail:

@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 systemd/homelab-audit.service \
+		debian/homelab-audit/etc/systemd/system/homelab-audit.service
+	install -D -m 644 config/audit.example.yml \
+		debian/homelab-audit/usr/share/homelab-audit/config/audit.example.yml
+	find migrations -type f -exec install -D -m 644 {} \
+		debian/homelab-audit/usr/share/homelab-audit/{} \;

@@ -1185,6 +1185,42 @@ def cmd_sessions_revoke(args):
     return 0
 
 
+# --- audit: homelab-audit's query endpoint, via homelab-api's
+# /api/v1/audit/* gateway. Self-scoped by default, same "clean 403,
+# never a silently-narrowed result" convention as sessions/mail-aliases
+# above -- ?user= is only honored server-side for a caller holding the
+# audit.view capability (site_admin always does). ---
+
+def cmd_audit_list(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        entries = _client().audit_list(
+            session["token"], user=args.user, since=args.since, until=args.until, action=args.action,
+        )
+    except ApiError as e:
+        _emit_error(args, f"Could not list audit entries: {e.message}")
+        return 1
+    if _emit(args, entries):
+        return 0
+    if not entries:
+        print("(no audit entries)")
+        return 0
+    rows = []
+    for e in entries:
+        rows.append([
+            _format_session_timestamp(e.get("occurred_at")),
+            e.get("user_email") or "",
+            e.get("action") or "",
+            e.get("resource_type") or "",
+            e.get("resource_id") or "",
+            e.get("ip_address") or "unknown",
+        ])
+    _print_table(["WHEN", "USER", "ACTION", "RESOURCE TYPE", "RESOURCE ID", "IP ADDRESS"], rows)
+    return 0
+
+
 # --- admin: homelab-api's site_admin-gated endpoints (api/README.md's
 # "Admin endpoints" section). No client-side role check here on
 # purpose — these just attempt the call and surface whatever the server
@@ -1678,6 +1714,16 @@ def build_parser():
     p.add_argument("--all-others", action="store_true", help="Revoke every OTHER session of yours, keep this one")
     p.add_argument("--user", help="Revoke this user's session instead of your own (site_admin only)")
     p.set_defaults(func=cmd_sessions_revoke)
+
+    audit = sub.add_parser("audit", help="Query the system-wide audit trail")
+    audit_sub = audit.add_subparsers(dest="audit_command", required=True)
+
+    p = audit_sub.add_parser("list", help="List audit entries (your own by default; --user requires audit.view/site_admin)")
+    p.add_argument("--user", help="List this user's audit entries instead of your own (audit.view/site_admin only)")
+    p.add_argument("--since", help="Only entries at/after this timestamp")
+    p.add_argument("--until", help="Only entries at/before this timestamp")
+    p.add_argument("--action", help="Only entries matching this action name (e.g. file.delete)")
+    p.set_defaults(func=cmd_audit_list)
 
     admin = sub.add_parser("admin", help="Administrative commands (site_admin role required)")
     admin_sub = admin.add_subparsers(dest="admin_command", required=True)

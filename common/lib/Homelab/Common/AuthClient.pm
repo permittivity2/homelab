@@ -1,6 +1,7 @@
 package Homelab::Common::AuthClient;
 use Mojo::Base -strict;
 use Mojo::UserAgent;
+use Mojo::URL;
 use Exporter 'import';
 
 our @EXPORT_OK = qw(introspect login refresh revoke);
@@ -12,6 +13,16 @@ our @EXPORT_OK = qw(introspect login refresh revoke);
 # do that, same reasoning as the registry client.
 #
 # introspect($jwt, api_base => 'http://10.10.0.x:3000') => { email => ..., exp => ... } or undef
+#
+# Optional `capability`: appended as ?capability=<name>, per homelab-api
+# 0.1.12's introspect extension (api/migrations/008-role-permissions.sql) --
+# the response then also carries has_capability (true unconditionally
+# for site_admin, else true only if one of the caller's roles has that
+# permission row). This is how a service OTHER than homelab-api itself
+# checks a capability: there's no shared in-process helper for it (the
+# role_permissions tables live only in homelab-api's own schema), so
+# every capability check is a remote introspect call, same as every
+# other "who is this" check already is.
 my $UA = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10);
 
 sub introspect {
@@ -19,7 +30,10 @@ sub introspect {
     my $api_base = $opts{api_base} // die "introspect(): api_base required\n";
     return undef unless $jwt;
 
-    my $tx  = $UA->get("$api_base/api/v1/auth/introspect", { Authorization => "Bearer $jwt" });
+    my $url = Mojo::URL->new("$api_base/api/v1/auth/introspect");
+    $url->query({ capability => $opts{capability} }) if defined $opts{capability};
+
+    my $tx  = $UA->get($url, { Authorization => "Bearer $jwt" });
     my $err = $tx->error;
     return undef if $err && !$err->{code};    # transport failure — treat as "not authenticated", don't die
     return undef unless $tx->result->code == 200;

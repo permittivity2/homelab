@@ -1,3 +1,36 @@
+homelab-mailbridge (0.1.4) unstable; urgency=medium
+
+  * Release v0.1.4
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:48:15 -0500
+
+homelab-mailbridge (0.1.4) unstable; urgency=medium
+
+  * Fix: enqueue() (audit logging) was undefined in the Mail controller
+    package -- AuditClient import was only in the top-level App package,
+    not the controller sub-package where send_message actually calls it
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:48:15 -0500
+
+homelab-mailbridge (0.1.3) unstable; urgency=medium
+
+  * Release v0.1.3
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:43:48 -0500
+
+homelab-mailbridge (0.1.3) unstable; urgency=medium
+
+  * Release v0.1.3
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:28:31 -0500
+
+homelab-mailbridge (0.1.3) unstable; urgency=medium
+
+  * Instrument mail send for the audit trail; new minimal Postgres
+    connection (INSERT-only on audit.queue)
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:27:24 -0500
+
 homelab-mailbridge (0.1.2) unstable; urgency=medium
 
   * Release v0.1.2

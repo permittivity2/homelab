@@ -7,6 +7,7 @@ use Homelab::Common::Health qw(mount_health_route);
 use Homelab::API::Auth qw(hash_password verify_password generate_jwt verify_jwt generate_jti generate_refresh_token);
 use Homelab::API::Registry;
 use Homelab::Common::Proxy qw(forward);
+use Homelab::Common::AuditClient qw(enqueue);
 
 has 'pg';
 has 'registry';
@@ -148,6 +149,12 @@ sub startup ($self) {
     $r->any('/api/v1/jobs' => sub ($c) { $self->_gateway($c, 'homelab-worker', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
     $r->any('/api/v1/jobs/*capture' => sub ($c) { $self->_gateway($c, 'homelab-worker', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
 
+    # homelab-audit's own route is /internal/v1/audit/log -- same
+    # two-registration requirement as jobs/domains above (a *capture
+    # wildcard never matches the bare prefix with nothing after it).
+    $r->any('/api/v1/audit' => sub ($c) { $self->_gateway($c, 'homelab-audit', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+    $r->any('/api/v1/audit/*capture' => sub ($c) { $self->_gateway($c, 'homelab-audit', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+
     return;
 }
 
@@ -282,6 +289,12 @@ sub _login ($self, $c) {
         q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at, user_agent, ip_address, first_seen_at)
           VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'), ?, ?, NOW())},
         $jti, $user->{id}, $refresh_row->{id}, $expires_in, $user_agent, $ip_address,
+    );
+
+    enqueue(
+        $self->pg->db, user_email => $email, jti => $jti, action => 'auth.login',
+        resource_type => 'user', resource_id => $user->{id}, source_service => 'homelab-api',
+        ip_address => $ip_address, user_agent => $user_agent,
     );
 
     return $c->render(json => {
@@ -615,6 +628,18 @@ sub _sessions_revoke_others ($self, $c) {
 
 # Renders 401/403 itself and returns undef on failure, so callers can
 # just do `my $user = $self->_require_site_admin($c) or return;`.
+# Cheap local re-decode of the caller's own already-verified JWT, just
+# for its jti -- homelab-api (unlike every other service) holds the
+# signing secret itself, so this never needs a remote introspect round
+# trip the way homelab-audit's own capability check does. Used only by
+# audit call sites that got here via _require_site_admin (which returns
+# {id, email}, no jti) rather than _authenticate (which already does).
+sub _jwt_jti ($self, $c) {
+    my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+    my $payload = $jwt ? verify_jwt($jwt, secret => $self->config->{jwt}{secret}) : undef;
+    return $payload ? $payload->{jti} : undef;
+}
+
 sub _require_site_admin ($self, $c) {
     my $user = $self->_authenticated_user($c);
     unless ($user) {
@@ -655,7 +680,7 @@ sub _admin_list_users ($self, $c) {
 
 # POST /api/v1/admin/users/:id/roles {role: "site_admin"}
 sub _admin_grant_role ($self, $c) {
-    $self->_require_site_admin($c) or return;
+    my $admin = $self->_require_site_admin($c) or return;
 
     my $user_id = $c->param('id');
     my $role    = ($c->req->json // {})->{role};
@@ -671,12 +696,18 @@ sub _admin_grant_role ($self, $c) {
         'INSERT INTO api.user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
         $user_id, $role_row->{id},
     );
+    enqueue(
+        $self->pg->db, user_email => $admin->{email}, jti => $self->_jwt_jti($c), action => 'role.grant',
+        resource_type => 'user', resource_id => $user_id, source_service => 'homelab-api',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { role => $role },
+    );
     return $c->render(json => { ok => \1 });
 }
 
 # DELETE /api/v1/admin/users/:id/roles/:role
 sub _admin_revoke_role ($self, $c) {
-    $self->_require_site_admin($c) or return;
+    my $admin = $self->_require_site_admin($c) or return;
 
     my $user_id = $c->param('id');
     my $role    = $c->param('role');
@@ -685,6 +716,12 @@ sub _admin_revoke_role ($self, $c) {
         q{DELETE FROM api.user_roles WHERE user_id = ?
           AND role_id = (SELECT id FROM api.roles WHERE name = ?)},
         $user_id, $role,
+    );
+    enqueue(
+        $self->pg->db, user_email => $admin->{email}, jti => $self->_jwt_jti($c), action => 'role.revoke',
+        resource_type => 'user', resource_id => $user_id, source_service => 'homelab-api',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { role => $role },
     );
     return $c->render(json => { ok => \1 });
 }

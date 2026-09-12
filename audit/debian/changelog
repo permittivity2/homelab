@@ -1,0 +1,35 @@
+homelab-audit (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:43:39 -0500
+
+homelab-audit (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:33:45 -0500
+
+homelab-audit (0.1.1) unstable; urgency=medium
+
+  * Fix: partition management can't run on the runtime role (no DDL) --
+    pre-create 24 months of partitions via migration instead of a
+    runtime timer
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:33:45 -0500
+
+homelab-audit (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:28:13 -0500
+
+homelab-audit (0.1.0) unstable; urgency=medium
+
+  * Initial release: system-wide audit trail consumer. Producers
+    enqueue into audit.queue via a local, synchronous Postgres INSERT
+    (Homelab::Common::AuditClient, homelab-common 0.1.14+); this
+    service drains it into the normalized, partitioned audit.entries
+    fact table and serves the audit.view-gated query endpoint.
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 18:00:00 -0500

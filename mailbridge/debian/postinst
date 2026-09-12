@@ -17,12 +17,32 @@ case "$1" in
         chown homelab:homelab /var/lib/homelab
 
         if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-mailbridge/db_host || true;               DB_HOST="${RET:-localhost}"
+            db_get homelab-mailbridge/pgbouncer_host || true;        PGBOUNCER_HOST="${RET:-localhost}"
             db_get homelab-mailbridge/homelab_api_base_url || true; API_BASE="${RET:-http://127.0.0.1:3000}"
             db_get homelab-mailbridge/imap_host || true;             IMAP_HOST="${RET:-mail.test.mailmasker.org}"
             db_get homelab-mailbridge/imap_port || true;             IMAP_PORT="${RET:-993}"
             db_get homelab-mailbridge/smtp_host || true;             SMTP_HOST="${RET:-mail.test.mailmasker.org}"
             db_get homelab-mailbridge/smtp_port || true;             SMTP_PORT="${RET:-587}"
             db_get homelab-mailbridge/listen_port || true;           LISTEN_PORT="${RET:-2510}"
+
+            echo "  bootstrapping Postgres roles for 'homelab_mailbridge' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_mailbridge --schema mailbridge --db-host "$DB_HOST")"
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success — see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-mailbridge' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
 
             # Full-line-anchored (not a bare hostname substring): imap_host
             # and smtp_host share the same example-config default value, so
@@ -37,6 +57,9 @@ case "$1" in
                 -e "s#smtp_port: 587#smtp_port: $SMTP_PORT#g" \
                 -e "s#listen: \"http://127\.0\.0\.1:2510\"#listen: \"http://127.0.0.1:$LISTEN_PORT\"#g" \
                 -e "s#  port: 2510#  port: $LISTEN_PORT#g" \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_mailbridge_runtime#$RUNTIME_ROLE#g" \
                 "$SHARE_DIR/config/mailbridge.example.yml" > "$CONFIG_FILE"
             chown root:homelab "$CONFIG_FILE"
             chmod 640 "$CONFIG_FILE"
@@ -44,6 +67,16 @@ case "$1" in
         else
             echo "  $CONFIG_FILE already exists -- leaving it untouched"
             echo "  (dpkg-reconfigure homelab-mailbridge to redo the prompts)"
+        fi
+
+        if [ -z "$RUNTIME_ROLE" ]; then
+            RUNTIME_ROLE="$(sed -n '/^database:/,$ {s/^[[:space:]]*user: //p}' "$CONFIG_FILE" | head -1)"
+        fi
+        if [ -n "$RUNTIME_ROLE" ]; then
+            echo "  granting '$RUNTIME_ROLE' INSERT access on audit.queue (for the mail-send audit trail)..."
+            DB_HOST_FOR_GRANT="${DB_HOST:-$(sed -n 's/^[[:space:]]*host: //p' "$CONFIG_FILE" | head -1)}"
+            homelab-audit-grant-queue-insert --role "$RUNTIME_ROLE" --db-host "${DB_HOST_FOR_GRANT:-localhost}" \
+                || echo "  WARNING: could not grant audit.queue access -- if homelab-audit isn't installed/migrated yet, install it and re-run this grant by hand (see homelab-audit/README.md); mail sends will fail closed until this grant exists."
         fi
 
         systemctl enable homelab-mailbridge >/dev/null 2>&1 || true

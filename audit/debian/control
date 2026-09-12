@@ -1,0 +1,28 @@
+Source: homelab-audit
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-audit
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common,
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         adduser,
+         sudo
+Recommends: homelab-api
+Description: System-wide audit trail consumer for the homelab-* ecosystem
+ Drains audit.queue (a durable staging table every other homelab-*
+ service INSERTs into directly, via a narrow INSERT-only Postgres grant
+ -- see Homelab::Common::AuditClient) into the real, normalized,
+ partitioned audit.entries fact table, and serves the site_admin/
+ audit.view-gated query endpoint fronted by homelab-api's
+ /api/v1/audit/* gateway route. This service never sits on the write
+ path -- producers enqueue via a local, synchronous Postgres INSERT, no
+ network hop and no dependency on this service being up; if it's down,
+ queued rows simply accumulate until it's back, nothing is lost.

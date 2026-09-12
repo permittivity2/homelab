@@ -1,3 +1,19 @@
+Template: homelab-mailbridge/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+ This app has no tables of its own -- the only thing it uses this for
+ is a narrow INSERT-only grant on audit.queue (see homelab-audit) for
+ the mail-send audit trail.
+
+Template: homelab-mailbridge/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
 Template: homelab-mailbridge/homelab_api_base_url
 Type: string
 Default: http://127.0.0.1:3000

@@ -1,5 +1,6 @@
 package Homelab::DomainAdmin::App::Controller::Dkim;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
+use Homelab::Common::AuditClient qw(enqueue);
 
 # DKIM key rotation -- see ../../../../README.md's "DKIM" section for
 # the full state-machine design. Private key material never touches
@@ -163,6 +164,12 @@ sub rotate ($c) {
           VALUES (?, ?, 'pending', ?, 2048, ?) RETURNING *},
         $domain_row->{id}, $selector, $public_key, $email,
     )->hash;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'), action => 'dkim.rotate',
+        resource_type => 'domain', resource_id => $domain, source_service => 'homelab-domain-admin',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { selector => $selector },
+    );
     return $c->render(json => $row, status => 201);
 }
 

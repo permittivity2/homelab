@@ -1,5 +1,6 @@
 package Homelab::DomainAdmin::App::Controller::Domains;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
+use Homelab::Common::AuditClient qw(enqueue);
 
 # GET /internal/v1/domains
 sub list ($c) {
@@ -43,6 +44,12 @@ sub create ($c) {
         'INSERT INTO domainadmin.domains (domain_name, mail_enabled, dns_managed, created_by) VALUES (?, ?, ?, ?) RETURNING *',
         $domain_name, $mail_enabled, $dns_managed, $email,
     )->hash;
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $c->stash('current_jti'), action => 'domain.create',
+        resource_type => 'domain', resource_id => $domain_name, source_service => 'homelab-domain-admin',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { mail_enabled => ($mail_enabled ? \1 : \0), dns_managed => ($dns_managed ? \1 : \0) },
+    );
     return $c->render(json => $row, status => 201);
 }
 

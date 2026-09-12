@@ -1,3 +1,21 @@
+homelab-cli (0.3.21) unstable; urgency=medium
+
+  * Release v0.3.21
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:43:44 -0500
+
+homelab-cli (0.3.21) unstable; urgency=medium
+
+  * Release v0.3.21
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:28:37 -0500
+
+homelab-cli (0.3.21) unstable; urgency=medium
+
+  * Add 'audit list' command
+
+ -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:27:24 -0500
+
 homelab-cli (0.3.20) unstable; urgency=medium
 
   * Release v0.3.20

@@ -2,18 +2,27 @@ package Homelab::MailBridge::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
 use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
 use Homelab::Common::Registry qw(register);
+use Homelab::Common::AuditClient qw(enqueue);
 
 has 'api_base';
 has 'mail_config';
+has 'pg';
 
 # Stateless, internal-only relay between homelab-api's gateway routes
 # (/api/v1/mail/*, see ../../api/README.md) and dovecot/postfix's real
 # IMAP/SMTP ports -- moved here from homelab-cli's own client-side
 # imaplib/smtplib code (see README.md) so a script never needs to know
-# mail's address at all, only homelab-api's. No database: nothing here
-# is ever persisted, every request is a fresh IMAP/SMTP round trip.
+# mail's address at all, only homelab-api's. Still no mail-related
+# database of its own -- every mail request is a fresh IMAP/SMTP round
+# trip, nothing persisted. The one exception, added for the audit
+# trail: a minimal Postgres connection whose ONLY grant is INSERT on
+# audit.queue (see homelab-audit-grant-queue-insert) -- an otherwise-
+# unused, empty `mailbridge` schema exists purely because the standard
+# two-role bootstrap always pairs a role with one, not because this
+# app has any tables of its own.
 sub startup ($self) {
     my $config = load_config('HOMELAB_MAILBRIDGE_CONFIG', '/etc/homelab/mailbridge/config.yml');
     $self->config($config);
@@ -26,6 +35,7 @@ sub startup ($self) {
     });
 
     $self->api_base($config->{homelab_api}{base_url} // die "config: homelab_api.base_url is required\n");
+    $self->pg(runtime_pg(%{ $config->{database} // die "config: database.* is required (see config/mailbridge.example.yml)\n" }));
 
     my $mail = $config->{mail} // die "config: mail.* is required (see config/mailbridge.example.yml)\n";
     for my $key (qw(imap_host imap_port smtp_host smtp_port)) {
@@ -33,9 +43,10 @@ sub startup ($self) {
     }
     $self->mail_config($mail);
 
-    # Nothing local to check (no DB, no disk state) -- up means able to
-    # respond at all.
-    mount_health_route($self, check => sub { return 1 });
+    mount_health_route($self, check => sub {
+        $self->pg->db->query('SELECT 1');
+        return 1;
+    });
 
     my $me = $config->{registry} // {};
     if ($me->{host} && $me->{port}) {
@@ -72,6 +83,7 @@ use Mojo::Date;
 use Mojo::UserAgent;
 use Mojo::Util qw(sha1_sum);
 use Homelab::Common::AuthClient qw(introspect);
+use Homelab::Common::AuditClient qw(enqueue);
 
 # Reused across requests, matching Homelab::Common::AuthClient's own
 # module-level $UA convention.
@@ -98,7 +110,10 @@ sub _authenticated_email ($c) {
         $c->render(json => { error => 'not logged in' }, status => 401);
         return;
     }
-    return ($result->{email}, $jwt);
+    # Third value (jti) is new, for the audit trail (see send_message) --
+    # every existing 2-variable caller silently ignores it, same
+    # additive-return-list precedent used throughout this codebase.
+    return ($result->{email}, $jwt, $result->{jti});
 }
 
 sub _xoauth2_string ($email, $token) {
@@ -218,7 +233,7 @@ sub read_message ($c) {
 }
 
 sub send_message ($c) {
-    my ($email, $token) = _authenticated_email($c) or return;
+    my ($email, $token, $jti) = _authenticated_email($c) or return;
     my $params  = $c->req->json // {};
     my $to      = $params->{to};
     my $subject = $params->{subject};
@@ -271,6 +286,18 @@ sub send_message ($c) {
         $c->app->log->warn("mailbridge send_message failed: $@");
         return $c->render(json => { error => 'could not send message' }, status => 502);
     }
+
+    # Enqueued only on real success -- a failed send above already
+    # returned. No eval/best-effort wrapper: per the audit trail's own
+    # design, a failed enqueue here means the API call itself now fails
+    # (502), even though the mail already left the building. Accepted
+    # tradeoff, same as everywhere else this pattern is used.
+    enqueue(
+        $c->app->pg->db, user_email => $email, jti => $jti, action => 'mail.send',
+        resource_type => 'mail.message', source_service => 'homelab-mailbridge',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { to => $to, from => $from, subject => $subject },
+    );
     return $c->render(json => { ok => \1 });
 }
 

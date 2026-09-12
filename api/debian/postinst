@@ -57,6 +57,21 @@ case "$1" in
             echo "  wrote $CONFIG_FILE"
         fi
 
+        # RUNTIME_ROLE is only set above on a fresh install (the `if
+        # [ ! -f "$CONFIG_FILE" ]` branch) -- on an upgrade, derive it
+        # from the config already on disk, same "reuse whichever
+        # credential already exists" pattern homelab-postfix's own
+        # postinst uses for its later cross-schema grants.
+        if [ -z "$RUNTIME_ROLE" ]; then
+            RUNTIME_ROLE="$(sed -n '/^database:/,/^database_migrate:/{s/^[[:space:]]*user: //p}' "$CONFIG_FILE" | head -1)"
+        fi
+        if [ -n "$RUNTIME_ROLE" ]; then
+            echo "  granting '$RUNTIME_ROLE' INSERT access on audit.queue (for the login/role-grant/session-revoke audit trail)..."
+            DB_HOST_FOR_GRANT="${DB_HOST:-$(sed -n '/^database_migrate:/,/^database:/{s/^[[:space:]]*host: //p}' "$CONFIG_FILE" | head -1)}"
+            homelab-audit-grant-queue-insert --role "$RUNTIME_ROLE" --db-host "${DB_HOST_FOR_GRANT:-localhost}" \
+                || echo "  WARNING: could not grant audit.queue access -- if homelab-audit isn't installed/migrated yet, install it and re-run this grant by hand (see homelab-audit/README.md); audited actions (login, role grant/revoke, session revoke) will fail closed until this grant exists."
+        fi
+
         echo "  applying migrations..."
         HOMELAB_API_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
             HOMELAB_API_CONFIG="$CONFIG_FILE" \

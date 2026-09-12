@@ -1,0 +1,158 @@
+#!/usr/bin/perl
+# Grants a narrow, INSERT-ONLY privilege on audit.queue to an EXISTING
+# runtime role -- used by every producing service's own postinst
+# (homelab-api, homelab-drive, homelab-domain-admin, homelab-
+# mailbridge, ...) right after that service's own role already exists,
+# so its Homelab::Common::AuditClient::enqueue() calls can succeed.
+#
+# Deliberately NOT the generic homelab-bootstrap-app-role script: that
+# one only ever creates a NEW role+schema pair for one feature's own
+# use. This reaches into a DIFFERENT feature's schema (homelab-audit's)
+# to grant an EXISTING role one narrow privilege -- same "rare,
+# deliberate, one-time admin action, never a stored/network admin
+# credential" precedent as homelab-postfix-bootstrap-role's own
+# cross-schema grants onto api.users/domainadmin.domains.
+#
+# INSERT-only on purpose: the granted role can never SELECT, UPDATE, or
+# DELETE anything in audit.queue -- it can only ever append a new row,
+# about as safe a cross-schema grant as exists.
+#
+# Same three-tier connection fallback as every other bootstrap script
+# in this project (local / SSH / manual), and the same ordering-
+# dependency check: dies loudly with a clear message if audit.queue
+# doesn't exist yet (homelab-audit not installed/migrated there yet),
+# rather than silently granting onto a table that isn't there.
+#
+# Usage: homelab-audit-grant-queue-insert --role EXISTING_ROLE --db-host HOST [--db homelab]
+
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+use IPC::Open2 qw(open2);
+
+my $DB      = 'homelab';
+my $ROLE    = '';
+my $DB_HOST = '';
+
+GetOptions(
+    'role=s'    => \$ROLE,
+    'db-host=s' => \$DB_HOST,
+    'db=s'      => \$DB,
+) or die usage();
+
+die usage() unless $ROLE && $DB_HOST;
+
+my @SSH_OPTS = ('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new');
+
+sub usage {
+    return "Usage: $0 --role EXISTING_ROLE --db-host HOST [--db homelab]\n";
+}
+
+sub log_msg  { print STDERR "[audit-grant-queue-insert] @_\n" }
+sub die_msg  { print STDERR "[audit-grant-queue-insert] ERROR: @_\n"; exit 1 }
+
+sub sql_escape {
+    my ($s) = @_;
+    $s =~ s/'/''/g;
+    return $s;
+}
+
+sub is_local_host {
+    my ($host) = @_;
+    return 1 if $host eq 'localhost' || $host eq '127.0.0.1' || $host eq '::1';
+    chomp(my $hostname = `hostname`);
+    return 1 if $host eq $hostname;
+    chomp(my $fqdn = `hostname -f 2>/dev/null`);
+    return 1 if $fqdn && $host eq $fqdn;
+    return 0;
+}
+
+# Same stdin-piping discipline as every other bootstrap script here
+# (never SQL as a -c/-tAc argv element) -- see homelab-bootstrap-app-
+# role's own comment for why that matters over SSH specifically.
+sub run_query_stdin_local_or_remote {
+    my ($sql, @cmd) = @_;
+    my ($out_fh, $in_fh);
+    my $pid = open2($out_fh, $in_fh, @cmd);
+    print $in_fh $sql;
+    close($in_fh);
+    my $out = do { local $/; <$out_fh> };
+    close($out_fh);
+    waitpid($pid, 0);
+    return undef unless $? == 0;
+    return $out;
+}
+
+sub check_audit_queue_exists {
+    my (@cmd) = @_;
+    my $out = run_query_stdin_local_or_remote(q{SELECT to_regclass('audit.queue')}, @cmd);
+    return defined $out && length $out;
+}
+
+sub build_sql {
+    my $role_esc = sql_escape($ROLE);
+    # INSERT on the table alone is NOT enough: audit.queue.id is
+    # BIGSERIAL, backed by a real sequence (audit.queue_id_seq), and
+    # Postgres requires USAGE on that sequence separately to call
+    # nextval() during the insert -- a real, live "permission denied
+    # for sequence queue_id_seq" error caught only by an actual insert
+    # attempt through a real narrowly-granted role, not by reading the
+    # GRANT statement and assuming INSERT-on-table covers it.
+    return <<SQL;
+GRANT USAGE ON SCHEMA audit TO "$role_esc";
+GRANT INSERT ON audit.queue TO "$role_esc";
+GRANT USAGE ON audit.queue_id_seq TO "$role_esc";
+SQL
+}
+
+sub run_sql_local_or_remote {
+    my ($sql, @cmd) = @_;
+    open(my $fh, '|-', @cmd) or die_msg("cannot exec @cmd: $!");
+    print $fh $sql;
+    close($fh);
+    return $? == 0;
+}
+
+sub ssh_trust_works {
+    system('ssh', @SSH_OPTS, $DB_HOST, 'true') == 0;
+}
+
+sub run_local {
+    my @psql_prefix = ('sudo', '-u', 'postgres', 'psql');
+    unless (check_audit_queue_exists(@psql_prefix, '-d', $DB, '-X', '-tA')) {
+        die_msg("audit.queue does not exist on $DB_HOST yet -- install/migrate homelab-audit there first");
+    }
+    log_msg("granting INSERT ON audit.queue to '$ROLE' locally (db-host is this host)");
+    return run_sql_local_or_remote(build_sql(), @psql_prefix, '-q', '-d', $DB, '-X', '-v', 'ON_ERROR_STOP=1');
+}
+
+sub run_remote {
+    my @remote_prefix = ('ssh', @SSH_OPTS, $DB_HOST);
+    unless (check_audit_queue_exists(@remote_prefix, "sudo -u postgres psql -d $DB -X -tA")) {
+        die_msg("audit.queue does not exist on $DB_HOST yet -- install/migrate homelab-audit there first");
+    }
+    log_msg("granting INSERT ON audit.queue to '$ROLE' on $DB_HOST via SSH");
+    return run_sql_local_or_remote(
+        build_sql(), @remote_prefix, "sudo -u postgres psql -q -d $DB -X -v ON_ERROR_STOP=1",
+    );
+}
+
+sub run_manual {
+    print STDERR <<MSG;
+[audit-grant-queue-insert] WARNING: cannot grant automatically (not local, and no SSH trust to $DB_HOST).
+  On $DB_HOST, have an administrator run:
+    sudo -u postgres psql -d $DB -v ON_ERROR_STOP=1 <<'SQL'
+@{[ build_sql() ]}
+SQL
+  (Note: if audit.queue doesn't exist there yet, install/migrate homelab-audit first.)
+MSG
+    return 0;
+}
+
+my $ok =
+    is_local_host($DB_HOST) ? run_local()
+  : ssh_trust_works()       ? run_remote()
+  :                           run_manual();
+
+die_msg('grant failed') unless $ok;
+print "GRANTED=1\n";

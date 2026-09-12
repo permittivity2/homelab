@@ -12,20 +12,25 @@ Depends: perl (>= 5.36),
          homelab-common,
          libmojolicious-perl,
          libyaml-libyaml-perl,
+         libmojo-pg-perl,
          libmail-imapclient-perl,
          libemail-mime-perl,
          libio-socket-ssl-perl,
-         adduser
-Recommends: homelab-api, homelab-dovecot, homelab-postfix
+         adduser,
+         sudo
+Recommends: homelab-api, homelab-dovecot, homelab-postfix, homelab-audit
 Description: Internal IMAP/SMTP relay behind homelab-api's mail gateway
- A Mojolicious app with no public address and no database: it exists
- purely so homelab-api's /api/v1/mail/* gateway routes have something
- to forward to that actually speaks IMAP/SMTP, so a client (homelab-cli
- or any third-party script) never needs to know dovecot's or postfix's
+ A Mojolicious app with no public address and, for anything mail-
+ related, no database: it exists purely so homelab-api's
+ /api/v1/mail/* gateway routes have something to forward to that
+ actually speaks IMAP/SMTP, so a client (homelab-cli or any
+ third-party script) never needs to know dovecot's or postfix's
  address -- only homelab-api's. Every request is authenticated the same
  way as every other homelab-* service (the caller's homelab-api JWT,
  re-verified here via introspect), and that same JWT is handed to
  dovecot/postfix as the XOAUTH2 bearer token -- the identical mechanism
  homelab-roundcube's SSO login already uses. Registers itself in the
  service registry with an internal host/port only; never fronted by
- homelab-webproxy.
+ homelab-webproxy. Holds one narrow Postgres grant (INSERT on
+ audit.queue) purely for the mail-send audit trail -- see
+ homelab-audit's own README.md.
