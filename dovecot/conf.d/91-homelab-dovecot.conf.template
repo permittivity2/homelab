@@ -196,9 +196,13 @@ service auth {
 # (confirmed real on production's dovecot, fronted by a real HAProxy) --
 # enabling it for a Dovecot that ISN'T actually behind HAProxy would
 # reject every direct IMAP/IMAPS connection outright, so this is
-# debconf-gated (homelab-dovecot/behind_haproxy, default false) rather
-# than unconditional like the auth listener above. __BEHIND_HAPROXY__
-# substitutes to the literal string `yes` or `no`.
+# debconf-gated (homelab-dovecot/behind_haproxy) rather than
+# unconditional like the auth listener above -- but the gate defaults
+# TRUE (matches production, stays correct whether this host runs alone
+# or split), not false: an installer who hasn't put homelab-haproxy in
+# front yet sees the rejection immediately and knows to go set it up,
+# rather than silently running exposed with no nudge to add one.
+# __BEHIND_HAPROXY__ substitutes to the literal string `yes` or `no`.
 #
 # TODO confirm via a live doveconf -n / real IMAPS-through-HAProxy login
 # that re-declaring inet_listener imap/imaps here MERGES the `haproxy`

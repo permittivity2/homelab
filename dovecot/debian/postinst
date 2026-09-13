@@ -33,11 +33,13 @@ case "$1" in
         # Read every run (not just first-install) -- behind_haproxy needs
         # to take effect on a plain dpkg-reconfigure too, applied below
         # via a targeted in-place edit regardless of which branch below
-        # actually (re)writes the rest of $MARKER.
+        # actually (re)writes the rest of $MARKER. Defaults true (see
+        # its own template) -- matches production, stays correct
+        # whether this host runs alone or split from Postfix later.
         db_get homelab-dovecot/behind_haproxy || true
         case "$RET" in
-            true) BEHIND_HAPROXY=yes ;;
-            *)    BEHIND_HAPROXY=no ;;
+            false) BEHIND_HAPROXY=no ;;
+            *)     BEHIND_HAPROXY=yes ;;
         esac
 
         if [ ! -f "$MARKER" ]; then
@@ -146,6 +148,13 @@ case "$1" in
         echo "homelab-dovecot configured."
         echo "config: $MARKER"
         echo "mail:   $VMAIL_HOME/<domain>/<user>/"
+        if [ "$BEHIND_HAPROXY" = "yes" ]; then
+            echo "haproxy: expected in front (behind_haproxy=true, the default) -- IMAP/IMAPS reject direct"
+            echo "         connections until homelab-haproxy is actually proxying to this host with"
+            echo "         send-proxy. dpkg-reconfigure homelab-dovecot to turn this off instead."
+        else
+            echo "haproxy: NOT expected (behind_haproxy=false) -- running exposed, not recommended."
+        fi
         echo ""
         ;;
 

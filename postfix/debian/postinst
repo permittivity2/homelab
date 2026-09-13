@@ -67,8 +67,17 @@ case "$1" in
         # connection and rejects a direct one with "421 Server local
         # error" (`haproxy read: timeout error` in the log) while it
         # waits for a header that never arrives. Same failure mode as
-        # Dovecot's `haproxy = yes`, same fix: debconf-gated, default
-        # false (homelab-postfix/behind_haproxy).
+        # Dovecot's `haproxy = yes`, same fix: debconf-gated
+        # (homelab-postfix/behind_haproxy) -- but gated toward the
+        # recommended answer, not away from it: this defaults to TRUE
+        # (matches production, stays correct whether this host ends up
+        # alone or split), on the theory that an installer who hasn't
+        # yet put homelab-haproxy in front of this host will see the
+        # rejected connections immediately and go set that up, rather
+        # than silently running exposed with no proxy in front and no
+        # nudge to add one. See homelab-haproxy's own package for the
+        # loopback-proxy pattern (matching homelab-webproxy's existing
+        # one) for a single-box install.
         postconf -e \
             "myhostname = $HOSTNAME" \
             "mydomain = $MAIL_DOMAIN" \
@@ -345,20 +354,24 @@ case "$1" in
             echo "  DKIM milter wiring skipped (homelab-postfix/enable_dkim=false) -- opendkim/opendkim-tools are installed but not wired in"
         fi
 
-        # --- HAProxy proxy-protocol (opt-in, see its own template) ---
-        # Read and applied every run (not gated by $MAP_CF like the
-        # bootstrap questions above) so it's toggleable via a plain
-        # dpkg-reconfigure -- same reasoning and shape as enable_dkim
-        # just above. Explicitly set to EMPTY when false, not just left
-        # alone, so flipping an already-true host back to false via
-        # reconfigure actually takes effect instead of leaving the old
-        # value in main.cf.
-        db_get homelab-postfix/behind_haproxy || true; BEHIND_HAPROXY="${RET:-false}"
+        # --- HAProxy proxy-protocol (see its own template -- defaults
+        # true/recommended, not a plain opt-in) --- Read and applied
+        # every run (not gated by $MAP_CF like the bootstrap questions
+        # above) so it's toggleable via a plain dpkg-reconfigure -- same
+        # reasoning and shape as enable_dkim just above. Explicitly set
+        # to EMPTY when false, not just left alone, so flipping an
+        # already-true host back to false via reconfigure actually
+        # takes effect instead of leaving the old value in main.cf.
+        db_get homelab-postfix/behind_haproxy || true; BEHIND_HAPROXY="${RET:-true}"
         if [ "$BEHIND_HAPROXY" = "true" ]; then
             postconf -e 'smtpd_upstream_proxy_protocol = haproxy'
-            echo "  smtpd_upstream_proxy_protocol=haproxy (homelab-postfix/behind_haproxy=true)"
+            echo "  smtpd_upstream_proxy_protocol=haproxy (homelab-postfix/behind_haproxy=true, the default) --"
+            echo "  this host will reject direct SMTP connections until homelab-haproxy is actually in"
+            echo "  front of it sending the PROXY-protocol preamble (send-proxy on its backend line)."
         else
             postconf -e 'smtpd_upstream_proxy_protocol ='
+            echo "  smtpd_upstream_proxy_protocol left unset (homelab-postfix/behind_haproxy=false) --"
+            echo "  running exposed with no HAProxy in front; not recommended, see its debconf description."
         fi
 
         if postfix check >/dev/null 2>&1; then
@@ -434,6 +447,13 @@ case "$1" in
         echo "sender login map: $SENDER_LOGIN_CF"
         echo "submission (587): SASL via Dovecot ($DOVECOT_HOST:12345), TLS required, sender-login-mismatch enforced"
         echo "smtp (25):        virtual_mailbox_domains=$CURRENT_VMD, LMTP to $DOVECOT_HOST:24"
+        if [ "$BEHIND_HAPROXY" = "true" ]; then
+            echo "haproxy:          expected in front (behind_haproxy=true) -- SMTP/submission reject direct"
+            echo "                  connections until homelab-haproxy is actually proxying to this host with"
+            echo "                  send-proxy. dpkg-reconfigure homelab-postfix to turn this off instead."
+        else
+            echo "haproxy:          NOT expected (behind_haproxy=false) -- running exposed, not recommended."
+        fi
         echo ""
         ;;
 

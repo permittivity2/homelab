@@ -39,6 +39,12 @@ Description: SMTP submission/relay wired to the homelab-* shared identity
  Dovecot locally is a supported configuration, not just installable-
  but-broken.
  .
+ HAProxy support (homelab-postfix/behind_haproxy, default TRUE --
+ recommended, matches production) adds smtpd_upstream_proxy_protocol =
+ haproxy for SMTP/submission. Answering false runs this host's SMTP/
+ submission exposed with no proxy in front, an explicit opt-out rather
+ than the default.
+ .
  virtual_mailbox_domains is a live pgsql: lookup against
  homelab-domain-admin's domainadmin.domains table, not a single
  hardcoded domain -- `homelab-cli dns domains add/enable/disable` takes

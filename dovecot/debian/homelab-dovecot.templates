@@ -36,14 +36,23 @@ Description: Base URL where homelab-api is reachable, for XOAUTH2/OAUTHBEARER:
 
 Template: homelab-dovecot/behind_haproxy
 Type: boolean
-Default: false
-Description: Is this Dovecot's IMAP/IMAPS traffic fronted by HAProxy (homelab-haproxy)?
- Enables `haproxy = yes` on the imap-login listeners, which then
- REQUIRE a PROXY-protocol preamble on every connection (confirmed real
- against this project's own production dovecot, which really is
- fronted by a real HAProxy this way) -- answering "true" here when
- nothing is actually proxying connections here will reject every
- direct IMAP/IMAPS login outright, so this defaults to false and must
- be turned on explicitly once homelab-haproxy is actually in front of
- this host (dpkg-reconfigure homelab-dovecot to change it later without
- a full reinstall).
+Default: true
+Description: Put this Dovecot's IMAP/IMAPS traffic behind HAProxy (homelab-haproxy)?
+ Recommended, and the default: matches this project's own production
+ dovecot, which really is fronted by a real HAProxy this way (confirmed
+ live), and it's the setup that stays correct whether this host runs
+ alone or split from Postfix onto a different box -- nothing to
+ reconfigure at the mail-transport layer either way. Set up
+ homelab-haproxy in front of this host (locally, proxying to
+ 127.0.0.1, if this is a single-box install; on whichever host holds
+ the public IP, if split) to actually receive connections once this is
+ answered "true".
+ .
+ Answering "true" enables `haproxy = yes` on the imap-login listeners,
+ which then REQUIRE a PROXY-protocol preamble on every connection --
+ confirmed live: until HAProxy is actually in front of this host and
+ sending that preamble (send-proxy on its backend line), every direct
+ IMAP/IMAPS login is rejected outright. Answer "false" only for a
+ deliberately direct, unproxied setup (e.g. while still setting up
+ homelab-haproxy) -- dpkg-reconfigure homelab-dovecot to change this
+ later either way, without a full reinstall.

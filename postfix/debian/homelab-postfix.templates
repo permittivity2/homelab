@@ -44,18 +44,28 @@ Description: Dovecot host for LMTP delivery and SASL auth:
 
 Template: homelab-postfix/behind_haproxy
 Type: boolean
-Default: false
-Description: Is this Postfix's SMTP/submission traffic fronted by HAProxy (homelab-haproxy)?
- Enables smtpd_upstream_proxy_protocol = haproxy, which then REQUIRES a
- PROXY-protocol preamble on every connection -- confirmed live (not
- assumed): answering "true" here when nothing is actually proxying
- connections here rejects every direct SMTP connection outright with
- "421 Server local error" (the peer times out waiting for a proxy
- header that never arrives). Same shape as homelab-dovecot's own
- behind_haproxy flag, and defaults to false for the identical reason.
- Turn on explicitly once homelab-haproxy is actually in front of this
- host (dpkg-reconfigure homelab-postfix to change it later without a
- full reinstall).
+Default: true
+Description: Put this Postfix's SMTP/submission traffic behind HAProxy (homelab-haproxy)?
+ Recommended, and the default: matches this project's own production
+ mail stack (Postfix and Dovecot each sit behind a real HAProxy,
+ confirmed live), and it's the setup that stays correct no matter where
+ this host ends up -- one box today, split across two tomorrow, with
+ nothing to reconfigure at the mail-transport layer either way. Set up
+ homelab-haproxy in front of this host (locally, proxying to
+ 127.0.0.1, if this is a single-box install; on whichever host holds
+ the public IP, if split) to actually receive connections once this is
+ answered "true".
+ .
+ Answering "true" enables smtpd_upstream_proxy_protocol = haproxy,
+ which then REQUIRES a PROXY-protocol preamble on every connection --
+ confirmed live: until HAProxy is actually in front of this host and
+ sending that preamble (send-proxy on its backend line), every direct
+ SMTP connection is rejected outright with "421 Server local error"
+ (the peer times out waiting for a proxy header that never arrives).
+ Answer "false" only for a deliberately direct, unproxied setup (e.g.
+ while still setting up homelab-haproxy) -- dpkg-reconfigure
+ homelab-postfix to change this later either way, without a full
+ reinstall.
 
 Template: homelab-postfix/enable_dkim
 Type: boolean

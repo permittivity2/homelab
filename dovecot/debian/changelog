@@ -1,6 +1,21 @@
-homelab-dovecot (0.1.5) unstable; urgency=medium
+homelab-dovecot (0.1.6) unstable; urgency=medium
 
-  * Release v0.1.5
+  * Release v0.1.6
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 11:26:40 -0500
+
+homelab-dovecot (0.1.6) unstable; urgency=medium
+
+  * behind_haproxy now defaults to TRUE (was false), per direction:
+    the safe/recommended posture (matches production, stays correct
+    whether this host ends up alone or split) should be the path of
+    least resistance, not something you have to know to turn on.
+    Bumped its debconf prompt to high priority (was medium) so a plain
+    interactive install actually sees and understands it, and the
+    postinst's final summary now states plainly whether this host
+    expects HAProxy in front and what happens if it isn't there yet
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 11:26:26 -0500
 
  -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 10:00:11 -0500
 

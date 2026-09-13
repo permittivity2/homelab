@@ -32,8 +32,10 @@ Description: IMAP/LMTP mail delivery wired to the homelab-* shared identity
  (homelab-postfix) can be independently placed on a different host,
  pointed here via its own dovecot_host debconf answer. Matches this
  project's own production mail stack, which really runs Postfix and
- Dovecot on separate hosts this way. Optional HAProxy support
- (homelab-dovecot/behind_haproxy, default false) adds `haproxy = yes`
- to the IMAP/IMAPS listeners specifically -- never the LMTP/auth ones,
- which are direct Postfix-to-Dovecot data-plane calls that never pass
- through a proxy.
+ Dovecot on separate hosts this way. HAProxy support
+ (homelab-dovecot/behind_haproxy, default TRUE -- recommended, matches
+ production) adds `haproxy = yes` to the IMAP/IMAPS listeners
+ specifically -- never the LMTP/auth ones, which are direct
+ Postfix-to-Dovecot data-plane calls that never pass through a proxy.
+ Answering false runs this host's IMAP/IMAPS exposed with no proxy in
+ front, an explicit opt-out rather than the default.
