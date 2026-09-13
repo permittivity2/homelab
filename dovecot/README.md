@@ -86,7 +86,19 @@ that turn out to matter in practice. Specific traps hit along the way:
   LMTP listener in this package's template binds all interfaces as a
   result; that's fine only because nft's default-drop INPUT policy on
   every host in this project has no allow rule for port 24, not because
-  Dovecot is restricting it.
+  Dovecot is restricting it. The SASL auth listener (port 12345, added
+  so homelab-postfix can authenticate submission from a different host)
+  binds all interfaces for the exact same reason.
+- **Not yet independently verified**: whether re-declaring
+  `inet_listener imap`/`inet_listener imaps` in this package's own
+  conf.d file (to add `haproxy = yes/no`, gated on
+  `homelab-dovecot/behind_haproxy`) actually MERGES that property onto
+  the vendor's own `service imap-login` definition, the way
+  `auth_mechanisms` is confirmed to merge (see above), or conflicts
+  with it. Confirm via `doveconf -n` plus a real IMAPS login (through
+  an actual HAProxy with `send-proxy`, and separately a direct
+  connection with `behind_haproxy=false`) before trusting this in
+  anything real.
 - **Debian's stock `dovecot-core` config ships a default
   `auth_username_format = %{user | username | lower}` scoped to `protocol
   lmtp { }`**, visible in `doveconf -n` even before this package touches

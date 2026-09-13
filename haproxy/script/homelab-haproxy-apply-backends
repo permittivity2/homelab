@@ -1,0 +1,93 @@
+#!/usr/bin/perl
+# Reads /etc/homelab/haproxy/backends.yml and regenerates
+# /etc/haproxy/haproxy.cfg wholesale (global/defaults boilerplate plus
+# one frontend+backend block per entry). Unlike nginx's one-vhost-per-
+# file model (homelab-webproxy), stock HAProxy is a single monolithic
+# config file, so this script owns that whole file rather than only
+# adding new pieces — re-running after removing an entry from
+# backends.yml actually removes it from haproxy.cfg too. Validates with
+# `haproxy -c` against the NEW config before ever touching the live
+# file; a validation failure leaves the previously-working config
+# completely untouched and exits non-zero, rather than reloading
+# haproxy into a broken state.
+#
+# Every generated `server` line carries `send-proxy` -- confirmed real
+# against this project's own production HAProxy (proxy01), which uses
+# exactly this on every mail-stack backend so postfix/dovecot see the
+# real client IP instead of this proxy's own. Backends are expected to
+# understand the PROXY protocol as a result: homelab-postfix always
+# does (harmless when not actually proxied -- see its own postinst
+# comment on smtpd_upstream_proxy_protocol), homelab-dovecot only when
+# its own behind_haproxy debconf flag is explicitly turned on (unsafe
+# to assume otherwise -- see its own template comment).
+use strict;
+use warnings;
+use YAML::XS qw(LoadFile);
+
+my $BACKENDS_CONFIG = $ENV{HOMELAB_HAPROXY_BACKENDS} // '/etc/homelab/haproxy/backends.yml';
+my $HAPROXY_CONFIG   = $ENV{HOMELAB_HAPROXY_CONFIG}   // '/etc/haproxy/haproxy.cfg';
+
+unless (-f $BACKENDS_CONFIG) {
+    print "homelab-haproxy: no $BACKENDS_CONFIG yet — nothing to apply.\n";
+    print "  Copy /usr/share/homelab-haproxy/config/backends.example.yml there and re-run.\n";
+    exit 0;
+}
+
+my $config   = LoadFile($BACKENDS_CONFIG);
+my @backends = @{ $config->{backends} // [] };
+
+my $cfg = <<'HEADER';
+# Managed by homelab-haproxy's homelab-haproxy-apply-backends — do not
+# hand-edit; edit /etc/homelab/haproxy/backends.yml and re-run
+# homelab-haproxy-apply-backends instead. Regenerated wholesale on
+# every run, not merged.
+global
+    log /dev/log local0
+    maxconn 4096
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    log     global
+    mode    tcp
+    option  tcplog
+    timeout connect 5s
+    timeout client  1m
+    timeout server  1m
+
+HEADER
+
+for my $backend (@backends) {
+    my $name          = $backend->{name}         // die "backends.yml: a backend is missing 'name'\n";
+    my $frontend_port = $backend->{frontend_port} // die "backends.yml: backend '$name' is missing 'frontend_port'\n";
+    my $target        = $backend->{backend}       // die "backends.yml: backend '$name' is missing 'backend'\n";
+
+    $cfg .= <<BLOCK;
+frontend ${name}_in
+    bind *:$frontend_port
+    default_backend ${name}_out
+
+backend ${name}_out
+    server $name $target check send-proxy
+
+BLOCK
+}
+
+my $tmp = "$HAPROXY_CONFIG.new";
+open(my $fh, '>', $tmp) or die "Cannot write $tmp: $!\n";
+print $fh $cfg;
+close($fh);
+
+my $check_rc = system('haproxy', '-c', '-f', $tmp);
+if ($check_rc != 0) {
+    unlink($tmp);
+    die "haproxy config validation failed for the new config — NOT applying; the previous $HAPROXY_CONFIG is untouched.\n";
+}
+
+rename($tmp, $HAPROXY_CONFIG) or die "Cannot install $HAPROXY_CONFIG: $!\n";
+
+system('systemctl', 'reload', 'haproxy') == 0
+    or die "haproxy config validated and installed but reload failed — check 'systemctl status haproxy'\n";
+
+print 'homelab-haproxy: applied ' . scalar(@backends) . " backend(s), reloaded.\n";

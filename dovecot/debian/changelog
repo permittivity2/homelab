@@ -1,8 +1,26 @@
-homelab-dovecot (0.1.4) unstable; urgency=medium
+homelab-dovecot (0.1.5) unstable; urgency=medium
 
-  * Release v0.1.4
+  * Release v0.1.5
 
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 08:41:28 -0500
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 10:00:11 -0500
+
+homelab-dovecot (0.1.5) unstable; urgency=medium
+
+  * Add an always-on SASL auth listener (inet_listener auth { port =
+    12345 }, same bind-all/firewall-is-the-boundary reasoning as the
+    existing LMTP listener) so homelab-postfix can authenticate
+    submission SASL from a different host, not just when co-located.
+    Confirmed this exact port against this project's own production
+    dovecot
+  * Add homelab-dovecot/behind_haproxy (debconf, default false,
+    re-promptable on dpkg-reconfigure without a full reinstall) --
+    when true, adds haproxy = yes to the imap-login listeners only
+    (never LMTP/auth, which are direct Postfix-to-Dovecot calls that
+    never pass through a proxy). Defaults off because enabling it for
+    a Dovecot that isn't actually behind HAProxy would reject every
+    direct IMAP/IMAPS connection outright
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 09:59:51 -0500
 
 homelab-dovecot (0.1.3) unstable; urgency=medium
 

@@ -30,6 +30,18 @@ Description: PgBouncer host for the runtime recipient-validation query:
  runtime/migrate role design. The bootstrapped role is also registered
  into this host's pgbouncer userlist.txt.
 
+Template: homelab-postfix/dovecot_host
+Type: string
+Default: localhost
+Description: Dovecot host for LMTP delivery and SASL auth:
+ Both virtual_transport (LMTP, port 24) and smtpd_sasl_path (port
+ 12345) point here over plain TCP — this package no longer assumes
+ Dovecot is on the same host. Matches this project's own production
+ mail stack, where Postfix and Dovecot run on separate hosts and talk
+ over exactly these two ports (confirmed against the real production
+ config, not assumed). The default of localhost preserves today's
+ co-located behavior for anyone who doesn't touch this.
+
 Template: homelab-postfix/enable_dkim
 Type: boolean
 Default: false

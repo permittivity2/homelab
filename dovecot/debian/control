@@ -26,3 +26,14 @@ Description: IMAP/LMTP mail delivery wired to the homelab-* shared identity
  standard split runtime/migrate Postgres role pattern most other
  homelab-* features use. That's an intentional, documented exception
  (see README.md), not an oversight.
+ .
+ Exposes LMTP delivery (port 24) and SASL auth (port 12345) both as
+ always-on plain-TCP listeners, not local unix sockets -- Postfix
+ (homelab-postfix) can be independently placed on a different host,
+ pointed here via its own dovecot_host debconf answer. Matches this
+ project's own production mail stack, which really runs Postfix and
+ Dovecot on separate hosts this way. Optional HAProxy support
+ (homelab-dovecot/behind_haproxy, default false) adds `haproxy = yes`
+ to the IMAP/IMAPS listeners specifically -- never the LMTP/auth ones,
+ which are direct Postfix-to-Dovecot data-plane calls that never pass
+ through a proxy.

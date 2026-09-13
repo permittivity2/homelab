@@ -8,7 +8,8 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-postfix
 Architecture: all
-Depends: ${misc:Depends}, postfix, postfix-pgsql, homelab-dovecot (>= 0.1.2), adduser, postgresql-client, opendkim, opendkim-tools
+Depends: ${misc:Depends}, postfix, postfix-pgsql, adduser, postgresql-client, opendkim, opendkim-tools
+Recommends: homelab-dovecot (>= 0.1.2)
 Description: SMTP submission/relay wired to the homelab-* shared identity
  Wires Postfix to the shared `homelab` Postgres database for recipient
  validation only -- a narrow, column-scoped cross-schema grant (email/
@@ -16,22 +17,27 @@ Description: SMTP submission/relay wired to the homelab-* shared identity
  script/homelab-postfix-bootstrap-role) backing a virtual_mailbox_maps
  pgsql lookup that decides accept/reject at RCPT TO time. SASL
  authentication for the submission service is delegated entirely to
- Dovecot's own passdb over a unix socket (smtpd_sasl_type = dovecot) --
- Postfix never queries Postgres for credentials itself. One Argon2id
- password in api.users backs both, but each service holds its own
- narrowly-scoped secret: the unified cross-feature identity design
- described in CLAUDE.md. Accepted mail is handed to homelab-dovecot over
- LMTP (127.0.0.1:24).
+ Dovecot's own passdb over plain TCP (smtpd_sasl_type = dovecot,
+ smtpd_sasl_path = inet:<dovecot_host>:12345) -- Postfix never queries
+ Postgres for credentials itself. One Argon2id password in api.users
+ backs both, but each service holds its own narrowly-scoped secret: the
+ unified cross-feature identity design described in CLAUDE.md. Accepted
+ mail is handed off over LMTP (port 24) to whatever host
+ homelab-postfix/dovecot_host names (default localhost) -- this
+ project's own production mail stack runs Postfix and Dovecot on
+ separate hosts talking over exactly these same two ports, confirmed
+ against the real production config, not assumed.
  .
  Like homelab-dovecot, this package owns no schema/tables of its own and
  therefore has no migrate role, unlike the standard split runtime/
  migrate Postgres role pattern most other homelab-* features use --
  an intentional, documented exception (see README.md), not an oversight.
  .
- Depends on homelab-dovecot as a hard runtime requirement, not just a
- recommendation: SASL authentication and all mail delivery both fail
- without it (the SASL socket and the LMTP listener it delivers to are
- both provided by homelab-dovecot).
+ homelab-dovecot is a Recommends, not a hard Depends: the two are
+ independently placeable (see homelab-postfix/dovecot_host above) --
+ installing just Postfix on a host that deliberately doesn't run
+ Dovecot locally is a supported configuration, not just installable-
+ but-broken.
  .
  virtual_mailbox_domains is a live pgsql: lookup against
  homelab-domain-admin's domainadmin.domains table, not a single

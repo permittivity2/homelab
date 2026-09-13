@@ -1,0 +1,23 @@
+Source: homelab-haproxy
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-haproxy
+Architecture: all
+Depends: perl (>= 5.36), libyaml-libyaml-perl, haproxy
+Description: HAProxy TCP-passthrough edge for the homelab-* ecosystem
+ Ships homelab-haproxy-apply-backends, which reads an editable
+ /etc/homelab/haproxy/backends.yml (frontend port -> backend host:port
+ pairs) and regenerates /etc/haproxy/haproxy.cfg wholesale, validating
+ with `haproxy -c` before ever touching the live config. Exists to
+ decouple "holds the public IP" from "runs the actual service" for raw
+ TCP protocols (SMTP, IMAP, ...) that, unlike HTTP, homelab-webproxy's
+ nginx-based reverse proxy can't front on its own -- lets services like
+ homelab-postfix/homelab-dovecot move off the internet-facing host
+ while their ports keep working from the same public IP. Does not (and,
+ being HAProxy, structurally cannot) proxy UDP -- DNS's primary query
+ traffic is out of scope for this tool.

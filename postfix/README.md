@@ -15,46 +15,41 @@ other `homelab-*` feature uses — but split more finely than
   delivery goes over LMTP (see below) — so the query only needs to prove
   existence: `SELECT 1 FROM api.users WHERE email='%s' AND active =
   true`.
-- **SASL authentication is delegated entirely to Dovecot.** Postfix
-  itself never queries Postgres for credentials — `smtpd_sasl_type =
-  dovecot` + `smtpd_sasl_path = private/auth` hands the whole
-  PLAIN/LOGIN exchange to Dovecot's own passdb over a unix socket at
-  `/var/spool/postfix/private/auth`, the exact same passdb every IMAP
-  login already uses. One Argon2id password in `api.users` backs both
-  paths, but each service holds its own narrowly-scoped credential —
-  Postfix's own Postgres role can't even read `password_hash`, so a
-  compromise of the SMTP submission path doesn't expose password hashes
-  the way a shared "the MTA can also do full auth lookups" design would.
+- **SASL authentication is delegated entirely to Dovecot, over plain
+  TCP.** Postfix itself never queries Postgres for credentials —
+  `smtpd_sasl_type = dovecot` + `smtpd_sasl_path =
+  inet:<dovecot_host>:12345` hands the whole PLAIN/LOGIN exchange to
+  Dovecot's own passdb over the network, the exact same passdb every
+  IMAP login already uses. One Argon2id password in `api.users` backs
+  both paths, but each service holds its own narrowly-scoped
+  credential — Postfix's own Postgres role can't even read
+  `password_hash`, so a compromise of the SMTP submission path doesn't
+  expose password hashes the way a shared "the MTA can also do full
+  auth lookups" design would.
 - **Delivery is LMTP to `homelab-dovecot`**, not Postfix's own local/
-  virtual delivery agent: `virtual_transport = lmtp:127.0.0.1:24`,
-  pointing at the TCP LMTP listener homelab-dovecot 0.1.2+ exposes
+  virtual delivery agent: `virtual_transport = lmtp:inet:<dovecot_host>:24`,
+  pointing at the TCP LMTP listener `homelab-dovecot` exposes
   specifically for this (see its own README's Gotchas section for why
   that listener binds all interfaces rather than just loopback).
+  `<dovecot_host>` is `homelab-postfix/dovecot_host` (debconf, default
+  `localhost`) — Postfix and Dovecot are independently placeable, not
+  required to be on the same host. Confirmed against this project's own
+  production mail stack, which really does run them on separate hosts
+  talking over exactly these same two ports (`lmtp:inet:dovecot01:24`,
+  `smtpd_sasl_path = inet:dovecot01:12345`).
 
-## Two config touches live in Dovecot's conf.d, split by ownership
+## No cross-package config writes
 
-Neither Postfix's `main.cf` (a single flat file) nor `master.cf` (fixed
-columnar format) has anything like Dovecot's `conf.d/` include
-mechanism, so cross-package coordination here works differently in each
-direction:
-
-- The **LMTP listener** is `homelab-dovecot`'s own concern (it already
-  `Depends:` on `dovecot-lmtpd`) and lives in *its* template
-  (`dovecot/conf.d/91-homelab-dovecot.conf.template`).
-- The **SASL socket** (`config/92-homelab-postfix-sasl.conf.template`)
-  is fundamentally a Postfix feature that happens to delegate to
-  Dovecot, so *this* package's `postinst` writes it directly into
-  `/etc/dovecot/conf.d/92-homelab-postfix-sasl.conf` and reloads
-  Dovecot — a real, intentional cross-package file write, not an
-  oversight.
-
-This creates a real install-order dependency within a single `postinst`
-run: Postfix must be started *first* (which creates
-`/var/spool/postfix/private/`) before the Dovecot SASL drop-in can be
-written and Dovecot reloaded — Dovecot can't create a unix socket inside
-a directory that doesn't exist yet. `debian/postinst` does exactly this
-sequence (start Postfix → write the Dovecot drop-in → reload Dovecot →
-add the submission service → reload Postfix again).
+Earlier versions of this package wrote a SASL-socket drop-in directly
+into Dovecot's own `conf.d/` (`smtpd_sasl_path = private/auth`, a unix
+socket only reachable when co-located) and required Postfix to start
+first so the socket directory existed before Dovecot could bind into
+it. Both the drop-in and the install-order dependency are gone now that
+SASL goes over the network instead: `homelab-dovecot` exposes its auth
+listener unconditionally on its own (`conf.d/91-homelab-dovecot.conf.template`'s
+`service auth { inet_listener auth { port = 12345 } }`, right next to
+its existing LMTP listener), and this package's `postinst` never
+touches Dovecot's files at all, co-located or not.
 
 ## Multi-domain support
 

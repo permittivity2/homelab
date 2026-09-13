@@ -1,0 +1,30 @@
+homelab-haproxy (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 10:00:16 -0500
+
+homelab-haproxy (0.1.1) unstable; urgency=medium
+
+  * Add send-proxy to every generated backend server line, confirmed
+    against this project's own production HAProxy (proxy01), which
+    uses exactly this on every mail-stack backend so postfix/dovecot
+    see the real client IP instead of the proxy's own
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 09:59:51 -0500
+
+homelab-haproxy (0.1.0) unstable; urgency=medium
+
+  * Initial release: HAProxy TCP-passthrough edge for raw-TCP
+    protocols (SMTP, submission, IMAP, IMAPS) -- decouples "holds the
+    public IP" from "runs the actual service" so homelab-postfix/
+    homelab-dovecot can move off the internet-facing host while their
+    ports keep working from the same public IP. homelab-haproxy-apply-
+    backends regenerates /etc/haproxy/haproxy.cfg wholesale from an
+    editable backends.yml, validating with `haproxy -c` before ever
+    touching the live config -- a failed validation leaves the
+    previous working config completely untouched. Explicitly does not,
+    and structurally cannot, handle DNS's UDP traffic; out of scope for
+    this tool by design, not an oversight
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 22:46:36 -0500

@@ -1,0 +1,23 @@
+# Copy to /etc/homelab/haproxy/backends.yml and edit. Re-run
+# `homelab-haproxy-apply-backends` (or reinstall/reconfigure the
+# package) after changing it — the whole /etc/haproxy/haproxy.cfg is
+# regenerated from this file every time, not merged, so removing an
+# entry here and re-applying actually removes it from haproxy.cfg too.
+#
+# Only pure-TCP protocols belong here (SMTP, submission, IMAP, IMAPS,
+# ...) — HAProxy is a TCP/HTTP proxy and cannot proxy UDP, so DNS's
+# primary query traffic (UDP:53) is not a fit for this tool. HTTP(S)
+# sites belong in homelab-webproxy's sites.yml instead, not here.
+backends:
+  - name: smtp
+    frontend_port: 25
+    backend: 127.0.0.1:25
+  - name: submission
+    frontend_port: 587
+    backend: 127.0.0.1:587
+  - name: imap
+    frontend_port: 143
+    backend: 127.0.0.1:143
+  - name: imaps
+    frontend_port: 993
+    backend: 127.0.0.1:993

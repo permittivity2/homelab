@@ -171,6 +171,51 @@ service lmtp {
   }
 }
 
+# SASL auth over TCP, same "bind all, firewall is the boundary" reasoning
+# as the LMTP listener right above -- lets homelab-postfix authenticate
+# submission SASL from a DIFFERENT host (smtpd_sasl_path =
+# inet:<this_host>:12345), not just when co-located. Always on,
+# unconditional, no debconf flag: unlike `haproxy = yes` below, an inet
+# auth listener existing doesn't change how any OTHER connection is
+# handled, so there's no failure mode from just always having it.
+# Confirmed real, this exact port, against this project's own production
+# dovecot (`service auth { inet_listener auth { port = 12345 } ... }`),
+# not invented for this package.
+service auth {
+  inet_listener auth {
+    port = 12345
+  }
+}
+
+# imap-login's own inet_listener blocks aren't declared anywhere else in
+# this package (everything else here is additive to vendor defaults, and
+# the vendor default imap/imaps listeners were never touched before) --
+# this is the one place that changes, and only to add the `haproxy`
+# property, not to redefine the listeners themselves. `haproxy = yes`
+# makes a listener REQUIRE a PROXY-protocol preamble on every connection
+# (confirmed real on production's dovecot, fronted by a real HAProxy) --
+# enabling it for a Dovecot that ISN'T actually behind HAProxy would
+# reject every direct IMAP/IMAPS connection outright, so this is
+# debconf-gated (homelab-dovecot/behind_haproxy, default false) rather
+# than unconditional like the auth listener above. __BEHIND_HAPROXY__
+# substitutes to the literal string `yes` or `no`.
+#
+# TODO confirm via a live doveconf -n / real IMAPS-through-HAProxy login
+# that re-declaring inet_listener imap/imaps here MERGES the `haproxy`
+# property onto the vendor's own listener definition rather than
+# conflicting with it -- auth_mechanisms merging this way is already
+# confirmed empirically (see the top of this file); service/inet_listener
+# blocks specifically have not been separately verified yet.
+service imap-login {
+  inet_listener imap {
+    haproxy = __BEHIND_HAPROXY__
+  }
+  inet_listener imaps {
+    haproxy = __BEHIND_HAPROXY__
+    port = 993
+  }
+}
+
 # Debian's own dovecot-core ships a DEFAULT `auth_username_format =
 # %{user | username | lower}` for the lmtp protocol specifically (visible
 # in a stock `doveconf -n` even before this package touches anything) --

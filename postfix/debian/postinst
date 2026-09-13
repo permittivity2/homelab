@@ -6,7 +6,6 @@ set -e
 SHARE_DIR=/usr/share/homelab-postfix
 MAP_CF=/etc/postfix/pgsql-virtual-mailbox.cf
 DOMAINS_CF=/etc/postfix/pgsql-virtual-domains.cf
-DOVECOT_SASL_DROPIN=/etc/dovecot/conf.d/92-homelab-postfix-sasl.conf
 RECIPIENT_ACCESS_CF=/etc/postfix/pgsql-recipient-access.cf
 ALIAS_MAPS_CF=/etc/postfix/pgsql-virtual-alias-maps.cf
 SENDER_LOGIN_CF=/etc/postfix/pgsql-sender-login-maps.cf
@@ -33,28 +32,61 @@ case "$1" in
         db_get homelab-postfix/mail_domain || true;    MAIL_DOMAIN="${RET:-test.mailmasker.org}"
         db_get homelab-postfix/db_host || true;        DB_HOST="${RET:-localhost}"
         db_get homelab-postfix/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
+        db_get homelab-postfix/dovecot_host || true;   DOVECOT_HOST="${RET:-localhost}"
 
+        # inet_interfaces was never explicitly set here before -- it
+        # silently inherited whatever the underlying `postfix` package
+        # defaulted to for its own (never preseeded) debconf questions,
+        # which happens to be `all` on an already-configured host but
+        # `loopback-only` on a genuinely fresh one (confirmed live: this
+        # exact gap made SMTP/submission unreachable from any other host
+        # on a brand-new install, only caught because this package
+        # finally got installed somewhere other than its original host).
+        #
+        # virtual_transport/smtpd_sasl_path both point at $DOVECOT_HOST
+        # over plain TCP (LMTP port 24, SASL auth port 12345) rather than
+        # localhost/a unix socket -- Postfix and Dovecot are independently
+        # placeable now, matching this project's own production mail
+        # stack, confirmed live: `virtual_transport = lmtp:inet:dovecot01:24`
+        # and `smtpd_sasl_path = inet:dovecot01:12345` on the real mail
+        # host, talking to a real, always-on `inet_listener auth { port =
+        # 12345 }` on the real dovecot host. homelab-dovecot exposes the
+        # matching listener unconditionally (see its own conf.d file).
+        #
+        # smtpd_upstream_proxy_protocol lets this Postfix sit behind
+        # HAProxy (homelab-haproxy) with `send-proxy` on the backend line
+        # -- confirmed via `postconf -d smtpd_upstream_proxy_protocol`
+        # that this is a real, global main.cf parameter, not a
+        # per-service-only setting. Harmless when NOT actually behind
+        # HAProxy: Postfix only expects a proxy-protocol header on a
+        # connection when this is set AND the peer actually behaves like
+        # one, so a direct (non-proxied) connection is unaffected -- this
+        # differs from Dovecot's `haproxy = yes`, which unconditionally
+        # requires the header once enabled (see homelab-dovecot's own
+        # behind_haproxy debconf flag for why that one stays opt-in).
         postconf -e \
             "myhostname = $HOSTNAME" \
             "mydomain = $MAIL_DOMAIN" \
+            'inet_interfaces = all' \
             'mydestination =' \
             'local_recipient_maps =' \
             'mynetworks = 127.0.0.0/8 [::1]/128' \
             "virtual_mailbox_domains = $MAIL_DOMAIN" \
             "virtual_mailbox_maps = pgsql:$MAP_CF" \
-            'virtual_transport = lmtp:127.0.0.1:24' \
+            "virtual_transport = lmtp:inet:$DOVECOT_HOST:24" \
             'smtpd_sasl_type = dovecot' \
-            'smtpd_sasl_path = private/auth' \
+            "smtpd_sasl_path = inet:$DOVECOT_HOST:12345" \
             'smtpd_sasl_auth_enable = yes' \
             'smtpd_sasl_security_options = noanonymous' \
             'broken_sasl_auth_clients = yes' \
+            'smtpd_upstream_proxy_protocol = haproxy' \
             'smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem' \
             'smtpd_tls_key_file = /etc/ssl/private/ssl-cert-snakeoil.key' \
             'smtpd_tls_security_level = may' \
             'smtp_tls_security_level = may' \
             'smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination' \
             'smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination, reject_invalid_hostname'
-        echo "  applied main.cf settings (myhostname=$HOSTNAME, virtual_mailbox_domains=$MAIL_DOMAIN)"
+        echo "  applied main.cf settings (myhostname=$HOSTNAME, virtual_mailbox_domains=$MAIL_DOMAIN, dovecot_host=$DOVECOT_HOST)"
 
         # PgBouncer/Postgres credential -- only bootstrap once; a
         # dpkg-reconfigure is the deliberate way to redo it (e.g. after
@@ -309,9 +341,6 @@ case "$1" in
             echo "  DKIM milter wiring skipped (homelab-postfix/enable_dkim=false) -- opendkim/opendkim-tools are installed but not wired in"
         fi
 
-        # Start postfix FIRST -- it creates /var/spool/postfix/private/,
-        # which the dovecot SASL socket below must already exist before
-        # dovecot can create a unix_listener inside it.
         if postfix check >/dev/null 2>&1; then
             systemctl enable postfix >/dev/null 2>&1 || true
             if systemctl is-active --quiet postfix; then
@@ -351,23 +380,6 @@ case "$1" in
             fi
         fi
 
-        # Additive drop-in into homelab-dovecot's OWN conf.d -- see the
-        # template's header comment for the ownership-split reasoning.
-        # Requires /var/spool/postfix/private/ to already exist (just
-        # ensured above) for dovecot to successfully create the socket
-        # inside it.
-        install -D -m 644 "$SHARE_DIR/config/92-homelab-postfix-sasl.conf.template" "$DOVECOT_SASL_DROPIN"
-        if command -v doveconf >/dev/null 2>&1; then
-            if doveconf -n >/dev/null 2>&1; then
-                systemctl reload-or-restart dovecot 2>/dev/null \
-                    || echo "  WARNING: dovecot reload/restart failed after writing $DOVECOT_SASL_DROPIN -- SASL auth won't work until it succeeds. Check 'systemctl status dovecot' by hand."
-            else
-                echo "  WARNING: doveconf -n failed after writing $DOVECOT_SASL_DROPIN -- NOT reloading dovecot. Check it by hand."
-            fi
-        else
-            echo "  WARNING: dovecot not found -- wrote $DOVECOT_SASL_DROPIN but it won't take effect until homelab-dovecot is installed."
-        fi
-
         # Submission service (port 587, SASL-required, TLS-required) --
         # master.cf has no native drop-in/include mechanism, so this
         # appends a clearly-marked, idempotent block once. The vendor's
@@ -400,8 +412,8 @@ case "$1" in
         echo "recipient map:    $MAP_CF"
         echo "alias map:        $ALIAS_MAPS_CF"
         echo "sender login map: $SENDER_LOGIN_CF"
-        echo "submission (587): SASL via Dovecot, TLS required, sender-login-mismatch enforced"
-        echo "smtp (25):        virtual_mailbox_domains=$CURRENT_VMD, LMTP to homelab-dovecot"
+        echo "submission (587): SASL via Dovecot ($DOVECOT_HOST:12345), TLS required, sender-login-mismatch enforced"
+        echo "smtp (25):        virtual_mailbox_domains=$CURRENT_VMD, LMTP to $DOVECOT_HOST:24"
         echo ""
         ;;
 

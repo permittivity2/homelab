@@ -1,0 +1,39 @@
+#!/bin/sh
+set -e
+
+CONFIG_DIR=/etc/homelab/haproxy
+BACKENDS_FILE="$CONFIG_DIR/backends.yml"
+SHARE_DIR=/usr/share/homelab-haproxy
+
+case "$1" in
+    configure)
+        echo "homelab-haproxy post-installation setup..."
+        mkdir -p "$CONFIG_DIR"
+
+        if [ ! -f "$BACKENDS_FILE" ]; then
+            cp "$SHARE_DIR/config/backends.example.yml" "$BACKENDS_FILE"
+            echo "  wrote a starter $BACKENDS_FILE -- edit it (real backend"
+            echo "  host:port pairs), then run: homelab-haproxy-apply-backends"
+        else
+            echo "  applying $BACKENDS_FILE..."
+            homelab-haproxy-apply-backends \
+                || echo "  WARNING: homelab-haproxy-apply-backends reported a problem -- see output above."
+        fi
+
+        systemctl enable haproxy >/dev/null 2>&1 || true
+
+        echo ""
+        echo "homelab-haproxy configured."
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

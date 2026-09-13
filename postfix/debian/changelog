@@ -1,8 +1,44 @@
-homelab-postfix (0.1.9) unstable; urgency=medium
+homelab-postfix (0.1.11) unstable; urgency=medium
 
-  * Release v0.1.9
+  * Release v0.1.11
 
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 15:23:05 -0500
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 10:00:15 -0500
+
+homelab-postfix (0.1.11) unstable; urgency=medium
+
+  * Decouple from homelab-dovecot -- virtual_transport/smtpd_sasl_path
+    now point at a configurable dovecot_host (debconf, default
+    localhost) over plain TCP (LMTP:24, SASL auth:12345) instead of
+    127.0.0.1/a local unix socket. Confirmed against this project's own
+    production mail stack, which really runs Postfix and Dovecot on
+    separate hosts this exact way. homelab-dovecot is now a Recommends,
+    not a hard Depends
+  * Removed the cross-package SASL drop-in this replaces (the
+    postinst no longer writes into Dovecot's own conf.d/ at all, and
+    the install-order dependency that required is gone with it) --
+    homelab-dovecot now exposes its auth listener unconditionally on
+    its own
+  * Added smtpd_upstream_proxy_protocol = haproxy (confirmed a real,
+    global main.cf parameter via postconf -d) so this can sit behind
+    homelab-haproxy with send-proxy -- harmless when not actually
+    proxied
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 09:59:51 -0500
+
+homelab-postfix (0.1.10) unstable; urgency=medium
+
+  * Explicitly set inet_interfaces = all -- never set here before, it
+    silently inherited whatever the underlying `postfix` package
+    defaulted to for its own (never preseeded) debconf questions, which
+    happened to be `all` on the one already-configured host this
+    package had ever been installed on, but `loopback-only` on a
+    genuinely fresh install. Confirmed live: this made SMTP/submission
+    completely unreachable from any other host the first time this
+    package was actually installed somewhere new -- an accidental
+    correctness that greenfield/install-time testing was always going
+    to eventually catch
+
+ -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 23:07:43 -0500
 
 homelab-postfix (0.1.9) unstable; urgency=medium
 

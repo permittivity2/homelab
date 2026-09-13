@@ -33,3 +33,17 @@ Description: Base URL where homelab-api is reachable, for XOAUTH2/OAUTHBEARER:
  issued access token) actually authenticate over IMAP, alongside the
  existing SQL passdb for plain-password logins. Server-to-server, so
  this is normally a loopback address, not a public one.
+
+Template: homelab-dovecot/behind_haproxy
+Type: boolean
+Default: false
+Description: Is this Dovecot's IMAP/IMAPS traffic fronted by HAProxy (homelab-haproxy)?
+ Enables `haproxy = yes` on the imap-login listeners, which then
+ REQUIRE a PROXY-protocol preamble on every connection (confirmed real
+ against this project's own production dovecot, which really is
+ fronted by a real HAProxy this way) -- answering "true" here when
+ nothing is actually proxying connections here will reject every
+ direct IMAP/IMAPS login outright, so this defaults to false and must
+ be turned on explicitly once homelab-haproxy is actually in front of
+ this host (dpkg-reconfigure homelab-dovecot to change it later without
+ a full reinstall).

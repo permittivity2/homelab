@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/backends.example.yml \
+		debian/homelab-haproxy/usr/share/homelab-haproxy/config/backends.example.yml
