@@ -71,6 +71,17 @@ class recipient_blocking extends rcube_plugin
         // explicitly, so nothing here relies on $this->mytask at all.
         $this->api->register_task('blockedaddresses', $this->ID);
 
+        // Unconditional for the same reason the taskbar button itself
+        // is: that button (and its icon glyph, defined in this
+        // stylesheet) renders on EVERY task's page, not just mail/
+        // blockedaddresses -- confirmed by a real, reproducible bug:
+        // an earlier version only loaded this on the mail/
+        // blockedaddresses branches below, and the taskbar icon
+        // silently fell back to Elastic's blank placeholder glyph on
+        // every other page (Settings, Addressbook, ...), while still
+        // showing correctly on the two pages that happened to load it.
+        $this->include_stylesheet('recipient_blocking.css');
+
         // Same "harmless to register unconditionally" reasoning as the
         // message-toolbar button below: this only ever renders on a
         // template that actually has a 'taskbar' container (every
@@ -101,7 +112,6 @@ class recipient_blocking extends rcube_plugin
             $this->register_action('plugin.block_recipient', [$this, 'action_block_recipient']);
             $this->register_action('plugin.unblock_recipient', [$this, 'action_unblock_recipient']);
             $this->include_script('recipient_blocking.js');
-            $this->include_stylesheet('recipient_blocking.css');
             // These specific labels are read client-side via rcmail.gettext()
             // for dynamic post-load UI updates (button state after a click) --
             // add_button()'s own label/title attribs are resolved server-side
@@ -173,7 +183,6 @@ class recipient_blocking extends rcube_plugin
             $this->api->register_action('plugin.unblock_recipient', $this->ID, [$this, 'action_unblock_recipient'], 'blockedaddresses');
             $this->register_handler('plugin.body', [$this, 'blockedaddresses_body']);
             $this->include_script('recipient_blocking.js');
-            $this->include_stylesheet('recipient_blocking.css');
             $this->rc->output->add_label('recipient_blocking.unblocking');
         }
     }
