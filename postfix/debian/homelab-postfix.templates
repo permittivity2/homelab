@@ -42,6 +42,21 @@ Description: Dovecot host for LMTP delivery and SASL auth:
  config, not assumed). The default of localhost preserves today's
  co-located behavior for anyone who doesn't touch this.
 
+Template: homelab-postfix/behind_haproxy
+Type: boolean
+Default: false
+Description: Is this Postfix's SMTP/submission traffic fronted by HAProxy (homelab-haproxy)?
+ Enables smtpd_upstream_proxy_protocol = haproxy, which then REQUIRES a
+ PROXY-protocol preamble on every connection -- confirmed live (not
+ assumed): answering "true" here when nothing is actually proxying
+ connections here rejects every direct SMTP connection outright with
+ "421 Server local error" (the peer times out waiting for a proxy
+ header that never arrives). Same shape as homelab-dovecot's own
+ behind_haproxy flag, and defaults to false for the identical reason.
+ Turn on explicitly once homelab-haproxy is actually in front of this
+ host (dpkg-reconfigure homelab-postfix to change it later without a
+ full reinstall).
+
 Template: homelab-postfix/enable_dkim
 Type: boolean
 Default: false

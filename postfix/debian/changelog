@@ -1,3 +1,21 @@
+homelab-postfix (0.1.12) unstable; urgency=medium
+
+  * Release v0.1.12
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 11:07:29 -0500
+
+homelab-postfix (0.1.12) unstable; urgency=medium
+
+  * Fix a real bug in 0.1.11's smtpd_upstream_proxy_protocol change,
+    found via live testing (not assumed): setting it unconditionally
+    does NOT degrade gracefully for a direct, non-proxied connection --
+    confirmed it rejects every plain SMTP connection with "421 Server
+    local error" (haproxy read: timeout error) while Postfix waits for
+    a PROXY-protocol preamble that never arrives. Made it opt-in
+    (homelab-postfix/behind_haproxy, default false, re-promptable via
+    dpkg-reconfigure), same shape as homelab-dovecot's own
+    behind_haproxy flag for the identical listener-level failure mode
+
 homelab-postfix (0.1.11) unstable; urgency=medium
 
   * Release v0.1.11

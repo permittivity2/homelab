@@ -53,17 +53,22 @@ case "$1" in
         # 12345 }` on the real dovecot host. homelab-dovecot exposes the
         # matching listener unconditionally (see its own conf.d file).
         #
-        # smtpd_upstream_proxy_protocol lets this Postfix sit behind
-        # HAProxy (homelab-haproxy) with `send-proxy` on the backend line
-        # -- confirmed via `postconf -d smtpd_upstream_proxy_protocol`
+        # smtpd_upstream_proxy_protocol (opt-in -- see below, applied
+        # separately from this block) lets this Postfix sit behind
+        # HAProxy (homelab-haproxy) with `send-proxy` on the backend
+        # line -- confirmed via `postconf -d smtpd_upstream_proxy_protocol`
         # that this is a real, global main.cf parameter, not a
-        # per-service-only setting. Harmless when NOT actually behind
-        # HAProxy: Postfix only expects a proxy-protocol header on a
-        # connection when this is set AND the peer actually behaves like
-        # one, so a direct (non-proxied) connection is unaffected -- this
-        # differs from Dovecot's `haproxy = yes`, which unconditionally
-        # requires the header once enabled (see homelab-dovecot's own
-        # behind_haproxy debconf flag for why that one stays opt-in).
+        # per-service-only setting. NOT set unconditionally here: an
+        # earlier version of this file assumed it was harmless when not
+        # actually behind HAProxy, on the theory that Postfix would only
+        # expect a proxy-protocol header on a connection that actually
+        # looked like one. Confirmed live that assumption was simply
+        # wrong -- with this set, Postfix REQUIRES the preamble on every
+        # connection and rejects a direct one with "421 Server local
+        # error" (`haproxy read: timeout error` in the log) while it
+        # waits for a header that never arrives. Same failure mode as
+        # Dovecot's `haproxy = yes`, same fix: debconf-gated, default
+        # false (homelab-postfix/behind_haproxy).
         postconf -e \
             "myhostname = $HOSTNAME" \
             "mydomain = $MAIL_DOMAIN" \
@@ -79,7 +84,6 @@ case "$1" in
             'smtpd_sasl_auth_enable = yes' \
             'smtpd_sasl_security_options = noanonymous' \
             'broken_sasl_auth_clients = yes' \
-            'smtpd_upstream_proxy_protocol = haproxy' \
             'smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem' \
             'smtpd_tls_key_file = /etc/ssl/private/ssl-cert-snakeoil.key' \
             'smtpd_tls_security_level = may' \
@@ -339,6 +343,22 @@ case "$1" in
             echo "  DKIM milter wiring complete -- use 'homelab-cli dns dkim rotate/activate <domain>' to actually sign mail"
         else
             echo "  DKIM milter wiring skipped (homelab-postfix/enable_dkim=false) -- opendkim/opendkim-tools are installed but not wired in"
+        fi
+
+        # --- HAProxy proxy-protocol (opt-in, see its own template) ---
+        # Read and applied every run (not gated by $MAP_CF like the
+        # bootstrap questions above) so it's toggleable via a plain
+        # dpkg-reconfigure -- same reasoning and shape as enable_dkim
+        # just above. Explicitly set to EMPTY when false, not just left
+        # alone, so flipping an already-true host back to false via
+        # reconfigure actually takes effect instead of leaving the old
+        # value in main.cf.
+        db_get homelab-postfix/behind_haproxy || true; BEHIND_HAPROXY="${RET:-false}"
+        if [ "$BEHIND_HAPROXY" = "true" ]; then
+            postconf -e 'smtpd_upstream_proxy_protocol = haproxy'
+            echo "  smtpd_upstream_proxy_protocol=haproxy (homelab-postfix/behind_haproxy=true)"
+        else
+            postconf -e 'smtpd_upstream_proxy_protocol ='
         fi
 
         if postfix check >/dev/null 2>&1; then
