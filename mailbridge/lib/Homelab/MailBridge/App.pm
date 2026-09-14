@@ -54,6 +54,11 @@ sub startup ($self) {
             register(
                 api_base => $self->api_base, feature_name => 'homelab-mailbridge',
                 host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+                description => 'IMAP/SMTP relay for homelab-api\'s /api/v1/mail/* gateway '
+                    . '(real protocol clients - dovecot for IMAP, postfix for SMTP; '
+                    . 'see `homelab-cli topology` for which hosts). Not Roundcube (browser-facing, '
+                    . 'talks to dovecot/postfix directly), not LMTP (internal postfix->dovecot '
+                    . 'delivery), not DKIM (postfix/OpenDKIM, invisible to this relay).',
             );
         };
         $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
