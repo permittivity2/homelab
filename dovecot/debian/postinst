@@ -30,6 +30,28 @@ case "$1" in
         chown vmail:vmail "$VMAIL_HOME"
         chmod 770 "$VMAIL_HOME"
 
+        # dovecot-core's own stock 10-auth.conf includes
+        # auth-system.conf.ext (PAM-backed passdb/userdb) by default --
+        # this package's real passdb/userdb live in $MARKER below (SQL +
+        # OAuth2 against api.users), never PAM, but nothing disabled the
+        # stock include, so both were active simultaneously with PAM's
+        # unconditional "user unknown" rejection winning the passdb
+        # chain over ever reaching the SQL passdb. Invisible on a plain
+        # `apt install` upgrade (dpkg preserves a modified conffile), but
+        # a `apt purge` + fresh install -- this package's own documented
+        # remedy for applying config changes reliably, used repeatedly
+        # this session -- restores 10-auth.conf to its stock,
+        # PAM-enabled state, silently breaking every real login. Found
+        # live: 100% IMAP login failure with dovecot's auth log showing
+        # `pam_unix(dovecot:auth): user unknown` for every real SQL
+        # account, right after exactly such a purge+reinstall. Run every
+        # configure (not gated behind the $MARKER first-install check
+        # below), same as the vmail user/dir setup above, so a
+        # dpkg-reconfigure alone also carries this fix even if $MARKER
+        # already exists.
+        sed -i 's/^!include auth-system\.conf\.ext/#!include auth-system.conf.ext/' \
+            "$CONF_D/10-auth.conf" 2>/dev/null || true
+
         # Read every run (not just first-install) -- behind_haproxy needs
         # to take effect on a plain dpkg-reconfigure too, applied below
         # via a targeted in-place edit regardless of which branch below
