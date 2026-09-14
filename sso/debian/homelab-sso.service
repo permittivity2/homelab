@@ -1,0 +1,29 @@
+[Unit]
+Description=Homelab SSO
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_SSO_CONFIG=/etc/homelab/sso/config.yml"
+Environment="HOMELAB_SSO_HOME=/usr/share/homelab-sso"
+# Same reasoning as homelab-api's own unit: this app only ever listens
+# on 127.0.0.1, so the only thing that can reach it is homelab-webproxy
+# on the same host once it fronts this service — trusting X-Forwarded-*
+# from that path is safe, and without it every relying party's OAuth
+# requests would look like they came from 127.0.0.1.
+Environment="MOJO_REVERSE_PROXY=1"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-sso
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-sso
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-sso
+
+[Install]
+WantedBy=multi-user.target

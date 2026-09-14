@@ -21,10 +21,30 @@ case "$1" in
             db_get homelab-sso/pgbouncer_host || true;       PGBOUNCER_HOST="${RET:-localhost}"
             db_get homelab-sso/homelab_api_base_url || true; API_BASE="${RET:-http://127.0.0.1:3000}"
             db_get homelab-sso/listen_port || true;          LISTEN_PORT="${RET:-2502}"
+            db_get homelab-sso/advertise_host || true;       ADVERTISE_HOST="${RET:-127.0.0.1}"
             db_get homelab-sso/drive_redirect_uri || true;      DRIVE_REDIRECT_URI="$RET"
             db_get homelab-sso/drive_client_secret || true;     DRIVE_SECRET="$RET"
             db_get homelab-sso/roundcube_redirect_uri || true;  ROUNDCUBE_REDIRECT_URI="$RET"
             db_get homelab-sso/roundcube_client_secret || true; ROUNDCUBE_SECRET="$RET"
+
+            # A redirect_uri routinely contains '&' (query strings with
+            # more than one param, e.g. Roundcube's own
+            # ?_task=login&_action=oauth) -- unescaped, sed's REPLACEMENT
+            # side treats '&' as "insert the matched text", silently
+            # corrupting the written config into a garbled, duplicated
+            # string instead of erroring. Found live: a real install
+            # with the actual production-matching roundcube redirect_uri
+            # (which contains exactly this '&') wrote a broken
+            # interleaved value, causing every subsequent real OAuth
+            # login attempt to fail with "Unknown client or redirect_uri"
+            # -- not caught by `sed`'s own exit code (0, "success") or by
+            # any config-syntax check, only by an actual end-to-end login
+            # attempt. Escape backslash, ampersand, and this file's own
+            # '#' sed delimiter before using any of these as a
+            # replacement.
+            sed_escape_replacement() { printf '%s' "$1" | sed -e 's/[\&#]/\\&/g'; }
+            DRIVE_REDIRECT_URI="$(sed_escape_replacement "$DRIVE_REDIRECT_URI")"
+            ROUNDCUBE_REDIRECT_URI="$(sed_escape_replacement "$ROUNDCUBE_REDIRECT_URI")"
 
             echo "  bootstrapping split Postgres roles for 'homelab_sso' on $DB_HOST..."
             BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_sso --schema sso --db-host "$DB_HOST")"
@@ -67,6 +87,8 @@ case "$1" in
                 -e "s#homelab_sso_migrate#$MIGRATE_ROLE#g" \
                 -e "s#http://127\.0\.0\.1:3000#$API_BASE#g" \
                 -e "s#0\.0\.0\.0:2502#0.0.0.0:$LISTEN_PORT#g" \
+                -e "s#  port: 2502#  port: $LISTEN_PORT#g" \
+                -e "s#  host: 127\.0\.0\.1#  host: $ADVERTISE_HOST#g" \
                 -e "s#CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS#$SESSION_SECRET#g" \
                 -e "s#https://drive.test.mailmasker.org/oauth/callback#$DRIVE_REDIRECT_URI#g" \
                 -e "s#YOUR_DRIVE_CLIENT_SECRET_HERE#$DRIVE_SECRET#g" \
