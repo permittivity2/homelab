@@ -287,6 +287,13 @@ def cmd_registry_lookup(args):
     return 0
 
 
+def _truncate(text, width=60):
+    if not text:
+        return ""
+    text = " ".join(text.split())  # collapse embedded newlines/wrapping
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
 def cmd_registry_list(args):
     try:
         results = _client().registry_list()
@@ -298,8 +305,40 @@ def cmd_registry_list(args):
     if not results:
         print("(no features registered)")
         return 0
-    rows = [[r["feature_name"], r["host"], r["port"]] for r in results]
-    _print_table(["FEATURE", "HOST", "PORT"], rows)
+    # Multiple rows can share a FEATURE (see 009-multi-instance-registry.sql
+    # -- more than one real instance behind the same feature_name, e.g. a
+    # rolling upgrade or genuine HA) -- each is its own row here, not
+    # collapsed, so that's actually visible rather than silently showing
+    # just one. Use -j for the full, untruncated description.
+    rows = [[r["feature_name"], r["host"], r["port"], _truncate(r.get("description"))] for r in results]
+    _print_table(["FEATURE", "HOST", "PORT", "DESCRIPTION"], rows)
+    return 0
+
+
+def cmd_topology(args):
+    """Non-HTTP infrastructure (dovecot, postfix, HAProxy frontends,
+    webproxy vhosts) -- deliberately a separate command from `registry`
+    above, not merged into it: this is real-protocol/proxy topology
+    that homelab-api's own gateway never forwards HTTP requests to, so
+    mixing it into the HTTP service registry would misleadingly imply
+    it could be. See 009-multi-instance-registry.sql and
+    api.infrastructure_registry."""
+    try:
+        results = _client().topology_list()
+    except ApiError as e:
+        _emit_error(args, f"Topology list failed: {e.message}")
+        return 1
+    if _emit(args, results):
+        return 0
+    if not results:
+        print("(no infrastructure registered)")
+        return 0
+    rows = []
+    for r in results:
+        fronts = ", ".join(r.get("fronts") or []) or "-"
+        port = r.get("port") if r.get("port") is not None else "-"
+        rows.append([r["kind"], r["name"], r["host"], port, fronts, _truncate(r.get("description"), 50)])
+    _print_table(["KIND", "NAME", "HOST", "PORT", "FRONTS", "DESCRIPTION"], rows)
     return 0
 
 
@@ -1526,6 +1565,13 @@ def build_parser():
     p = registry_sub.add_parser("lookup", help="Look up a feature's address (see 'registry list' for valid names)")
     p.add_argument("feature_name")
     p.set_defaults(func=cmd_registry_lookup)
+
+    p = sub.add_parser(
+        "topology",
+        help="Non-HTTP infrastructure (dovecot, postfix, HAProxy frontends, webproxy vhosts) -- "
+             "see 'registry list' for HTTP-forwardable services instead",
+    )
+    p.set_defaults(func=cmd_topology)
 
     dns = sub.add_parser("dns", help="DNS + mail-domain administration (site_admin role required)")
     dns_sub = dns.add_subparsers(dest="dns_command", required=True)

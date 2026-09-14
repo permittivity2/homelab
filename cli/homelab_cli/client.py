@@ -182,6 +182,9 @@ class Client:
     def registry_list(self):
         return self._request("GET", "/api/v1/registry")
 
+    def topology_list(self):
+        return self._request("GET", "/api/v1/registry/infrastructure")
+
     # --- Admin (site_admin role required server-side — see
     # api/README.md's "Admin endpoints" section) ---
     def admin_list_users(self, token):
