@@ -52,6 +52,8 @@ sub startup ($self) {
             register(
                 api_base => $self->api_base, feature_name => 'homelab-domain-admin',
                 host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+                description => 'DNS/domain/DKIM/recipient-access admin, serves /api/v1/domains/*'
+                    . ' (talks to a remote PowerDNS API - see `homelab-cli topology`)',
             );
         };
         $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
