@@ -2,15 +2,23 @@
 # instead (dpkg-reconfigure homelab-roundcube). This is a SEPARATE,
 # internal-only nginx vhost, distinct from homelab-webproxy's own
 # managed sites -- it exists purely to bridge Roundcube's PHP-FPM
-# backend to plain HTTP on loopback, so homelab-webproxy's existing
-# `upstream: 127.0.0.1:PORT` reverse-proxy model (designed around
+# backend to plain HTTP, so homelab-webproxy's existing
+# `upstream: host:PORT` reverse-proxy model (designed around
 # already-HTTP-speaking backends like homelab-drive's hypnotoad) works
 # for a PHP application too without needing homelab-webproxy itself to
-# learn a second, fastcgi-flavored upstream type. Listens on loopback
-# only -- homelab-webproxy is the only intended caller, terminating the
-# real public-facing TLS.
+# learn a second, fastcgi-flavored upstream type.
+#
+# Bound to all interfaces, not loopback only: homelab-webproxy and
+# homelab-roundcube are routinely on separate hosts (this project's own
+# test topology included), and a loopback-only bind would make this
+# totally unreachable from a remote webproxy -- same "bind broadly, the
+# firewall is the boundary" posture used elsewhere in this project, not
+# "trust the network" (nftables scopes inbound access on this port to
+# webproxy's own address specifically, tighter than the broad
+# internal-supernet scoping used for the pure backend services, since
+# this one serves the actual webmail UI rather than an internal API).
 server {
-    listen 127.0.0.1:__INTERNAL_PORT__;
+    listen __INTERNAL_PORT__;
     server_name _;
     root /var/lib/roundcube/public_html;
     index index.php;

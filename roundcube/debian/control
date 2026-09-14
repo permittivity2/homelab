@@ -8,8 +8,8 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-roundcube
 Architecture: all
-Depends: ${misc:Depends}, roundcube-core, roundcube-pgsql, php-fpm, nginx, adduser, postgresql-client, homelab-dovecot, homelab-postfix
-Recommends: homelab-sso
+Depends: ${misc:Depends}, roundcube-core, roundcube-pgsql, php-fpm, nginx, adduser, postgresql-client
+Recommends: homelab-sso, homelab-dovecot, homelab-postfix
 Description: Roundcube webmail wired to the homelab-* shared identity
  Roundcube webmail (Debian's own roundcube-core/roundcube-pgsql, not
  vendored source). Login is delegated to homelab-sso (Roundcube's own
@@ -43,7 +43,14 @@ Description: Roundcube webmail wired to the homelab-* shared identity
  designed around already-HTTP-speaking backends like homelab-drive's
  hypnotoad -- needs no changes to serve a PHP application.
  .
- Depends on homelab-dovecot and homelab-postfix as hard runtime
- requirements, not just recommendations: without a working IMAP server
- and SMTP submission service, Roundcube has nothing to log into or
- send through.
+ homelab-dovecot/homelab-postfix are Recommends, not hard Depends
+ (corrected from an earlier version of this package that hard-depended
+ on both, conflating "needs a working IMAP/SMTP service" with "needs
+ that service's package installed on this same host"): imap_host/
+ imap_port/smtp_host/smtp_port (debconf, default localhost) point this
+ app at wherever those actually run -- this project's own production
+ mail stack, and this ecosystem's own test topology, both routinely run
+ Roundcube on a different host from Dovecot/Postfix. Installing this
+ package on a host that also happens to run Dovecot/Postfix locally
+ (the co-located default) is still fully supported, just no longer
+ required.

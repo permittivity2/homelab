@@ -20,21 +20,52 @@ $config = [];
 
 $config['db_dsnw'] = 'pgsql://__DB_USER__:__DB_PASS__@__DB_HOST__:__DB_PORT__/__DB_NAME__';
 
-// IMAP host chosen to perform the log-in -- homelab-dovecot, same host
-// (loopback), plain (non-TLS) connection: Dovecot allows plaintext AUTH
-// on loopback even with disable_plaintext_auth at its Debian default,
-// and TLS between two processes on the same host via 127.0.0.1 adds
-// packaging complexity (cert trust) without a real security benefit
-// here. Revisit if Roundcube and Dovecot are ever split across hosts.
-$config['imap_host'] = ['localhost:143'];
+// IMAP host chosen to perform the log-in -- homelab-dovecot,
+// __IMAP_HOST__:__IMAP_PORT__. ssl:// (not plain, not tls://): Roundcube
+// and Dovecot are now routinely split across hosts (see
+// homelab-mailbridge's identical choice), and any non-loopback hop goes
+// through homelab-haproxy, which fronts Dovecot's IMAPS listener --
+// plain/STARTTLS on 143 would still work port-wise (haproxy=yes gates
+// the whole imap-login service, not just 993) but ssl://:993 is the
+// more conventional choice and avoids relying on STARTTLS negotiation
+// working identically through the proxy.
+$config['imap_host'] = ['ssl://__IMAP_HOST__:__IMAP_PORT__'];
 
 // SMTP server (submission, not the inbound MX port) -- homelab-postfix,
-// same host. %u/%p: whatever the user just authenticated to IMAP with
-// is reused for SMTP AUTH too, so there's still only ever one password
-// prompt.
-$config['smtp_host'] = 'localhost:587';
+// __SMTP_HOST__:__SMTP_PORT__, tls:// (STARTTLS) -- same "no longer
+// assumed same-host" reasoning as imap_host above. %u/%p: whatever the
+// user just authenticated to IMAP with is reused for SMTP AUTH too, so
+// there's still only ever one password prompt.
+$config['smtp_host'] = 'tls://__SMTP_HOST__:__SMTP_PORT__';
 $config['smtp_user'] = '%u';
 $config['smtp_pass'] = '%p';
+
+// homelab-postfix/homelab-dovecot's own TLS listeners use the vendor
+// snakeoil self-signed cert (see homelab-postfix's own main.cf comment
+// on smtpd_tls_cert_file) -- fine for internal traffic that never
+// leaves this project's own network, but PHP's SSL stream wrapper
+// verifies the peer certificate by default and silently refuses the
+// connection otherwise. Found live, the first time IMAP/SMTP were
+// actually split from Roundcube onto a different host (loopback
+// connections never exercised this at all): every login failed with a
+// generic "IMAP Error: ... Could not connect to ssl://...: Unknown
+// reason" -- no certificate-specific message at all, only found by
+// comparing a raw `openssl s_client` connection (which succeeds, and
+// doesn't verify by default) against this app's own actual failure.
+$config['imap_conn_options'] = [
+    'ssl' => [
+        'verify_peer'       => false,
+        'verify_peer_name'  => false,
+        'allow_self_signed' => true,
+    ],
+];
+$config['smtp_conn_options'] = [
+    'ssl' => [
+        'verify_peer'       => false,
+        'verify_peer_name'  => false,
+        'allow_self_signed' => true,
+    ],
+];
 
 $config['support_url'] = '';
 $config['product_name'] = '__PRODUCT_NAME__';

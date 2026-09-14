@@ -17,6 +17,32 @@ Description: PgBouncer host for Roundcube's own runtime database connection:
  bootstrapped runtime role is also registered into this host's pgbouncer
  userlist.txt.
 
+Template: homelab-roundcube/imap_host
+Type: string
+Default: localhost
+Description: IMAP host (homelab-dovecot):
+ Written into config.inc.php's imap_host as ssl://<host>:<port> --
+ Roundcube and Dovecot no longer need to be co-located (see
+ homelab-mailbridge's identical split). Leave as localhost only when
+ genuinely co-installed.
+
+Template: homelab-roundcube/imap_port
+Type: string
+Default: 993
+Description: IMAP port (TLS):
+
+Template: homelab-roundcube/smtp_host
+Type: string
+Default: localhost
+Description: SMTP submission host (homelab-postfix):
+ Written into config.inc.php's smtp_host as tls://<host>:<port>. Leave
+ as localhost only when genuinely co-installed.
+
+Template: homelab-roundcube/smtp_port
+Type: string
+Default: 587
+Description: SMTP submission port:
+
 Template: homelab-roundcube/internal_port
 Type: string
 Default: 8080
@@ -39,6 +65,19 @@ Description: Base URL where homelab-sso is reachable:
  user ever types a password -- this app's native OAuth support (plus
  two small core patches, see script/homelab-roundcube-patch-oauth-sso)
  redirects here for login and logout.
+ .
+ IMPORTANT once this app and homelab-sso are on different hosts:
+ oauth_auth_uri and oauth_logout_uri are BROWSER redirects, not
+ server-to-server calls -- this value must be an address the end
+ user's own browser can actually reach (e.g. homelab-sso's own public
+ homelab-webproxy vhost, https://login.example.com), never an internal-
+ only data-plane IP/port. A raw internal address here will produce a
+ login page that redirects somewhere the browser can't connect to at
+ all -- found live, not just in review, the first time this was set to
+ an internal IP instead of the public vhost. (oauth_token_uri/
+ oauth_identity_uri are genuinely server-side and would work fine
+ either way; this one value drives all four, so it has to satisfy the
+ stricter browser-facing requirement.)
 
 Template: homelab-roundcube/sso_client_secret
 Type: password

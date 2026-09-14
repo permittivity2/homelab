@@ -26,6 +26,10 @@ case "$1" in
         db_get homelab-roundcube/sso_base_url || true;      SSO_BASE_URL="${RET:-http://127.0.0.1:2502}"
         db_get homelab-roundcube/sso_client_secret || true; SSO_CLIENT_SECRET="$RET"
         db_get homelab-roundcube/api_base_url || true;      API_BASE_URL="${RET:-http://127.0.0.1:3000}"
+        db_get homelab-roundcube/imap_host || true;         IMAP_HOST="${RET:-localhost}"
+        db_get homelab-roundcube/imap_port || true;         IMAP_PORT="${RET:-993}"
+        db_get homelab-roundcube/smtp_host || true;         SMTP_HOST="${RET:-localhost}"
+        db_get homelab-roundcube/smtp_port || true;         SMTP_PORT="${RET:-587}"
 
         # Debian's roundcube-core does NOT scan /usr/share/roundcube/
         # plugins/ directly -- rcube_plugin_api::load_plugin() actually
@@ -118,6 +122,10 @@ case "$1" in
                 -e "s#__SSO_BASE_URL__#$SSO_BASE_URL#g" \
                 -e "s#__SSO_CLIENT_SECRET__#$SSO_CLIENT_SECRET#g" \
                 -e "s#__API_BASE_URL__#$API_BASE_URL#g" \
+                -e "s#__IMAP_HOST__#$IMAP_HOST#g" \
+                -e "s#__IMAP_PORT__#$IMAP_PORT#g" \
+                -e "s#__SMTP_HOST__#$SMTP_HOST#g" \
+                -e "s#__SMTP_PORT__#$SMTP_PORT#g" \
                 "$SHARE_DIR/config/config.inc.php.template" > "$CONFIG_FILE"
             chown root:www-data "$CONFIG_FILE"
             chmod 640 "$CONFIG_FILE"
