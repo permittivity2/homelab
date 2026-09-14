@@ -252,8 +252,58 @@ sub _maybe_restart_pdns ($self) {
     $tx->commit;
 
     $self->log->info("restarting pdns ($row->{reason})");
-    system('/usr/bin/sudo', '/usr/bin/systemctl', 'restart', 'pdns');
-    $self->log->warn('pdns restart may have failed (exit code ' . ($? >> 8) . ')') if $? != 0;
+
+    # Unconditionally assumed PowerDNS was on this same host -- true
+    # only for the original co-located deployment topology. Once this
+    # package moved onto homelab-postfix's own host instead (its real,
+    # documented "must co-locate with OpenDKIM" requirement -- see
+    # README.md's "Deployment topology" -- while PowerDNS itself stayed
+    # put), every restart attempt failed with "Unit pdns.service not
+    # found", silently, on a 10-second recurring timer, forever. Found
+    # live via that exact log line appearing right after a real
+    # `dns domains add`, not from reading this code in isolation. Empty
+    # practical impact turned out to be smaller than the "no reload
+    # path at all" README warning implies -- PowerDNS's gpgsql backend
+    # answered real queries for the brand-new zone/record immediately,
+    # restart or no restart, confirmed with a real `dig` -- but a
+    # master/slave topology's NOTIFY-to-slaves behavior on zone changes
+    # very plausibly still depends on this actually running, so it's
+    # fixed here rather than left as "apparently harmless."
+    # NOT the same local-or-SSH-or-manual tiering used by
+    # homelab-bootstrap-app-role/-pgbouncer-entry elsewhere in this
+    # project, deliberately: those run from postinst, as root, with
+    # root's own already-established SSH trust available. This runs at
+    # *runtime*, from inside the app, as the unprivileged `homelab`
+    # service user (see systemd/homelab-domain-admin.service's
+    # User=homelab) -- which has no SSH key of its own and never should
+    # (giving a network-facing service user standing SSH access to
+    # another host is a real privilege-escalation surface, not a gap to
+    # casually close). So: local restart via the existing narrow
+    # sudoers grant when co-located, and a clear, actionable log
+    # message when not -- never a doomed SSH attempt as `homelab` that
+    # would just fail a different way. A real cross-host restart path
+    # (if the NOTIFY-to-slaves behavior below ever actually needs it in
+    # practice) belongs in its own scoped follow-up, with its own
+    # deliberately-provisioned credential -- not improvised here.
+    my $pdns_host = eval { Mojo::URL->new($self->powerdns->base_url)->host } // '';
+    if ($pdns_host eq '' || $pdns_host eq '127.0.0.1' || $pdns_host eq 'localhost') {
+        system('/usr/bin/sudo', '/usr/bin/systemctl', 'restart', 'pdns');
+        $self->log->warn('pdns restart may have failed (exit code ' . ($? >> 8) . ')') if $? != 0;
+    }
+    else {
+        # Not a hard failure: PowerDNS's gpgsql backend has been
+        # confirmed (real `dig` query, immediately after a real write,
+        # no restart) to serve brand-new zones/records without this at
+        # all. This restart is believed to matter only for NOTIFY-ing
+        # slave nameservers of the change -- untested in this topology,
+        # since no slave is configured -- so this stays a loud log
+        # line, not a thrown error that would fail the write itself.
+        $self->log->warn("pdns runs on a different host ($pdns_host) than this service -- "
+            . "cannot restart it locally. Real DNS resolution has been confirmed to keep "
+            . "working without this (PowerDNS's gpgsql backend serves new zones/records live), "
+            . "but if this deployment ever adds a slave nameserver, restart pdns by hand on "
+            . "$pdns_host now so it NOTIFYs it of this change ($row->{reason}).");
+    }
     return;
 }
 
