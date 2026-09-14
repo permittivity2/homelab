@@ -90,6 +90,30 @@ Description: Put this Postfix's SMTP/submission traffic behind HAProxy (homelab-
  homelab-postfix to change this later either way, without a full
  reinstall.
 
+Template: homelab-postfix/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable:
+ Used only to register this host in homelab-api's infrastructure
+ topology registry (`homelab-cli topology`) -- Postfix itself never
+ calls homelab-api for anything else (its recipient/domain/alias
+ lookups go straight to Postgres via pgsql: maps, not through the API).
+ Best-effort: a wrong or unreachable value here only means this host
+ won't show up in `homelab-cli topology`, mail flow is unaffected.
+
+Template: homelab-postfix/advertise_host
+Type: string
+Default: 127.0.0.1
+Description: This host's own address to advertise in the infrastructure topology registry:
+ Written to homelab-api's api.infrastructure_registry via
+ homelab-register-infrastructure, purely for `homelab-cli topology`
+ visibility -- unlike the HTTP services' own advertise_host (which
+ homelab-api's gateway actually connects to), nothing forwards traffic
+ here based on this value. Leave as 127.0.0.1 only if this is a
+ throwaway single-box install; set it to this host's real reachable
+ address (e.g. its data-plane IP) so the topology view is actually
+ useful for a distributed deployment.
+
 Template: homelab-postfix/enable_dkim
 Type: boolean
 Default: false
