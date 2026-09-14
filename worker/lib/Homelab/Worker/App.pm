@@ -65,6 +65,7 @@ sub startup ($self) {
             register(
                 api_base => $self->api_base, feature_name => 'homelab-worker',
                 host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+                description => 'Background jobs: zip-job pipeline, serves /api/v1/jobs/*',
             );
         };
         $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
