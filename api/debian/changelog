@@ -1,3 +1,34 @@
+homelab-api (0.1.18) unstable; urgency=medium
+
+  * Release v0.1.18
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 19:49:40 -0500
+
+homelab-api (0.1.18) unstable; urgency=medium
+
+  * Converted the hottest routes (_login, _introspect, _gateway/
+    Registry::lookup) to Mojo::Pg's non-blocking query_p API + the new
+    homelab-common Proxy::forward()/AuditClient::enqueue_p. Root cause,
+    confirmed live: a stress test at 40-way concurrency collapsed every
+    gateway-routed request (login/whoami/domain-admin/drive/jobs) to
+    0-40% success with a single hypnotoad worker even hitting its own
+    heartbeat_timeout -- Hypnotoad workers are single-threaded event
+    loops, and the old blocking ->query()/->start() calls parked the
+    WHOLE worker for each DB or backend round trip, not just the one
+    request. Requires homelab-common >= 0.1.18. _register, _refresh,
+    _logout, the /auth/sessions routes, and all /admin/* routes are
+    UNCONVERTED (still blocking) -- lower request volume, not what the
+    stress test exercised; tracked as follow-up work, not silently
+    dropped.
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 19:50:00 -0500
+
+homelab-api (0.1.17) unstable; urgency=medium
+
+  * Release v0.1.17
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 14:15:05 -0500
+
 homelab-api (0.1.16) unstable; urgency=medium
 
   * Audit: session.revoke was never actually enqueued despite the

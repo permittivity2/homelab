@@ -9,7 +9,7 @@ Homepage: https://github.com/permittivity2/homelab
 Package: homelab-api
 Architecture: all
 Depends: perl (>= 5.36),
-         homelab-common,
+         homelab-common (>= 0.1.18),
          libmojolicious-perl,
          libyaml-libyaml-perl,
          libmojo-pg-perl,

@@ -1,16 +1,27 @@
 package Homelab::API::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
+use Mojo::Promise;
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
 use Homelab::API::Auth qw(hash_password verify_password generate_jwt verify_jwt generate_jti generate_refresh_token);
 use Homelab::API::Registry;
 use Homelab::Common::Proxy qw(forward);
-use Homelab::Common::AuditClient qw(enqueue);
+use Homelab::Common::AuditClient qw(enqueue enqueue_p);
 
 has 'pg';
 has 'registry';
+
+# Promise-chain sentinel for the routes converted to non-blocking below
+# (_login, _introspect, _gateway): some early-exit branches already
+# called $c->render() themselves (e.g. 401/429/502) and just need the
+# rest of that route's chain skipped, not treated as a real error --
+# rejecting with this shared marker, checked in each such route's own
+# final ->catch, distinguishes "already handled" from "something
+# actually broke" without a second render() firing on the same request
+# (Mojolicious dies loudly on a double render).
+my $ALREADY_RENDERED = \'already_rendered';
 
 sub startup ($self) {
     my $config = load_config('HOMELAB_API_CONFIG', '/etc/homelab/api/config.yml');
@@ -158,12 +169,27 @@ sub startup ($self) {
     return;
 }
 
+# Non-blocking (registry lookup via ->lookup_p, forward() itself now
+# promise-based too) -- this is the busiest route in the whole service
+# (every /api/v1/{drive,mail,domains,jobs,audit}/* request lands here),
+# and a blocking lookup+forward used to park a whole hypnotoad worker
+# for both the registry SELECT AND the full backend round trip. See
+# Homelab::Common::Proxy's own docs for why forward() requires
+# render_later from its caller.
 sub _gateway ($self, $c, $feature_name, %opts) {
-    my $entry = $self->registry->lookup($feature_name);
-    unless ($entry && $entry->{host} && $entry->{port}) {
-        return $c->render(json => { error => "$feature_name is not currently available" }, status => 502);
-    }
-    return forward($c, feature_name => $feature_name, host => $entry->{host}, port => $entry->{port}, %opts);
+    $c->render_later;
+    $self->registry->lookup_p($feature_name)->then(sub ($entry) {
+        unless ($entry && $entry->{host} && $entry->{port}) {
+            $c->render(json => { error => "$feature_name is not currently available" }, status => 502);
+            return;
+        }
+        return forward($c, feature_name => $feature_name, host => $entry->{host}, port => $entry->{port}, %opts);
+    })->catch(sub ($err) {
+        $c->app->log->error("_gateway($feature_name) failed: $err");
+        $c->render(json => { error => "$feature_name is not currently available" }, status => 502)
+            unless $c->tx->res->code;
+    });
+    return;
 }
 
 # Rate limiting + a structured, queryable log of every auth attempt --
@@ -195,6 +221,25 @@ sub _rate_limited ($self, $ip) {
 
 sub _log_attempt ($self, %fields) {
     $self->pg->db->query(
+        'INSERT INTO api.login_attempts (ip, email, endpoint, success) VALUES (?, ?, ?, ?)',
+        @fields{qw(ip email endpoint success)},
+    );
+}
+
+# Non-blocking twins of _rate_limited/_log_attempt above, used only by
+# the converted _login below -- _register still uses the blocking
+# originals (lower request volume than login, not what the stress test
+# exercised; left as a tracked follow-up rather than converted here).
+sub _rate_limited_p ($self, $ip) {
+    return $self->pg->db->query_p(
+        q{SELECT count(*) AS n FROM api.login_attempts
+          WHERE ip = ? AND success = FALSE AND attempted_at > NOW() - (? * INTERVAL '1 minute')},
+        $ip, RATE_LIMIT_WINDOW_MIN,
+    )->then(sub ($results) { return $results->hash->{n} >= RATE_LIMIT_MAX_FAILURES });
+}
+
+sub _log_attempt_p ($self, %fields) {
+    return $self->pg->db->query_p(
         'INSERT INTO api.login_attempts (ip, email, endpoint, success) VALUES (?, ?, ?, ?)',
         @fields{qw(ip email endpoint success)},
     );
@@ -240,6 +285,15 @@ sub _register ($self, $c) {
     return $c->render(json => { id => $user->{id}, email => $email }, status => 201);
 }
 
+# Converted to Mojo::Pg's non-blocking API (see $ALREADY_RENDERED above
+# for the early-exit convention) -- this was the worst single offender
+# in the blocking-I/O stress-test collapse: 5+ sequential DB round trips
+# per call, each one parking the ENTIRE hypnotoad worker's event loop
+# (not just this request) for its full duration under Mojo::Pg's old
+# blocking ->query(). Behavior is unchanged from the blocking version
+# above -- same status codes, same error shapes, same query ordering
+# (each step here still genuinely depends on the previous one's result,
+# e.g. the session INSERT needs the refresh_token row's own id).
 sub _login ($self, $c) {
     my $body     = $c->req->json // {};
     my $email    = $body->{email};
@@ -249,69 +303,93 @@ sub _login ($self, $c) {
     return $c->render(json => { error => 'email and password are required' }, status => 400)
         unless $email && $password;
 
-    if ($self->_rate_limited($ip)) {
-        return $c->render(json => { error => 'Too many login attempts. Please wait 15 minutes.' }, status => 429);
-    }
+    $c->render_later;
 
-    my $user = $self->pg->db->query(
-        'SELECT id, password_hash, active FROM api.users WHERE email = ?', $email,
-    )->hash;
+    $self->_rate_limited_p($ip)->then(sub ($limited) {
+        if ($limited) {
+            $c->render(json => { error => 'Too many login attempts. Please wait 15 minutes.' }, status => 429);
+            return Mojo::Promise->reject($ALREADY_RENDERED);
+        }
+        return $self->pg->db->query_p('SELECT id, password_hash, active FROM api.users WHERE email = ?', $email);
+    })->then(sub ($results) {
+        my $user = $results->hash;
+        unless ($user && $user->{active} && verify_password($password, $user->{password_hash})) {
+            return $self->_log_attempt_p(ip => $ip, email => $email, endpoint => 'login', success => 0)->then(sub {
+                $c->render(json => { error => 'invalid email or password' }, status => 401);
+                return Mojo::Promise->reject($ALREADY_RENDERED);
+            });
+        }
+        return $self->_log_attempt_p(ip => $ip, email => $email, endpoint => 'login', success => 1)
+            ->then(sub { return $user });
+    })->then(sub ($user) {
+        # Session device/IP metadata (see migrations/007-session-metadata.sql).
+        # client_user_agent/client_ip are optional caller-supplied overrides --
+        # homelab-sso's authorize_submit passes the REAL submitting browser's
+        # own values here, since without them this row would record sso's own
+        # backend HTTP client (the actual caller of THIS endpoint), not the
+        # browser sitting behind it. Not a new trust boundary: whoever's
+        # calling already had to supply a valid password for $email, so the
+        # worst a lie here does is make that same account's OWN session-list
+        # entry cosmetically wrong -- never an auth bypass.
+        my $user_agent = $body->{client_user_agent} // $c->req->headers->user_agent;
+        $user_agent = 'unknown' unless defined $user_agent && length $user_agent;
+        my $ip_address = $body->{client_ip} // $ip;
 
-    unless ($user && $user->{active} && verify_password($password, $user->{password_hash})) {
-        $self->_log_attempt(ip => $ip, email => $email, endpoint => 'login', success => 0);
-        return $c->render(json => { error => 'invalid email or password' }, status => 401);
-    }
-    $self->_log_attempt(ip => $ip, email => $email, endpoint => 'login', success => 1);
+        my $jti = generate_jti();
+        my ($jwt, $expires_in) = generate_jwt($email, secret => $self->config->{jwt}{secret}, expires_in => $self->config->{jwt}{expiry_seconds}, jti => $jti);
+        my $refresh_token = generate_refresh_token();
+        my $refresh_ttl_days = $self->config->{jwt}{refresh_expiry_days} // 30;
 
-    # Session device/IP metadata (see migrations/007-session-metadata.sql).
-    # client_user_agent/client_ip are optional caller-supplied overrides --
-    # homelab-sso's authorize_submit passes the REAL submitting browser's
-    # own values here, since without them this row would record sso's own
-    # backend HTTP client (the actual caller of THIS endpoint), not the
-    # browser sitting behind it. Not a new trust boundary: whoever's
-    # calling already had to supply a valid password for $email, so the
-    # worst a lie here does is make that same account's OWN session-list
-    # entry cosmetically wrong -- never an auth bypass.
-    my $user_agent = $body->{client_user_agent} // $c->req->headers->user_agent;
-    $user_agent = 'unknown' unless defined $user_agent && length $user_agent;
-    my $ip_address = $body->{client_ip} // $ip;
-
-    my $jti = generate_jti();
-    my ($jwt, $expires_in) = generate_jwt($email, secret => $self->config->{jwt}{secret}, expires_in => $self->config->{jwt}{expiry_seconds}, jti => $jti);
-    my $refresh_token = generate_refresh_token();
-    my $refresh_ttl_days = $self->config->{jwt}{refresh_expiry_days} // 30;
-
-    my $refresh_row = $self->pg->db->query(
-        q{INSERT INTO api.refresh_tokens (user_id, token, expires_at) VALUES (?, ?, NOW() + (? * INTERVAL '1 day')) RETURNING id},
-        $user->{id}, $refresh_token, $refresh_ttl_days,
-    )->hash;
-    $self->pg->db->query(
-        q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at, user_agent, ip_address, first_seen_at)
-          VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'), ?, ?, NOW())},
-        $jti, $user->{id}, $refresh_row->{id}, $expires_in, $user_agent, $ip_address,
-    );
-
-    enqueue(
-        $self->pg->db, actor_email => $email, affected_user => $email, jti => $jti, action => 'auth.login',
-        resource_type => 'user', resource_id => $user->{id}, source_service => 'homelab-api',
-        ip_address => $ip_address, user_agent => $user_agent,
-    );
-
-    return $c->render(json => {
-        success       => \1,
-        token         => $jwt,
-        refresh_token => $refresh_token,
-        expires_in    => $expires_in,
-        email         => $email,
+        return $self->pg->db->query_p(
+            q{INSERT INTO api.refresh_tokens (user_id, token, expires_at) VALUES (?, ?, NOW() + (? * INTERVAL '1 day')) RETURNING id},
+            $user->{id}, $refresh_token, $refresh_ttl_days,
+        )->then(sub ($results) {
+            my $refresh_row = $results->hash;
+            return $self->pg->db->query_p(
+                q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at, user_agent, ip_address, first_seen_at)
+                  VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'), ?, ?, NOW())},
+                $jti, $user->{id}, $refresh_row->{id}, $expires_in, $user_agent, $ip_address,
+            );
+        })->then(sub {
+            return enqueue_p(
+                $self->pg->db, actor_email => $email, affected_user => $email, jti => $jti, action => 'auth.login',
+                resource_type => 'user', resource_id => $user->{id}, source_service => 'homelab-api',
+                ip_address => $ip_address, user_agent => $user_agent,
+            );
+        })->then(sub {
+            $c->render(json => {
+                success       => \1,
+                token         => $jwt,
+                refresh_token => $refresh_token,
+                expires_in    => $expires_in,
+                email         => $email,
+            });
+        });
+    })->catch(sub ($err) {
+        return if ref $err eq 'SCALAR' && $err == $ALREADY_RENDERED;
+        $c->app->log->error("_login failed: $err");
+        $c->render(json => { error => 'internal server error' }, status => 500);
     });
+
+    return;
 }
 
+# Converted to Mojo::Pg's non-blocking API -- this is called by EVERY
+# other service in the fleet on EVERY authenticated request it handles
+# (see Homelab::Common::Proxy's own docs: "each backend already
+# re-verifies it independently via its own introspect() call"), making
+# it arguably the single hottest route in the whole service, hotter
+# than _login itself. Behavior unchanged from the blocking version:
+# same status codes/error shapes, same revocation-then-roles-then-
+# optional-capability sequencing.
 sub _introspect ($self, $c) {
     my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
     return $c->render(json => { error => 'Token required' }, status => 401) unless $jwt;
 
     my $payload = verify_jwt($jwt, secret => $self->config->{jwt}{secret});
     return $c->render(json => { error => 'invalid or expired token' }, status => 401) unless $payload;
+
+    $c->render_later;
 
     # The actual revocation check -- see migrations/005-sessions.sql for
     # why this exists: without it, a JWT stays valid on pure signature+
@@ -321,38 +399,55 @@ sub _introspect ($self, $c) {
     # from here on always has one, so "no row" only ever means "this
     # token predates session tracking" or "forged jti", neither of which
     # should introspect as valid.
-    my $session = $self->pg->db->query(
-        'SELECT revoked FROM api.sessions WHERE jti = ?', $payload->{jti} // '',
-    )->hash;
-    return $c->render(json => { error => 'session revoked' }, status => 401)
-        unless $session && !$session->{revoked};
+    $self->pg->db->query_p('SELECT revoked FROM api.sessions WHERE jti = ?', $payload->{jti} // '')
+        ->then(sub ($results) {
+            my $session = $results->hash;
+            unless ($session && !$session->{revoked}) {
+                $c->render(json => { error => 'session revoked' }, status => 401);
+                return Mojo::Promise->reject($ALREADY_RENDERED);
+            }
+            # Added for homelab-domain-admin's site_admin gating (Phase 5) --
+            # every existing caller (Dovecot's oauth2 passdb, mailbridge) simply
+            # ignores this new key, same additive-response precedent as every
+            # other field added here historically.
+            return $self->pg->db->query_p(
+                q{SELECT r.name FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+                  JOIN api.users u ON u.id = ur.user_id WHERE u.email = ?}, $payload->{email},
+            );
+        })->then(sub ($results) {
+            my $roles = $results->hashes->map(sub { $_->{name} })->to_array;
+            my $response = { email => $payload->{email}, exp => $payload->{exp}, roles => $roles, jti => $payload->{jti} };
 
-    # Added for homelab-domain-admin's site_admin gating (Phase 5) --
-    # every existing caller (Dovecot's oauth2 passdb, mailbridge) simply
-    # ignores this new key, same additive-response precedent as every
-    # other field added here historically.
-    my $roles = $self->pg->db->query(
-        q{SELECT r.name FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
-          JOIN api.users u ON u.id = ur.user_id WHERE u.email = ?}, $payload->{email},
-    )->hashes->map(sub { $_->{name} })->to_array;
+            # Optional ?capability=<name> -- how a DIFFERENT service (which has
+            # no direct grant on api.role_permissions/api.permissions, and never
+            # will per this ecosystem's "no shared cross-schema access" norm)
+            # asks "does this caller have capability X" without homelab-api
+            # needing to expose a whole new endpoint for it. Reuses the same
+            # introspect() call every service already makes on every request --
+            # see _has_capability_p below for the actual site_admin-always-wins
+            # plus role_permissions logic. Ignored by every existing caller that
+            # doesn't pass it, same additive precedent as `roles`/`jti` above.
+            my $capability = $c->param('capability');
+            unless ($capability) {
+                $c->render(json => $response);
+                return;
+            }
 
-    my $response = { email => $payload->{email}, exp => $payload->{exp}, roles => $roles, jti => $payload->{jti} };
+            return $self->pg->db->query_p('SELECT id FROM api.users WHERE email = ?', $payload->{email})
+                ->then(sub ($results2) {
+                    my $user = $results2->hash;
+                    return $user ? $self->_has_capability_p($user->{id}, $capability) : Mojo::Promise->resolve(0);
+                })->then(sub ($has_cap) {
+                    $response->{has_capability} = $has_cap ? \1 : \0;
+                    $c->render(json => $response);
+                });
+        })->catch(sub ($err) {
+            return if ref $err eq 'SCALAR' && $err == $ALREADY_RENDERED;
+            $c->app->log->error("_introspect failed: $err");
+            $c->render(json => { error => 'internal server error' }, status => 500);
+        });
 
-    # Optional ?capability=<name> -- how a DIFFERENT service (which has
-    # no direct grant on api.role_permissions/api.permissions, and never
-    # will per this ecosystem's "no shared cross-schema access" norm)
-    # asks "does this caller have capability X" without homelab-api
-    # needing to expose a whole new endpoint for it. Reuses the same
-    # introspect() call every service already makes on every request --
-    # see _has_capability below for the actual site_admin-always-wins
-    # plus role_permissions logic. Ignored by every existing caller that
-    # doesn't pass it, same additive precedent as `roles`/`jti` above.
-    if (my $capability = $c->param('capability')) {
-        my $user = $self->pg->db->query('SELECT id FROM api.users WHERE email = ?', $payload->{email})->hash;
-        $response->{has_capability} = ($user && $self->_has_capability($user->{id}, $capability)) ? \1 : \0;
-    }
-
-    return $c->render(json => $response);
+    return;
 }
 
 sub _refresh ($self, $c) {
@@ -780,22 +875,24 @@ sub _admin_revoke_role ($self, $c) {
 # with a named subset of capabilities -- it never constrains what
 # site_admin can do, and no existing hardcoded site_admin check
 # anywhere in this ecosystem is expected to switch to it.
-sub _has_capability ($self, $user_id, $name) {
-    my $is_admin = $self->pg->db->query(
+# Confirmed the only caller is _introspect above (see that route's own
+# comment) -- converted in place rather than kept alongside a dead
+# blocking twin.
+sub _has_capability_p ($self, $user_id, $name) {
+    return $self->pg->db->query_p(
         q{SELECT 1 FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
           WHERE ur.user_id = ? AND r.name = 'site_admin'},
         $user_id,
-    )->hash;
-    return 1 if $is_admin;
-
-    my $has_perm = $self->pg->db->query(
-        q{SELECT 1 FROM api.user_roles ur
-          JOIN api.role_permissions rp ON rp.role_id = ur.role_id
-          JOIN api.permissions p ON p.id = rp.permission_id
-          WHERE ur.user_id = ? AND p.name = ?},
-        $user_id, $name,
-    )->hash;
-    return $has_perm ? 1 : 0;
+    )->then(sub ($results) {
+        return 1 if $results->hash;
+        return $self->pg->db->query_p(
+            q{SELECT 1 FROM api.user_roles ur
+              JOIN api.role_permissions rp ON rp.role_id = ur.role_id
+              JOIN api.permissions p ON p.id = rp.permission_id
+              WHERE ur.user_id = ? AND p.name = ?},
+            $user_id, $name,
+        )->then(sub ($results2) { return $results2->hash ? 1 : 0 });
+    });
 }
 
 # GET /api/v1/admin/roles -- every role, with its granted permission

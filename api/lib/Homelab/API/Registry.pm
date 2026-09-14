@@ -22,6 +22,17 @@ sub lookup ($self, $feature_name) {
     )->hash;
 }
 
+# Non-blocking twin of lookup() above, for the gateway's own hot path
+# (_gateway in App.pm runs this on EVERY /api/v1/{drive,mail,domains,
+# jobs,audit}/* request) -- a blocking ->query() here parks the whole
+# hypnotoad worker for the round trip before forward() even starts.
+sub lookup_p ($self, $feature_name) {
+    return $self->pg->db->query_p(
+        'SELECT feature_name, host, port, health_check_url FROM api.service_registry WHERE feature_name = ?',
+        $feature_name,
+    )->then(sub ($results) { return $results->hash });
+}
+
 sub list_all ($self) {
     return $self->pg->db->query(
         'SELECT feature_name, host, port, health_check_url FROM api.service_registry ORDER BY feature_name',
