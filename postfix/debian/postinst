@@ -33,6 +33,8 @@ case "$1" in
         db_get homelab-postfix/db_host || true;        DB_HOST="${RET:-localhost}"
         db_get homelab-postfix/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
         db_get homelab-postfix/dovecot_host || true;   DOVECOT_HOST="${RET:-localhost}"
+        db_get homelab-postfix/default_process_limit || true;     PROCESS_LIMIT="${RET:-600}"
+        db_get homelab-postfix/client_connection_limit || true;   CLIENT_CONN_LIMIT="${RET:-200}"
 
         # inet_interfaces was never explicitly set here before -- it
         # silently inherited whatever the underlying `postfix` package
@@ -98,8 +100,10 @@ case "$1" in
             'smtpd_tls_security_level = may' \
             'smtp_tls_security_level = may' \
             'smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination' \
-            'smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination, reject_invalid_hostname'
-        echo "  applied main.cf settings (myhostname=$HOSTNAME, virtual_mailbox_domains=$MAIL_DOMAIN, dovecot_host=$DOVECOT_HOST)"
+            'smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination, reject_invalid_hostname' \
+            "default_process_limit = $PROCESS_LIMIT" \
+            "smtpd_client_connection_count_limit = $CLIENT_CONN_LIMIT"
+        echo "  applied main.cf settings (myhostname=$HOSTNAME, virtual_mailbox_domains=$MAIL_DOMAIN, dovecot_host=$DOVECOT_HOST, default_process_limit=$PROCESS_LIMIT, smtpd_client_connection_count_limit=$CLIENT_CONN_LIMIT)"
 
         # PgBouncer/Postgres credential -- only bootstrap once; a
         # dpkg-reconfigure is the deliberate way to redo it (e.g. after

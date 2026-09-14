@@ -42,6 +42,29 @@ Description: Dovecot host for LMTP delivery and SASL auth:
  config, not assumed). The default of localhost preserves today's
  co-located behavior for anyone who doesn't touch this.
 
+Template: homelab-postfix/default_process_limit
+Type: string
+Default: 600
+Description: Postfix default_process_limit (total concurrent processes per service, e.g. smtpd):
+ Postfix's own stock default is 100 -- never explicitly set by this
+ package before, found live to be comfortably below what these
+ containers' CPU/RAM can actually sustain. Sized to stay above
+ homelab-haproxy's smtp_in/submission_in frontend maxconn (default 500
+ in that package) so Postfix's own total capacity is never the first
+ thing to bind for traffic HAProxy already decided to accept.
+
+Template: homelab-postfix/client_connection_limit
+Type: string
+Default: 200
+Description: Postfix smtpd_client_connection_count_limit (max concurrent connections from one client IP):
+ Postfix's own stock default is 50. Confirmed live as the real cause of
+ a stress-test mail-send collapse: HAProxy's send-proxy preserves the
+ real client IP, so a burst of concurrent connections from one real
+ sender hits this per-client cap long before the server's total
+ capacity does. Kept as a bounded fraction of default_process_limit
+ (above) rather than raised to match it 1:1 or disabled -- a single
+ client still shouldn't be able to monopolize the whole process pool.
+
 Template: homelab-postfix/behind_haproxy
 Type: boolean
 Default: true
