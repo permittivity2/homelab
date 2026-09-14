@@ -31,6 +31,24 @@ case "$1" in
         mkdir -p "$PG_CONF_DIR/conf.d"
         mkdir -p "$HBA_DROPIN_DIR"
 
+        # listen_addresses only takes effect on a full restart, not a
+        # reload (confirmed empirically -- same as homelab-pgbouncer's own
+        # listen_addr/listen_port, see that package's postinst for the
+        # identical pattern). Snapshot the previously active value before
+        # overwriting $CONF_DROPIN, so we know below whether this run
+        # actually changed it. The file stores it single-quoted (a
+        # postgresql.conf GUC string), but the fresh debconf answer isn't
+        # quoted -- strip the quotes here or this comparison never matches
+        # and every single upgrade/reconfigure restarts Postgres
+        # unnecessarily, exactly the routine-upgrade connection drop this
+        # change-detection exists to avoid (caught by re-running this
+        # postinst a second time with no actual answer change and noticing
+        # it still claimed "changed").
+        PREV_LISTEN_ADDRESSES=""
+        if [ -f "$CONF_DROPIN" ]; then
+            PREV_LISTEN_ADDRESSES="$(sed -n "s/^listen_addresses = '\\(.*\\)'\$/\\1/p" "$CONF_DROPIN")"
+        fi
+
         # Our own conf.d file, never the vendor's postgresql.conf. In
         # adopt_existing mode we still write this (it's additive-only by
         # design -- a single listen_addresses line), since Postgres itself
@@ -60,11 +78,25 @@ case "$1" in
         # (a real, separate directive from postgresql.conf's) -- never
         # reorders or removes any of the admin's existing hand-written
         # rules, only appends the activation line once.
-        if [ -f "$HBA_FILE" ] && ! grep -q "^include_dir 'pg_hba.conf.d'" "$HBA_FILE" 2>/dev/null; then
+        #
+        # Deliberately UNQUOTED, unlike postgresql.conf's own
+        # `include_dir = 'conf.d'` above: confirmed live (real `pg_ctlcluster
+        # restart`, not just a syntax check) that pg_hba.conf's parser does
+        # NOT strip quotes the way postgresql.conf's GUC parser does --
+        # quoting this the same way postgresql.conf wants produces a
+        # directory name of the five characters 'pg_hba.conf.d' (quotes
+        # included), which doesn't exist, and Postgres refuses to start at
+        # all ("could not open configuration directory"). pg_hba.conf is a
+        # different file format (client-auth records, not GUC assignments);
+        # its own shipped example comment two lines above this in a stock
+        # pg_hba.conf (`include_dir       DIRECTORY`) already shows no
+        # quotes -- should have matched that instead of copying
+        # postgresql.conf's convention.
+        if [ -f "$HBA_FILE" ] && ! grep -q "^include_dir pg_hba.conf.d$" "$HBA_FILE" 2>/dev/null; then
             {
                 echo ""
                 echo "# BEGIN homelab-database managed include"
-                echo "include_dir 'pg_hba.conf.d'"
+                echo "include_dir pg_hba.conf.d"
                 echo "# END homelab-database managed include"
             } >> "$HBA_FILE"
             echo "  activated pg_hba.conf.d include in $HBA_FILE"
@@ -93,10 +125,25 @@ case "$1" in
             rm -f "$CRON_FILE"
         fi
 
-        # Reload, never restart -- live connections from every homelab-*
-        # feature must never be dropped by a routine install/upgrade.
+        # Reload by default -- live connections from every homelab-*
+        # feature must never be dropped by a routine install/upgrade. BUT
+        # restart when listen_addresses actually changed (or on first
+        # activation): confirmed live that a reload leaves Postgres still
+        # bound to its old address(es) with no warning in `doveconf`-style
+        # config-check output, silently stranding every remote client
+        # (bootstrap-app-role's migrate role connects directly to Postgres,
+        # bypassing PgBouncer -- see CLAUDE.md -- so this isn't just a
+        # pgbouncer-fronted runtime path, an unreachable Postgres breaks
+        # every future feature install's migration step outright). Same
+        # change-detection pattern as homelab-pgbouncer's own
+        # listen_addr/listen_port handling.
         if command -v pg_ctlcluster >/dev/null 2>&1; then
-            pg_ctlcluster "$PGVER" main reload || echo "  WARNING: reload failed -- check 'pg_lsclusters' and reload by hand."
+            if [ -z "$PREV_LISTEN_ADDRESSES" ] || [ "$PREV_LISTEN_ADDRESSES" != "$LISTEN_ADDRESSES" ]; then
+                echo "  listen_addresses changed (or first activation) -- restarting"
+                pg_ctlcluster "$PGVER" main restart || echo "  WARNING: restart failed -- check 'pg_lsclusters' and restart by hand."
+            else
+                pg_ctlcluster "$PGVER" main reload || echo "  WARNING: reload failed -- check 'pg_lsclusters' and reload by hand."
+            fi
         fi
 
         db_stop
