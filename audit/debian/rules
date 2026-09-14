@@ -5,10 +5,19 @@
 
 override_dh_auto_test:
 
+# Unit file used to be hand-copied into /etc/systemd/system/ in
+# override_dh_install below, invisible to dh_installsystemd -- this
+# package shipped with no prerm/postrm at all as a result, so `apt
+# purge` never stopped the running service (found live via
+# ../drive/debian/rules's identical bug -- see that file's own
+# comment for the full incident). --no-enable --no-start: postinst
+# already handles enable/start itself with its own sequencing.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
+
 override_dh_install:
 	dh_install
-	install -D -m 644 systemd/homelab-audit.service \
-		debian/homelab-audit/etc/systemd/system/homelab-audit.service
 	install -D -m 644 config/audit.example.yml \
 		debian/homelab-audit/usr/share/homelab-audit/config/audit.example.yml
 	find migrations -type f -exec install -D -m 644 {} \

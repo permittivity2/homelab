@@ -22,3 +22,15 @@ Template: homelab-audit/listen_port
 Type: string
 Default: 2513
 Description: Port for homelab-audit to listen on:
+
+Template: homelab-audit/advertise_host
+Type: string
+Default: 127.0.0.1
+Description: This host's own address to advertise in the service registry:
+ Written into config.yml's registry.host -- what homelab-api's gateway
+ actually connects to when forwarding /api/v1/audit/* requests here.
+ Leave as 127.0.0.1 only if this service runs on the SAME host as
+ homelab-api itself; set it to this host's real reachable address
+ (e.g. its data-plane IP) for any distributed deployment, or every
+ gateway forward will try to reach homelab-api's own loopback instead
+ of this service.
