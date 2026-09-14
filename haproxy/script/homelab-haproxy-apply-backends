@@ -62,10 +62,21 @@ for my $backend (@backends) {
     my $name          = $backend->{name}         // die "backends.yml: a backend is missing 'name'\n";
     my $frontend_port = $backend->{frontend_port} // die "backends.yml: backend '$name' is missing 'frontend_port'\n";
     my $target        = $backend->{backend}       // die "backends.yml: backend '$name' is missing 'backend'\n";
+    # Deliberate per-frontend ceiling, not just an implicit inherit from
+    # the global 4096 -- found missing entirely during a 2026-09-13
+    # stress-testing pass: with no frontend-level maxconn, HAProxy let
+    # far more through than the actual backend (Postfix/Dovecot) was
+    # tuned to handle, so a forgotten backend-side stock default
+    # (Postfix's smtpd_client_connection_count_limit=50) became the
+    # real, accidental bottleneck instead of a deliberate one here.
+    # Default 500 when unset so every existing/future entry gets a sane
+    # ceiling rather than silently inheriting the uncapped global.
+    my $maxconn = $backend->{maxconn} // 500;
 
     $cfg .= <<BLOCK;
 frontend ${name}_in
     bind *:$frontend_port
+    maxconn $maxconn
     default_backend ${name}_out
 
 backend ${name}_out

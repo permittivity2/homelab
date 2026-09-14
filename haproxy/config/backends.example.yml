@@ -8,16 +8,33 @@
 # ...) — HAProxy is a TCP/HTTP proxy and cannot proxy UDP, so DNS's
 # primary query traffic (UDP:53) is not a fit for this tool. HTTP(S)
 # sites belong in homelab-webproxy's sites.yml instead, not here.
+#
+# maxconn (optional, default 500): this frontend's own deliberate
+# connection ceiling. Don't just omit it and rely on the global
+# `maxconn 4096` in haproxy.cfg's [global] section -- that's a
+# whole-process safety cap, not a considered per-service limit, and
+# leaving each frontend uncapped just means whatever the backend's OWN
+# stock defaults happen to be (e.g. Postfix's
+# smtpd_client_connection_count_limit, Dovecot's process_min_avail)
+# become the real, accidental bottleneck instead of a deliberate one
+# here. Keep this correlated with the backend's own total capacity --
+# homelab-postfix/homelab-dovecot both default their own total-capacity
+# settings to 600, comfortably above this 500, so HAProxy's ceiling is
+# the one that actually binds first.
 backends:
   - name: smtp
     frontend_port: 25
     backend: 127.0.0.1:25
+    maxconn: 500
   - name: submission
     frontend_port: 587
     backend: 127.0.0.1:587
+    maxconn: 500
   - name: imap
     frontend_port: 143
     backend: 127.0.0.1:143
+    maxconn: 500
   - name: imaps
     frontend_port: 993
     backend: 127.0.0.1:993
+    maxconn: 500

@@ -56,6 +56,7 @@ backends:
   - name: smtp
     frontend_port: 25
     backend: 10.50.1.201:25
+    maxconn: 250
   - name: imaps
     frontend_port: 993
     backend: 10.50.1.202:993
@@ -74,9 +75,11 @@ my $cfg = do { local (@ARGV, $/) = $haproxy_cfg; <> };
 like($cfg, qr/frontend smtp_in/, 'smtp frontend block present');
 like($cfg, qr/bind \*:25/, 'smtp frontend binds the right port');
 like($cfg, qr/server smtp 10\.50\.1\.201:25 check send-proxy/, 'smtp backend targets the right host:port, with send-proxy');
+like($cfg, qr/frontend smtp_in\s+bind \*:25\s+maxconn 250/, 'smtp frontend uses its own explicit maxconn');
 like($cfg, qr/frontend imaps_in/, 'imaps frontend block present');
 like($cfg, qr/bind \*:993/, 'imaps frontend binds the right port');
 like($cfg, qr/server imaps 10\.50\.1\.202:993 check send-proxy/, 'imaps backend targets the right host:port, with send-proxy');
+like($cfg, qr/frontend imaps_in\s+bind \*:993\s+maxconn 500/, 'imaps frontend defaults maxconn to 500 when unset');
 unlike($cfg, qr/__[A-Z_]+__/, 'no template placeholders left unsubstituted');
 
 # Idempotency: re-run with the same input, must succeed again and
