@@ -8,7 +8,8 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-webproxy
 Architecture: all
-Depends: perl (>= 5.36), libyaml-libyaml-perl, nginx, certbot, python3-certbot-nginx
+Depends: perl (>= 5.36), libyaml-libyaml-perl, nginx, certbot, python3-certbot-nginx,
+         homelab-common (>= 0.1.19)
 Description: nginx + Let's Encrypt reverse proxy for the homelab-* ecosystem
  Ships homelab-webproxy-apply-sites, which reads an editable
  /etc/homelab/webproxy/sites.yml (domain -> upstream host:port pairs)

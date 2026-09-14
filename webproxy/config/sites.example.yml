@@ -4,6 +4,23 @@
 # sites that don't already have a vhost.
 letsencrypt_email: YOUR_EMAIL_HERE
 
+# This host's own real, internet-reachable address -- the one every
+# `domain` below actually resolves to. This package has no debconf of
+# its own (config here is plain hand-edited YAML, deliberately, unlike
+# most other homelab-* packages), so this is a plain config key rather
+# than a new debconf template just for one value. Used only to populate
+# homelab-api's infrastructure topology registry (`homelab-cli
+# topology`) with each vhost's own address -- purely observational,
+# never consulted by nginx or certbot themselves. Leave blank to skip
+# registration entirely.
+advertise_host: YOUR_PUBLIC_ADDRESS_HERE
+
+# Where to register with (see advertise_host above) -- an already-known
+# value for every site below anyway, since each one's own upstream is
+# reachable only via this same homelab-api. Also skips registration if
+# blank.
+homelab_api_base: https://YOUR_API_DOMAIN_HERE
+
 sites:
   - domain: drive.test.mailmasker.org
     upstream: 127.0.0.1:2501
