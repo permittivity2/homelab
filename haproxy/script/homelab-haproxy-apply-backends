@@ -22,7 +22,9 @@
 # to assume otherwise -- see its own template comment).
 use strict;
 use warnings;
-use YAML::XS qw(LoadFile);
+use YAML::XS qw(LoadFile DumpFile);
+use Mojo::JSON qw(encode_json);
+use File::Temp qw(tempfile);
 
 my $BACKENDS_CONFIG = $ENV{HOMELAB_HAPROXY_BACKENDS} // '/etc/homelab/haproxy/backends.yml';
 my $HAPROXY_CONFIG   = $ENV{HOMELAB_HAPROXY_CONFIG}   // '/etc/haproxy/haproxy.cfg';
@@ -102,3 +104,36 @@ system('systemctl', 'reload', 'haproxy') == 0
     or die "haproxy config validated and installed but reload failed — check 'systemctl status haproxy'\n";
 
 print 'homelab-haproxy: applied ' . scalar(@backends) . " backend(s), reloaded.\n";
+
+# Topology visibility only (`homelab-cli topology`) -- never lets a
+# registration problem affect the actual haproxy config apply above,
+# which has already succeeded by this point. Skipped entirely when
+# either value is unset or still the example file's placeholder, same
+# "explicit opt-in, not auto-detected" convention as every other
+# cross-host address in this project.
+my $api_base       = $config->{api_base};
+my $advertise_host = $config->{advertise_host};
+if ($api_base && $advertise_host && $advertise_host !~ /^YOUR_/) {
+    my @entries = map {
+        my $b = $_;
+        {
+            name        => "haproxy-$b->{name}_in",
+            kind        => 'tcp-proxy-frontend',
+            host        => $advertise_host,
+            port        => $b->{frontend_port},
+            description => "HAProxy frontend, send-proxy to $b->{backend}",
+            fronts      => ["$b->{name}\@$b->{backend}"],
+        };
+    } @backends;
+
+    my ($entries_fh, $entries_file) = tempfile(SUFFIX => '.json', UNLINK => 1);
+    print $entries_fh encode_json(\@entries);
+    close $entries_fh;
+
+    my $reg_rc = system(
+        'homelab-register-infrastructure', '--api-base', $api_base,
+        '--replace-prefix', 'haproxy-', '--entries-file', $entries_file,
+    );
+    print "  WARNING: homelab-register-infrastructure exited non-zero -- topology view may be stale\n"
+        if $reg_rc != 0;
+}
