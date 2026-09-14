@@ -1,0 +1,77 @@
+#!/usr/bin/perl
+# Registers a non-HTTP infrastructure entry (dovecot, postfix, an
+# HAProxy frontend, a webproxy vhost) into homelab-api's
+# api.infrastructure_registry table, so `homelab-cli topology` has
+# something to show -- separate from the HTTP service_registry every
+# Mojolicious homelab-* feature registers itself into via
+# Homelab::Common::Registry, since these speak IMAP/SMTP/raw TCP, not
+# HTTP, and must never be selectable by homelab-api's own gateway
+# forwarding logic (which only ever consults service_registry).
+#
+# Best-effort by design, same as homelab-bootstrap-pgbouncer-entry:
+# prints a warning and exits 0 on failure rather than failing the
+# calling package's postinst outright -- this is a topology-visibility
+# nicety, not something anything else depends on to function.
+#
+# Single-entry usage (dovecot, postfix -- one real instance per host):
+#   homelab-register-infrastructure --api-base URL --name NAME --kind KIND \
+#       --host HOST [--port PORT] [--description DESC] [--fronts a,b,c]
+#
+# Multi-entry, wholesale-replace usage (HAProxy, webproxy -- config
+# regenerated wholesale on every apply, not merged, so the registry
+# should track that: every existing row whose name starts with
+# --replace-prefix is deleted before this batch is inserted):
+#   homelab-register-infrastructure --api-base URL --replace-prefix PREFIX \
+#       --entries-file /path/to/entries.json
+# where entries.json is a JSON array of {name, kind, host, port,
+# description, fronts} objects.
+
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+use Mojo::UserAgent;
+use Mojo::JSON qw(decode_json);
+
+my %opt;
+GetOptions(
+    \%opt,
+    'api-base=s', 'name=s', 'kind=s', 'host=s', 'port=i',
+    'description=s', 'fronts=s', 'replace-prefix=s', 'entries-file=s',
+) or die "usage: see script header\n";
+
+die "--api-base is required\n" unless $opt{'api-base'};
+
+my $ua = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10);
+my $body;
+
+if ($opt{'replace-prefix'}) {
+    die "--entries-file is required with --replace-prefix\n" unless $opt{'entries-file'};
+    open my $fh, '<', $opt{'entries-file'} or die "can't read $opt{'entries-file'}: $!\n";
+    local $/;
+    my $entries = decode_json(<$fh>);
+    close $fh;
+    $body = { replace_prefix => $opt{'replace-prefix'}, entries => $entries };
+}
+else {
+    for my $field (qw(name kind host)) {
+        die "--$field is required\n" unless $opt{$field};
+    }
+    $body = {
+        name        => $opt{name},
+        kind        => $opt{kind},
+        host        => $opt{host},
+        port        => $opt{port},
+        description => $opt{description},
+        fronts      => $opt{fronts} ? [split /,/, $opt{fronts}] : undef,
+    };
+}
+
+my $tx = $ua->post("$opt{'api-base'}/api/v1/registry/infrastructure", json => $body);
+if ($tx->error) {
+    print "  WARNING: infrastructure registry registration failed -- "
+        . ($tx->error->{message} // 'unknown error') . "\n";
+    print "           (topology visibility only -- not required for this service to function)\n";
+    exit 0;
+}
+print "  registered with infrastructure registry\n";
+exit 0;

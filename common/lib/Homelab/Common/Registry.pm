@@ -39,6 +39,7 @@ sub register {
         host             => $host,
         port             => $port,
         health_check_url => $opts{health_check_url},
+        description      => $opts{description},
     });
     die 'Registry registration failed: ' . _tx_error($tx) . "\n" if $tx->error;
     return 1;
