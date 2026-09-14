@@ -21,6 +21,7 @@ case "$1" in
             db_get homelab-worker/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
             db_get homelab-worker/api_base || true;       API_BASE="${RET:-http://localhost:3000}"
             db_get homelab-worker/listen_port || true;    LISTEN_PORT="${RET:-2512}"
+            db_get homelab-worker/advertise_host || true; ADVERTISE_HOST="${RET:-127.0.0.1}"
             db_get homelab-worker/storage_path || true;   STORAGE_PATH="${RET:-/var/lib/homelab/worker-storage}"
 
             echo "  bootstrapping Postgres roles for 'homelab_worker' on $DB_HOST..."
@@ -44,6 +45,14 @@ case "$1" in
                 --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
                 || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
 
+            # Bound to 0.0.0.0, not 127.0.0.1 (only the port used to get
+            # substituted) -- unreachable from any other host, including
+            # homelab-api's own gateway forward, otherwise. Found via a
+            # real remote gateway-forward attempt, not assumed. Same
+            # "bind broadly, firewall is the boundary" posture already
+            # used elsewhere in this project (dovecot's LMTP/auth
+            # listeners, etc), matching what homelab-sso/homelab-drive's
+            # own example configs already did correctly.
             sed \
                 -e "s#https://api\.test\.mailmasker\.org#$API_BASE#g" \
                 -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
@@ -53,8 +62,9 @@ case "$1" in
                 -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
                 -e "s#homelab_worker_migrate#$MIGRATE_ROLE#g" \
                 -e "s#/var/lib/homelab/worker-storage#$STORAGE_PATH#g" \
-                -e "s#\"http://127\.0\.0\.1:2512\"#\"http://127.0.0.1:$LISTEN_PORT\"#g" \
+                -e "s#\"http://127\.0\.0\.1:2512\"#\"http://0.0.0.0:$LISTEN_PORT\"#g" \
                 -e "s#  port: 2512#  port: $LISTEN_PORT#g" \
+                -e "s#  host: 127\.0\.0\.1#  host: $ADVERTISE_HOST#g" \
                 "$SHARE_DIR/config/worker.example.yml" > "$CONFIG_FILE"
             chown root:homelab "$CONFIG_FILE"
             chmod 640 "$CONFIG_FILE"
