@@ -32,5 +32,15 @@ jwt:
 
 server:
   listen: "http://0.0.0.0:3000"
-  workers: 20
+  # Each hypnotoad worker is a forked Perl/Mojolicious process; measured
+  # live at ~49MB RSS apiece (fork() COW sharing means this is real
+  # incremental cost, not fully shared). 8 was chosen for a 512MB/2-core
+  # container specifically -- raising this without re-measuring actual
+  # memory under a real combined-load burst (not just checking CPU
+  # headroom) caused a genuine kernel OOM-kill of this service in
+  # production testing at workers=20 (Failed with result 'oom-kill',
+  # 500M peak + 450M swap peak). Scale this up only after confirming
+  # `free -m` stays comfortably clear of the container's real RAM limit
+  # under the heaviest realistic combined request pattern, not CPU alone.
+  workers: 8
   pid_file: /var/lib/homelab/api-hypnotoad.pid

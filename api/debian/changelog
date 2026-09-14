@@ -1,3 +1,9 @@
+homelab-api (0.1.20) unstable; urgency=medium
+
+  * Release v0.1.20
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 22:29:32 -0500
+
 homelab-api (0.1.19) unstable; urgency=medium
 
   * Raise the greenfield default hypnotoad worker count in
