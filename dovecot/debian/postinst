@@ -164,6 +164,18 @@ case "$1" in
             echo "           Run 'doveconf -n' by hand to see it; the previous running config (if any) is untouched."
         fi
 
+        # Re-registered every configure (not gated behind $MARKER), same
+        # reasoning as the auth-system.conf.ext fix above -- topology
+        # visibility only (see homelab-register-infrastructure's own
+        # header comment), never required for dovecot itself to
+        # function, so failure here is a warning, not fatal.
+        db_get homelab-dovecot/advertise_host || true; ADVERTISE_HOST="${RET:-127.0.0.1}"
+        db_get homelab-dovecot/api_base || true; REG_API_BASE="${RET:-http://127.0.0.1:3000}"
+        homelab-register-infrastructure --api-base "$REG_API_BASE" \
+            --name dovecot --kind imap --host "$ADVERTISE_HOST" --port 993 \
+            --description "IMAP/IMAPS/LMTP mail delivery (SQL passdb against api.users); also serves plain IMAP:143" \
+            || true
+
         db_stop
 
         echo ""

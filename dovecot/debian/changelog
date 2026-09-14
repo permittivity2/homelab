@@ -1,3 +1,9 @@
+homelab-dovecot (0.1.11) unstable; urgency=medium
+
+  * Release v0.1.11
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 23:39:56 -0500
+
 homelab-dovecot (0.1.10) unstable; urgency=medium
 
   * Release v0.1.10
