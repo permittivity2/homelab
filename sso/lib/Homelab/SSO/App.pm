@@ -53,6 +53,7 @@ sub startup ($self) {
             register(
                 api_base => $self->api_base, feature_name => 'homelab-sso',
                 host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+                description => 'OAuth2/SSO authorization server for roundcube, drive, and other clients',
             );
         };
         $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
