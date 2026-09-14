@@ -1,3 +1,21 @@
+homelab-mailbridge (0.1.9) unstable; urgency=medium
+
+  * Release v0.1.9
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 14:15:16 -0500
+
+homelab-mailbridge (0.1.8) unstable; urgency=medium
+
+  * Release v0.1.8
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 13:18:21 -0500
+
+homelab-mailbridge (0.1.7) unstable; urgency=medium
+
+  * Release v0.1.7
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 13:15:33 -0500
+
 homelab-mailbridge (0.1.6) unstable; urgency=medium
 
   * Release v0.1.6

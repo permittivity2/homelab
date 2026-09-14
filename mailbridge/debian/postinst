@@ -25,6 +25,7 @@ case "$1" in
             db_get homelab-mailbridge/smtp_host || true;             SMTP_HOST="${RET:-mail.test.mailmasker.org}"
             db_get homelab-mailbridge/smtp_port || true;             SMTP_PORT="${RET:-587}"
             db_get homelab-mailbridge/listen_port || true;           LISTEN_PORT="${RET:-2510}"
+            db_get homelab-mailbridge/advertise_host || true;        ADVERTISE_HOST="${RET:-127.0.0.1}"
 
             echo "  bootstrapping Postgres roles for 'homelab_mailbridge' on $DB_HOST..."
             BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_mailbridge --schema mailbridge --db-host "$DB_HOST")"
@@ -49,14 +50,24 @@ case "$1" in
             # a plain hostname substitution would silently overwrite BOTH
             # with $IMAP_HOST even when the admin gave a different
             # $SMTP_HOST.
+            #
+            # listen bound to 0.0.0.0, not 127.0.0.1 (only the port used to
+            # get substituted) -- unreachable from any other host,
+            # including homelab-api's own gateway forward, otherwise.
+            # Found via a real remote gateway-forward attempt, not
+            # assumed. Same "bind broadly, firewall is the boundary"
+            # posture already used elsewhere in this project (dovecot's
+            # LMTP/auth listeners, etc), matching what homelab-sso/
+            # homelab-drive's own example configs already did correctly.
             sed \
                 -e "s#base_url: https://api\.test\.mailmasker\.org#base_url: $API_BASE#g" \
                 -e "s#imap_host: mail\.test\.mailmasker\.org#imap_host: $IMAP_HOST#g" \
                 -e "s#imap_port: 993#imap_port: $IMAP_PORT#g" \
                 -e "s#smtp_host: mail\.test\.mailmasker\.org#smtp_host: $SMTP_HOST#g" \
                 -e "s#smtp_port: 587#smtp_port: $SMTP_PORT#g" \
-                -e "s#listen: \"http://127\.0\.0\.1:2510\"#listen: \"http://127.0.0.1:$LISTEN_PORT\"#g" \
+                -e "s#listen: \"http://127\.0\.0\.1:2510\"#listen: \"http://0.0.0.0:$LISTEN_PORT\"#g" \
                 -e "s#  port: 2510#  port: $LISTEN_PORT#g" \
+                -e "s#  host: 127\.0\.0\.1#  host: $ADVERTISE_HOST#g" \
                 -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
                 -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
                 -e "s#homelab_mailbridge_runtime#$RUNTIME_ROLE#g" \
