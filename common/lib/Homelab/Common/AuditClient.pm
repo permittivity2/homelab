@@ -2,7 +2,7 @@ package Homelab::Common::AuditClient;
 use Mojo::Base -strict;
 use Exporter 'import';
 
-our @EXPORT_OK = qw(enqueue);
+our @EXPORT_OK = qw(enqueue enqueue_p);
 
 # Writes ONE audit event -- not an HTTP client despite living alongside
 # AuthClient/SSOClient in this shared module. Every homelab-* service
@@ -59,6 +59,31 @@ sub enqueue {
         { json => \%payload },
     );
     return 1;
+}
+
+# Non-blocking twin of enqueue() above, for callers running inside a
+# Mojo::Pg promise chain (e.g. homelab-api's _login, converted to avoid
+# parking a whole hypnotoad worker on this INSERT's round trip). Same
+# contract otherwise -- same required fields, same "let it propagate,
+# no best-effort swallowing" posture, same "pass the caller's own $db
+# handle for transaction consistency" design. Returns the Mojo::Promise
+# from $db->query_p directly; callers chain their own ->then/->catch.
+sub enqueue_p {
+    my ($db, %fields) = @_;
+    die "AuditClient::enqueue_p(): db handle required\n" unless $db;
+    for my $required (qw(actor_email affected_user action source_service)) {
+        die "AuditClient::enqueue_p(): $required is required\n" unless defined $fields{$required} && length $fields{$required};
+    }
+
+    my %payload = map { $_ => $fields{$_} } grep { defined $fields{$_} } qw(
+        actor_email affected_user jti action resource_type resource_id source_service
+        ip_address user_agent detail occurred_at
+    );
+
+    return $db->query_p(
+        q{INSERT INTO audit.queue (payload) VALUES (?)},
+        { json => \%payload },
+    );
 }
 
 1;

@@ -1,3 +1,22 @@
+homelab-common (0.1.18) unstable; urgency=medium
+
+  * Release v0.1.18
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 19:49:33 -0500
+
+homelab-common (0.1.18) unstable; urgency=medium
+
+  * Proxy::forward() converted to non-blocking (Mojo::UserAgent's
+    start_p instead of start) -- a blocking forward() parked an entire
+    hypnotoad worker's event loop for the full backend round trip on
+    every gateway-forwarded request, confirmed as a real cause of a
+    stress-test collapse in homelab-api. Callers must now call
+    $c->render_later before invoking forward(). AuditClient gains
+    enqueue_p, a non-blocking twin of enqueue() for callers running
+    inside a Mojo::Pg promise chain; enqueue() itself is unchanged.
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 19:50:00 -0500
+
 homelab-common (0.1.17) unstable; urgency=medium
 
   * Release v0.1.17

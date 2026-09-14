@@ -3,6 +3,7 @@ use Mojo::Base -strict;
 use Mojo::UserAgent;
 use Mojo::URL;
 use Mojo::Transaction::HTTP;
+use Mojo::Promise;
 use Exporter 'import';
 use Homelab::Common::Registry qw(lookup);
 
@@ -51,6 +52,15 @@ exception page, when the registry lookup fails or the backend is
 unreachable -- from a client's perspective that's a routing problem it
 can't do anything about, not an application error.
 
+Non-blocking (uses C<$UA-E<gt>start_p>, not C<start>) -- a hypnotoad
+worker is a single-threaded event loop, and the old blocking C<start>
+parked the ENTIRE worker for every gateway-forwarded request's full
+round trip (confirmed as the root cause of a real stress-test collapse
+at concurrency, see homelab-api's changelog). Callers MUST call
+C<$c-E<gt>render_later> before invoking C<forward()> -- it renders
+asynchronously via the returned promise's own C<-E<gt>then>/C<-E<gt>catch>,
+not before returning.
+
 =cut
 
 # forward($c, feature_name => ..., api_base => ..., strip_prefix => '')
@@ -96,7 +106,7 @@ sub forward {
     }
     unless ($entry && $entry->{host} && $entry->{port}) {
         $c->render(json => { error => "$feature_name is not currently available" }, status => 502);
-        return;
+        return Mojo::Promise->resolve;
     }
 
     my $path = $c->req->url->path->to_string;
@@ -138,20 +148,26 @@ sub forward {
     # recording homelab-api's own loopback address before this fix.
     $tx->req->headers->header('X-Forwarded-For' => $c->tx->remote_address);
     $tx->req->headers->header('X-Real-IP'       => $c->tx->remote_address);
-    $tx = $UA->start($tx);
 
-    unless ($tx->res->code) {
-        my $err = $tx->error;
-        $c->render(
-            json   => { error => "$feature_name is not reachable: " . ($err->{message} // 'unknown error') },
-            status => 504,
-        );
+    return $UA->start_p($tx)->then(sub {
+        my ($tx) = @_;
+        unless ($tx->res->code) {
+            my $err = $tx->error;
+            $c->render(
+                json   => { error => "$feature_name is not reachable: " . ($err->{message} // 'unknown error') },
+                status => 504,
+            );
+            return;
+        }
+
+        $c->res->headers->content_type($tx->res->headers->content_type) if $tx->res->headers->content_type;
+        $c->render(data => $tx->res->body, status => $tx->res->code);
         return;
-    }
-
-    $c->res->headers->content_type($tx->res->headers->content_type) if $tx->res->headers->content_type;
-    $c->render(data => $tx->res->body, status => $tx->res->code);
-    return;
+    })->catch(sub {
+        my ($err) = @_;
+        $c->render(json => { error => "$feature_name is not reachable: $err" }, status => 504);
+        return;
+    });
 }
 
 1;
