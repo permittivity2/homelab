@@ -1,3 +1,16 @@
+homelab-api (0.1.19) unstable; urgency=medium
+
+  * Raise the greenfield default hypnotoad worker count in
+    config/api.example.yml from 4 to 20. Confirmed via real stress
+    testing that a 2-core/512MB container has idle CPU/RAM headroom
+    far beyond what 4 (or even 12, this session's interim hand-tuned
+    value on ct04) workers can use -- more workers directly helps the
+    routes not yet converted to non-blocking I/O (_register, _refresh,
+    _logout, /auth/sessions/*, /admin/*), each of which still parks a
+    whole worker's event loop per request.
+
+ -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 21:29:22 -0500
+
 homelab-api (0.1.18) unstable; urgency=medium
 
   * Release v0.1.18

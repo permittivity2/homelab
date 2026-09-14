@@ -32,5 +32,5 @@ jwt:
 
 server:
   listen: "http://0.0.0.0:3000"
-  workers: 4
+  workers: 20
   pid_file: /var/lib/homelab/api-hypnotoad.pid
