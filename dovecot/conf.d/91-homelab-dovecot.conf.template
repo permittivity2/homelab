@@ -236,9 +236,25 @@ haproxy_trusted_networks = 10.50.0.0/16
 # regardless of real client load) until HAProxy's own 60s timeout
 # closed them from the outside. Keeping a standby pool sized for a
 # realistic burst eliminates the fork-on-demand latency spike.
+#
+# Raised again (32->128) after a follow-up 60-concurrent-connection
+# burst still occasionally hit "Connection queue full" -- confirmed via
+# live CPU/RAM sampling during a repro that this container had 90-100%
+# idle CPU and flat ~50%-used RAM the entire time, i.e. a pure software
+# ceiling, not a hardware one. process_limit is now also set explicitly
+# (was implicitly Dovecot's compiled-in default) to 600, deliberately
+# kept comfortably ABOVE homelab-haproxy's own imap_in/imaps_in frontend
+# maxconn (500 each, see that package's backends.yml) so this service's
+# total capacity is never the thing that binds first for traffic
+# HAProxy already decided to admit -- HAProxy's frontend maxconn is
+# meant to be the real, coherient front-door ceiling for this path.
+# 128 is roughly a fifth of the new 600 total: sized to absorb a
+# realistic burst's full standby needs without wastefully pre-forking
+# most of the total capacity at idle.
 # Unconditional, same reasoning as haproxy_trusted_networks above.
 service imap-login {
-  process_min_avail = 32
+  process_limit = 600
+  process_min_avail = 128
   inet_listener imap {
     haproxy = __BEHIND_HAPROXY__
   }
