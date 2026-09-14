@@ -167,20 +167,36 @@ class recipient_blocking extends rcube_plugin
         if ($this->rc->task == 'blockedaddresses') {
             // Same body/handler/JS as the Settings-tab version above --
             // this task exists purely to put the identical page behind
-            // its own taskbar icon, not to duplicate any logic. Action
-            // names/keys are registered explicitly against this task
-            // (rcube_plugin_api::register_action()'s real $task-prefix
-            // behavior: "$task.$action", confirmed by reading it, not
-            // assumed) so they match what the framework actually looks
-            // up -- 'index' because rcmail's own dispatch defaults a
-            // plugin task's action to literally "index" when the URL has
-            // no _action at all (confirmed in program/include/rcmail.php),
-            // and 'plugin.blockedaddresses' because the existing search
-            // form's JS (shared, unchanged below) always submits to that
-            // literal action name regardless of which task it's on.
+            // its own taskbar icon, not to duplicate any logic.
+            //
+            // The $task arg to register_action() is NOT simply prefixed
+            // onto whatever action name you pass -- confirmed by actually
+            // reading both sides of the dispatch, not assumed (a previous
+            // version of this comment got this wrong, which is exactly
+            // what caused a real, reproducible "No handler found for
+            // action plugin.unblock_recipient" (524) bug on this task's
+            // page: register_action() with $task set stores the callback
+            // under "$task.$action" verbatim, so passing an action that
+            // ALREADY starts with "plugin." here produces a doubled key
+            // like "blockedaddresses.plugin.unblock_recipient" -- but
+            // rcmail's own dispatch (program/include/rcmail.php) routes
+            // ANY action matching /^plugin\./ through exec_action($action)
+            // with NO task prefix at all, regardless of current task; the
+            // task-prefixed exec_action("$task.$action") path only ever
+            // fires for actions that do NOT start with "plugin.". So:
+            // 'index' (no "plugin." prefix -- rcmail defaults a plugin
+            // task's action to literally "index" when the URL has no
+            // _action at all) genuinely needs $task here to match that
+            // path. 'plugin.blockedaddresses' (the existing search form's
+            // JS, shared/unchanged below, always submits this literal
+            // action name regardless of which task it's on) and
+            // 'plugin.unblock_recipient' must NOT pass $task -- same as
+            // the mail/settings blocks above register them -- so they
+            // land under the plain "plugin.*" key the framework actually
+            // looks up.
             $this->api->register_action('index', $this->ID, [$this, 'action_blockedaddresses'], 'blockedaddresses');
-            $this->api->register_action('plugin.blockedaddresses', $this->ID, [$this, 'action_blockedaddresses'], 'blockedaddresses');
-            $this->api->register_action('plugin.unblock_recipient', $this->ID, [$this, 'action_unblock_recipient'], 'blockedaddresses');
+            $this->api->register_action('plugin.blockedaddresses', $this->ID, [$this, 'action_blockedaddresses']);
+            $this->api->register_action('plugin.unblock_recipient', $this->ID, [$this, 'action_unblock_recipient']);
             $this->register_handler('plugin.body', [$this, 'blockedaddresses_body']);
             $this->include_script('recipient_blocking.js');
             $this->rc->output->add_label('recipient_blocking.unblocking');
