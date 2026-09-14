@@ -37,6 +37,7 @@ sub startup ($self) {
             register(
                 api_base => $self->api_base, feature_name => 'homelab-audit',
                 host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+                description => 'Audit trail: drains api.audit_queue, serves /api/v1/audit/*',
             );
         };
         $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
