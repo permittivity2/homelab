@@ -23,6 +23,18 @@ Type: string
 Default: 2501
 Description: Port for homelab-drive to listen on:
 
+Template: homelab-drive/advertise_host
+Type: string
+Default: 127.0.0.1
+Description: This host's own address to advertise in the service registry:
+ Written into config.yml's registry.host -- what homelab-api's gateway
+ actually connects to when forwarding /api/v1/drive/* requests here.
+ Leave as 127.0.0.1 only if this service runs on the SAME host as
+ homelab-api itself; set it to this host's real reachable address
+ (e.g. its data-plane IP) for any distributed deployment, or every
+ gateway forward will try to reach homelab-api's own loopback instead
+ of this service.
+
 Template: homelab-drive/sso_base_url
 Type: string
 Default: http://127.0.0.1:2502

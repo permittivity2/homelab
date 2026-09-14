@@ -21,6 +21,7 @@ case "$1" in
             db_get homelab-drive/pgbouncer_host || true;  PGBOUNCER_HOST="${RET:-localhost}"
             db_get homelab-drive/api_base || true;        API_BASE="${RET:-http://localhost:3000}"
             db_get homelab-drive/listen_port || true;     LISTEN_PORT="${RET:-2501}"
+            db_get homelab-drive/advertise_host || true;  ADVERTISE_HOST="${RET:-127.0.0.1}"
             db_get homelab-drive/sso_base_url || true;      SSO_BASE_URL="${RET:-http://127.0.0.1:2502}"
             db_get homelab-drive/sso_redirect_uri || true;  SSO_REDIRECT_URI="${RET:-https://drive.test.mailmasker.org/oauth/callback}"
             db_get homelab-drive/sso_client_secret || true; SSO_CLIENT_SECRET="$RET"
@@ -66,7 +67,7 @@ case "$1" in
                 -e "s#homelab_drive_migrate#$MIGRATE_ROLE#g" \
                 -e "s#CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS#$SESSION_SECRET#g" \
                 -e "s#0\.0\.0\.0:2501#0.0.0.0:$LISTEN_PORT#g" \
-                -e "s#host: 127\.0\.0\.1#host: 127.0.0.1#g" \
+                -e "s#host: 127\.0\.0\.1#host: $ADVERTISE_HOST#g" \
                 -e "s#port: 2501#port: $LISTEN_PORT#g" \
                 -e "s#YOUR_SSO_BASE_URL_HERE#$SSO_BASE_URL#g" \
                 -e "s#https://drive.test.mailmasker.org/oauth/callback#$SSO_REDIRECT_URI#g" \

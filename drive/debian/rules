@@ -5,10 +5,32 @@
 
 override_dh_auto_test:
 
+# The unit file used to be hand-copied straight into
+# /etc/systemd/system/ inside override_dh_install below -- which meant
+# dh_installsystemd (part of the standard `dh $@` sequence, compat 13)
+# never saw it as a real service to manage, so this package shipped
+# with NO prerm/postrm at all. Found live: `apt purge` deleted the
+# package's files but never stopped the running process, leaving an
+# orphaned hypnotoad instance bound to this app's own port, still
+# trying (and failing, loudly, on a 5-second timer) to reach a
+# database that had just been removed out from under it -- caught only
+# because a real post-decommission email check surfaced unrelated
+# log noise that led back here, not by anything in this package's own
+# tests. Fixed by declaring the unit the standard debhelper way
+# (debian/homelab-drive.service, picked up automatically) instead.
+# --no-enable --no-start: this package's own postinst already handles
+# enable/start/restart itself with careful sequencing (config must
+# exist, role bootstrap must succeed, etc. first) -- debhelper's
+# default auto-generated postinst snippet would duplicate that, running
+# after the custom logic already ran. The stop-before-remove and
+# daemon-reload-after-remove behavior this fix actually needs comes
+# from dh_installsystemd's prerm/postrm generation, which isn't
+# affected by these two flags.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
 override_dh_install:
 	dh_install
-	install -D -m 644 systemd/homelab-drive.service \
-		debian/homelab-drive/etc/systemd/system/homelab-drive.service
 	install -D -m 644 config/drive.example.yml \
 		debian/homelab-drive/usr/share/homelab-drive/config/drive.example.yml
 	find migrations -type f -exec install -D -m 644 {} \
