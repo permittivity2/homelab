@@ -204,13 +204,41 @@ service auth {
 # rather than silently running exposed with no nudge to add one.
 # __BEHIND_HAPROXY__ substitutes to the literal string `yes` or `no`.
 #
-# TODO confirm via a live doveconf -n / real IMAPS-through-HAProxy login
-# that re-declaring inet_listener imap/imaps here MERGES the `haproxy`
-# property onto the vendor's own listener definition rather than
-# conflicting with it -- auth_mechanisms merging this way is already
-# confirmed empirically (see the top of this file); service/inet_listener
-# blocks specifically have not been separately verified yet.
+# Confirmed via a live doveconf -n / real IMAPS-through-HAProxy login: yes,
+# re-declaring inet_listener imap/imaps here MERGES the `haproxy` property
+# onto the vendor's own listener definition rather than conflicting with it
+# -- same merge behavior already confirmed for auth_mechanisms at the top
+# of this file.
+#
+# `haproxy = yes` alone is NOT sufficient, though (found via that same live
+# test): without haproxy_trusted_networks naming the proxy's own address,
+# Dovecot treats every PROXY-protocol connection as untrusted and closes it
+# before TLS even starts (logged as "haproxy: Client not trusted (rip=)"),
+# indistinguishable from a client hang/EOF on the connecting side. Scoped to
+# the whole 10.50.0.0/16 data-plane supernet rather than one specific
+# HAProxy host's address -- same "bind broadly, the firewall is the actual
+# boundary" reasoning as the always-on LMTP/auth listeners above, and it
+# means this doesn't need its own debconf prompt just to track which host
+# happens to run homelab-haproxy. Unconditional (not gated on
+# __BEHIND_HAPROXY__): inert when nothing sends a PROXY header.
+haproxy_trusted_networks = 10.50.0.0/16
+
+# process_min_avail: Dovecot's default (0) keeps zero pre-forked
+# imap-login workers on standby and forks new ones on demand as
+# connections arrive. Under a burst of ~60 near-simultaneous new
+# connections, that on-demand forking couldn't keep pace on this
+# container's 2 cores -- HAProxy's TCP connect to the listener succeeded
+# instantly (kernel accepted the SYN), but the connections sat waiting
+# for a login worker to actually accept() them, producing ZERO dovecot
+# log output (not even the "Client not trusted" warning -- that's a
+# red herring from HAProxy's own unrelated ~2s health-check cadence,
+# confirmed by its steady drip continuing throughout the burst
+# regardless of real client load) until HAProxy's own 60s timeout
+# closed them from the outside. Keeping a standby pool sized for a
+# realistic burst eliminates the fork-on-demand latency spike.
+# Unconditional, same reasoning as haproxy_trusted_networks above.
 service imap-login {
+  process_min_avail = 32
   inet_listener imap {
     haproxy = __BEHIND_HAPROXY__
   }
