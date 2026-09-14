@@ -65,6 +65,7 @@ sub startup ($self) {
             register(
                 api_base => $self->api_base, feature_name => 'homelab-drive',
                 host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+                description => 'File storage web app + JSON API, serves /api/v1/drive/*',
             );
         };
         $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
