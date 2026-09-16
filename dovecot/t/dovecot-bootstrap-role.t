@@ -119,4 +119,55 @@ is(
     'after re-running, the NEW (rotated) password works',
 );
 
+# --role-suffix: each HA instance's own uniquely-named role (added after
+# a real fleet rebuild found every 2nd/3rd homelab-dovecot instance's
+# install silently rotating ONE shared role's password out from under
+# already-running siblings). A suffixed role needs the exact same
+# cleanup as the bare one above, tracked separately since it's a
+# DIFFERENT role name.
+my $suffix        = 'testsuffix';
+my $suffixed_role = "${role}_${suffix}";
+
+END {
+    if ($ENV{HOMELAB_DOVECOT_TEST_LIVE_BOOTSTRAP}) {
+        my $r = "homelab_dovecot_runtime_testsuffix";
+        system('sudo', '-u', 'postgres', 'psql', '-d', 'homelab', '-c', qq{REVOKE ALL ON api.users FROM "$r"});
+        system('sudo', '-u', 'postgres', 'psql', '-d', 'homelab', '-c', qq{REVOKE ALL ON SCHEMA api FROM "$r"});
+        system('sudo', '-u', 'postgres', 'psql', '-c', qq{DROP ROLE IF EXISTS "$r"});
+    }
+}
+
+my $suffixed_output = `perl $script --db-host $hostname --role-suffix $suffix 2>/dev/null`;
+is($? >> 8, 0, '--role-suffix: bootstrap script exits 0');
+
+my %suffixed_creds;
+for my $line (split /
+/, $suffixed_output) {
+    my ($k, $v) = split /=/, $line, 2;
+    $suffixed_creds{$k} = $v if defined $v;
+}
+is($suffixed_creds{ROLE}, $suffixed_role, '--role-suffix produces homelab_dovecot_runtime_<suffix>, not the bare name');
+isnt($suffixed_creds{ROLE}, $role, '--role-suffix role is a DIFFERENT role than the bare one bootstrapped above');
+
+sub psql_as_role {
+    my ($use_role, $password, @sql_and_args) = @_;
+    local $ENV{PGPASSWORD} = $password;
+    return system('psql', '-h', '127.0.0.1', '-U', $use_role, '-d', 'homelab', '-q', @sql_and_args);
+}
+
+is(
+    psql_as_role($suffixed_role, $suffixed_creds{PASSWORD}, '-c', 'SELECT email, password_hash, active FROM api.users LIMIT 1'),
+    0,
+    '--role-suffix role can SELECT the same three granted columns as the bare role',
+);
+
+# The actual point of this whole feature: bootstrapping the SUFFIXED
+# role must not have touched the ORIGINAL bare role's password from
+# earlier in this file -- that's exactly the bug this feature fixes.
+is(
+    psql_as($creds2{PASSWORD}, '-c', 'SELECT email FROM api.users LIMIT 1'),
+    0,
+    q{bootstrapping a --role-suffix role does NOT rotate the bare role's password out from under it},
+);
+
 done_testing;

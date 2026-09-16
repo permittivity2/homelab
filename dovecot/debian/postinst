@@ -69,9 +69,13 @@ case "$1" in
             db_get homelab-dovecot/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
             db_get homelab-dovecot/mail_domain || true;    MAIL_DOMAIN="$RET"
             db_get homelab-dovecot/api_base || true;       API_BASE="${RET:-http://127.0.0.1:3000}"
+            db_get homelab-dovecot/instance_id || true;    INSTANCE_ID="$RET"
 
-            echo "  bootstrapping 'homelab_dovecot_runtime' on $DB_HOST..."
-            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-dovecot-bootstrap-role" --db-host "$DB_HOST")"
+            ROLE_SUFFIX_ARGS=""
+            [ -n "$INSTANCE_ID" ] && ROLE_SUFFIX_ARGS="--role-suffix $INSTANCE_ID"
+
+            echo "  bootstrapping 'homelab_dovecot_runtime${INSTANCE_ID:+_$INSTANCE_ID}' on $DB_HOST..."
+            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-dovecot-bootstrap-role" --db-host "$DB_HOST" $ROLE_SUFFIX_ARGS)"
 
             ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^ROLE=//p')"
             PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^PASSWORD=//p')"

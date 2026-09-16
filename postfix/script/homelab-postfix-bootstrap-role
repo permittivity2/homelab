@@ -53,7 +53,7 @@
 # with homelab-pgbouncer's userlist.txt use it directly, no separate
 # hashing step.
 #
-# Usage: homelab-postfix-bootstrap-role --db-host HOST [--db homelab]
+# Usage: homelab-postfix-bootstrap-role --db-host HOST [--db homelab] [--role-suffix SUFFIX]
 
 use strict;
 use warnings;
@@ -63,20 +63,32 @@ use IPC::Open2 qw(open2);
 
 my $DB      = 'homelab';
 my $DB_HOST = '';
-my $ROLE    = 'homelab_postfix_runtime';
+my $ROLE_SUFFIX = '';
+my $ROLE_BASE   = 'homelab_postfix_runtime';
+our $ROLE;
 
 GetOptions(
-    'db-host=s' => \$DB_HOST,
-    'db=s'      => \$DB,
+    'db-host=s'     => \$DB_HOST,
+    'db=s'          => \$DB,
+    'role-suffix=s' => \$ROLE_SUFFIX,
 ) or die usage();
 
 die usage() unless $DB_HOST;
+
+# Distinguishes one HA instance's own Postgres role from its siblings'
+# (e.g. three homelab-postfix installs behind the same HAProxy pool each
+# need their OWN role -- sharing one meant every new instance's install
+# silently rotated the password out from under the other two already
+# running, found live during a real fleet rebuild). Empty/omitted (the
+# default) keeps today's exact bare role name, so a single-instance
+# deployment upgrading this package is completely unaffected.
+$ROLE = length($ROLE_SUFFIX) ? "${ROLE_BASE}_${ROLE_SUFFIX}" : $ROLE_BASE;
 
 my @SSH_OPTS    = ('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new');
 my $PENDING_DIR = '/var/lib/homelab-database/pending';
 
 sub usage {
-    return "Usage: $0 --db-host HOST [--db homelab]\n";
+    return "Usage: $0 --db-host HOST [--db homelab] [--role-suffix SUFFIX]\n";
 }
 
 sub log_msg  { print STDERR "[postfix-bootstrap-role] @_\n" }

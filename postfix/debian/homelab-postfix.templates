@@ -151,3 +151,21 @@ Description: Address THIS host's own OpenDKIM binds its milter socket to (only r
  from 127.0.0.1 and every remote secondary's mail silently stops being
  signed (milter_default_action=accept means it still gets DELIVERED,
  just unsigned, which is easy to miss without checking).
+
+Template: homelab-postfix/instance_id
+Type: string
+Default:
+Description: Unique identifier for this HA instance's own Postgres role:
+ Only needed when running more than one homelab-postfix instance behind
+ the same HAProxy pool (see homelab-haproxy's own backends.yml) -- each
+ instance needs its OWN Postgres role, or every new instance's install
+ silently rotates the shared role's password out from under every other
+ already-running instance (confirmed live: this broke SMTP submission
+ and RCPT TO validation fleet-wide during a real 3-instance rebuild).
+ Leave blank for a single, standalone instance (keeps the plain
+ homelab_postfix_runtime role name, matching every install before this
+ template existed). For an HA pool, give each instance its own short,
+ stable value (e.g. its own hostname: "ct02", "ct13", "ct14") -- the
+ role becomes homelab_postfix_runtime_<value>. Changing this on an
+ already-bootstrapped instance does NOT migrate the old role; run
+ 'dpkg-reconfigure homelab-postfix' afterward to bootstrap the new one.

@@ -109,8 +109,12 @@ case "$1" in
         # dpkg-reconfigure is the deliberate way to redo it (e.g. after
         # a password rotation), same convention as homelab-dovecot.
         if [ ! -f "$MAP_CF" ]; then
-            echo "  bootstrapping 'homelab_postfix_runtime' on $DB_HOST..."
-            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-postfix-bootstrap-role" --db-host "$DB_HOST")"
+            db_get homelab-postfix/instance_id || true; INSTANCE_ID="$RET"
+            ROLE_SUFFIX_ARGS=""
+            [ -n "$INSTANCE_ID" ] && ROLE_SUFFIX_ARGS="--role-suffix $INSTANCE_ID"
+
+            echo "  bootstrapping 'homelab_postfix_runtime${INSTANCE_ID:+_$INSTANCE_ID}' on $DB_HOST..."
+            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-postfix-bootstrap-role" --db-host "$DB_HOST" $ROLE_SUFFIX_ARGS)"
 
             ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^ROLE=//p')"
             PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^PASSWORD=//p')"
