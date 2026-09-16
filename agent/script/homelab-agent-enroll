@@ -1,0 +1,41 @@
+#!/usr/bin/perl
+# One-shot enrollment: exchanges a single-use code (minted by a
+# site_admin via `POST /api/v1/admin/agent/enroll`, e.g. through
+# homelab-cli) for this agent's first JWT + refresh_token, and writes
+# them to the credential file homelab-agent's own App.pm reads at
+# startup. Run once by postinst on first install; safe to re-run by
+# hand (dpkg-reconfigure) if the credential file is ever lost or the
+# refresh_token has fully lapsed (see migrations/010-fleet-agent.sql's
+# own comment on why a re-enrollment, not silent failure, is the right
+# outcome for a genuinely abandoned credential).
+#
+# Usage: homelab-agent-enroll --api-base URL --code CODE --credential-file PATH
+
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+use Mojo::UserAgent;
+use Mojo::JSON qw(encode_json);
+use YAML::XS qw(DumpFile);
+
+my %opt;
+GetOptions(\%opt, 'api-base=s', 'code=s', 'credential-file=s') or die "usage: see script header\n";
+for my $field (qw(api-base code credential-file)) {
+    die "--$field is required\n" unless $opt{$field};
+}
+
+my $ua = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10);
+my $tx = $ua->post("$opt{'api-base'}/api/v1/agent/enroll/redeem", json => { code => $opt{code} });
+if ($tx->error) {
+    my $body = eval { $tx->result->json } // {};
+    die "enrollment failed: " . ($body->{error} // $tx->error->{message} // 'unknown error') . "\n";
+}
+
+my $result = $tx->result->json;
+DumpFile($opt{'credential-file'}, {
+    refresh_token => $result->{refresh_token},
+    token         => $result->{token},
+    expires_at    => time + $result->{expires_in},
+});
+chmod 0600, $opt{'credential-file'};
+print "enrolled -- credential written to $opt{'credential-file'}\n";

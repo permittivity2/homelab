@@ -1,0 +1,105 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/agent
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+CREDENTIAL_FILE="$CONFIG_DIR/credential.yml"
+SHARE_DIR=/usr/share/homelab-agent
+MANIFEST_DIR=/etc/homelab/services
+
+case "$1" in
+    configure)
+        echo "homelab-agent post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab "$CONFIG_DIR"
+
+        # Shared across every homelab-* package, not owned by this one --
+        # created here (this package is a hard dependency of nothing, so
+        # nothing else can rely on it existing first) but writable by
+        # any of them via the homelab group, matching this project's
+        # existing config-file group-ownership convention elsewhere.
+        mkdir -p "$MANIFEST_DIR"
+        chgrp homelab "$MANIFEST_DIR"
+        chmod 775 "$MANIFEST_DIR"
+
+        db_get homelab-agent/api_base || true;        API_BASE="${RET:-http://localhost:3000}"
+        db_get homelab-agent/hostname || true;         HOSTNAME_ANSWER="$RET"
+        db_get homelab-agent/advertise_host || true;  ADVERTISE_HOST="${RET:-127.0.0.1}"
+        db_get homelab-agent/listen_port || true;     LISTEN_PORT="${RET:-2520}"
+        db_get homelab-agent/enrollment_code || true; ENROLLMENT_CODE="$RET"
+
+        HOSTNAME_VALUE="${HOSTNAME_ANSWER:-$(hostname -s)}"
+
+        if [ ! -f "$CREDENTIAL_FILE" ]; then
+            if [ -n "$ENROLLMENT_CODE" ]; then
+                echo "  redeeming enrollment code..."
+                if homelab-agent-enroll --api-base "$API_BASE" --code "$ENROLLMENT_CODE" \
+                        --credential-file "$CREDENTIAL_FILE"; then
+                    chown homelab:homelab "$CREDENTIAL_FILE"
+                else
+                    echo "  ERROR: enrollment failed -- see output above. The code may have"
+                    echo "         expired (10 minute window) or already been used. Get a"
+                    echo "         fresh one (homelab-cli admin agent enroll $HOSTNAME_VALUE)"
+                    echo "         and re-run 'dpkg-reconfigure homelab-agent'."
+                fi
+            else
+                echo "  no enrollment code provided -- not enrolled yet."
+                echo "  get one from a site_admin (homelab-cli admin agent enroll $HOSTNAME_VALUE)"
+                echo "  and run 'dpkg-reconfigure homelab-agent' with it."
+            fi
+        else
+            echo "  $CREDENTIAL_FILE already exists -- already enrolled, leaving it untouched"
+            echo "  (delete it and dpkg-reconfigure to re-enroll, e.g. after a fully-lapsed refresh_token)"
+        fi
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            sed \
+                -e "s#YOUR_API_BASE_HERE#$API_BASE#g" \
+                -e "s#YOUR_HOSTNAME_HERE#$HOSTNAME_VALUE#g" \
+                -e "s#advertise_host: 127\.0\.0\.1#advertise_host: $ADVERTISE_HOST#g" \
+                -e "s#\"http://0\.0\.0\.0:2520\"#\"http://0.0.0.0:$LISTEN_PORT\"#g" \
+                "$SHARE_DIR/config/agent.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+            echo "  (dpkg-reconfigure homelab-agent to redo the prompts)"
+        fi
+
+        if [ -f "$CREDENTIAL_FILE" ]; then
+            systemctl enable homelab-agent >/dev/null 2>&1 || true
+            if systemctl is-active --quiet homelab-agent; then
+                systemctl reload-or-restart homelab-agent \
+                    || echo "  WARNING: homelab-agent reload/restart failed -- check 'systemctl status homelab-agent' by hand."
+            else
+                systemctl start homelab-agent \
+                    || echo "  WARNING: homelab-agent failed to start -- check 'journalctl -xeu homelab-agent' by hand."
+            fi
+        else
+            echo "  NOT starting homelab-agent -- no credential yet (see above)."
+        fi
+
+        db_stop
+        echo ""
+        echo "homelab-agent configured."
+        echo "config:   $CONFIG_FILE"
+        echo "manifest: $MANIFEST_DIR/*.yml"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

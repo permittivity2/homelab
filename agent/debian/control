@@ -1,0 +1,32 @@
+Source: homelab-agent
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-agent
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common,
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         adduser
+Description: Per-host fleet agent: declarative service manifest + heartbeat + live status
+ Every homelab-* package that has something worth watching (a systemd
+ unit, a listening port) drops a small YAML file into
+ /etc/homelab/services/ declaring it. This agent reads that directory,
+ checks each declared entry against reality, and reports the result to
+ homelab-api both periodically (a heartbeat, for the fleet-wide
+ dashboard view -- see `homelab-cli fleet status`/`fleet drift`) and
+ on demand (GET /status, authenticated the same "verify at every hop"
+ way as every other internal request in this ecosystem, for
+ up-to-the-second truth rather than as-of-the-last-heartbeat). A
+ mismatch in either direction is the interesting signal: something
+ declared but not running is a real outage; something running but
+ undeclared is a surprise nothing else in this project would have
+ caught. Replaces api.infrastructure_registry/`homelab-cli topology`.
+ No database of its own -- every interaction with homelab-api is a
+ plain HTTP call, authenticated as this host's own enrolled
+ system_agent identity (see README.md's "Enrollment" section).

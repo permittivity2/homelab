@@ -1,0 +1,32 @@
+# Homelab Agent Configuration
+#
+# Per-host fleet agent: reads /etc/homelab/services/*.yml, checks each
+# declared entry against reality, reports the result to homelab-api on
+# a heartbeat and on-demand via GET /status. See README.md.
+
+homelab_api:
+  base_url: YOUR_API_BASE_HERE
+
+# This host's own logical identity (e.g. "ct07") -- keyed against in
+# api.hosts/api.host_service_status, shown in `homelab-cli fleet status`.
+hostname: YOUR_HOSTNAME_HERE
+
+# This host's own reachable address -- what homelab-api's admin-facing
+# pull (GET this agent's own /status, on an admin's behalf) actually
+# connects to. Same "explicit debconf answer, never auto-detected"
+# convention as every other advertise_host in this project.
+advertise_host: 127.0.0.1
+
+manifest_dir: /etc/homelab/services
+credential_file: /etc/homelab/agent/credential.yml
+heartbeat_interval_seconds: 60
+
+server:
+  listen: "http://0.0.0.0:2520"
+  # See lib/Homelab/Agent/App.pm's own comment: every per-request check
+  # this app does is non-blocking, so a small worker count buys real
+  # concurrency without the memory cost of a large one -- and this app
+  # runs on every host in the fleet, so that cost multiplies by fleet
+  # size, not just once.
+  workers: 2
+  pid_file: /var/lib/homelab/agent-hypnotoad.pid

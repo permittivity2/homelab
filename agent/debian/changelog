@@ -1,0 +1,21 @@
+homelab-agent (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Tue, 15 Sep 2026 22:28:53 -0500
+
+homelab-agent (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Tue, 15 Sep 2026 22:25:26 -0500
+
+homelab-agent (0.1.0) unstable; urgency=medium
+
+  * Initial release. Per-host fleet agent: declarative
+    /etc/homelab/services/*.yml manifest checked against reality,
+    reported to homelab-api via heartbeat (push) and GET /status
+    (pull, authenticated). Replaces api.infrastructure_registry/
+    `homelab-cli topology`.
+
+ -- Gardner <gardner@homelab>  Mon, 15 Sep 2026 22:30:00 -0500

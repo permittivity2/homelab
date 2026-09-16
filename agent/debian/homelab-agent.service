@@ -1,0 +1,22 @@
+[Unit]
+Description=Homelab Fleet Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_AGENT_CONFIG=/etc/homelab/agent/config.yml"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-agent
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-agent
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-agent
+
+[Install]
+WantedBy=multi-user.target

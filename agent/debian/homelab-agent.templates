@@ -1,0 +1,41 @@
+Template: homelab-agent/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url. Also used once, at
+ first install, to redeem the enrollment code below.
+
+Template: homelab-agent/hostname
+Type: string
+Default:
+Description: This host's own logical name (e.g. "ct07"):
+ Keyed against in api.hosts/api.host_service_status and shown in
+ `homelab-cli fleet status`. Leave blank to use this system's own
+ hostname (hostname -s) as a default.
+
+Template: homelab-agent/advertise_host
+Type: string
+Default: 127.0.0.1
+Description: This host's own reachable address:
+ Written into config.yml's advertise_host -- what homelab-api connects
+ to for an on-demand live GET /status (an admin's own real-time
+ check), separate from the periodic heartbeat this agent pushes out.
+ Leave as 127.0.0.1 only if nothing outside this host will ever need
+ the pull path.
+
+Template: homelab-agent/listen_port
+Type: string
+Default: 2520
+Description: Port for homelab-agent to listen on:
+
+Template: homelab-agent/enrollment_code
+Type: password
+Default:
+Description: One-time enrollment code for this host:
+ Obtain this from a site_admin BEFORE installing, via
+ `homelab-cli admin agent enroll <hostname>` run on an already-enrolled
+ admin session. Single-use and short-lived (10 minutes by default) --
+ exchanged once, at first install, for this agent's own long-lived
+ identity; never stored or reused after that. Leave blank to skip
+ enrollment for now (the service will refuse to start until you run
+ `dpkg-reconfigure homelab-agent` with a real code).

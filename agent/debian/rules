@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+# Correct location from day one -- see ../worker/debian/rules's own
+# comment for the incident that established this pattern (a
+# hand-copied-into-/etc/systemd/system unit is invisible to
+# dh_installsystemd, so the package ships no prerm/postrm and apt purge
+# never stops the running service). --no-enable --no-start: postinst
+# handles enable/start itself with its own sequencing (credential file
+# must exist first).
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/agent.example.yml \
+		debian/homelab-agent/usr/share/homelab-agent/config/agent.example.yml
