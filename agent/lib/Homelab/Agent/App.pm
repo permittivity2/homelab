@@ -194,6 +194,11 @@ sub _check_one_p ($self, $entry) {
         return {
             name => $entry->{name}, package => $entry->{package}, kind => $entry->{kind},
             expected => \1, actual => ($actual ? \1 : \0), description => $entry->{description},
+            # Descriptive only (what real backend(s) a proxy-type entry
+            # routes to, e.g. HAProxy frontends/webproxy vhosts) -- this
+            # agent never acts on it, just carries it through from the
+            # manifest to homelab-api's own host_service_status row.
+            fronts => $entry->{fronts},
         };
     };
 
@@ -222,13 +227,23 @@ sub _check_systemd_unit_p ($self, $unit) {
 
 sub _check_tcp_port_p ($self, $port) {
     my $promise = Mojo::Promise->new;
-    Mojo::IOLoop::Client->new->connect(
-        address => '127.0.0.1', port => $port, timeout => 3,
-        sub ($client, $err, $stream) {
-            $promise->resolve($err ? 0 : 1);
-            $stream->close if $stream;
-        },
-    );
+    # Mojo::IOLoop::Client reports outcomes via connect/error events
+    # (->on(...)), never a trailing callback to connect() itself --
+    # passing one silently gets folded into the args hash instead (an
+    # odd-length list, so it's a no-op key with the callback never
+    # invoked), which left this promise resolving on a hung connection
+    # forever. Found live via "Odd number of elements in anonymous hash
+    # at Mojo/IOLoop/Client.pm" in journalctl once tcp_port checks were
+    # actually declared in a manifest.
+    my $client = Mojo::IOLoop::Client->new;
+    # connect's event passes the raw handle (a bare IO::Socket), not a
+    # Mojo::IOLoop::Stream -- close it directly, no stream wrapping.
+    $client->on(connect => sub ($client, $handle) {
+        $promise->resolve(1);
+        $handle->close if $handle;
+    });
+    $client->on(error => sub ($client, $err) { $promise->resolve(0) });
+    $client->connect(address => '127.0.0.1', port => $port, timeout => 3);
     return $promise;
 }
 

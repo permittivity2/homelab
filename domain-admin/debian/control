@@ -16,7 +16,7 @@ Depends: perl (>= 5.36),
          adduser,
          openssl,
          sudo
-Recommends: homelab-dns, homelab-postfix, homelab-api
+Recommends: homelab-dns, homelab-postfix, homelab-api, homelab-agent
 Description: DNS + mail-domain administration for the homelab-* ecosystem
  Owns "what domains are we authoritative for, and what is their DKIM/
  mail-routing state" as one cohesive concern, fronted by homelab-api's

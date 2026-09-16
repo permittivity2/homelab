@@ -14,7 +14,7 @@ Depends: perl (>= 5.36),
          libyaml-libyaml-perl,
          libmojo-pg-perl,
          adduser
-Recommends: homelab-database, homelab-pgbouncer, homelab-api
+Recommends: homelab-database, homelab-pgbouncer, homelab-api, homelab-agent
 Description: OIDC-style SSO provider for the homelab-* ecosystem
  A Mojolicious app implementing an OAuth2/OIDC-style authorization-code
  flow (GET/POST /oauth/authorize, POST /oauth/token, GET /oauth/userinfo,

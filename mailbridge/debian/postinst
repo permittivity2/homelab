@@ -16,6 +16,17 @@ case "$1" in
         mkdir -p /var/lib/homelab "$CONFIG_DIR"
         chown homelab:homelab /var/lib/homelab
 
+        # Shared manifest dir -- may not exist yet if homelab-agent
+        # isn't installed on this host first (install order isn't
+        # guaranteed either way); ensure it, then drop this package's
+        # own declarative entry into it unconditionally (static
+        # metadata, not user config -- always refresh, unlike
+        # $CONFIG_FILE below).
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services
+        cp "$SHARE_DIR/services/mailbridge.yml" "/etc/homelab/services/mailbridge.yml"
+
         if [ ! -f "$CONFIG_FILE" ]; then
             db_get homelab-mailbridge/db_host || true;               DB_HOST="${RET:-localhost}"
             db_get homelab-mailbridge/pgbouncer_host || true;        PGBOUNCER_HOST="${RET:-localhost}"

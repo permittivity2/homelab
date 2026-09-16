@@ -33,6 +33,8 @@ override_dh_install:
 	dh_install
 	install -D -m 644 config/drive.example.yml \
 		debian/homelab-drive/usr/share/homelab-drive/config/drive.example.yml
+	install -D -m 644 services/drive.yml \
+		debian/homelab-drive/usr/share/homelab-drive/services/drive.yml
 	find migrations -type f -exec install -D -m 644 {} \
 		debian/homelab-drive/usr/share/homelab-drive/{} \;
 	find templates -type f -exec install -D -m 644 {} \

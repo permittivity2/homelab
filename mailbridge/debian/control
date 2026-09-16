@@ -18,7 +18,7 @@ Depends: perl (>= 5.36),
          libio-socket-ssl-perl,
          adduser,
          sudo
-Recommends: homelab-api, homelab-dovecot, homelab-postfix, homelab-audit
+Recommends: homelab-api, homelab-dovecot, homelab-postfix, homelab-audit, homelab-agent
 Description: Internal IMAP/SMTP relay behind homelab-api's mail gateway
  A Mojolicious app with no public address and, for anything mail-
  related, no database: it exists purely so homelab-api's

@@ -20,5 +20,7 @@ override_dh_install:
 	dh_install
 	install -D -m 644 config/api.example.yml \
 		debian/homelab-api/usr/share/homelab-api/config/api.example.yml
+	install -D -m 644 services/api.yml \
+		debian/homelab-api/usr/share/homelab-api/services/api.yml
 	find migrations -type f -exec install -D -m 644 {} \
 		debian/homelab-api/usr/share/homelab-api/{} \;

@@ -1,0 +1,7 @@
+name: sso
+package: homelab-sso
+kind: http_service
+check:
+  systemd_unit: homelab-sso
+  tcp_port: 2502
+description: "OAuth2/SSO authorization server for roundcube, drive, and other clients"

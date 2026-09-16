@@ -18,7 +18,7 @@ Depends: perl (>= 5.36),
          libcrypt-argon2-perl,
          libcrypt-urandom-perl,
          adduser
-Recommends: homelab-database, homelab-pgbouncer, homelab-drive, homelab-mailbridge
+Recommends: homelab-database, homelab-pgbouncer, homelab-drive, homelab-mailbridge, homelab-agent
 Description: Identity/auth/RBAC and service registry for the homelab-* ecosystem
  A Mojolicious app providing account registration/login, JWT
  issuance/introspection/refresh (rotating refresh tokens, Argon2id

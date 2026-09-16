@@ -20,6 +20,8 @@ override_dh_install:
 	dh_install
 	install -D -m 644 config/sso.example.yml \
 		debian/homelab-sso/usr/share/homelab-sso/config/sso.example.yml
+	install -D -m 644 services/sso.yml \
+		debian/homelab-sso/usr/share/homelab-sso/services/sso.yml
 	find migrations -type f -exec install -D -m 644 {} \
 		debian/homelab-sso/usr/share/homelab-sso/{} \;
 	find templates -type f -exec install -D -m 644 {} \

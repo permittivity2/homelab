@@ -1,0 +1,7 @@
+name: drive
+package: homelab-drive
+kind: http_service
+check:
+  systemd_unit: homelab-drive
+  tcp_port: 2501
+description: "File storage web app + JSON API, serves /api/v1/drive/*"

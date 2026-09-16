@@ -1,0 +1,7 @@
+name: mailbridge
+package: homelab-mailbridge
+kind: http_service
+check:
+  systemd_unit: homelab-mailbridge
+  tcp_port: 2510
+description: "IMAP/SMTP relay for homelab-api's /api/v1/mail/* gateway (real protocol clients - dovecot for IMAP, postfix for SMTP). Not Roundcube, not LMTP, not DKIM."

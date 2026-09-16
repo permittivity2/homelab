@@ -1,0 +1,7 @@
+name: worker
+package: homelab-worker
+kind: http_service
+check:
+  systemd_unit: homelab-worker
+  tcp_port: 2512
+description: "Background jobs: zip-job pipeline, serves /api/v1/jobs/*"

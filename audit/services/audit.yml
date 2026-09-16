@@ -1,0 +1,7 @@
+name: audit
+package: homelab-audit
+kind: http_service
+check:
+  systemd_unit: homelab-audit
+  tcp_port: 2513
+description: "Audit trail: drains api.audit_queue, serves /api/v1/audit/*"

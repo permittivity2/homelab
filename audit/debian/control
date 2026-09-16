@@ -15,7 +15,7 @@ Depends: perl (>= 5.36),
          libmojo-pg-perl,
          adduser,
          sudo
-Recommends: homelab-api
+Recommends: homelab-api, homelab-agent
 Description: System-wide audit trail consumer for the homelab-* ecosystem
  Drains audit.queue (a durable staging table every other homelab-*
  service INSERTs into directly, via a narrow INSERT-only Postgres grant

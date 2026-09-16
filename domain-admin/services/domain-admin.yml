@@ -1,0 +1,7 @@
+name: domain-admin
+package: homelab-domain-admin
+kind: http_service
+check:
+  systemd_unit: homelab-domain-admin
+  tcp_port: 2511
+description: "DNS/domain/DKIM/recipient-access admin, serves /api/v1/domains/* (talks to a remote PowerDNS API)"

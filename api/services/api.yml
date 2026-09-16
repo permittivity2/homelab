@@ -1,0 +1,7 @@
+name: api
+package: homelab-api
+kind: http_service
+check:
+  systemd_unit: homelab-api
+  tcp_port: 3000
+description: "Identity/auth/RBAC + gateway + service registry - the one address every other feature/client resolves everything else through"

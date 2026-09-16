@@ -16,7 +16,7 @@ Depends: perl (>= 5.36),
          libarchive-zip-perl,
          adduser,
          sudo
-Recommends: homelab-api
+Recommends: homelab-api, homelab-agent
 Description: Centralized background-job engine for the homelab-* ecosystem
  Executes long-running work submitted by any other homelab-* feature over
  HTTP, fronted by homelab-api's /api/v1/jobs/* gateway route the same way
