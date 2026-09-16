@@ -1,8 +1,9 @@
 package Homelab::Agent::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
-our $VERSION = '0.1.4';
+our $VERSION = '0.1.5';
 
+use Fcntl qw(:flock O_CREAT O_RDWR);
 use Mojo::Promise;
 use Mojo::IOLoop;
 use Mojo::IOLoop::Subprocess;
@@ -18,6 +19,7 @@ has 'advertise_host';
 has 'manifest_dir';
 has 'credential_file';
 has 'credential';   # in-memory {token, refresh_token, expires_at}
+has 'heartbeat_lock_fh';   # kept open for the process lifetime -- see _claim_heartbeat_duty
 has ua => sub { Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10) };
 # Mojo::IOLoop::Client weakens its own $self in every closure it
 # schedules (reactor timer, next_tick, io watch) -- it relies on the
@@ -89,18 +91,48 @@ sub startup ($self) {
     # router, leaving $self bound to the controller and $c undef).
     $self->routes->get('/status' => sub ($c) { $self->_handle_status($c) });
 
-    my $interval = $config->{heartbeat_interval_seconds} // 60;
-    Mojo::IOLoop->recurring($interval => sub { $self->_heartbeat_once->catch(sub ($err) {
-        $self->log->warn("heartbeat failed: $err");
-    }) });
-    # Also fire once shortly after startup, not just after the first
-    # full interval -- a freshly (re)started agent shouldn't sit
-    # invisible to the fleet view for up to $interval seconds.
-    Mojo::IOLoop->timer(2 => sub { $self->_heartbeat_once->catch(sub ($err) {
-        $self->log->warn("initial heartbeat failed: $err");
-    }) });
+    # startup() runs independently in EVERY hypnotoad worker process
+    # (workers: 2 above) -- registering the heartbeat timer unconditionally
+    # here used to mean two workers independently refreshing+persisting
+    # the SAME credential_file's single-use rotating refresh_token every
+    # interval, racing each other. Whichever request the server saw
+    # second used an already-consumed refresh_token and got rejected,
+    # permanently breaking heartbeats from that point on for BOTH workers
+    # (found live on the first several hosts of a real fleet rebuild --
+    # not a theoretical race, it reproduced on every single host with the
+    # default workers: 2). Only the worker that wins this exclusive,
+    # non-blocking flock owns heartbeat duty; the other still serves
+    # /health and /status requests fine, it just doesn't also heartbeat.
+    # The lock is released automatically when its process exits (flock is
+    # tied to the open filehandle, kept alive for the process's lifetime
+    # via heartbeat_lock_fh), so a respawned worker or hypnotoad hot
+    # upgrade re-elects a new owner with no manual intervention.
+    if ($self->_claim_heartbeat_duty) {
+        my $interval = $config->{heartbeat_interval_seconds} // 60;
+        Mojo::IOLoop->recurring($interval => sub { $self->_heartbeat_once->catch(sub ($err) {
+            $self->log->warn("heartbeat failed: $err");
+        }) });
+        # Also fire once shortly after startup, not just after the first
+        # full interval -- a freshly (re)started agent shouldn't sit
+        # invisible to the fleet view for up to $interval seconds.
+        Mojo::IOLoop->timer(2 => sub { $self->_heartbeat_once->catch(sub ($err) {
+            $self->log->warn("initial heartbeat failed: $err");
+        }) });
+    }
 
     return;
+}
+
+# Returns true iff this process just became the sole heartbeat owner.
+# LOCK_EX | LOCK_NB never blocks: a worker that loses the race gets a
+# false return immediately instead of waiting on the winner.
+sub _claim_heartbeat_duty ($self) {
+    my $lock_file = '/var/lib/homelab/agent-heartbeat.lock';
+    sysopen(my $fh, $lock_file, O_CREAT | O_RDWR, 0600)
+        or die "can't open $lock_file: $!\n";
+    return 0 unless flock($fh, LOCK_EX | LOCK_NB);
+    $self->heartbeat_lock_fh($fh);   # held open (and thus locked) for the process's lifetime
+    return 1;
 }
 
 # GET /status -- authenticated the same way homelab-mailbridge/
