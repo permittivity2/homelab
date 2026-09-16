@@ -315,33 +315,6 @@ def cmd_registry_list(args):
     return 0
 
 
-def cmd_topology(args):
-    """Non-HTTP infrastructure (dovecot, postfix, HAProxy frontends,
-    webproxy vhosts) -- deliberately a separate command from `registry`
-    above, not merged into it: this is real-protocol/proxy topology
-    that homelab-api's own gateway never forwards HTTP requests to, so
-    mixing it into the HTTP service registry would misleadingly imply
-    it could be. See 009-multi-instance-registry.sql and
-    api.infrastructure_registry."""
-    try:
-        results = _client().topology_list()
-    except ApiError as e:
-        _emit_error(args, f"Topology list failed: {e.message}")
-        return 1
-    if _emit(args, results):
-        return 0
-    if not results:
-        print("(no infrastructure registered)")
-        return 0
-    rows = []
-    for r in results:
-        fronts = ", ".join(r.get("fronts") or []) or "-"
-        port = r.get("port") if r.get("port") is not None else "-"
-        rows.append([r["kind"], r["name"], r["host"], port, fronts, _truncate(r.get("description"), 50)])
-    _print_table(["KIND", "NAME", "HOST", "PORT", "FRONTS", "DESCRIPTION"], rows)
-    return 0
-
-
 def cmd_admin_agent_enroll(args):
     session = _require_session(args)
     if not session:
@@ -1652,13 +1625,6 @@ def build_parser():
     p = registry_sub.add_parser("lookup", help="Look up a feature's address (see 'registry list' for valid names)")
     p.add_argument("feature_name")
     p.set_defaults(func=cmd_registry_lookup)
-
-    p = sub.add_parser(
-        "topology",
-        help="[being replaced by 'fleet status'] Non-HTTP infrastructure (dovecot, postfix, "
-             "HAProxy frontends, webproxy vhosts) -- see 'registry list' for HTTP-forwardable services instead",
-    )
-    p.set_defaults(func=cmd_topology)
 
     fleet = sub.add_parser(
         "fleet",

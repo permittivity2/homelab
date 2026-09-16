@@ -182,13 +182,9 @@ class Client:
     def registry_list(self):
         return self._request("GET", "/api/v1/registry")
 
-    def topology_list(self):
-        return self._request("GET", "/api/v1/registry/infrastructure")
-
     # --- Fleet agent (see api/migrations/010-fleet-agent.sql) --
-    # supersedes topology_list above; kept alongside it only until every
-    # package's own manifest rollout is complete and infrastructure_registry
-    # is actually dropped.
+    # supersedes the old topology_list/'homelab-cli topology' (removed --
+    # see api/migrations/012-drop-infrastructure-registry.sql).
     def fleet_hosts(self, token):
         return self._request("GET", "/api/v1/admin/agent/hosts", headers=self._auth(token))
 

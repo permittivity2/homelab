@@ -1,0 +1,21 @@
+-- api.infrastructure_registry (009-multi-instance-registry.sql) existed
+-- purely for `homelab-cli topology` -- non-HTTP topology visibility
+-- (dovecot, postfix, HAProxy frontends, webproxy vhosts), populated by
+-- the now-deleted homelab-register-infrastructure script. The fleet-agent
+-- system (010-fleet-agent.sql: api.hosts + api.host_service_status,
+-- populated by every host's own homelab-agent reading its declarative
+-- /etc/homelab/services/*.yml manifest) fully supersedes this: it covers
+-- the same non-HTTP entries plus everything else on the fleet, is
+-- pull-able in real time via each agent's own /status, and needed no
+-- separate registration call at all. Every caller of
+-- homelab-register-infrastructure was already migrated off it before
+-- this migration (dovecot/postfix directly; haproxy/webproxy onto their
+-- own manifest-generation scripts) -- confirmed via a full-tree grep
+-- immediately before writing this migration.
+--
+-- Does NOT touch api.service_registry -- a completely separate table
+-- (the one Homelab::Common::Registry's register()/lookup() actually
+-- read/write) that homelab-api's own gateway forwarding depends on for
+-- real request routing, not just visibility. That table is unrelated to
+-- this retirement and stays exactly as-is.
+DROP TABLE IF EXISTS api.infrastructure_registry;

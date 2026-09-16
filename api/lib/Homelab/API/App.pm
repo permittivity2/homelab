@@ -64,12 +64,6 @@ sub startup ($self) {
     # every OTHER feature's register()/lookup() calls hit) ------------
     $r->post('/api/v1/registry/register' => sub ($c) { $self->_registry_register($c) });
     $r->get('/api/v1/registry'           => sub ($c) { $self->_registry_list($c) });
-    # infrastructure/* registered ABOVE the :feature wildcard below —
-    # Mojolicious matches routes in definition order, and :feature would
-    # otherwise swallow the literal path segment "infrastructure" as a
-    # feature name, routing here to _registry_lookup instead.
-    $r->post('/api/v1/registry/infrastructure' => sub ($c) { $self->_registry_register_infrastructure($c) });
-    $r->get('/api/v1/registry/infrastructure'  => sub ($c) { $self->_registry_list_infrastructure($c) });
     $r->get('/api/v1/registry/:feature'  => sub ($c) { $self->_registry_lookup($c) });
 
     # --- Admin (site_admin role required — see migrations/003-rbac.sql's
@@ -785,48 +779,6 @@ sub _agent_list_mismatches ($self, $c) {
         q{SELECT hostname, service_name, package_name, kind, expected, actual, description, fronts, checked_at
           FROM api.host_service_status WHERE expected != actual ORDER BY service_name, hostname},
     )->hashes->to_array);
-}
-
-# POST /api/v1/registry/infrastructure {name, kind, host, port?, description?, fronts?, replace_prefix?}
-# Deliberately separate from /api/v1/registry/register above — this
-# table (api.infrastructure_registry, see 009-multi-instance-registry.sql)
-# is for non-HTTP topology (dovecot, postfix, HAProxy frontends, webproxy
-# vhosts) that _gateway's forwarding logic must never be able to select.
-# When replace_prefix is given, every existing row whose name starts
-# with it is deleted before this entry (and any others in the same
-# batch — see entries below) is inserted, matching a config that's
-# regenerated wholesale on every apply rather than merged (HAProxy's
-# backends.yml, webproxy's sites.yml) so a removed frontend/vhost
-# disappears from the topology view too, not just a config file.
-sub _registry_register_infrastructure ($self, $c) {
-    my $body = $c->req->json // {};
-    # required-field check runs against each ENTRY being inserted, not
-    # the top-level request body -- in replace_prefix (batch) mode the
-    # body itself only carries replace_prefix/entries, name/kind/host
-    # live one level down inside each element of `entries`. Found live:
-    # every wholesale-replace caller (HAProxy, webproxy) got a hard 400
-    # "name is required" even with fully valid entries, because this
-    # validated $body's own top level regardless of mode.
-    my $prefix  = $body->{replace_prefix};
-    my $entries = $prefix ? ($body->{entries} // [$body]) : [$body];
-    for my $entry (@$entries) {
-        for my $field (qw(name kind host)) {
-            return $c->render(json => { error => "$field is required" }, status => 400)
-                unless defined $entry->{$field};
-        }
-    }
-    if ($prefix) {
-        $self->registry->replace_infrastructure_by_prefix($prefix, @$entries);
-    }
-    else {
-        $self->registry->register_infrastructure(%$body);
-    }
-    return $c->render(json => { ok => \1 });
-}
-
-# GET /api/v1/registry/infrastructure
-sub _registry_list_infrastructure ($self, $c) {
-    return $c->render(json => $self->registry->list_infrastructure);
 }
 
 # Verifies a bearer JWT (signature+expiry+not-revoked -- the same three
