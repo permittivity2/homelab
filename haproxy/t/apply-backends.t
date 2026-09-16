@@ -106,4 +106,34 @@ like($output3, qr/validation failed/, 'reports validation failure clearly');
 my $after = do { local (@ARGV, $/) = $haproxy_cfg; <> };
 is($after, $before, 'the previously-working config is left untouched after a validation failure');
 
+# 'backends' (a list) -- HA/load-balanced group, added for 3x dovecot/
+# postfix instances behind one HAProxy. Must coexist with 'backend'
+# (single) entries in the same file, and must NOT emit `balance` for a
+# single-server entry (nothing to balance).
+open(my $mfh, '>', $backends_yml) or die $!;
+print $mfh <<YAML;
+backends:
+  - name: imap
+    frontend_port: 143
+    backends:
+      - 10.50.2.45:143
+      - 10.50.2.50:143
+      - 10.50.2.56:143
+  - name: smtp
+    frontend_port: 25
+    backend: 10.50.2.46:25
+YAML
+close($mfh);
+
+my $output4 = `perl script/homelab-haproxy-apply-backends 2>&1`;
+is($? >> 8, 0, 'script exits 0 with a mix of backend/backends entries') or diag($output4);
+my $cfg4 = do { local (@ARGV, $/) = $haproxy_cfg; <> };
+like($cfg4, qr/frontend imap_in/, 'multi-backend frontend block present');
+like($cfg4, qr/backend imap_out\s+balance roundrobin/, 'multi-backend group gets balance roundrobin');
+like($cfg4, qr/server imap1 10\.50\.2\.45:143 check send-proxy/, 'first HA server line present, numbered');
+like($cfg4, qr/server imap2 10\.50\.2\.50:143 check send-proxy/, 'second HA server line present, numbered');
+like($cfg4, qr/server imap3 10\.50\.2\.56:143 check send-proxy/, 'third HA server line present, numbered');
+unlike($cfg4, qr/backend smtp_out\s+balance/, 'single-backend entry gets no balance line -- nothing to balance');
+like($cfg4, qr/server smtp 10\.50\.2\.46:25 check send-proxy/, 'single-backend entry keeps its unnumbered server name (backward compat)');
+
 done_testing;

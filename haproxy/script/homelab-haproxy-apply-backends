@@ -61,7 +61,22 @@ HEADER
 for my $backend (@backends) {
     my $name          = $backend->{name}         // die "backends.yml: a backend is missing 'name'\n";
     my $frontend_port = $backend->{frontend_port} // die "backends.yml: backend '$name' is missing 'frontend_port'\n";
-    my $target        = $backend->{backend}       // die "backends.yml: backend '$name' is missing 'backend'\n";
+    # 'backend' (single host:port, original shape) and 'backends' (a
+    # list, for HA/load-balanced groups) are both accepted -- 'backends'
+    # added when this first needed more than one real server per
+    # frontend (3x dovecot/postfix instances behind one HAProxy). Both
+    # forms generate identical single-server output when there's only
+    # one target, so this is purely additive: no existing backends.yml
+    # needs to change.
+    my @targets;
+    if (my $list = $backend->{backends}) {
+        die "backends.yml: backend '$name''s 'backends' must be a list\n" unless ref($list) eq 'ARRAY';
+        @targets = @$list;
+    } elsif (my $single = $backend->{backend}) {
+        @targets = ($single);
+    } else {
+        die "backends.yml: backend '$name' needs either 'backend' (one target) or 'backends' (a list)\n";
+    }
     # Deliberate per-frontend ceiling, not just an implicit inherit from
     # the global 4096 -- found missing entirely during a 2026-09-13
     # stress-testing pass: with no frontend-level maxconn, HAProxy let
@@ -73,6 +88,19 @@ for my $backend (@backends) {
     # ceiling rather than silently inheriting the uncapped global.
     my $maxconn = $backend->{maxconn} // 500;
 
+    # roundrobin: HAProxy's own overall default balance algorithm, and
+    # the natural fit for a handful of same-capacity mail-service
+    # instances (no reason yet to weight one over another) -- only
+    # emitted when there's more than one server, since a single-server
+    # backend has nothing to balance and the line would be inert noise.
+    my $balance_line = @targets > 1 ? "    balance roundrobin\n" : '';
+    my $server_lines = join '', map {
+        my $i = $_ + 1;
+        my $t = $targets[$_];
+        my $srv_name = @targets > 1 ? "${name}${i}" : $name;
+        "    server $srv_name $t check send-proxy\n";
+    } 0 .. $#targets;
+
     $cfg .= <<BLOCK;
 frontend ${name}_in
     bind *:$frontend_port
@@ -80,8 +108,7 @@ frontend ${name}_in
     default_backend ${name}_out
 
 backend ${name}_out
-    server $name $target check send-proxy
-
+${balance_line}${server_lines}
 BLOCK
 }
 
@@ -119,13 +146,14 @@ my $manifest_file = "$manifest_dir/haproxy.yml";
 if (-d $manifest_dir) {
     my @manifest = map {
         my $b = $_;
+        my @t = $b->{backends} ? @{ $b->{backends} } : ($b->{backend});
         {
             name        => "haproxy-$b->{name}_in",
             package     => 'homelab-haproxy',
             kind        => 'tcp-proxy-frontend',
             check       => { tcp_port => $b->{frontend_port} },
-            description => "HAProxy frontend, send-proxy to $b->{backend}",
-            fronts      => ["$b->{name}\@$b->{backend}"],
+            description => "HAProxy frontend, send-proxy to " . join(', ', @t),
+            fronts      => [map { "$b->{name}\@$_" } @t],
         };
     } @backends;
     eval { DumpFile($manifest_file, \@manifest); 1 }
