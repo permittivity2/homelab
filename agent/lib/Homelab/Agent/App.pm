@@ -1,7 +1,7 @@
 package Homelab::Agent::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
-our $VERSION = '0.1.5';
+our $VERSION = '0.1.6';
 
 use Fcntl qw(:flock O_CREAT O_RDWR);
 use Mojo::Promise;
@@ -91,48 +91,90 @@ sub startup ($self) {
     # router, leaving $self bound to the controller and $c undef).
     $self->routes->get('/status' => sub ($c) { $self->_handle_status($c) });
 
-    # startup() runs independently in EVERY hypnotoad worker process
-    # (workers: 2 above) -- registering the heartbeat timer unconditionally
-    # here used to mean two workers independently refreshing+persisting
-    # the SAME credential_file's single-use rotating refresh_token every
-    # interval, racing each other. Whichever request the server saw
-    # second used an already-consumed refresh_token and got rejected,
-    # permanently breaking heartbeats from that point on for BOTH workers
-    # (found live on the first several hosts of a real fleet rebuild --
-    # not a theoretical race, it reproduced on every single host with the
-    # default workers: 2). Only the worker that wins this exclusive,
-    # non-blocking flock owns heartbeat duty; the other still serves
-    # /health and /status requests fine, it just doesn't also heartbeat.
-    # The lock is released automatically when its process exits (flock is
-    # tied to the open filehandle, kept alive for the process's lifetime
-    # via heartbeat_lock_fh), so a respawned worker or hypnotoad hot
-    # upgrade re-elects a new owner with no manual intervention.
-    if ($self->_claim_heartbeat_duty) {
-        my $interval = $config->{heartbeat_interval_seconds} // 60;
-        Mojo::IOLoop->recurring($interval => sub { $self->_heartbeat_once->catch(sub ($err) {
-            $self->log->warn("heartbeat failed: $err");
-        }) });
-        # Also fire once shortly after startup, not just after the first
-        # full interval -- a freshly (re)started agent shouldn't sit
-        # invisible to the fleet view for up to $interval seconds.
-        Mojo::IOLoop->timer(2 => sub { $self->_heartbeat_once->catch(sub ($err) {
-            $self->log->warn("initial heartbeat failed: $err");
-        }) });
-    }
+    # Under hypnotoad (workers: 2 above), the app is built ONCE in the
+    # manager process -- startup() runs a single time, pre-fork -- and
+    # each worker inherits that already-built state (routes, and any
+    # Mojo::IOLoop timer already registered here) via fork(). A flock
+    # acquired once in THIS sub, before the fork, gets inherited too: both
+    # children share the same underlying open file description, so they
+    # effectively both "hold" it -- flock can't tell them apart. A first
+    # attempt at this fix (locking once here, gating whether the timer
+    # even got registered) looked right on paper but measurably did NOT
+    # work: both workers kept firing the inherited timer and racing to
+    # refresh+persist the SAME credential_file's single-use rotating
+    # refresh_token every interval, exactly as before the "fix" -- caught
+    # live, fleet-wide, by checking actual journals after deploying it,
+    # not assumed fixed from the code alone.
+    #
+    # Correct fix: don't gate REGISTRATION (which only ever happens once,
+    # pre-fork, so gating it here can't distinguish the eventual workers
+    # from each other). Gate EXECUTION instead, freshly, every time the
+    # timer actually fires -- see _heartbeat_if_owner below. Each firing
+    # opens its OWN new file descriptor (sysopen, not reused/inherited)
+    # and holds the lock only for that one attempt's duration, releasing
+    # it immediately after. Whichever process's copy of the (inherited,
+    # identical) timer happens to fire first each cycle wins that cycle;
+    # the loser's flock attempt fails fast (LOCK_NB) and it just skips
+    # silently. This works regardless of whether hypnotoad's actual
+    # worker model turns out to be "single pre-fork startup + inherited
+    # IOLoop state" (what the evidence above points to) or "startup() re-
+    # run independently per worker" (the original, now-disproven
+    # assumption) -- either way, the mutual exclusion is decided at call
+    # time, in whichever OS process is actually executing the callback,
+    # never at registration time.
+    my $interval = $config->{heartbeat_interval_seconds} // 60;
+    Mojo::IOLoop->recurring($interval => sub { $self->_heartbeat_if_owner->catch(sub ($err) {
+        $self->log->warn("heartbeat failed: $err");
+    }) });
+    # Also fire once shortly after startup, not just after the first
+    # full interval -- a freshly (re)started agent shouldn't sit
+    # invisible to the fleet view for up to $interval seconds.
+    Mojo::IOLoop->timer(2 => sub { $self->_heartbeat_if_owner->catch(sub ($err) {
+        $self->log->warn("initial heartbeat failed: $err");
+    }) });
 
     return;
 }
 
-# Returns true iff this process just became the sole heartbeat owner.
-# LOCK_EX | LOCK_NB never blocks: a worker that loses the race gets a
-# false return immediately instead of waiting on the winner.
-sub _claim_heartbeat_duty ($self) {
+# Wraps _heartbeat_once so only one process-at-this-exact-moment ever
+# actually runs it, no matter how many copies of the (inherited) timer
+# exist fleet-side. A losing attempt isn't an error -- it means a sibling
+# process's copy of this same timer is already mid-heartbeat, which is
+# exactly the intended outcome, so it resolves quietly rather than
+# rejecting into the caller's ->catch/log->warn.
+sub _heartbeat_if_owner ($self) {
+    return Mojo::Promise->resolve unless $self->_try_claim_heartbeat_duty;
+    return $self->_heartbeat_once->finally(sub { $self->_release_heartbeat_duty });
+}
+
+# Returns true iff this call just acquired the lock. LOCK_EX | LOCK_NB
+# never blocks: a call that loses the race gets a false return
+# immediately instead of waiting on the winner. Always opens a FRESH
+# file descriptor (never reuses one from a previous call, and never one
+# inherited via fork from another process) -- see the long comment in
+# startup() above for why that distinction is the actual fix.
+sub _try_claim_heartbeat_duty ($self) {
     my $lock_file = '/var/lib/homelab/agent-heartbeat.lock';
     sysopen(my $fh, $lock_file, O_CREAT | O_RDWR, 0600)
         or die "can't open $lock_file: $!\n";
     return 0 unless flock($fh, LOCK_EX | LOCK_NB);
-    $self->heartbeat_lock_fh($fh);   # held open (and thus locked) for the process's lifetime
+    $self->heartbeat_lock_fh($fh);   # held only until _release_heartbeat_duty, below
     return 1;
+}
+
+# Releases what _try_claim_heartbeat_duty acquired, immediately after
+# one heartbeat attempt finishes (success or failure) -- so the NEXT
+# interval's firing, whichever process's copy of the timer gets there
+# first, starts from a clean, unheld lock rather than this same process
+# holding it forever (which would work too, but only by accident: it
+# would just mean whichever process's timer fired FIRST, ever, wins
+# every future cycle -- fine in practice, but "released and re-claimed
+# every cycle" is simpler to reason about and doesn't depend on that).
+sub _release_heartbeat_duty ($self) {
+    my $fh = $self->heartbeat_lock_fh or return;
+    flock($fh, LOCK_UN);
+    close($fh);
+    $self->heartbeat_lock_fh(undef);
 }
 
 # GET /status -- authenticated the same way homelab-mailbridge/
@@ -169,7 +211,22 @@ sub _handle_status ($self, $c) {
 # Every cycle, not just when the access token looks close to expiry --
 # simpler than tracking expiry separately, and the cost (one extra
 # HTTP round trip roughly once a minute) is a non-issue.
+#
+# Re-reads credential_file fresh every call rather than trusting
+# $self->credential's in-memory value: under hypnotoad, this app's
+# in-memory state gets forked into multiple processes that each keep
+# their OWN independent copy from that point on (see startup()'s own
+# comment on the heartbeat-ownership lock for the full story) -- if
+# process A wins a cycle, refreshes, and writes the new token to disk,
+# process B's in-memory copy is now stale even though only ONE of them
+# runs _heartbeat_once at a time. Without this reload, whichever process
+# happens to win the NEXT cycle's lock could still be B, attempting an
+# already-consumed refresh_token and failing despite correctly holding
+# the lock. Reading disk fresh here means it doesn't matter which
+# process wins any given cycle -- it always uses the one currently-valid
+# token, not whatever its own fork-inherited memory last saw.
 sub _heartbeat_once ($self) {
+    $self->credential(LoadFile($self->credential_file));
     return $self->ua->post_p("@{[$self->api_base]}/api/v1/auth/refresh",
         json => { refresh_token => $self->credential->{refresh_token} })
     ->then(sub ($tx) {
