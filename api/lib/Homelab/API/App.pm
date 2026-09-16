@@ -101,6 +101,19 @@ sub startup ($self) {
     $r->delete('/api/v1/admin/roles/:role/permissions/:permission' => [role => qr/[^\/]+/, permission => qr/[^\/]+/]
         => sub ($c) { $self->_admin_revoke_permission($c) });
 
+    # --- Fleet agent (see migrations/010-fleet-agent.sql). Enroll is
+    # site_admin-only (a human bootstrapping a new host's agent); redeem
+    # and heartbeat are the agent's own unauthenticated-until-redeemed and
+    # system_agent-authenticated calls respectively; the read endpoints
+    # are site_admin-only, same posture as every other /admin/* route
+    # above. -----------------------------------------------------------
+    $r->post('/api/v1/admin/agent/enroll' => sub ($c) { $self->_agent_enroll($c) });
+    $r->post('/api/v1/agent/enroll/redeem' => sub ($c) { $self->_agent_enroll_redeem($c) });
+    $r->post('/api/v1/agent/heartbeat' => sub ($c) { $self->_agent_heartbeat($c) });
+    $r->get('/api/v1/admin/agent/hosts' => sub ($c) { $self->_agent_list_hosts($c) });
+    $r->get('/api/v1/admin/agent/status' => sub ($c) { $self->_agent_list_status($c) });
+    $r->get('/api/v1/admin/agent/status/mismatches' => sub ($c) { $self->_agent_list_mismatches($c) });
+
     # --- Gateway: the ONLY address a client (homelab-cli, or any
     # third-party script) should ever need -- see ../../CLAUDE.md's "one
     # API" design notes and Homelab::Common::Proxy's own docs. Auth is
@@ -316,9 +329,29 @@ sub _login ($self, $c) {
             $c->render(json => { error => 'Too many login attempts. Please wait 15 minutes.' }, status => 429);
             return Mojo::Promise->reject($ALREADY_RENDERED);
         }
-        return $self->pg->db->query_p('SELECT id, password_hash, active FROM api.users WHERE email = ?', $email);
+        # is_system_agent fetched in the SAME query as password_hash,
+        # checked BEFORE verify_password is ever called below (not as a
+        # later stage) — system_agent accounts (a fleet agent's own
+        # identity, or homelab-api's own outbound identity for pulling
+        # agent status, see migrations/010-fleet-agent.sql) get an
+        # unguessable, NOT NECESSARILY ARGON2-FORMATTED password_hash
+        # (they're only ever issued a session via
+        # /api/v1/agent/enroll/redeem, never this endpoint), and
+        # verify_password's own argon2id_verify() throws on a malformed
+        # hash rather than returning false — calling it on one of these
+        # rows would 500, not cleanly reject. Checking the role first
+        # avoids ever reaching that call for these accounts.
+        return $self->pg->db->query_p(
+            q{SELECT u.id, u.password_hash, u.active,
+                     EXISTS(SELECT 1 FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+                            WHERE ur.user_id = u.id AND r.name = 'system_agent') AS is_system_agent
+              FROM api.users u WHERE u.email = ?}, $email,
+        );
     })->then(sub ($results) {
         my $user = $results->hash;
+        # Same generic error as a wrong password, deliberately, so this
+        # doesn't leak which accounts are system accounts.
+        $user = undef if $user && $user->{is_system_agent};
         unless ($user && $user->{active} && verify_password($password, $user->{password_hash})) {
             return $self->_log_attempt_p(ip => $ip, email => $email, endpoint => 'login', success => 0)->then(sub {
                 $c->render(json => { error => 'invalid email or password' }, status => 401);
@@ -559,6 +592,199 @@ sub _registry_lookup ($self, $c) {
 # subcommand name alone).
 sub _registry_list ($self, $c) {
     return $c->render(json => $self->registry->list_all);
+}
+
+# --- Fleet agent (see migrations/010-fleet-agent.sql) --------------
+# All blocking/synchronous, deliberately — same reasoning as _register
+# staying blocking: low request volume (one enroll per new host ever,
+# one heartbeat per host roughly per minute across the whole fleet),
+# nowhere near the concurrency that made _login/_introspect/_gateway
+# worth converting.
+
+sub _require_system_agent ($self, $c) {
+    my $user = $self->_authenticated_user($c);
+    unless ($user) {
+        $c->render(json => { error => 'authentication required' }, status => 401);
+        return undef;
+    }
+    my $has_role = $self->pg->db->query(
+        q{SELECT 1 FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+          WHERE ur.user_id = ? AND r.name = 'system_agent'}, $user->{id},
+    )->hash;
+    unless ($has_role) {
+        $c->render(json => { error => 'system_agent role required' }, status => 403);
+        return undef;
+    }
+    return $user;
+}
+
+# Shared by _agent_enroll_redeem below (a real login mint would be
+# _login's own job, but system_agent accounts can never use that path
+# -- see its own explicit guard -- so this duplicates just the
+# session-minting tail of it, not the password/rate-limit machinery
+# that doesn't apply here).
+sub _mint_session_blocking ($self, $email, $user_id, $c) {
+    my $jti = generate_jti();
+    my ($jwt, $expires_in) = generate_jwt(
+        $email, secret => $self->config->{jwt}{secret},
+        expires_in => $self->config->{jwt}{expiry_seconds}, jti => $jti,
+    );
+    my $refresh_token    = generate_refresh_token();
+    my $refresh_ttl_days = $self->config->{jwt}{refresh_expiry_days} // 30;
+
+    my $refresh_row = $self->pg->db->query(
+        q{INSERT INTO api.refresh_tokens (user_id, token, expires_at)
+          VALUES (?, ?, NOW() + (? * INTERVAL '1 day')) RETURNING id},
+        $user_id, $refresh_token, $refresh_ttl_days,
+    )->hash;
+    $self->pg->db->query(
+        q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at, user_agent, ip_address, first_seen_at)
+          VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'), ?, ?, NOW())},
+        $jti, $user_id, $refresh_row->{id}, $expires_in, 'homelab-agent', $c->tx->remote_address,
+    );
+    return ($jwt, $refresh_token, $expires_in);
+}
+
+# POST /api/v1/admin/agent/enroll {hostname, ttl_minutes?}
+# site_admin mints a short-lived, single-use code for a new host's
+# agent to redeem below for its first JWT + refresh_token -- the one
+# genuinely new credential-issuance path this design needs; everything
+# downstream of redemption reuses the rotating-refresh-token/session-
+# revocation machinery that already exists for human logins.
+sub _agent_enroll ($self, $c) {
+    my $admin = $self->_require_site_admin($c) or return;
+    my $body     = $c->req->json // {};
+    my $hostname = $body->{hostname};
+    return $c->render(json => { error => 'hostname is required' }, status => 400) unless $hostname;
+
+    my $code        = generate_refresh_token();
+    my $ttl_minutes = $body->{ttl_minutes} // 10;
+    $self->pg->db->query(
+        q{INSERT INTO api.agent_enrollment_codes (code, hostname, issued_by, expires_at)
+          VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 minute'))},
+        $code, $hostname, $admin->{email}, $ttl_minutes,
+    );
+    return $c->render(json => { code => $code, hostname => $hostname, expires_in_minutes => $ttl_minutes }, status => 201);
+}
+
+# POST /api/v1/agent/enroll/redeem {code}
+# Deliberately unauthenticated going in -- the code itself is the
+# credential, same as any OAuth2 device-authorization-grant exchange --
+# but single-use (used_at) and short-lived (expires_at, set by
+# _agent_enroll above). Creates this agent's synthetic identity
+# (agent+<hostname>@system.homelab, system_agent role) on first
+# redemption; a later re-enrollment of the same hostname (e.g. after its
+# refresh_token has fully lapsed from being offline past its own expiry)
+# reuses the existing identity rather than creating a duplicate.
+sub _agent_enroll_redeem ($self, $c) {
+    my $body = $c->req->json // {};
+    my $code = $body->{code};
+    return $c->render(json => { error => 'code is required' }, status => 400) unless $code;
+
+    my $row = $self->pg->db->query(
+        q{SELECT hostname FROM api.agent_enrollment_codes
+          WHERE code = ? AND used_at IS NULL AND expires_at > NOW()},
+        $code,
+    )->hash;
+    return $c->render(json => { error => 'invalid, expired, or already-used code' }, status => 401) unless $row;
+
+    $self->pg->db->query('UPDATE api.agent_enrollment_codes SET used_at = NOW() WHERE code = ?', $code);
+
+    my $email = "agent+$row->{hostname}\@system.homelab";
+    my $user  = $self->pg->db->query('SELECT id FROM api.users WHERE email = ?', $email)->hash;
+    unless ($user) {
+        # Random, unusable, never disclosed password -- same assumption
+        # _login's system_agent guard is belt-and-suspenders on top of.
+        $user = $self->pg->db->query(
+            q{INSERT INTO api.users (email, password_hash, active) VALUES (?, ?, true) RETURNING id},
+            $email, generate_refresh_token(),
+        )->hash;
+        my $role = $self->pg->db->query(q{SELECT id FROM api.roles WHERE name = 'system_agent'})->hash;
+        $self->pg->db->query(
+            'INSERT INTO api.user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
+            $user->{id}, $role->{id},
+        );
+    }
+
+    my ($jwt, $refresh_token, $expires_in) = $self->_mint_session_blocking($email, $user->{id}, $c);
+    return $c->render(json => {
+        success => \1, token => $jwt, refresh_token => $refresh_token, expires_in => $expires_in,
+    }, status => 201);
+}
+
+# POST /api/v1/agent/heartbeat
+# {hostname, address, agent_port, agent_version?, services: [{name, package, kind, expected, actual, description}]}
+# Requires this agent's own system_agent-roled JWT. Checked in-process
+# here (never a remote introspect round trip) because homelab-api
+# already holds the signing secret itself -- same reasoning _jwt_jti's
+# own comment already gives for why homelab-api specifically never needs
+# that round trip for its own authentication checks, unlike every other
+# service.
+sub _agent_heartbeat ($self, $c) {
+    my $caller = $self->_require_system_agent($c) or return;
+    my $body   = $c->req->json // {};
+    for my $field (qw(hostname address agent_port)) {
+        return $c->render(json => { error => "$field is required" }, status => 400)
+            unless defined $body->{$field};
+    }
+
+    $self->pg->db->query(
+        q{INSERT INTO api.hosts (hostname, address, agent_port, agent_version, last_heartbeat)
+          VALUES (?, ?, ?, ?, NOW())
+          ON CONFLICT (hostname) DO UPDATE
+              SET address = EXCLUDED.address, agent_port = EXCLUDED.agent_port,
+                  agent_version = EXCLUDED.agent_version, last_heartbeat = NOW()},
+        $body->{hostname}, $body->{address}, $body->{agent_port}, $body->{agent_version},
+    );
+
+    for my $svc (@{ $body->{services} // [] }) {
+        $self->pg->db->query(
+            q{INSERT INTO api.host_service_status
+                  (hostname, service_name, package_name, kind, expected, actual, description, checked_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+              ON CONFLICT (hostname, service_name) DO UPDATE
+                  SET package_name = EXCLUDED.package_name, kind = EXCLUDED.kind,
+                      expected = EXCLUDED.expected, actual = EXCLUDED.actual,
+                      description = EXCLUDED.description, checked_at = NOW()},
+            $body->{hostname}, $svc->{name}, $svc->{package}, $svc->{kind},
+            ($svc->{expected} ? 1 : 0), ($svc->{actual} ? 1 : 0), $svc->{description},
+        );
+    }
+
+    return $c->render(json => { ok => \1 });
+}
+
+# GET /api/v1/admin/agent/hosts -- every host that's ever heartbeated,
+# and how long ago. A hostname absent here entirely (not just stale)
+# means its agent has never successfully enrolled+heartbeated at all.
+sub _agent_list_hosts ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    return $c->render(json => $self->pg->db->query(
+        'SELECT hostname, address, agent_port, agent_version, last_heartbeat FROM api.hosts ORDER BY hostname',
+    )->hashes->to_array);
+}
+
+# GET /api/v1/admin/agent/status -- every declared-or-observed service
+# across the whole fleet, expected vs actual, as of each host's own last
+# heartbeat.
+sub _agent_list_status ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    return $c->render(json => $self->pg->db->query(
+        q{SELECT hostname, service_name, package_name, kind, expected, actual, description, checked_at
+          FROM api.host_service_status ORDER BY service_name, hostname},
+    )->hashes->to_array);
+}
+
+# GET /api/v1/admin/agent/status/mismatches -- just the actionable rows:
+# expected=true/actual=false (a real outage) or expected=false/
+# actual=true (an undeclared surprise -- exactly what the loopback-only
+# stock postfix on every ct0N container would have shown up as here).
+sub _agent_list_mismatches ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    return $c->render(json => $self->pg->db->query(
+        q{SELECT hostname, service_name, package_name, kind, expected, actual, description, checked_at
+          FROM api.host_service_status WHERE expected != actual ORDER BY service_name, hostname},
+    )->hashes->to_array);
 }
 
 # POST /api/v1/registry/infrastructure {name, kind, host, port?, description?, fronts?, replace_prefix?}
