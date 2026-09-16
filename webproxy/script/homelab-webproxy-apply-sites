@@ -8,9 +8,7 @@
 # them.
 use strict;
 use warnings;
-use YAML::XS qw(LoadFile);
-use Mojo::JSON qw(encode_json);
-use File::Temp qw(tempfile);
+use YAML::XS qw(LoadFile DumpFile);
 
 my $SITES_CONFIG    = $ENV{HOMELAB_WEBPROXY_SITES}      // '/etc/homelab/webproxy/sites.yml';
 my $VHOST_TEMPLATE  = $ENV{HOMELAB_WEBPROXY_TEMPLATE}   // '/usr/share/homelab-webproxy/config/vhost.conf.template';
@@ -94,42 +92,38 @@ for my $site (@sites) {
 
 print "homelab-webproxy: $applied new site(s) configured.\n";
 
-# Registers every site in @sites with homelab-api's infrastructure
-# topology registry (`homelab-cli topology`), unconditionally on every
-# run (not just newly-applied ones) -- sites.yml is this package's own
-# source of truth and is meant to be regenerated wholesale here, same
-# reasoning as HAProxy's own backends.yml -> haproxy.cfg ("not merged"),
-# so a domain removed from sites.yml should also disappear from the
-# topology view, not just stop getting a new vhost written for it.
-# Best-effort: never lets a registration failure affect the exit status
-# of the actual site-apply work above.
-if ($config->{advertise_host} && $config->{homelab_api_base}
-        && $config->{advertise_host} !~ /YOUR_PUBLIC_ADDRESS_HERE/
-        && $config->{homelab_api_base} !~ /YOUR_API_DOMAIN_HERE/) {
-    my @entries = map {
+# Writes /etc/homelab/services/webproxy.yml, one entry per site,
+# unconditionally on every run (not just newly-applied ones) --
+# sites.yml is this package's own source of truth and is meant to be
+# regenerated wholesale here, same reasoning as HAProxy's own
+# backends.yml -> haproxy.cfg ("not merged"), so a domain removed from
+# sites.yml should also disappear from the fleet status view, not just
+# stop getting a new vhost written for it. homelab-agent (if installed
+# on this host) picks this up and reports it to homelab-api -- no
+# config needed here for that, unlike the old infrastructure_registry
+# call this replaced, which needed this host's own address passed in
+# explicitly; homelab-agent already knows its own identity. Best-effort:
+# never lets a write failure affect the exit status of the actual
+# site-apply work above.
+my $manifest_dir  = $ENV{HOMELAB_SERVICES_MANIFEST_DIR} // '/etc/homelab/services';
+my $manifest_file = "$manifest_dir/webproxy.yml";
+if (-d $manifest_dir) {
+    my @manifest = map {
         {
             name        => "webproxy-$_->{domain}",
+            package     => 'homelab-webproxy',
             kind        => 'http-proxy-vhost',
-            host        => $config->{advertise_host},
-            port        => 443,
+            check       => { tcp_port => 443 },
             description => "HTTPS vhost for $_->{domain}",
             fronts      => [$_->{upstream}],
         }
     } @sites;
-
-    my ($fh, $entries_file) = tempfile(SUFFIX => '.json', UNLINK => 1);
-    print $fh encode_json(\@entries);
-    close $fh;
-
-    my $rc = system(
-        'homelab-register-infrastructure', '--api-base', $config->{homelab_api_base},
-        '--replace-prefix', 'webproxy-', '--entries-file', $entries_file,
-    );
-    warn "  WARNING: homelab-register-infrastructure exited $rc\n" if $rc != 0;
+    eval { DumpFile($manifest_file, \@manifest); 1 }
+        or print "  WARNING: failed to write $manifest_file -- fleet status view may be stale: $@\n";
 }
 else {
-    print "homelab-webproxy: advertise_host/homelab_api_base not set in $SITES_CONFIG"
-        . " -- skipping topology registration.\n";
+    print "homelab-webproxy: $manifest_dir doesn't exist (homelab-agent not installed here yet)"
+        . " -- skipping manifest write.\n";
 }
 
 sub _vhost_has_https {

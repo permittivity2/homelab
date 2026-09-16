@@ -22,21 +22,16 @@
 # settings to 600, comfortably above this 500, so HAProxy's ceiling is
 # the one that actually binds first.
 #
-# api_base / advertise_host (both optional): if set, every apply run
-# registers this host's current frontends into homelab-api's
-# infrastructure topology registry (`homelab-cli topology`), so an
-# operator can actually see "this proxy fronts postfix@ct02, dovecot@ct01"
-# without reading this file by hand. api_base is homelab-api's own
-# address (same value every other homelab-* package's api_base debconf
-# answer uses); advertise_host is THIS host's own real, reachable
-# address — use the address real clients actually connect to (e.g. the
-# public IP behind mail.test.mailmasker.org's DNS), not this host's
-# internal data-plane address, since that's what makes the topology
-# view meaningful to someone reading it. Best-effort: registration
-# failures are logged and never block the actual haproxy.cfg apply.
-# Leave either unset to skip registration entirely.
-api_base: https://api.test.mailmasker.org
-advertise_host: YOUR_PUBLIC_HOST_OR_IP
+# Every apply run also writes /etc/homelab/services/haproxy.yml, one
+# entry per frontend below (with `fronts` naming the real backend it
+# routes to, e.g. "smtp@127.0.0.1:25") -- homelab-agent (if installed on
+# this host) picks that up and reports it to homelab-api, so an operator
+# can see "this proxy fronts postfix@ct02, dovecot@ct01" via
+# `homelab-cli fleet status` without reading this file by hand. No
+# config needed here for that -- homelab-agent already knows this
+# host's own identity from its own config. Skipped (with a note, not an
+# error) if /etc/homelab/services doesn't exist yet, i.e. homelab-agent
+# isn't installed on this host.
 
 backends:
   - name: smtp

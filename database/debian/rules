@@ -19,3 +19,5 @@ override_dh_install:
 		debian/homelab-database/usr/share/homelab-database/backup-paths.txt
 	install -D -m 755 backup-hook.sh \
 		debian/homelab-database/usr/share/homelab-database/backup-hook.sh
+	install -D -m 644 services/postgresql.yml \
+		debian/homelab-database/usr/share/homelab-database/services/postgresql.yml

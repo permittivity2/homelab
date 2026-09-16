@@ -1,0 +1,12 @@
+- name: roundcube-nginx
+  package: homelab-roundcube
+  kind: http_service
+  check:
+    systemd_unit: nginx
+  description: "Roundcube's internal-only nginx vhost, bridging homelab-webproxy to PHP-FPM"
+- name: roundcube-php-fpm
+  package: homelab-roundcube
+  kind: http_service
+  check:
+    systemd_unit: phpPHP_VERSION_PLACEHOLDER-fpm
+  description: "PHP-FPM pool serving Roundcube itself"

@@ -1,0 +1,7 @@
+name: pdns
+package: homelab-dns
+kind: dns
+check:
+  systemd_unit: pdns
+  tcp_port: 53
+description: "PowerDNS authoritative nameserver (gpgsql backend)"

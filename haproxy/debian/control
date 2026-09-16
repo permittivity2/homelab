@@ -9,6 +9,7 @@ Homepage: https://github.com/permittivity2/homelab
 Package: homelab-haproxy
 Architecture: all
 Depends: perl (>= 5.36), libyaml-libyaml-perl, libmojolicious-perl, homelab-common (>= 0.1.19), haproxy
+Recommends: homelab-agent
 Description: HAProxy TCP-passthrough edge for the homelab-* ecosystem
  Ships homelab-haproxy-apply-backends, which reads an editable
  /etc/homelab/haproxy/backends.yml (frontend port -> backend host:port

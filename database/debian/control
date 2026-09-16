@@ -9,6 +9,7 @@ Homepage: https://github.com/permittivity2/homelab
 Package: homelab-database
 Architecture: all
 Depends: ${misc:Depends}, postgresql, postgresql-client
+Recommends: homelab-agent
 Description: PostgreSQL provisioning substrate for the homelab-* ecosystem
  Installs/configures PostgreSQL itself and idempotently creates the one
  shared `homelab` database every feature's own narrow schema lives

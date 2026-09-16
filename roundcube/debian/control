@@ -9,7 +9,7 @@ Homepage: https://github.com/permittivity2/homelab
 Package: homelab-roundcube
 Architecture: all
 Depends: ${misc:Depends}, roundcube-core, roundcube-pgsql, php-fpm, nginx, adduser, postgresql-client
-Recommends: homelab-sso, homelab-dovecot, homelab-postfix
+Recommends: homelab-sso, homelab-dovecot, homelab-postfix, homelab-agent
 Description: Roundcube webmail wired to the homelab-* shared identity
  Roundcube webmail (Debian's own roundcube-core/roundcube-pgsql, not
  vendored source). Login is delegated to homelab-sso (Roundcube's own

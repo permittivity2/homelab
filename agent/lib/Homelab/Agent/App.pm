@@ -17,6 +17,19 @@ has 'manifest_dir';
 has 'credential_file';
 has 'credential';   # in-memory {token, refresh_token, expires_at}
 has ua => sub { Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10) };
+# Mojo::IOLoop::Client weakens its own $self in every closure it
+# schedules (reactor timer, next_tick, io watch) -- it relies on the
+# CALLER holding the only strong reference for the connection's
+# lifetime. A bare `my $client = Mojo::IOLoop::Client->new` local to a
+# function that returns before the connection settles has nothing else
+# refing it, so it's garbage-collected immediately and every scheduled
+# callback later fires against an already-undef $self and silently
+# no-ops -- found live via _check_tcp_port_p hanging every tcp_port
+# check forever (no error, promise never settles) despite using the
+# documented on(connect=>)/on(error=>) API correctly. Keying pending
+# clients here by their own stringified ref keeps each one alive until
+# its own callback fires and removes it.
+has _pending_tcp_clients => sub { {} };
 
 # One agent per host, reporting a declarative manifest
 # (/etc/homelab/services/*.yml, one YAML doc per file -- either a single
@@ -69,6 +82,9 @@ sub startup ($self) {
     $self->credential(LoadFile($self->credential_file));
 
     $self->routes->get('/health' => sub ($c) { $c->render(json => { status => 'ok' }) });
+    # _handle_status takes ($self, $c) -- call it as a method, not a
+    # bare coderef (a bare \&_handle_status only gets handed $c by the
+    # router, leaving $self bound to the controller and $c undef).
     $self->routes->get('/status' => sub ($c) { $self->_handle_status($c) });
 
     my $interval = $config->{heartbeat_interval_seconds} // 60;
@@ -91,8 +107,7 @@ sub startup ($self) {
 # Unlike the heartbeat this pushes, this re-checks everything live
 # (no caching) -- the whole point of the pull path is up-to-the-second
 # truth, not "as of the last heartbeat".
-sub _handle_status ($c) {
-    my $self = $c->app;
+sub _handle_status ($self, $c) {
     my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
     unless ($jwt) {
         return $c->render(json => { error => 'authentication required' }, status => 401);
@@ -236,13 +251,22 @@ sub _check_tcp_port_p ($self, $port) {
     # at Mojo/IOLoop/Client.pm" in journalctl once tcp_port checks were
     # actually declared in a manifest.
     my $client = Mojo::IOLoop::Client->new;
+    # See _pending_tcp_clients' own comment -- $client must stay
+    # strongly referenced somewhere until one of these fires, or it's
+    # garbage-collected before the connection ever settles.
+    my $key = "$client";
+    $self->_pending_tcp_clients->{$key} = $client;
     # connect's event passes the raw handle (a bare IO::Socket), not a
     # Mojo::IOLoop::Stream -- close it directly, no stream wrapping.
-    $client->on(connect => sub ($client, $handle) {
+    $client->on(connect => sub ($c, $handle) {
         $promise->resolve(1);
         $handle->close if $handle;
+        delete $self->_pending_tcp_clients->{$key};
     });
-    $client->on(error => sub ($client, $err) { $promise->resolve(0) });
+    $client->on(error => sub ($c, $err) {
+        $promise->resolve(0);
+        delete $self->_pending_tcp_clients->{$key};
+    });
     $client->connect(address => '127.0.0.1', port => $port, timeout => 3);
     return $promise;
 }

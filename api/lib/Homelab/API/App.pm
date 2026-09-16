@@ -740,14 +740,14 @@ sub _agent_heartbeat ($self, $c) {
     for my $svc (@{ $body->{services} // [] }) {
         $self->pg->db->query(
             q{INSERT INTO api.host_service_status
-                  (hostname, service_name, package_name, kind, expected, actual, description, checked_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                  (hostname, service_name, package_name, kind, expected, actual, description, fronts, checked_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
               ON CONFLICT (hostname, service_name) DO UPDATE
                   SET package_name = EXCLUDED.package_name, kind = EXCLUDED.kind,
                       expected = EXCLUDED.expected, actual = EXCLUDED.actual,
-                      description = EXCLUDED.description, checked_at = NOW()},
+                      description = EXCLUDED.description, fronts = EXCLUDED.fronts, checked_at = NOW()},
             $body->{hostname}, $svc->{name}, $svc->{package}, $svc->{kind},
-            ($svc->{expected} ? 1 : 0), ($svc->{actual} ? 1 : 0), $svc->{description},
+            ($svc->{expected} ? 1 : 0), ($svc->{actual} ? 1 : 0), $svc->{description}, $svc->{fronts},
         );
     }
 
@@ -770,7 +770,7 @@ sub _agent_list_hosts ($self, $c) {
 sub _agent_list_status ($self, $c) {
     $self->_require_site_admin($c) or return;
     return $c->render(json => $self->pg->db->query(
-        q{SELECT hostname, service_name, package_name, kind, expected, actual, description, checked_at
+        q{SELECT hostname, service_name, package_name, kind, expected, actual, description, fronts, checked_at
           FROM api.host_service_status ORDER BY service_name, hostname},
     )->hashes->to_array);
 }
@@ -782,7 +782,7 @@ sub _agent_list_status ($self, $c) {
 sub _agent_list_mismatches ($self, $c) {
     $self->_require_site_admin($c) or return;
     return $c->render(json => $self->pg->db->query(
-        q{SELECT hostname, service_name, package_name, kind, expected, actual, description, checked_at
+        q{SELECT hostname, service_name, package_name, kind, expected, actual, description, fronts, checked_at
           FROM api.host_service_status WHERE expected != actual ORDER BY service_name, hostname},
     )->hashes->to_array);
 }

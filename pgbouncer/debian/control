@@ -9,7 +9,7 @@ Homepage: https://github.com/permittivity2/homelab
 Package: homelab-pgbouncer
 Architecture: all
 Depends: ${misc:Depends}, pgbouncer
-Recommends: homelab-database
+Recommends: homelab-database, homelab-agent
 Description: PgBouncer connection pooler in front of the shared homelab database
  Configures PgBouncer (scram-sha-256 auth, a static userlist.txt) with a
  `homelab` database entry pointing at a homelab-database-managed Postgres

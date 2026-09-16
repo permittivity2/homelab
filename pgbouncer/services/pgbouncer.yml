@@ -1,0 +1,7 @@
+name: pgbouncer
+package: homelab-pgbouncer
+kind: pgbouncer
+check:
+  systemd_unit: pgbouncer
+  tcp_port: 6432
+description: "PgBouncer connection pooler in front of the shared homelab database"

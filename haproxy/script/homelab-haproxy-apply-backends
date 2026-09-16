@@ -23,8 +23,6 @@
 use strict;
 use warnings;
 use YAML::XS qw(LoadFile DumpFile);
-use Mojo::JSON qw(encode_json);
-use File::Temp qw(tempfile);
 
 my $BACKENDS_CONFIG = $ENV{HOMELAB_HAPROXY_BACKENDS} // '/etc/homelab/haproxy/backends.yml';
 my $HAPROXY_CONFIG   = $ENV{HOMELAB_HAPROXY_CONFIG}   // '/etc/haproxy/haproxy.cfg';
@@ -105,35 +103,34 @@ system('systemctl', 'reload', 'haproxy') == 0
 
 print 'homelab-haproxy: applied ' . scalar(@backends) . " backend(s), reloaded.\n";
 
-# Topology visibility only (`homelab-cli topology`) -- never lets a
-# registration problem affect the actual haproxy config apply above,
-# which has already succeeded by this point. Skipped entirely when
-# either value is unset or still the example file's placeholder, same
-# "explicit opt-in, not auto-detected" convention as every other
-# cross-host address in this project.
-my $api_base       = $config->{api_base};
-my $advertise_host = $config->{advertise_host};
-if ($api_base && $advertise_host && $advertise_host !~ /^YOUR_/) {
-    my @entries = map {
+# Fleet-topology visibility (`homelab-cli fleet status`, via
+# homelab-agent -- see ../../agent/README.md) -- replaces the old
+# homelab-register-infrastructure call to api.infrastructure_registry
+# (retired). No host/api_base needed here at all: homelab-agent already
+# knows its own host identity from its own config and reports every
+# manifest entry under that, so this script only ever needs to state
+# WHAT exists on this host, never WHERE this host is. Regenerated
+# wholesale on every run, same as haproxy.cfg itself above -- a
+# frontend removed from backends.yml disappears from the fleet view
+# too, not just the live config. Never lets a write failure affect the
+# actual haproxy config apply above, which has already succeeded.
+my $manifest_dir  = $ENV{HOMELAB_SERVICES_MANIFEST_DIR} // '/etc/homelab/services';
+my $manifest_file = "$manifest_dir/haproxy.yml";
+if (-d $manifest_dir) {
+    my @manifest = map {
         my $b = $_;
         {
             name        => "haproxy-$b->{name}_in",
+            package     => 'homelab-haproxy',
             kind        => 'tcp-proxy-frontend',
-            host        => $advertise_host,
-            port        => $b->{frontend_port},
+            check       => { tcp_port => $b->{frontend_port} },
             description => "HAProxy frontend, send-proxy to $b->{backend}",
             fronts      => ["$b->{name}\@$b->{backend}"],
         };
     } @backends;
-
-    my ($entries_fh, $entries_file) = tempfile(SUFFIX => '.json', UNLINK => 1);
-    print $entries_fh encode_json(\@entries);
-    close $entries_fh;
-
-    my $reg_rc = system(
-        'homelab-register-infrastructure', '--api-base', $api_base,
-        '--replace-prefix', 'haproxy-', '--entries-file', $entries_file,
-    );
-    print "  WARNING: homelab-register-infrastructure exited non-zero -- topology view may be stale\n"
-        if $reg_rc != 0;
+    eval { DumpFile($manifest_file, \@manifest); 1 }
+        or print "  WARNING: failed to write $manifest_file -- fleet status view may be stale: $@\n";
+}
+else {
+    print "  NOTE: $manifest_dir doesn't exist (homelab-agent not installed here yet) -- skipping manifest write.\n";
 }

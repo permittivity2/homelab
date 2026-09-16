@@ -28,6 +28,8 @@ override_dh_install:
 		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/recipient_blocking.css
 	install -D -m 644 plugins/recipient_blocking/localization/en_US.inc \
 		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/localization/en_US.inc
+	install -D -m 644 services/roundcube.yml \
+		debian/homelab-roundcube/usr/share/homelab-roundcube/services/roundcube.yml
 
 override_dh_auto_build:
 	# Nothing to compile

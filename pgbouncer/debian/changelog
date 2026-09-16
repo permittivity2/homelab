@@ -1,3 +1,9 @@
+homelab-pgbouncer (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Tue, 15 Sep 2026 22:38:40 -0500
+
 homelab-pgbouncer (0.1.1) unstable; urgency=medium
 
   * Release v0.1.1

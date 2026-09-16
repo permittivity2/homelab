@@ -155,6 +155,18 @@ case "$1" in
             echo "           Run 'nginx -t' by hand to see it; the previous running config (if any) is untouched."
         fi
 
+        # Declarative manifest for homelab-agent (see
+        # ../../agent/README.md). The php-fpm unit name is version-
+        # specific ($PHP_VERSION, detected above the same way the rest
+        # of this postinst already does) -- substituted fresh every run,
+        # unlike config.yml's own first-install-only handling, since
+        # nothing here is otherwise host-specific.
+        mkdir -p /etc/homelab/services
+        sed -e "s#phpPHP_VERSION_PLACEHOLDER-fpm#php$PHP_VERSION-fpm#g" \
+            /usr/share/homelab-roundcube/services/roundcube.yml \
+            > /etc/homelab/services/roundcube.yml
+        chgrp homelab /etc/homelab/services/roundcube.yml 2>/dev/null || true
+
         db_stop
 
         echo ""

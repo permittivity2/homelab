@@ -1,0 +1,6 @@
+name: postgresql
+package: homelab-database
+kind: postgres
+check:
+  systemd_unit: postgresql@18-main
+description: "Postgres 18, the shared 'homelab' database every feature's schema lives in"

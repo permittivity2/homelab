@@ -118,6 +118,14 @@ case "$1" in
             echo "         'journalctl -xeu pgbouncer' and $MARKER by hand."
         fi
 
+        # Declarative manifest for homelab-agent (see
+        # ../../agent/README.md) -- static content, copied into place
+        # every run.
+        mkdir -p /etc/homelab/services
+        install -m 644 /usr/share/homelab-pgbouncer/services/pgbouncer.yml \
+            /etc/homelab/services/pgbouncer.yml
+        chgrp homelab /etc/homelab/services/pgbouncer.yml 2>/dev/null || true
+
         db_stop
 
         echo ""

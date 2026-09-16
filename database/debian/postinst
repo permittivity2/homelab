@@ -146,6 +146,17 @@ case "$1" in
             fi
         fi
 
+        # Declarative manifest for homelab-agent (see
+        # ../../agent/README.md) -- static content, just copied into
+        # place every run so an upgrade also picks up any future change
+        # to the shipped manifest, unlike config.yml's own
+        # first-install-only handling above (nothing here is
+        # host-specific or debconf-driven).
+        mkdir -p /etc/homelab/services
+        install -m 644 /usr/share/homelab-database/services/postgresql.yml \
+            /etc/homelab/services/postgresql.yml
+        chgrp homelab /etc/homelab/services/postgresql.yml 2>/dev/null || true
+
         db_stop
 
         # The one shared substrate database every homelab-* feature's own
