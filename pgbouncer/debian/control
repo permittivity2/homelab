@@ -8,7 +8,7 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-pgbouncer
 Architecture: all
-Depends: ${misc:Depends}, pgbouncer
+Depends: ${misc:Depends}, pgbouncer, homelab-common
 Recommends: homelab-database, homelab-agent
 Description: PgBouncer connection pooler in front of the shared homelab database
  Configures PgBouncer (scram-sha-256 auth, a static userlist.txt) with a
@@ -20,4 +20,10 @@ Description: PgBouncer connection pooler in front of the shared homelab database
  into userlist.txt (homelab-bootstrap-pgbouncer-entry) lives in
  homelab-common instead of here, so any feature host can depend on the
  lightweight client tool without this whole package (and a full local
- pgbouncer server) coming along with it.
+ pgbouncer server) coming along with it. This package itself needs a
+ hard Depends (not just Recommends) on homelab-common too: a remote
+ host's bootstrap SSHes INTO the pgbouncer host and runs that exact
+ tool locally there to register itself -- found missing on a fresh
+ install where nothing had ever pulled homelab-common onto the
+ pgbouncer host itself, leaving every remote registration attempt with
+ no binary to SSH into.

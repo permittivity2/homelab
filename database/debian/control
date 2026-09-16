@@ -8,7 +8,7 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-database
 Architecture: all
-Depends: ${misc:Depends}, postgresql, postgresql-client
+Depends: ${misc:Depends}, postgresql, postgresql-client, homelab-common
 Recommends: homelab-agent
 Description: PostgreSQL provisioning substrate for the homelab-* ecosystem
  Installs/configures PostgreSQL itself and idempotently creates the one
@@ -17,4 +17,8 @@ Description: PostgreSQL provisioning substrate for the homelab-* ecosystem
  feature's own roles/schema (homelab-bootstrap-app-role) lives in
  homelab-common instead of here, so any feature host can depend on the
  lightweight client tool without this whole package (and a full local
- Postgres server) coming along with it.
+ Postgres server) coming along with it. Needs a hard Depends on
+ homelab-common itself too, same reasoning as homelab-pgbouncer's own
+ identical fix: a remote feature host's role-bootstrap SSHes INTO this
+ host and runs that tool locally here, which needs the binary present
+ on THIS side, not just the caller's.
