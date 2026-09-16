@@ -17,18 +17,6 @@ Description: PgBouncer host for the runtime SQL passdb connection:
  design. The bootstrapped role is also registered into this host's
  pgbouncer userlist.txt.
 
-Template: homelab-dovecot/advertise_host
-Type: string
-Default: 127.0.0.1
-Description: This host's own address to advertise in the infrastructure topology registry:
- Written into homelab-api's api.infrastructure_registry (see
- `homelab-cli topology`) purely for operator visibility -- unlike the
- HTTP service registry, nothing forwards requests here based on this
- value. Leave as 127.0.0.1 only if this host has no other reachable
- address; set it to this host's real reachable address (e.g. its
- data-plane IP) for any distributed deployment, or the topology view
- will misleadingly show dovecot as running on loopback.
-
 Template: homelab-dovecot/mail_domain
 Type: string
 Default:

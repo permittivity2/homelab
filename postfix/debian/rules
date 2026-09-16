@@ -21,6 +21,8 @@ override_dh_install:
 		debian/homelab-postfix/usr/share/homelab-postfix/config/opendkim.conf.template
 	install -D -m 755 script/homelab-postfix-bootstrap-role \
 		debian/homelab-postfix/usr/share/homelab-postfix/script/homelab-postfix-bootstrap-role
+	install -D -m 644 config/postfix.manifest.yml \
+		debian/homelab-postfix/usr/share/homelab-postfix/config/postfix.manifest.yml
 
 override_dh_auto_build:
 	# Nothing to compile

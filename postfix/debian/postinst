@@ -35,8 +35,6 @@ case "$1" in
         db_get homelab-postfix/dovecot_host || true;   DOVECOT_HOST="${RET:-localhost}"
         db_get homelab-postfix/default_process_limit || true;     PROCESS_LIMIT="${RET:-600}"
         db_get homelab-postfix/client_connection_limit || true;   CLIENT_CONN_LIMIT="${RET:-200}"
-        db_get homelab-postfix/api_base || true;       API_BASE="${RET:-http://localhost:3000}"
-        db_get homelab-postfix/advertise_host || true; ADVERTISE_HOST="${RET:-127.0.0.1}"
 
         # inet_interfaces was never explicitly set here before -- it
         # silently inherited whatever the underlying `postfix` package
@@ -442,14 +440,15 @@ case "$1" in
             echo "           Run 'postfix check' by hand to see it."
         fi
 
-        # Best-effort topology-visibility registration only (see
-        # homelab-register-infrastructure's own header) -- run every
-        # configure, unconditionally, same as the other per-run settings
-        # above. Never blocks or fails this postinst.
-        homelab-register-infrastructure --api-base "$API_BASE" \
-            --name postfix --kind smtp --host "$ADVERTISE_HOST" --port 587 \
-            --description "SMTP submission (587, SASL auth via Dovecot) + inbound relay (25) + OpenDKIM signing" \
-            || echo "  WARNING: infrastructure registry registration failed (topology visibility only, mail flow unaffected)"
+        # Topology visibility now comes from homelab-agent reading this
+        # static manifest, not a self-registration call homelab-postfix
+        # makes itself (api.infrastructure_registry/`homelab-cli
+        # topology` are retired -- see api/migrations/010-fleet-agent.sql
+        # and ../../agent/README.md). Re-copied every configure so a
+        # package upgrade also refreshes it if the shipped manifest ever
+        # changes.
+        mkdir -p /etc/homelab/services
+        cp "$SHARE_DIR/config/postfix.manifest.yml" /etc/homelab/services/postfix.yml
 
         db_stop
 

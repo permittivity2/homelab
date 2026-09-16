@@ -1,0 +1,11 @@
+# Installed verbatim to /etc/homelab/services/postfix.yml by postinst.
+# Static, not templated -- this package's own facts don't vary by host.
+# Read by homelab-agent (see ../../agent/README.md), never
+# homelab-postfix itself.
+name: postfix
+package: homelab-postfix
+kind: smtp
+check:
+  systemd_unit: postfix
+  tcp_port: 587
+description: "SMTP submission (587, SASL auth via Dovecot) + inbound relay (25) + OpenDKIM signing"

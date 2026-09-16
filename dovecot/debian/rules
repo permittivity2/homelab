@@ -9,6 +9,8 @@ override_dh_install:
 		debian/homelab-dovecot/usr/share/homelab-dovecot/conf.d/91-homelab-dovecot.conf.template
 	install -D -m 755 script/homelab-dovecot-bootstrap-role \
 		debian/homelab-dovecot/usr/share/homelab-dovecot/script/homelab-dovecot-bootstrap-role
+	install -D -m 644 config/dovecot.manifest.yml \
+		debian/homelab-dovecot/usr/share/homelab-dovecot/config/dovecot.manifest.yml
 
 override_dh_auto_build:
 	# Nothing to compile

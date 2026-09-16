@@ -1,0 +1,12 @@
+# Installed verbatim to /etc/homelab/services/dovecot.yml by postinst.
+# Static, not templated -- this package's own facts (name/kind/check/
+# description) don't vary by host, only the deployment does. Read by
+# homelab-agent (see ../../agent/README.md), never homelab-dovecot
+# itself.
+name: dovecot
+package: homelab-dovecot
+kind: imap
+check:
+  systemd_unit: dovecot
+  tcp_port: 993
+description: "IMAP/IMAPS/LMTP mail delivery (SQL passdb against api.users); also serves plain IMAP:143"
