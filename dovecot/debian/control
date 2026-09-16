@@ -8,7 +8,7 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-dovecot
 Architecture: all
-Depends: ${misc:Depends}, dovecot-core, dovecot-imapd, dovecot-lmtpd, dovecot-pgsql, postgresql-client, adduser
+Depends: ${misc:Depends}, dovecot-core, dovecot-imapd, dovecot-lmtpd, dovecot-pgsql, postgresql-client, adduser, homelab-common
 Description: IMAP/LMTP mail delivery wired to the homelab-* shared identity
  Wires Dovecot's SQL passdb to the shared `homelab` Postgres database's
  api.users table via a narrow, column-scoped cross-schema grant (email/
@@ -39,3 +39,9 @@ Description: IMAP/LMTP mail delivery wired to the homelab-* shared identity
  Postfix-to-Dovecot data-plane calls that never pass through a proxy.
  Answering false runs this host's IMAP/IMAPS exposed with no proxy in
  front, an explicit opt-out rather than the default.
+ .
+ Depends on homelab-common (not just implicitly expects it): postinst
+ calls homelab-bootstrap-pgbouncer-entry from that package to register
+ this host's runtime role's SCRAM secret -- found missing on a fresh
+ install with nothing else pulling homelab-common in, silently falling
+ through to a "register by hand" warning instead of the automatic path.
