@@ -377,7 +377,7 @@ def cmd_fleet_status(args):
 
 
 def cmd_fleet_drift(args):
-    """Just the actionable rows from `fleet status`: expected=true/
+    """Just the actionable rows from `admin fleet status`: expected=true/
     actual=false is a real outage, expected=false/actual=true is an
     undeclared surprise (e.g. a service nobody's manifest ever claimed,
     running anyway)."""
@@ -1626,16 +1626,6 @@ def build_parser():
     p.add_argument("feature_name")
     p.set_defaults(func=cmd_registry_lookup)
 
-    fleet = sub.add_parser(
-        "fleet",
-        help="Live, agent-verified view of every host and service in the fleet (site_admin role required)",
-    )
-    fleet_sub = fleet.add_subparsers(dest="fleet_command", required=True)
-    p = fleet_sub.add_parser("status", help="Every host + every declared/observed service, expected vs actual")
-    p.set_defaults(func=cmd_fleet_status)
-    p = fleet_sub.add_parser("drift", help="Just the mismatches: real outages and undeclared surprises")
-    p.set_defaults(func=cmd_fleet_drift)
-
     dns = sub.add_parser("dns", help="DNS + mail-domain administration (site_admin role required)")
     dns_sub = dns.add_subparsers(dest="dns_command", required=True)
 
@@ -1945,7 +1935,7 @@ def build_parser():
     p = permissions_sub.add_parser("list", help="List the known capability catalog")
     p.set_defaults(func=cmd_admin_permissions_list)
 
-    agent = admin_sub.add_parser("agent", help="Fleet agent enrollment (see 'fleet status'/'fleet drift')")
+    agent = admin_sub.add_parser("agent", help="Fleet agent enrollment (see 'admin fleet status'/'admin fleet drift')")
     agent_sub = agent.add_subparsers(dest="admin_agent_command", required=True)
     p = agent_sub.add_parser(
         "enroll",
@@ -1954,6 +1944,16 @@ def build_parser():
     p.add_argument("hostname", help="The host's own logical name, e.g. 'ct07' -- must match what its agent is configured with")
     p.add_argument("--ttl-minutes", type=int, help="How long the code stays redeemable (default: 10)")
     p.set_defaults(func=cmd_admin_agent_enroll)
+
+    fleet = admin_sub.add_parser(
+        "fleet",
+        help="Live, agent-verified view of every host and service in the fleet",
+    )
+    fleet_sub = fleet.add_subparsers(dest="admin_fleet_command", required=True)
+    p = fleet_sub.add_parser("status", help="Every host + every declared/observed service, expected vs actual")
+    p.set_defaults(func=cmd_fleet_status)
+    p = fleet_sub.add_parser("drift", help="Just the mismatches: real outages and undeclared surprises")
+    p.set_defaults(func=cmd_fleet_drift)
 
     return parser
 
