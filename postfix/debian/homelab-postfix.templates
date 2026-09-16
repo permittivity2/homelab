@@ -94,13 +94,60 @@ Template: homelab-postfix/enable_dkim
 Type: boolean
 Default: false
 Description: Wire DKIM signing into Postfix (OpenDKIM milter)?
- Adds smtpd_milters/non_smtpd_milters pointing at OpenDKIM
- (inet:localhost:8891 -- OpenDMARC is not wired here, out of scope for
- this package), and sets up /etc/opendkim/keys ownership so the
- unprivileged `homelab` user (which
- homelab-domain-admin runs as) can generate and rotate keys there. An
- already-configured host answering "false" here (the default) gets
- zero milter-config change on a routine upgrade -- turn this on
- explicitly via `dpkg-reconfigure homelab-postfix` when ready. Key
- generation/rotation itself is done separately via `homelab-cli dns
- dkim rotate/activate/retire`, not by this postinst.
+ Adds smtpd_milters/non_smtpd_milters pointing at OpenDKIM (see
+ dkim_milter_host below -- OpenDMARC is not wired here, out of scope
+ for this package). An already-configured host answering "false" here
+ (the default) gets zero milter-config change on a routine upgrade --
+ turn this on explicitly via `dpkg-reconfigure homelab-postfix` when
+ ready. Key generation/rotation itself is done separately via
+ `homelab-cli dns dkim rotate/activate/retire`, not by this postinst.
+
+Template: homelab-postfix/run_local_opendkim
+Type: boolean
+Default: true
+Description: Run OpenDKIM locally on THIS host (only asked when enable_dkim is true)?
+ True (the default) is the normal, single-instance setup: this host
+ runs its own OpenDKIM, homelab-domain-admin must also be installed
+ here (DKIM private key material is read from local disk only and must
+ never cross a network -- see domain-admin/README.md), and
+ /etc/opendkim/keys ownership is set up so domain-admin's unprivileged
+ `homelab` user can generate/rotate keys there.
+ .
+ Answer "false" to run multiple load-balanced Postfix instances signing
+ with the SAME DKIM key/selector, instead of each instance rotating its
+ own (which would mean several different selectors published in DNS at
+ once for no real benefit): exactly one instance in the group answers
+ "true" here (the "primary", co-located with homelab-domain-admin as
+ usual) and every other instance ("secondary") answers "false" and
+ instead points dkim_milter_host below at the primary's own address --
+ nothing DKIM-related is installed, started, or given key-directory
+ access on a "false" host, it just relays signing requests to the
+ primary's milter over the network.
+
+Template: homelab-postfix/dkim_milter_host
+Type: string
+Default: localhost
+Description: Host Postfix connects to for DKIM signing (OpenDKIM's milter, port 8891):
+ Almost always leave this at "localhost" -- the normal setup is
+ Postfix and OpenDKIM co-located, talking over loopback, which is also
+ what run_local_opendkim=true expects. Only change this on a
+ "secondary" instance in a load-balanced group (run_local_opendkim=
+ false): point it at the "primary" instance's own data-plane address
+ (e.g. 10.50.2.46) so this host's outbound mail still gets signed, by
+ the one shared OpenDKIM, over the network instead of locally. The
+ primary's own firewall needs an inbound allowance for port 8891 from
+ wherever its secondaries live before this will actually work.
+
+Template: homelab-postfix/dkim_milter_bind_address
+Type: string
+Default: localhost
+Description: Address THIS host's own OpenDKIM binds its milter socket to (only read when run_local_opendkim is true):
+ Leave at "localhost" for a normal single-instance setup (nothing
+ outside this host ever needs to reach its milter). Set this to
+ "0.0.0.0" (this project's usual "bind broadly, the firewall is the
+ real boundary" convention) ONLY on a "primary" host in a load-balanced
+ group, i.e. one that other Postfix instances' dkim_milter_host above
+ will be pointing at -- otherwise OpenDKIM only accepts connections
+ from 127.0.0.1 and every remote secondary's mail silently stops being
+ signed (milter_default_action=accept means it still gets DELIVERED,
+ just unsigned, which is easy to miss without checking).

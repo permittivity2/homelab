@@ -38,5 +38,5 @@ KeyTable        /etc/opendkim/KeyTable
 SigningTable    /etc/opendkim/SigningTable
 ExternalIgnoreList  refile:/etc/opendkim/TrustedHosts
 InternalHosts       refile:/etc/opendkim/TrustedHosts
-Socket          inet:8891@localhost
+Socket          inet:8891@__MILTER_BIND_ADDRESS__
 PidFile         /run/opendkim/opendkim.pid
