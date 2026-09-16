@@ -14,6 +14,13 @@ my $SITES_CONFIG    = $ENV{HOMELAB_WEBPROXY_SITES}      // '/etc/homelab/webprox
 my $VHOST_TEMPLATE  = $ENV{HOMELAB_WEBPROXY_TEMPLATE}   // '/usr/share/homelab-webproxy/config/vhost.conf.template';
 my $SITES_AVAILABLE = $ENV{HOMELAB_WEBPROXY_AVAILABLE}  // '/etc/nginx/sites-available';
 my $SITES_ENABLED   = $ENV{HOMELAB_WEBPROXY_ENABLED}    // '/etc/nginx/sites-enabled';
+# nginx's `upstream {}` directive is only valid in the http{} context,
+# not inside a server{} block -- so a load-balanced site's upstream
+# group can't live in the per-domain vhost file the way a single
+# proxy_pass target does. Debian/Ubuntu's stock nginx.conf already
+# `include`s this directory from inside http{}, so a file dropped here
+# loads automatically with no nginx.conf edit needed.
+my $CONFD_DIR        = $ENV{HOMELAB_WEBPROXY_CONFD}      // '/etc/nginx/conf.d';
 
 unless (-f $SITES_CONFIG) {
     print "homelab-webproxy: no $SITES_CONFIG yet — nothing to apply.\n";
@@ -35,8 +42,43 @@ my $template = do {
 
 my $applied = 0;
 for my $site (@sites) {
-    my $domain   = $site->{domain}   // die "sites.yml: a site is missing 'domain'\n";
-    my $upstream = $site->{upstream} // die "sites.yml: site '$domain' is missing 'upstream'\n";
+    my $domain = $site->{domain} // die "sites.yml: a site is missing 'domain'\n";
+
+    # 'upstream' (single host:port, original shape) and 'upstreams' (a
+    # list, for HA/load-balanced groups) both accepted -- 'upstreams'
+    # added when this first needed more than one real backend per site
+    # (3x roundcube instances behind one vhost). A list gets turned into
+    # a real nginx upstream{} block (see $CONFD_DIR above); proxy_pass
+    # then targets that block's name instead of a literal host:port --
+    # nginx doesn't support multiple proxy_pass targets any other way.
+    my @upstream_targets;
+    if (my $list = $site->{upstreams}) {
+        die "sites.yml: site '$domain''s 'upstreams' must be a list\n" unless ref($list) eq 'ARRAY';
+        @upstream_targets = @$list;
+    } elsif (my $single = $site->{upstream}) {
+        @upstream_targets = ($single);
+    } else {
+        die "sites.yml: site '$domain' needs either 'upstream' (one target) or 'upstreams' (a list)\n";
+    }
+
+    my $upstream;
+    if (@upstream_targets > 1) {
+        (my $pool_name = $domain) =~ s/[^A-Za-z0-9]/_/g;
+        $pool_name = "pool_$pool_name";
+        $upstream = $pool_name;
+        my $pool_conf = "$CONFD_DIR/$domain-upstream.conf";
+        open(my $pfh, '>', $pool_conf) or die "Cannot write $pool_conf: $!\n";
+        print $pfh "# Managed by homelab-webproxy's homelab-webproxy-apply-sites for\n";
+        print $pfh "# $domain -- do not hand-edit; edit /etc/homelab/webproxy/sites.yml\n";
+        print $pfh "# and re-run homelab-webproxy-apply-sites instead. Regenerated\n";
+        print $pfh "# wholesale on every run, not merged.\n";
+        print $pfh "upstream $pool_name {\n";
+        print $pfh "    server $_;\n" for @upstream_targets;
+        print $pfh "}\n";
+        close($pfh);
+    } else {
+        $upstream = $upstream_targets[0];
+    }
 
     my $vhost_path = "$SITES_AVAILABLE/$domain";
 
@@ -109,13 +151,15 @@ my $manifest_dir  = $ENV{HOMELAB_SERVICES_MANIFEST_DIR} // '/etc/homelab/service
 my $manifest_file = "$manifest_dir/webproxy.yml";
 if (-d $manifest_dir) {
     my @manifest = map {
+        my $s = $_;
+        my @t = $s->{upstreams} ? @{ $s->{upstreams} } : ($s->{upstream});
         {
-            name        => "webproxy-$_->{domain}",
+            name        => "webproxy-$s->{domain}",
             package     => 'homelab-webproxy',
             kind        => 'http-proxy-vhost',
             check       => { tcp_port => 443 },
-            description => "HTTPS vhost for $_->{domain}",
-            fronts      => [$_->{upstream}],
+            description => "HTTPS vhost for $s->{domain}",
+            fronts      => [@t],
         }
     } @sites;
     eval { DumpFile($manifest_file, \@manifest); 1 }
