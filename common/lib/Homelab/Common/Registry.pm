@@ -1,6 +1,7 @@
 package Homelab::Common::Registry;
 use Mojo::Base -strict;
 use Mojo::UserAgent;
+use YAML::XS qw(LoadFile);
 use Exporter 'import';
 
 our @EXPORT_OK = qw(register lookup);
@@ -14,6 +15,34 @@ our @EXPORT_OK = qw(register lookup);
 my $UA = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10);
 my %CACHE;              # feature_name => { data => {...}, expires => $epoch }
 my $CACHE_TTL = 60;     # seconds
+
+# Both registry HTTP routes require a system_agent-role JWT (see the
+# incident writeup on the commit that added this): the POST is the live
+# gateway-routing table homelab-api's own forwarding trusts, so it used
+# to let anyone on the network silently hijack a feature's backend
+# address. Every register()/lookup() caller already runs as the same
+# 'homelab' OS user as homelab-agent, which is Recommends:-installed
+# alongside it and already maintains a live, auto-refreshing
+# system_agent credential right here — reusing that file avoids standing
+# up a second, parallel credential system for every registering package.
+# Deliberately NOT cached/held in memory across calls: this module is
+# used by long-lived services whose local agent rotates the token on
+# every heartbeat, so re-reading the file each call is the only way to
+# always have a live token, and it's a local stat+read, not a network
+# call, so the cost is negligible next to the HTTP round trip it feeds.
+my $CREDENTIAL_FILE = '/etc/homelab/agent/credential.yml';
+
+sub _system_agent_token {
+    my (%opts) = @_;
+    my $path = $opts{credential_file} // $CREDENTIAL_FILE;
+    die "no homelab-agent credential found at $path -- install and enroll "
+        . "homelab-agent on this host first (homelab-cli admin agent enroll "
+        . "<hostname>, then 'dpkg-reconfigure homelab-agent')\n"
+        unless -f $path;
+    my $credential = LoadFile($path);
+    die "credential file $path has no token\n" unless $credential->{token};
+    return $credential->{token};
+}
 
 # Registers this feature's own address. Call once at startup, and again
 # on a periodic keep-alive (e.g. a recurring Mojo::IOLoop timer) so a
@@ -34,13 +63,17 @@ sub register {
     my $host         = $opts{host}         // die "register(): host required\n";
     my $port         = $opts{port}         // die "register(): port required\n";
 
-    my $tx = $UA->post("$api_base/api/v1/registry/register", json => {
-        feature_name     => $feature_name,
-        host             => $host,
-        port             => $port,
-        health_check_url => $opts{health_check_url},
-        description      => $opts{description},
-    });
+    my $token = _system_agent_token(credential_file => $opts{credential_file});
+    my $tx = $UA->post("$api_base/api/v1/registry/register",
+        { Authorization => "Bearer $token" },
+        json => {
+            feature_name     => $feature_name,
+            host             => $host,
+            port             => $port,
+            health_check_url => $opts{health_check_url},
+            description      => $opts{description},
+        },
+    );
     die 'Registry registration failed: ' . _tx_error($tx) . "\n" if $tx->error;
     return 1;
 }
@@ -57,7 +90,8 @@ sub lookup {
         return $cached->{data} if $cached->{expires} > time;
     }
 
-    my $tx = $UA->get("$api_base/api/v1/registry/$feature_name");
+    my $token = _system_agent_token(credential_file => $opts{credential_file});
+    my $tx = $UA->get("$api_base/api/v1/registry/$feature_name", { Authorization => "Bearer $token" });
     die "Registry lookup for '$feature_name' failed: " . _tx_error($tx) . "\n" if $tx->error;
 
     my $data = $tx->result->json;

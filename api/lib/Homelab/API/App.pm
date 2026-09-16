@@ -563,7 +563,15 @@ sub _logout ($self, $c) {
     return $c->render(json => { success => \1 });
 }
 
+# Write side: only a host's own homelab-agent-issued system_agent
+# credential may register a feature here (same gate /api/v1/agent/
+# heartbeat uses) -- this table is what homelab-api's own gateway
+# forwarding trusts to decide where real user traffic goes, so an
+# unauthenticated POST here would have let anyone on the network
+# silently hijack any feature's backend address. See the commit that
+# introduced this check for the incident writeup.
 sub _registry_register ($self, $c) {
+    $self->_require_system_agent($c) or return;
     my $body = $c->req->json // {};
     for my $field (qw(feature_name host port)) {
         return $c->render(json => { error => "$field is required" }, status => 400)
@@ -573,7 +581,12 @@ sub _registry_register ($self, $c) {
     return $c->render(json => { ok => \1 });
 }
 
+# Read side: any logged-in caller (human or service), not site_admin --
+# same "owner doesn't need to be an admin to ask a basic question"
+# posture as mail-aliases/mine. Was previously unauthenticated entirely,
+# leaking internal service topology to anyone on the network.
 sub _registry_lookup ($self, $c) {
+    my ($caller, undef) = $self->_authenticate($c) or return;
     my $feature = $c->param('feature');
     my $entry   = $self->registry->lookup($feature);
     return $c->render(json => { error => 'not found' }, status => 404) unless $entry;
@@ -583,8 +596,9 @@ sub _registry_lookup ($self, $c) {
 # GET /api/v1/registry -- every currently-registered feature, so a
 # client can discover valid feature_name values instead of guessing
 # (e.g. "homelab-mailbridge" isn't guessable from the CLI's own `mail`
-# subcommand name alone).
+# subcommand name alone). Same bare-login gate as _registry_lookup.
 sub _registry_list ($self, $c) {
+    my ($caller, undef) = $self->_authenticate($c) or return;
     return $c->render(json => $self->registry->list_all);
 }
 

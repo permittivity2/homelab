@@ -276,8 +276,11 @@ def cmd_logout(args):
 
 
 def cmd_registry_lookup(args):
+    session = _require_session(args)
+    if not session:
+        return 1
     try:
-        result = _client().registry_lookup(args.feature_name)
+        result = _client().registry_lookup(session["token"], args.feature_name)
     except ApiError as e:
         _emit_error(args, f"Lookup failed: {e.message}")
         return 1
@@ -295,8 +298,11 @@ def _truncate(text, width=60):
 
 
 def cmd_registry_list(args):
+    session = _require_session(args)
+    if not session:
+        return 1
     try:
-        results = _client().registry_list()
+        results = _client().registry_list(session["token"])
     except ApiError as e:
         _emit_error(args, f"List failed: {e.message}")
         return 1

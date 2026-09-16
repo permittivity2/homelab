@@ -60,15 +60,17 @@ def test_non_json_error_response_falls_back_to_raw_text(client):
 
 def test_registry_lookup_builds_correct_path(client):
     with patch("requests.request", return_value=_mock_response(200, {"feature_name": "homelab-sso", "host": "h", "port": 1})) as m:
-        client.registry_lookup("homelab-sso")
+        client.registry_lookup("t", "homelab-sso")
     assert m.call_args.args[1] == "http://localhost:3000/api/v1/registry/homelab-sso"
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer t"
 
 
 def test_registry_list_builds_correct_path_and_returns_list(client):
     payload = [{"feature_name": "homelab-drive", "host": "h", "port": 1}]
     with patch("requests.request", return_value=_mock_response(200, payload)) as m:
-        result = client.registry_list()
+        result = client.registry_list("t")
     assert m.call_args.args[1] == "http://localhost:3000/api/v1/registry"
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer t"
     assert result == payload
 
 

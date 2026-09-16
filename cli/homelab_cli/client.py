@@ -176,11 +176,11 @@ class Client:
             params["action"] = action
         return self._request("GET", "/api/v1/audit/log", headers=self._auth(token), params=params)
 
-    def registry_lookup(self, feature_name):
-        return self._request("GET", f"/api/v1/registry/{feature_name}")
+    def registry_lookup(self, token, feature_name):
+        return self._request("GET", f"/api/v1/registry/{feature_name}", headers=self._auth(token))
 
-    def registry_list(self):
-        return self._request("GET", "/api/v1/registry")
+    def registry_list(self, token):
+        return self._request("GET", "/api/v1/registry", headers=self._auth(token))
 
     # --- Fleet agent (see api/migrations/010-fleet-agent.sql) --
     # supersedes the old topology_list/'homelab-cli topology' (removed --
