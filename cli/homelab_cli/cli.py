@@ -23,7 +23,7 @@ from .client import ApiError, Client
 KNOWN_ROLES = ["user", "site_admin"]
 
 
-def _client():
+def _client(args=None):
     # Wires up transparent refresh-on-401 (see Client._send in
     # client.py): if the session's JWT has expired mid-command, the
     # Client retries once using this refresh_token and persists whatever
@@ -35,14 +35,25 @@ def _client():
     # per this fix's design -- touching none of those call sites); the
     # only thing this closure needs from it is the refresh_token and a
     # place to write an updated one back to disk. No session at all
-    # (never logged in) means refresh_token=None, which makes
-    # Client._send's retry branch a no-op -- unchanged prior behavior.
-    session = cfgmod.load_session() or {}
+    # (never logged in, or no active profile and no --as) means
+    # refresh_token=None, which makes Client._send's retry branch a
+    # no-op -- unchanged prior behavior.
+    #
+    # Every call site passes its own `args` through so a global --as
+    # EMAIL flag (see build_parser) makes that one invocation act as a
+    # different stored profile without touching which one is active.
+    # `args` still defaults to None (-> the active profile, same as
+    # before multi-profile support existed) for any caller -- tests,
+    # mainly -- that has no argparse Namespace to hand it.
+    as_user = getattr(args, "as_user", None) if args else None
+    session = cfgmod.get_session(email=as_user) or {}
+    profile_email = session.get("email") or as_user
 
     def _on_token_refreshed(new_token, new_refresh_token):
         session["token"] = new_token
         session["refresh_token"] = new_refresh_token
-        cfgmod.save_session(session)
+        if profile_email:
+            cfgmod.upsert_profile(profile_email, new_token, new_refresh_token)
 
     return Client(
         cfgmod.load_config()["api_base"],
@@ -152,16 +163,30 @@ def _nudge_missing_dns_records(client, token, domain_name):
 
 
 def _require_session(args):
-    """Returns the saved session dict, or None (after printing a clear
-    error, JSON-shaped in -j mode) if there isn't one. Every command
-    below that needs to already be logged in starts with this, matching
-    cmd_whoami's own existing error message so there's exactly one "how
-    do I log in" hint used everywhere."""
-    session = cfgmod.load_session()
-    if not session:
+    """Returns the resolved session dict (`--as EMAIL` if given, else the
+    active profile), or None (after printing a clear error, JSON-shaped
+    in -j mode) if there isn't one. Every command below that needs to
+    already be logged in starts with this, matching cmd_whoami's own
+    existing error message so there's exactly one "how do I log in" hint
+    used everywhere -- the exact message just now distinguishes *why*
+    there's no session (never logged in at all vs. logged in as someone
+    but nobody's active vs. --as named an unknown profile), since those
+    call for different fixes."""
+    as_user = getattr(args, "as_user", None)
+    if as_user:
+        session = cfgmod.get_session(email=as_user)
+        if not session:
+            _emit_error(args, f"Not logged in as {as_user}. Run: homelab-cli login {as_user}")
+        return session
+
+    data = cfgmod.load_profiles()
+    if not data["profiles"]:
         _emit_error(args, "Not logged in. Run: homelab-cli login <email>")
         return None
-    return session
+    if not data["active"]:
+        _emit_error(args, "No active profile. Run: homelab-cli profile use <email> (see: homelab-cli profile list)")
+        return None
+    return cfgmod.get_session()
 
 
 def _emit(args, data):
@@ -211,7 +236,7 @@ def cmd_configure(args):
 def cmd_register(args):
     password = args.password or getpass.getpass("Password: ")
     try:
-        result = _client().register(args.email, password)
+        result = _client(args).register(args.email, password)
     except ApiError as e:
         _emit_error(args, f"Registration failed: {e.message}")
         return 1
@@ -224,17 +249,14 @@ def cmd_register(args):
 def cmd_login(args):
     password = args.password or getpass.getpass("Password: ")
     try:
-        result = _client().login(args.email, password)
+        result = _client(args).login(args.email, password)
     except ApiError as e:
         _emit_error(args, f"Login failed: {e.message}")
         return 1
-    cfgmod.save_session({
-        "email": args.email,
-        "token": result["token"],
-        "refresh_token": result["refresh_token"],
-    })
+    cfgmod.upsert_profile(args.email, result["token"], result["refresh_token"])
+    cfgmod.set_active(args.email)  # logging in as someone switches you to them
     # Deliberately NOT the raw result: it carries the token/refresh_token
-    # already written to session.yml (0600) -- no reason to also put a
+    # already written to profiles.yml (0600) -- no reason to also put a
     # live credential on stdout for -j callers to end up in shell
     # history/logs/a captured pipeline.
     if _emit(args, {"success": True, "email": args.email}):
@@ -248,7 +270,7 @@ def cmd_whoami(args):
     if not session:
         return 1
     try:
-        result = _client().introspect(session["token"])
+        result = _client(args).introspect(session["token"])
     except ApiError as e:
         if e.status_code == 401:
             _emit_error(args, "Session expired. Run: homelab-cli login <email>")
@@ -262,16 +284,76 @@ def cmd_whoami(args):
 
 
 def cmd_logout(args):
-    session = cfgmod.load_session()
-    if session:
-        try:
-            _client().logout(session["refresh_token"])
-        except ApiError:
-            pass  # best-effort — clear the local session regardless
-    cfgmod.clear_session()
-    if _emit(args, {"success": True}):
+    if getattr(args, "all", False):
+        data = cfgmod.load_profiles()
+        for email, profile in data["profiles"].items():
+            try:
+                _client(args).logout(profile["refresh_token"])
+            except ApiError:
+                pass  # best-effort — clear every local profile regardless
+        cfgmod.clear_all_profiles()
+        if _emit(args, {"success": True, "logged_out": list(data["profiles"])}):
+            return 0
+        print("Logged out of every stored profile")
         return 0
-    print("Logged out")
+
+    data = cfgmod.load_profiles()
+    active = data["active"]
+    if not active:
+        if _emit(args, {"success": True}):
+            return 0
+        print("Not currently logged in as anyone (see: homelab-cli profile list)")
+        return 0
+    session = cfgmod.get_session()
+    try:
+        _client(args).logout(session["refresh_token"])
+    except ApiError:
+        pass  # best-effort — clear the local profile regardless
+    cfgmod.remove_profile(active)
+    if _emit(args, {"success": True, "logged_out": active}):
+        return 0
+    print(f"Logged out of {active}")
+    return 0
+
+
+def cmd_profile_list(args):
+    data = cfgmod.load_profiles()
+    if _emit(args, {"active": data["active"], "profiles": list(data["profiles"])}):
+        return 0
+    if not data["profiles"]:
+        print("(no stored profiles -- run: homelab-cli login <email>)")
+        return 0
+    for email in data["profiles"]:
+        marker = "* " if email == data["active"] else "  "
+        print(f"{marker}{email}")
+    return 0
+
+
+def cmd_profile_use(args):
+    try:
+        cfgmod.set_active(args.email)
+    except KeyError:
+        _emit_error(args, f"Not logged in as {args.email}. Run: homelab-cli login {args.email}")
+        return 1
+    if _emit(args, {"success": True, "active": args.email}):
+        return 0
+    print(f"Now acting as {args.email}")
+    return 0
+
+
+def cmd_profile_remove(args):
+    data = cfgmod.load_profiles()
+    if args.email not in data["profiles"]:
+        _emit_error(args, f"Not logged in as {args.email}.")
+        return 1
+    try:
+        _client(args).logout(data["profiles"][args.email]["refresh_token"])
+    except ApiError:
+        pass  # best-effort — remove the local profile regardless
+    cfgmod.remove_profile(args.email)
+    if _emit(args, {"success": True, "removed": args.email}):
+        return 0
+    print(f"Removed {args.email}")
     return 0
 
 
@@ -280,7 +362,7 @@ def cmd_registry_lookup(args):
     if not session:
         return 1
     try:
-        result = _client().registry_lookup(session["token"], args.feature_name)
+        result = _client(args).registry_lookup(session["token"], args.feature_name)
     except ApiError as e:
         _emit_error(args, f"Lookup failed: {e.message}")
         return 1
@@ -302,7 +384,7 @@ def cmd_registry_list(args):
     if not session:
         return 1
     try:
-        results = _client().registry_list(session["token"])
+        results = _client(args).registry_list(session["token"])
     except ApiError as e:
         _emit_error(args, f"List failed: {e.message}")
         return 1
@@ -326,7 +408,7 @@ def cmd_admin_agent_enroll(args):
     if not session:
         return 1
     try:
-        result = _client().admin_agent_enroll(session["token"], args.hostname, args.ttl_minutes)
+        result = _client(args).admin_agent_enroll(session["token"], args.hostname, args.ttl_minutes)
     except ApiError as e:
         _emit_error(args, f"Enrollment failed: {e.message}")
         return 1
@@ -350,8 +432,8 @@ def cmd_fleet_status(args):
     if not session:
         return 1
     try:
-        hosts = _client().fleet_hosts(session["token"])
-        status = _client().fleet_status(session["token"])
+        hosts = _client(args).fleet_hosts(session["token"])
+        status = _client(args).fleet_status(session["token"])
     except ApiError as e:
         _emit_error(args, f"Fleet status failed: {e.message}")
         return 1
@@ -391,7 +473,7 @@ def cmd_fleet_drift(args):
     if not session:
         return 1
     try:
-        mismatches = _client().fleet_mismatches(session["token"])
+        mismatches = _client(args).fleet_mismatches(session["token"])
     except ApiError as e:
         _emit_error(args, f"Fleet drift check failed: {e.message}")
         return 1
@@ -420,7 +502,7 @@ def cmd_dns_domains_list(args):
     if not session:
         return 1
     try:
-        domains = _client().dns_list_domains(session["token"])
+        domains = _client(args).dns_list_domains(session["token"])
     except ApiError as e:
         _emit_error(args, f"Could not list domains: {e.message}")
         return 1
@@ -446,7 +528,7 @@ def cmd_dns_domains_add(args):
     session = _require_session(args)
     if not session:
         return 1
-    client = _client()
+    client = _client(args)
     try:
         result = client.dns_add_domain(
             session["token"], args.domain_name,
@@ -469,7 +551,7 @@ def cmd_dns_domains_show(args):
     if not session:
         return 1
     try:
-        d = _client().dns_get_domain(session["token"], args.domain_name)
+        d = _client(args).dns_get_domain(session["token"], args.domain_name)
     except ApiError as e:
         _emit_error(args, f"Could not show domain: {e.message}")
         return 1
@@ -485,7 +567,7 @@ def cmd_dns_domains_enable(args):
     if not session:
         return 1
     try:
-        result = _client().dns_set_domain_enabled(session["token"], args.domain_name, True)
+        result = _client(args).dns_set_domain_enabled(session["token"], args.domain_name, True)
     except ApiError as e:
         _emit_error(args, f"Could not enable domain: {e.message}")
         return 1
@@ -500,7 +582,7 @@ def cmd_dns_domains_disable(args):
     if not session:
         return 1
     try:
-        result = _client().dns_set_domain_enabled(session["token"], args.domain_name, False)
+        result = _client(args).dns_set_domain_enabled(session["token"], args.domain_name, False)
     except ApiError as e:
         _emit_error(args, f"Could not disable domain: {e.message}")
         return 1
@@ -515,7 +597,7 @@ def cmd_dns_records_list(args):
     if not session:
         return 1
     try:
-        records = _client().dns_list_records(session["token"], args.domain_name)
+        records = _client(args).dns_list_records(session["token"], args.domain_name)
     except ApiError as e:
         _emit_error(args, f"Could not list records: {e.message}")
         return 1
@@ -534,7 +616,7 @@ def cmd_dns_records_add(args):
     if not session:
         return 1
     try:
-        result = _client().dns_add_record(
+        result = _client(args).dns_add_record(
             session["token"], args.domain_name, args.name, args.type, args.value, ttl=args.ttl,
         )
     except ApiError as e:
@@ -551,7 +633,7 @@ def cmd_dns_records_delete(args):
     if not session:
         return 1
     try:
-        result = _client().dns_delete_record(session["token"], args.domain_name, args.name, args.type)
+        result = _client(args).dns_delete_record(session["token"], args.domain_name, args.name, args.type)
     except ApiError as e:
         _emit_error(args, f"Could not delete record: {e.message}")
         return 1
@@ -567,7 +649,7 @@ def cmd_dns_mx_set(args):
         return 1
     value = _build_mx_value(args.priority, args.host)
     try:
-        result = _client().dns_add_record(session["token"], args.domain_name, args.domain_name, "MX", [value])
+        result = _client(args).dns_add_record(session["token"], args.domain_name, args.domain_name, "MX", [value])
     except ApiError as e:
         _emit_error(args, f"Could not set MX record: {e.message}")
         return 1
@@ -583,7 +665,7 @@ def cmd_dns_spf_set(args):
         return 1
     value = _build_spf_value(args.all, args.include)
     try:
-        result = _client().dns_add_record(session["token"], args.domain_name, args.domain_name, "TXT", [value])
+        result = _client(args).dns_add_record(session["token"], args.domain_name, args.domain_name, "TXT", [value])
     except ApiError as e:
         _emit_error(args, f"Could not set SPF record: {e.message}")
         return 1
@@ -600,7 +682,7 @@ def cmd_dns_dmarc_set(args):
     value = _build_dmarc_value(args.policy, args.rua, args.pct)
     record_name = f"_dmarc.{args.domain_name}"
     try:
-        result = _client().dns_add_record(session["token"], args.domain_name, record_name, "TXT", [value])
+        result = _client(args).dns_add_record(session["token"], args.domain_name, record_name, "TXT", [value])
     except ApiError as e:
         _emit_error(args, f"Could not set DMARC record: {e.message}")
         return 1
@@ -615,7 +697,7 @@ def cmd_dns_dkim_list(args):
     if not session:
         return 1
     try:
-        selectors = _client().dns_list_dkim(session["token"], args.domain_name)
+        selectors = _client(args).dns_list_dkim(session["token"], args.domain_name)
     except ApiError as e:
         _emit_error(args, f"Could not list DKIM selectors: {e.message}")
         return 1
@@ -634,7 +716,7 @@ def cmd_dns_dkim_rotate(args):
     if not session:
         return 1
     try:
-        result = _client().dns_rotate_dkim(session["token"], args.domain_name)
+        result = _client(args).dns_rotate_dkim(session["token"], args.domain_name)
     except ApiError as e:
         _emit_error(args, f"Could not rotate DKIM key: {e.message}")
         return 1
@@ -649,7 +731,7 @@ def cmd_dns_dkim_activate(args):
     if not session:
         return 1
     try:
-        result = _client().dns_activate_dkim(session["token"], args.domain_name, args.selector)
+        result = _client(args).dns_activate_dkim(session["token"], args.domain_name, args.selector)
     except ApiError as e:
         _emit_error(args, f"Could not activate {args.selector}: {e.message}")
         return 1
@@ -664,7 +746,7 @@ def cmd_dns_dkim_retire(args):
     if not session:
         return 1
     try:
-        result = _client().dns_retire_dkim(session["token"], args.domain_name, args.selector)
+        result = _client(args).dns_retire_dkim(session["token"], args.domain_name, args.selector)
     except ApiError as e:
         _emit_error(args, f"Could not retire {args.selector}: {e.message}")
         return 1
@@ -679,7 +761,7 @@ def cmd_dns_recipient_access_list(args):
     if not session:
         return 1
     try:
-        entries = _client().dns_list_recipient_access(session["token"])
+        entries = _client(args).dns_list_recipient_access(session["token"])
     except ApiError as e:
         _emit_error(args, f"Could not list recipient-access entries: {e.message}")
         return 1
@@ -698,7 +780,7 @@ def cmd_dns_recipient_access_block(args):
     if not session:
         return 1
     try:
-        result = _client().dns_set_recipient_access(session["token"], args.recipient, "REJECT", reason=args.reason)
+        result = _client(args).dns_set_recipient_access(session["token"], args.recipient, "REJECT", reason=args.reason)
     except ApiError as e:
         _emit_error(args, f"Could not block {args.recipient}: {e.message}")
         return 1
@@ -713,7 +795,7 @@ def cmd_dns_recipient_access_allow(args):
     if not session:
         return 1
     try:
-        result = _client().dns_set_recipient_access(session["token"], args.recipient, "OK", reason=args.reason)
+        result = _client(args).dns_set_recipient_access(session["token"], args.recipient, "OK", reason=args.reason)
     except ApiError as e:
         _emit_error(args, f"Could not allow {args.recipient}: {e.message}")
         return 1
@@ -728,7 +810,7 @@ def cmd_dns_recipient_access_remove(args):
     if not session:
         return 1
     try:
-        result = _client().dns_delete_recipient_access(session["token"], args.recipient)
+        result = _client(args).dns_delete_recipient_access(session["token"], args.recipient)
     except ApiError as e:
         _emit_error(args, f"Could not remove {args.recipient}: {e.message}")
         return 1
@@ -742,7 +824,7 @@ def cmd_dns_mail_aliases_add(args):
     session = _require_session(args)
     if not session:
         return 1
-    client = _client()
+    client = _client(args)
     try:
         result = client.dns_add_mail_alias(session["token"], args.source_pattern, args.destination, send_enabled=args.send_enabled)
     except ApiError as e:
@@ -767,7 +849,7 @@ def cmd_dns_mail_aliases_list(args):
     if not session:
         return 1
     try:
-        entries = _client().dns_list_mail_aliases(session["token"], destination=args.user)
+        entries = _client(args).dns_list_mail_aliases(session["token"], destination=args.user)
     except ApiError as e:
         _emit_error(args, f"Could not list mail aliases: {e.message}")
         return 1
@@ -790,7 +872,7 @@ def cmd_dns_mail_aliases_enable_send(args):
     if not session:
         return 1
     try:
-        result = _client().dns_set_mail_alias_send_enabled(session["token"], args.source_pattern, True)
+        result = _client(args).dns_set_mail_alias_send_enabled(session["token"], args.source_pattern, True)
     except ApiError as e:
         _emit_error(args, f"Could not enable sending for {args.source_pattern}: {e.message}")
         return 1
@@ -805,7 +887,7 @@ def cmd_dns_mail_aliases_disable_send(args):
     if not session:
         return 1
     try:
-        result = _client().dns_set_mail_alias_send_enabled(session["token"], args.source_pattern, False)
+        result = _client(args).dns_set_mail_alias_send_enabled(session["token"], args.source_pattern, False)
     except ApiError as e:
         _emit_error(args, f"Could not disable sending for {args.source_pattern}: {e.message}")
         return 1
@@ -820,7 +902,7 @@ def cmd_dns_mail_aliases_remove(args):
     if not session:
         return 1
     try:
-        result = _client().dns_delete_mail_alias(session["token"], args.source_pattern)
+        result = _client(args).dns_delete_mail_alias(session["token"], args.source_pattern)
     except ApiError as e:
         _emit_error(args, f"Could not remove {args.source_pattern}: {e.message}")
         return 1
@@ -839,7 +921,7 @@ def cmd_mail_list(args):
     if not session:
         return 1
     try:
-        messages = _client().mail_list(session["token"], mailbox=args.mailbox, limit=args.limit)
+        messages = _client(args).mail_list(session["token"], mailbox=args.mailbox, limit=args.limit)
     except ApiError as e:
         _emit_error(args, f"Could not list messages: {e.message}")
         return 1
@@ -858,7 +940,7 @@ def cmd_mail_read(args):
     if not session:
         return 1
     try:
-        message = _client().mail_read(session["token"], args.uid, mailbox=args.mailbox)
+        message = _client(args).mail_read(session["token"], args.uid, mailbox=args.mailbox)
     except ApiError as e:
         _emit_error(args, f"Could not read message: {e.message}")
         return 1
@@ -885,7 +967,7 @@ def cmd_mail_send(args):
     if body is None:
         body = sys.stdin.read()
     try:
-        result = _client().mail_send(session["token"], args.to, args.subject, body, from_address=args.from_address)
+        result = _client(args).mail_send(session["token"], args.to, args.subject, body, from_address=args.from_address)
     except ApiError as e:
         _emit_error(args, f"Could not send message: {e.message}")
         return 1
@@ -900,7 +982,7 @@ def cmd_mail_allowed_senders(args):
     if not session:
         return 1
     try:
-        result = _client().mail_allowed_senders(session["token"])
+        result = _client(args).mail_allowed_senders(session["token"])
     except ApiError as e:
         _emit_error(args, f"Could not list allowed senders: {e.message}")
         return 1
@@ -927,7 +1009,7 @@ def cmd_mail_block(args):
     if not session:
         return 1
     try:
-        result = _client().mail_block(session["token"], args.recipient, reason=args.reason)
+        result = _client(args).mail_block(session["token"], args.recipient, reason=args.reason)
     except ApiError as e:
         _emit_error(args, f"Could not block {args.recipient}: {e.message}")
         return 1
@@ -942,7 +1024,7 @@ def cmd_mail_unblock(args):
     if not session:
         return 1
     try:
-        result = _client().mail_unblock(session["token"], args.recipient)
+        result = _client(args).mail_unblock(session["token"], args.recipient)
     except ApiError as e:
         _emit_error(args, f"Could not unblock {args.recipient}: {e.message}")
         return 1
@@ -957,7 +1039,7 @@ def cmd_mail_blocked(args):
     if not session:
         return 1
     try:
-        entries = _client().mail_blocked(session["token"], q=args.search)
+        entries = _client(args).mail_blocked(session["token"], q=args.search)
     except ApiError as e:
         _emit_error(args, f"Could not list blocked addresses: {e.message}")
         return 1
@@ -978,7 +1060,7 @@ def cmd_drive_list(args):
     session = _require_session(args)
     if not session:
         return 1
-    client = _client()
+    client = _client(args)
     try:
         folders = client.drive_list_folders(session["token"], parent_id=args.folder)
         files = client.drive_list_files(session["token"], folder_id=args.folder)
@@ -1004,7 +1086,7 @@ def cmd_drive_mkdir(args):
     if not session:
         return 1
     try:
-        result = _client().drive_create_folder(session["token"], args.name, parent_folder_id=args.parent)
+        result = _client(args).drive_create_folder(session["token"], args.name, parent_folder_id=args.parent)
     except ApiError as e:
         _emit_error(args, f"Could not create folder: {e.message}")
         return 1
@@ -1019,7 +1101,7 @@ def cmd_drive_rmdir(args):
     if not session:
         return 1
     try:
-        result = _client().drive_delete_folder(session["token"], args.folder_id)
+        result = _client(args).drive_delete_folder(session["token"], args.folder_id)
     except ApiError as e:
         _emit_error(args, f"Could not delete folder: {e.message}")
         return 1
@@ -1038,7 +1120,7 @@ def cmd_drive_upload(args):
         _emit_error(args, f"No such file: {path}")
         return 1
     try:
-        result = _client().drive_upload_file(session["token"], path, folder_id=args.folder)
+        result = _client(args).drive_upload_file(session["token"], path, folder_id=args.folder)
     except ApiError as e:
         _emit_error(args, f"Upload failed: {e.message}")
         return 1
@@ -1054,7 +1136,7 @@ def cmd_drive_download(args):
         return 1
     dest = args.output or args.file_id
     try:
-        _client().drive_download_file(session["token"], args.file_id, dest)
+        _client(args).drive_download_file(session["token"], args.file_id, dest)
     except ApiError as e:
         _emit_error(args, f"Download failed: {e.message}")
         return 1
@@ -1072,7 +1154,7 @@ def cmd_drive_delete(args):
     if not session:
         return 1
     try:
-        result = _client().drive_delete_file(session["token"], args.file_id)
+        result = _client(args).drive_delete_file(session["token"], args.file_id)
     except ApiError as e:
         _emit_error(args, f"Delete failed: {e.message}")
         return 1
@@ -1097,7 +1179,7 @@ def cmd_jobs_list(args):
     if not session:
         return 1
     try:
-        jobs = _client().jobs_list(session["token"], all_users=args.all, type=args.type, state=args.state)
+        jobs = _client(args).jobs_list(session["token"], all_users=args.all, type=args.type, state=args.state)
     except ApiError as e:
         _emit_error(args, f"Could not list jobs: {e.message}")
         return 1
@@ -1122,7 +1204,7 @@ def cmd_jobs_show(args):
     if not session:
         return 1
     try:
-        j = _client().jobs_get(session["token"], args.job_id)
+        j = _client(args).jobs_get(session["token"], args.job_id)
     except ApiError as e:
         _emit_error(args, f"Could not show job: {e.message}")
         return 1
@@ -1138,7 +1220,7 @@ def cmd_jobs_download(args):
     session = _require_session(args)
     if not session:
         return 1
-    client = _client()
+    client = _client(args)
     try:
         job = client.jobs_get(session["token"], args.job_id)
     except ApiError as e:
@@ -1241,7 +1323,7 @@ def cmd_sessions_list(args):
     if not session:
         return 1
     try:
-        sessions = _client().sessions_list(session["token"], user=args.user)
+        sessions = _client(args).sessions_list(session["token"], user=args.user)
     except ApiError as e:
         _emit_error(args, f"Could not list sessions: {e.message}")
         return 1
@@ -1278,7 +1360,7 @@ def cmd_sessions_revoke(args):
 
     if args.all_others:
         try:
-            result = _client().sessions_revoke_others(session["token"])
+            result = _client(args).sessions_revoke_others(session["token"])
         except ApiError as e:
             _emit_error(args, f"Could not revoke other sessions: {e.message}")
             return 1
@@ -1298,7 +1380,7 @@ def cmd_sessions_revoke(args):
     # (server-computed `current`, not a second, separately-fetched call
     # to match jtis by hand).
     try:
-        sessions = _client().sessions_list(session["token"], user=args.user)
+        sessions = _client(args).sessions_list(session["token"], user=args.user)
     except ApiError as e:
         _emit_error(args, f"Could not resolve session ID: {e.message}")
         return 1
@@ -1322,7 +1404,7 @@ def cmd_sessions_revoke(args):
 
     target = matches[0]
     try:
-        result = _client().sessions_revoke(session["token"], target["jti"], user=args.user)
+        result = _client(args).sessions_revoke(session["token"], target["jti"], user=args.user)
     except ApiError as e:
         _emit_error(args, f"Could not revoke session: {e.message}")
         return 1
@@ -1345,7 +1427,7 @@ def cmd_audit_list(args):
     if not session:
         return 1
     try:
-        entries = _client().audit_list(
+        entries = _client(args).audit_list(
             session["token"], user=args.user, affecting=args.affecting,
             since=args.since, until=args.until, action=args.action,
         )
@@ -1382,7 +1464,7 @@ def cmd_admin_users_list(args):
     if not session:
         return 1
     try:
-        users = _client().admin_list_users(session["token"])
+        users = _client(args).admin_list_users(session["token"])
     except ApiError as e:
         _emit_error(args, f"Could not list users: {e.message}")
         return 1
@@ -1404,7 +1486,7 @@ def cmd_admin_grant_role(args):
     if not session:
         return 1
     try:
-        result = _client().admin_grant_role(session["token"], args.user_id, args.role)
+        result = _client(args).admin_grant_role(session["token"], args.user_id, args.role)
     except ApiError as e:
         _emit_error(args, f"Could not grant role: {e.message}")
         return 1
@@ -1419,7 +1501,7 @@ def cmd_admin_revoke_role(args):
     if not session:
         return 1
     try:
-        result = _client().admin_revoke_role(session["token"], args.user_id, args.role)
+        result = _client(args).admin_revoke_role(session["token"], args.user_id, args.role)
     except ApiError as e:
         _emit_error(args, f"Could not revoke role: {e.message}")
         return 1
@@ -1434,7 +1516,7 @@ def cmd_admin_roles_list(args):
     if not session:
         return 1
     try:
-        roles = _client().admin_list_roles(session["token"])
+        roles = _client(args).admin_list_roles(session["token"])
     except ApiError as e:
         _emit_error(args, f"Could not list roles: {e.message}")
         return 1
@@ -1456,7 +1538,7 @@ def cmd_admin_roles_add(args):
     if not session:
         return 1
     try:
-        result = _client().admin_create_role(session["token"], args.name, description=args.description)
+        result = _client(args).admin_create_role(session["token"], args.name, description=args.description)
     except ApiError as e:
         _emit_error(args, f"Could not create role: {e.message}")
         return 1
@@ -1471,7 +1553,7 @@ def cmd_admin_roles_remove(args):
     if not session:
         return 1
     try:
-        result = _client().admin_delete_role(session["token"], args.name)
+        result = _client(args).admin_delete_role(session["token"], args.name)
     except ApiError as e:
         _emit_error(args, f"Could not remove role: {e.message}")
         return 1
@@ -1486,7 +1568,7 @@ def cmd_admin_permissions_list(args):
     if not session:
         return 1
     try:
-        permissions = _client().admin_list_permissions(session["token"])
+        permissions = _client(args).admin_list_permissions(session["token"])
     except ApiError as e:
         _emit_error(args, f"Could not list permissions: {e.message}")
         return 1
@@ -1505,7 +1587,7 @@ def cmd_admin_roles_grant_permission(args):
     if not session:
         return 1
     try:
-        result = _client().admin_grant_permission(session["token"], args.role, args.permission)
+        result = _client(args).admin_grant_permission(session["token"], args.role, args.permission)
     except ApiError as e:
         _emit_error(args, f"Could not grant permission: {e.message}")
         return 1
@@ -1520,7 +1602,7 @@ def cmd_admin_roles_revoke_permission(args):
     if not session:
         return 1
     try:
-        result = _client().admin_revoke_permission(session["token"], args.role, args.permission)
+        result = _client(args).admin_revoke_permission(session["token"], args.role, args.permission)
     except ApiError as e:
         _emit_error(args, f"Could not revoke permission: {e.message}")
         return 1
@@ -1575,13 +1657,20 @@ examples:
   homelab-cli mail allowed-senders
   homelab-cli admin users list
 
+  homelab-cli login you@test.mailmasker.org      # switches active -> you@...
+  homelab-cli login admin@test.mailmasker.org    # switches active -> admin@...
+  homelab-cli profile list                       # see every stored login, '*' = active
+  homelab-cli profile use you@test.mailmasker.org
+  homelab-cli --as admin@test.mailmasker.org admin users list  # one-off, doesn't switch active
+
   homelab-cli -j dns domains list | jq -r '.[].domain_name'
   homelab-cli -j sessions list | jq -r '.[] | select(.current) | .jti'
 
-Session (token/refresh_token) is stored 0600 in
-~/.config/homelab-cli/session.yml; the non-secret api_base lives in
-config.yml in the same directory. Full documentation, including every
-command's own gotchas: https://github.com/permittivity2/homelab
+Every account you've logged in as (token/refresh_token) is stored 0600 in
+~/.config/homelab-cli/profiles.yml, alongside which one is active; the
+non-secret api_base lives in config.yml in the same directory. Full
+documentation, including every command's own gotchas:
+https://github.com/permittivity2/homelab
 """
 
 
@@ -1599,6 +1688,10 @@ def build_parser():
         "-j", "--json", action="store_true",
         help="Machine-readable output: print the real API response as JSON instead of a formatted table/message. Must come before the subcommand.",
     )
+    parser.add_argument(
+        "--as", dest="as_user", metavar="EMAIL",
+        help="Run just this one command as a different stored profile, without changing which one is active (see 'profile list'/'profile use'). Must come before the subcommand.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # homelab-api is the ONLY address this CLI ever needs -- drive and
@@ -1613,16 +1706,28 @@ def build_parser():
     p.add_argument("--password", help="Prompted for if omitted")
     p.set_defaults(func=cmd_register)
 
-    p = sub.add_parser("login", help="Log in and save a session")
+    p = sub.add_parser("login", help="Log in as an account and make it the active profile (see 'profile list' for every stored login)")
     p.add_argument("email")
     p.add_argument("--password", help="Prompted for if omitted")
     p.set_defaults(func=cmd_login)
 
-    p = sub.add_parser("whoami", help="Show the currently logged-in user")
+    p = sub.add_parser("whoami", help="Show the currently active (or --as) user")
     p.set_defaults(func=cmd_whoami)
 
-    p = sub.add_parser("logout", help="Log out and clear the saved session")
+    p = sub.add_parser("logout", help="Log out of the active profile (or every stored profile with --all)")
+    p.add_argument("--all", action="store_true", help="Log out of every stored profile, not just the active one")
     p.set_defaults(func=cmd_logout)
+
+    profile = sub.add_parser("profile", help="Manage multiple locally-stored logins and switch which one is active")
+    profile_sub = profile.add_subparsers(dest="profile_command", required=True)
+    p = profile_sub.add_parser("list", help="List every locally logged-in account; '*' marks the active one")
+    p.set_defaults(func=cmd_profile_list)
+    p = profile_sub.add_parser("use", help="Switch the active profile (must already be logged in as this email -- see 'login')")
+    p.add_argument("email")
+    p.set_defaults(func=cmd_profile_use)
+    p = profile_sub.add_parser("remove", help="Forget a stored login (logging out of it if it's the active one)")
+    p.add_argument("email")
+    p.set_defaults(func=cmd_profile_remove)
 
     registry = sub.add_parser("registry", help="Service registry commands")
     registry_sub = registry.add_subparsers(dest="registry_command", required=True)

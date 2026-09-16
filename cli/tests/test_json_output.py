@@ -34,9 +34,11 @@ def _mock_response(status_code, json_body):
 def _isolated_config(tmp_path, monkeypatch):
     monkeypatch.setattr(cfgmod, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(cfgmod, "CONFIG_FILE", tmp_path / "config.yml")
-    monkeypatch.setattr(cfgmod, "SESSION_FILE", tmp_path / "session.yml")
+    monkeypatch.setattr(cfgmod, "PROFILES_FILE", tmp_path / "profiles.yml")
+    monkeypatch.setattr(cfgmod, "_LEGACY_SESSION_FILE", tmp_path / "session.yml")
     cfgmod.save_config({"api_base": "http://localhost:3000"})
-    cfgmod.save_session({"email": "test@example.com", "token": "tok", "refresh_token": "rt"})
+    cfgmod.upsert_profile("test@example.com", "tok", "rt")
+    cfgmod.set_active("test@example.com")
 
 
 # --- Representative command shapes --------------------------------------
@@ -79,7 +81,7 @@ def test_json_error_is_valid_json_on_stderr(capsys):
 
 
 def test_json_login_omits_the_token_but_still_saves_the_session(capsys):
-    """The token/refresh_token are already written to session.yml
+    """The token/refresh_token are already written to profiles.yml
     (0600) -- no reason to also put a live credential on -j stdout for
     a shell history/log/captured pipeline to pick up."""
     with patch("requests.request", return_value=_mock_response(200, {"token": "secret-jwt", "refresh_token": "secret-refresh"})):
@@ -88,11 +90,12 @@ def test_json_login_omits_the_token_but_still_saves_the_session(capsys):
     out = json.loads(capsys.readouterr().out)
     assert out == {"success": True, "email": "you@example.com"}
     assert "secret-jwt" not in json.dumps(out)
-    assert cfgmod.load_session()["token"] == "secret-jwt"  # still persisted for real use
+    assert cfgmod.get_session()["token"] == "secret-jwt"  # still persisted for real use
+    assert cfgmod.load_profiles()["active"] == "you@example.com"  # login also switches active
 
 
 def test_json_no_session_error_is_also_json(capsys, tmp_path, monkeypatch):
-    monkeypatch.setattr(cfgmod, "SESSION_FILE", tmp_path / "no-such-session.yml")
+    monkeypatch.setattr(cfgmod, "PROFILES_FILE", tmp_path / "no-such-profiles.yml")
     code = main(["-j", "dns", "domains", "list"])
     assert code == 1
     payload = json.loads(capsys.readouterr().err)
