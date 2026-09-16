@@ -8,7 +8,7 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-roundcube
 Architecture: all
-Depends: ${misc:Depends}, roundcube-core, roundcube-pgsql, php-fpm, nginx, adduser, postgresql-client
+Depends: ${misc:Depends}, roundcube-core, roundcube-pgsql, php-fpm, nginx, adduser, postgresql-client, homelab-common
 Recommends: homelab-sso, homelab-dovecot, homelab-postfix, homelab-agent
 Description: Roundcube webmail wired to the homelab-* shared identity
  Roundcube webmail (Debian's own roundcube-core/roundcube-pgsql, not
@@ -30,7 +30,10 @@ Description: Roundcube webmail wired to the homelab-* shared identity
  mail itself, which stays entirely in Dovecot's Maildir storage) lives
  in its own "roundcube" Postgres schema via the standard split runtime/
  migrate role pair (script homelab-bootstrap-app-role, the same generic
- tool homelab-api/homelab-drive use) -- unlike homelab-dovecot's and
+ tool homelab-api/homelab-drive use -- hence the hard Depends on
+ homelab-common above, which is where that tool actually lives; found
+ missing on a fresh install, same class of gap already fixed for
+ homelab-database/homelab-pgbouncer/homelab-postfix) -- unlike homelab-dovecot's and
  homelab-postfix's bespoke single-role scripts, since Roundcube
  genuinely owns tables and fits the standard two-role pattern. A
  one-time search_path redirect (see script/homelab-roundcube-apply-
