@@ -81,6 +81,16 @@ package Homelab::MailBridge::App::Controller::Mail;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 
 use MIME::Base64 qw(encode_base64);
+# IO::Socket::SSL is an OPTIONAL runtime dependency of both Net::SMTP
+# (->starttls) and Mail::IMAPClient (Ssl => 1) -- neither module loads
+# it at `use` time, only lazily on first actual TLS use. Loading it
+# explicitly, eagerly, here avoids a real failure mode found live: a
+# lazy `require IO::Socket::SSL` deep inside Net::SMTP::starttls, the
+# first time it ever runs in a given hypnotoad worker, silently
+# returned false with no error message set ($smtp->message empty) --
+# reproducible every time when NOT preloaded, gone every time when it
+# IS (confirmed both ways by hand on a live host before this fix).
+use IO::Socket::SSL;
 use Mail::IMAPClient;
 use Net::SMTP;
 use Email::MIME;
