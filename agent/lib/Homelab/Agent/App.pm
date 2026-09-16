@@ -1,6 +1,8 @@
 package Homelab::Agent::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
+our $VERSION = '0.1.4';
+
 use Mojo::Promise;
 use Mojo::IOLoop;
 use Mojo::IOLoop::Subprocess;

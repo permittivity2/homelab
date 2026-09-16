@@ -4,7 +4,7 @@ use ExtUtils::MakeMaker;
 
 WriteMakefile(
     NAME         => 'Homelab::Agent',
-    VERSION      => '0.1.0',
+    VERSION_FROM => 'lib/Homelab/Agent/App.pm',
     ABSTRACT     => 'Per-host fleet agent: declarative service manifest + heartbeat + live status',
     AUTHOR       => 'Jeff Gardner <mailmasker-api01@forge.name>',
     LICENSE      => 'agpl_3',
