@@ -185,6 +185,25 @@ class Client:
     def topology_list(self):
         return self._request("GET", "/api/v1/registry/infrastructure")
 
+    # --- Fleet agent (see api/migrations/010-fleet-agent.sql) --
+    # supersedes topology_list above; kept alongside it only until every
+    # package's own manifest rollout is complete and infrastructure_registry
+    # is actually dropped.
+    def fleet_hosts(self, token):
+        return self._request("GET", "/api/v1/admin/agent/hosts", headers=self._auth(token))
+
+    def fleet_status(self, token):
+        return self._request("GET", "/api/v1/admin/agent/status", headers=self._auth(token))
+
+    def fleet_mismatches(self, token):
+        return self._request("GET", "/api/v1/admin/agent/status/mismatches", headers=self._auth(token))
+
+    def admin_agent_enroll(self, token, hostname, ttl_minutes=None):
+        body = {"hostname": hostname}
+        if ttl_minutes is not None:
+            body["ttl_minutes"] = ttl_minutes
+        return self._request("POST", "/api/v1/admin/agent/enroll", headers=self._auth(token), json=body)
+
     # --- Admin (site_admin role required server-side — see
     # api/README.md's "Admin endpoints" section) ---
     def admin_list_users(self, token):

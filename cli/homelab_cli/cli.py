@@ -342,6 +342,93 @@ def cmd_topology(args):
     return 0
 
 
+def cmd_admin_agent_enroll(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client().admin_agent_enroll(session["token"], args.hostname, args.ttl_minutes)
+    except ApiError as e:
+        _emit_error(args, f"Enrollment failed: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Code for {result['hostname']} (expires in {result['expires_in_minutes']} minutes):")
+    print(f"  {result['code']}")
+    print()
+    print("Preseed this on the new host BEFORE installing homelab-agent, e.g.:")
+    print(f"  echo 'homelab-agent homelab-agent/enrollment_code password {result['code']}' | sudo debconf-set-selections")
+    return 0
+
+
+def cmd_fleet_status(args):
+    """Every host that's ever heartbeated, and every service it's
+    declared/observed -- see api/migrations/010-fleet-agent.sql. This
+    is the real answer to "what's on what server": a live-agent-verified
+    view, not a hand-maintained document that only stays correct as
+    long as someone remembers to update it."""
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        hosts = _client().fleet_hosts(session["token"])
+        status = _client().fleet_status(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Fleet status failed: {e.message}")
+        return 1
+    if _emit(args, {"hosts": hosts, "services": status}):
+        return 0
+
+    if not hosts:
+        print("(no hosts have ever heartbeated -- has homelab-agent been enrolled+installed anywhere yet?)")
+        return 0
+
+    print("HOSTS")
+    _print_table(
+        ["HOSTNAME", "ADDRESS", "AGENT_PORT", "VERSION", "LAST_HEARTBEAT"],
+        [[h["hostname"], h["address"], h["agent_port"], h.get("agent_version") or "-", h["last_heartbeat"]] for h in hosts],
+    )
+    print()
+    print("SERVICES")
+    if not status:
+        print("(no services reported yet)")
+        return 0
+    rows = [
+        [s["service_name"], s["hostname"], s.get("kind") or "-",
+         "yes" if s["expected"] else "no", "yes" if s["actual"] else "no",
+         _truncate(s.get("description"), 40)]
+        for s in status
+    ]
+    _print_table(["SERVICE", "HOSTNAME", "KIND", "EXPECTED", "ACTUAL", "DESCRIPTION"], rows)
+    return 0
+
+
+def cmd_fleet_drift(args):
+    """Just the actionable rows from `fleet status`: expected=true/
+    actual=false is a real outage, expected=false/actual=true is an
+    undeclared surprise (e.g. a service nobody's manifest ever claimed,
+    running anyway)."""
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        mismatches = _client().fleet_mismatches(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Fleet drift check failed: {e.message}")
+        return 1
+    if _emit(args, mismatches):
+        return 0
+    if not mismatches:
+        print("No drift -- every declared service matches its observed state fleet-wide.")
+        return 0
+    rows = []
+    for m in mismatches:
+        problem = "DOWN (expected, not running)" if m["expected"] and not m["actual"] else "UNDECLARED (running, not expected)"
+        rows.append([m["hostname"], m["service_name"], problem, _truncate(m.get("description"), 40)])
+    _print_table(["HOSTNAME", "SERVICE", "PROBLEM", "DESCRIPTION"], rows)
+    return 0
+
+
 # --- dns: homelab-api's /api/v1/domains/* gateway -> homelab-domain-admin
 # (see ../../domain-admin/README.md). site_admin role required
 # server-side (role-gating itself lands once homelab-api's introspect
@@ -1568,10 +1655,20 @@ def build_parser():
 
     p = sub.add_parser(
         "topology",
-        help="Non-HTTP infrastructure (dovecot, postfix, HAProxy frontends, webproxy vhosts) -- "
-             "see 'registry list' for HTTP-forwardable services instead",
+        help="[being replaced by 'fleet status'] Non-HTTP infrastructure (dovecot, postfix, "
+             "HAProxy frontends, webproxy vhosts) -- see 'registry list' for HTTP-forwardable services instead",
     )
     p.set_defaults(func=cmd_topology)
+
+    fleet = sub.add_parser(
+        "fleet",
+        help="Live, agent-verified view of every host and service in the fleet (site_admin role required)",
+    )
+    fleet_sub = fleet.add_subparsers(dest="fleet_command", required=True)
+    p = fleet_sub.add_parser("status", help="Every host + every declared/observed service, expected vs actual")
+    p.set_defaults(func=cmd_fleet_status)
+    p = fleet_sub.add_parser("drift", help="Just the mismatches: real outages and undeclared surprises")
+    p.set_defaults(func=cmd_fleet_drift)
 
     dns = sub.add_parser("dns", help="DNS + mail-domain administration (site_admin role required)")
     dns_sub = dns.add_subparsers(dest="dns_command", required=True)
@@ -1881,6 +1978,16 @@ def build_parser():
     permissions_sub = permissions.add_subparsers(dest="admin_permissions_command", required=True)
     p = permissions_sub.add_parser("list", help="List the known capability catalog")
     p.set_defaults(func=cmd_admin_permissions_list)
+
+    agent = admin_sub.add_parser("agent", help="Fleet agent enrollment (see 'fleet status'/'fleet drift')")
+    agent_sub = agent.add_subparsers(dest="admin_agent_command", required=True)
+    p = agent_sub.add_parser(
+        "enroll",
+        help="Mint a one-time code for a new host's agent to redeem (run this BEFORE installing homelab-agent there)",
+    )
+    p.add_argument("hostname", help="The host's own logical name, e.g. 'ct07' -- must match what its agent is configured with")
+    p.add_argument("--ttl-minutes", type=int, help="How long the code stays redeemable (default: 10)")
+    p.set_defaults(func=cmd_admin_agent_enroll)
 
     return parser
 
