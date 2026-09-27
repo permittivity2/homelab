@@ -247,6 +247,39 @@ infrastructure, not just the local test host:
 
 ## Gotchas
 
+- **Outbound port 25 to the real internet must be opened by hand on
+  every Postfix host's own nftables config -- nothing in this package,
+  or anywhere else in this repo, provisions it.** Found live, 2026-09-26:
+  a real invite email (Roundcube's own `deliver_message()`, not this
+  package's own submission path -- but the outbound relay hop is the
+  same either way) sat deferred for nearly an hour
+  (`status=deferred (connect to ...:25: Connection timed out)`) before
+  someone noticed. `/etc/nftables.conf`'s own `chain output` on every
+  Postfix host (ct05/ct06/ct07 as of this writing) had narrow, explicit
+  allow rules for this host's OWN internal needs only -- LMTP delivery
+  to Dovecot, the OpenDKIM milter socket, Postgres/PgBouncer, port
+  80/443 -- and simply never had a rule for plain outbound SMTP at all.
+  Inbound port 25 (accepting mail FROM the internet) and internal LMTP
+  delivery (to fleet-managed domains) both worked fine without it,
+  which is exactly why this went unnoticed until the first real
+  external-domain send: nothing about local delivery or receiving mail
+  ever exercises Postfix's own OUTBOUND relay path. Confirmed NOT a
+  pfsense/production-firewall issue -- port 443 to the same external IP
+  worked fine from these same hosts, and port 25 to that same IP worked
+  fine from a genuinely different network, isolating the block to each
+  Postfix host's own local egress rule. Fix: add a bare
+  `tcp dport 25 accept` to `chain output` in `/etc/nftables.conf`
+  (deliberately unrestricted by destination -- Postfix's whole job here
+  is relaying to arbitrary external mail servers) and
+  `systemctl reload nftables` (a full flush+reapply per the file's own
+  `flush ruleset` line -- see the badips incident writeup elsewhere in
+  this project for why an incremental live `nft add rule` isn't the
+  right way to apply a change like this). NOT needed on ct00: it never
+  originates outbound SMTP itself, only relays already-open connections
+  to the internal Postfix pool via HAProxy, so its own narrower
+  `ip daddr 10.50.0.0/22`-scoped rule is correct as-is and was
+  deliberately left untouched.
+
 - **A new config template needs its own explicit `install -D` line in
   `debian/rules`, or the package builds fine and fails at postinst
   time instead.** Adding `config/opendkim.conf.template` without also
