@@ -42,8 +42,17 @@ unless ($ENV{HOMELAB_POSTFIX_BLOCK_LINK_CONFIG}) {
     exit 0;
 }
 
-use Homelab::Common::Config qw(load_config);
-use Homelab::Common::DB qw(runtime_pg);
+# require, NOT use: `use` runs at COMPILE time -- before the runtime
+# skip-guard above -- so a compile-time `use Homelab::Common::*` fails
+# the whole file under CI's `prove -I lib` (which has no homelab-common
+# in @INC) even when this section is never meant to run. Loading these
+# at runtime, only after the env-var guard, keeps the pure-function
+# tests above runnable everywhere while the DB-backed tests still get
+# their dependencies in a real deployed environment (where common IS
+# installed). Same reason the sibling packages load their App via a
+# runtime Test::Mojo->new('...') rather than a compile-time use.
+require Homelab::Common::Config; Homelab::Common::Config->import('load_config');
+require Homelab::Common::DB;     Homelab::Common::DB->import('runtime_pg');
 
 my $config = load_config('HOMELAB_POSTFIX_BLOCK_LINK_CONFIG', '/etc/homelab/postfix-block-link/config.yml');
 my $db = runtime_pg(%{ $config->{database} })->db;
