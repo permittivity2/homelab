@@ -50,3 +50,62 @@ Template: homelab-dns/disable_axfr
 Type: boolean
 Default: true
 Description: (slave only) Refuse to re-serve zone transfers to further downstream slaves?
+
+Template: homelab-dns/local_address
+Type: string
+Default:
+Description: Explicit IP(s) PowerDNS should bind to (comma-separated), or blank for its own wildcard default:
+ Leave blank to preserve PowerDNS's own default listen behavior
+ (today's default on every existing install). Set this on a host
+ that's internet-reachable (directly, or via a NAT/DNAT forward) so
+ the bind is explicit rather than a wildcard -- e.g. "10.50.2.162,
+ 127.0.0.1".
+
+Template: homelab-dns/enable_api
+Type: boolean
+Default: false
+Description: Enable PowerDNS's own built-in HTTP API on this host?
+ Only turn this on when homelab-domain-admin is NOT co-located on this
+ same host (the co-located case already gets its own API drop-in from
+ homelab-domain-admin itself -- enabling both would double-define the
+ same pdns.d directives). Use this when PowerDNS runs on a dedicated
+ host and a remote homelab-domain-admin needs to reach its API instead
+ (homelab-domain-admin's own pdns_api_host/pdns_api_port/pdns_api_key
+ debconf answers point at whatever you set here).
+
+Template: homelab-dns/api_allow_from
+Type: string
+Default: 127.0.0.1
+Description: (if API enabled) IPs allowed to reach the PowerDNS API (space-separated):
+ The remote host(s) running homelab-domain-admin. The API bind address
+ itself reuses local_address above (falling back to 127.0.0.1 if that
+ was left blank) -- there's no separate question for it, to avoid two
+ address fields that have to be kept in sync by hand.
+
+Template: homelab-dns/api_key
+Type: password
+Default:
+Description: (if API enabled) PowerDNS API key:
+ Leave blank to auto-generate one (printed once at the end of this
+ install) -- copy it into the remote homelab-domain-admin host's
+ pdns_api_key debconf answer (dpkg-reconfigure homelab-domain-admin).
+ Supply a value here instead if you're matching a key that host
+ already has.
+
+Template: homelab-dns/proxy_protocol_from
+Type: string
+Default:
+Description: CIDR(s) trusted to send a PROXY protocol header (comma-separated), or blank to disable:
+ Set this to the address of a homelab-dnsdist (or any other PROXY
+ protocol-aware) edge in front of this host, so PowerDNS sees the real
+ client IP instead of the edge's own -- matters for AXFR ACLs and any
+ IP-based logging. Confirmed supported by this project's installed
+ PowerDNS (5.0.2's own proxy-protocol-from setting). MUST be a real
+ CIDR, e.g. "10.50.2.144/32" -- a bare IP with no mask leaves the
+ trusted-sender list effectively empty, and PowerDNS then explicitly
+ REFUSES every proxy-protocol-wrapped query rather than accepting or
+ ignoring it. Leave blank (default, and every existing install's
+ current state) if nothing in front of this host speaks PROXY
+ protocol -- a query WITHOUT a header at all is accepted normally
+ either way; this setting only changes whether a header, when present,
+ is honored (trusted sender) or gets the query refused (untrusted).

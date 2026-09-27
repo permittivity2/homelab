@@ -22,6 +22,11 @@ case "$1" in
         db_get homelab-dns/also_notify || true;         ALSO_NOTIFY="$RET"
         db_get homelab-dns/slave_cycle_interval || true; SLAVE_CYCLE="${RET:-60}"
         db_get homelab-dns/disable_axfr || true;        DISABLE_AXFR="${RET:-true}"
+        db_get homelab-dns/local_address || true;       LOCAL_ADDRESS="$RET"
+        db_get homelab-dns/enable_api || true;           ENABLE_API="${RET:-false}"
+        db_get homelab-dns/api_allow_from || true;       API_ALLOW_FROM="${RET:-127.0.0.1}"
+        db_get homelab-dns/api_key || true;              API_KEY="$RET"
+        db_get homelab-dns/proxy_protocol_from || true;  PROXY_PROTOCOL_FROM="$RET"
 
         mkdir -p "$PDNS_D"
         sed \
@@ -62,9 +67,46 @@ case "$1" in
             fi
             [ "$DISABLE_AXFR" = "true" ] && echo "disable-axfr=yes" >> "$MARKER"
         fi
+        # Blank (the default, and every existing install's current
+        # state) preserves PowerDNS's own wildcard bind exactly as
+        # before -- only an explicit answer changes anything here.
+        [ -n "$LOCAL_ADDRESS" ] && echo "local-address=$LOCAL_ADDRESS" >> "$MARKER"
+        # Blank (the default) leaves proxy-protocol-from unset entirely
+        # -- PowerDNS's own default is to not expect/honor a PROXY
+        # protocol header from anyone, i.e. today's existing behavior.
+        [ -n "$PROXY_PROTOCOL_FROM" ] && echo "proxy-protocol-from=$PROXY_PROTOCOL_FROM" >> "$MARKER"
         chmod 640 "$MARKER"
         chgrp pdns "$MARKER" 2>/dev/null || true
         echo "  wrote $MARKER (role: $ROLE)"
+
+        # Own built-in API, for a host with no co-located
+        # homelab-domain-admin (see homelab-dns/enable_api's own
+        # description in debian/homelab-dns.templates for why this
+        # defaults off and stays off on every already-existing,
+        # co-located install).
+        API_MARKER="$PDNS_D/92-homelab-dns-api.conf"
+        if [ "$ENABLE_API" = "true" ]; then
+            API_BIND="${LOCAL_ADDRESS%%,*}"
+            API_BIND="${API_BIND:-127.0.0.1}"
+            if [ -z "$API_KEY" ]; then
+                API_KEY="$(openssl rand -base64 32)"
+                PRINT_API_KEY=1
+            fi
+            sed \
+                -e "s#__API_BIND__#$API_BIND#g" \
+                -e "s#__API_ALLOW_FROM__#$(echo "$API_ALLOW_FROM" | tr ' ' ',')#g" \
+                -e "s#__API_KEY__#$API_KEY#g" \
+                "$SHARE_DIR/pdns.d/92-homelab-dns-api.conf.template" > "$API_MARKER"
+            chmod 640 "$API_MARKER"
+            chgrp pdns "$API_MARKER" 2>/dev/null || true
+            echo "  wrote $API_MARKER (API bound to $API_BIND:8081, allow-from: $API_ALLOW_FROM)"
+        elif [ -f "$API_MARKER" ]; then
+            # Answer flipped back to false on a reconfigure -- remove the
+            # stale drop-in rather than leaving an API silently exposed
+            # that the debconf answers no longer admit to.
+            rm -f "$API_MARKER"
+            echo "  removed $API_MARKER (homelab-dns/enable_api is now false)"
+        fi
 
         # Apply PowerDNS's own official schema, but ONLY if it isn't
         # already present -- referenced live from the installed
@@ -138,6 +180,14 @@ case "$1" in
 
         echo ""
         echo "homelab-dns configured (role: $ROLE)."
+        if [ "$ENABLE_API" = "true" ] && [ -n "$PRINT_API_KEY" ]; then
+            echo ""
+            echo "  Generated PowerDNS API key (copy this into the remote"
+            echo "  homelab-domain-admin host's config -- dpkg-reconfigure"
+            echo "  homelab-domain-admin, or preseed homelab-domain-admin/pdns_api_key):"
+            echo ""
+            echo "  API_KEY=$API_KEY"
+        fi
         echo ""
         ;;
 

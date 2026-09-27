@@ -1,0 +1,17 @@
+# Managed by homelab-dns -- do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-dns). Only written when
+# homelab-dns/enable_api=true (see debian/homelab-dns.templates) --
+# for a PowerDNS host that has no co-located homelab-domain-admin of
+# its own, so a REMOTE homelab-domain-admin can reach this API instead
+# (its own pdns_api_host/pdns_api_port/pdns_api_key debconf answers
+# point at this host). Same directives homelab-domain-admin's own
+# 95-homelab-domain-admin-api.conf.template writes for the co-located
+# case -- deliberately a separate numbered file, not appended into
+# 90-homelab-dns.conf, so the gpgsql-backend config and the API config
+# stay independently readable/greppable.
+webserver=yes
+webserver-address=__API_BIND__
+webserver-port=8081
+webserver-allow-from=__API_ALLOW_FROM__
+api=yes
+api-key=__API_KEY__

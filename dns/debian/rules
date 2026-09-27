@@ -7,6 +7,8 @@ override_dh_install:
 	dh_install
 	install -D -m 644 pdns.d/90-homelab-dns.conf.template \
 		debian/homelab-dns/usr/share/homelab-dns/pdns.d/90-homelab-dns.conf.template
+	install -D -m 644 pdns.d/92-homelab-dns-api.conf.template \
+		debian/homelab-dns/usr/share/homelab-dns/pdns.d/92-homelab-dns-api.conf.template
 	install -D -m 644 backup-paths.txt \
 		debian/homelab-dns/usr/share/homelab-dns/backup-paths.txt
 	install -D -m 644 services/pdns.yml \
