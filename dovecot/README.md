@@ -232,6 +232,48 @@ pgbouncer` is the confirmed fix — bigger blast radius (it affects every
 feature's connections, not just this one), which is exactly why
 postinst doesn't do it automatically on this package's behalf.
 
+## Multi-instance HA: shared mail storage must be mounted with the SAME identity on every instance
+
+This package itself owns no shared-storage mount at all — how a
+multi-instance (HA) deployment shares `/var/mail/vhosts/` across
+instances (NFS, SSHFS, a clustered filesystem, etc.) is entirely up to
+whoever installs it, not something this package templates or enforces.
+That's deliberate: storage topology is genuinely site-specific.
+
+But a real, serious bug was found and fixed live (2026-09-25) on this
+project's own test fleet that's worth knowing about regardless of which
+sharing mechanism an installer picks: **every instance must mount the
+shared storage authenticating as the SAME restricted identity (this
+project's own setup uses a dedicated `vmail` account on the storage
+side) — never as `root` on even one instance.**
+
+What went wrong: of three Dovecot instances sharing one SSHFS-mounted
+NAS directory, two mounted it as the storage server's own `vmail` user;
+the third, by mistake, mounted it as `root`. All three *displayed* the
+mount's files as owned by `vmail` locally (an sshfs `-o uid=,gid=`
+cosmetic option) — but a `root`-authenticated SSHFS session's actual
+read/write permission checks are bypassed at the far end, and any *new*
+file that instance created got genuinely written to the underlying
+disk owned by `root`, not `vmail` — invisible from the two
+`vmail`-authenticated instances the moment either of them next tried to
+read it. Symptom: any mailbox whose most recent delivery happened to
+land on the `root`-mounted instance became silently unreadable — a
+"Connection to storage server failed" / auth-looking error — the next
+time IMAP happened to land on either of the other two, purely by the
+luck of which instance a load balancer routed to. Confirmed directly:
+`stat` through the mount showed `vmail`-owned everywhere; `stat` run
+*directly on the storage server itself*, bypassing every mount, showed
+the real, root-owned truth.
+
+**If you're setting up a multi-instance deployment**: whatever sharing
+mechanism you use, verify every single instance authenticates to the
+shared storage as the exact same non-root identity, and confirm it by
+creating a file from *each* instance and reading it back from *every
+other* instance — not just checking that the mount succeeded, since a
+misconfigured-but-mounted share shows no error at mount time at all,
+only later, non-deterministically, once real data is created and
+another instance tries to read it.
+
 ## Testing
 
 Package-local: none beyond `t/dovecot-bootstrap-role.t` (needs a real
