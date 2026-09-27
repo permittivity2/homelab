@@ -4,7 +4,7 @@ use Mojo::Base 'Mojolicious', -signatures;
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
-use Homelab::Common::Registry qw(register);
+use Homelab::Common::Registry qw(register_recurring);
 use Homelab::Common::AuditClient qw(enqueue);
 
 has 'api_base';
@@ -50,18 +50,16 @@ sub startup ($self) {
 
     my $me = $config->{registry} // {};
     if ($me->{host} && $me->{port}) {
-        eval {
-            register(
-                api_base => $self->api_base, feature_name => 'homelab-mailbridge',
-                host => $me->{host}, port => $me->{port}, health_check_url => '/health',
-                description => 'IMAP/SMTP relay for homelab-api\'s /api/v1/mail/* gateway '
-                    . '(real protocol clients - dovecot for IMAP, postfix for SMTP; '
-                    . 'see `homelab-cli admin fleet status` for which hosts). Not Roundcube (browser-facing, '
-                    . 'talks to dovecot/postfix directly), not LMTP (internal postfix->dovecot '
-                    . 'delivery), not DKIM (postfix/OpenDKIM, invisible to this relay).',
-            );
-        };
-        $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
+        register_recurring(
+            api_base => $self->api_base, feature_name => 'homelab-mailbridge',
+            host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+            description => 'IMAP/SMTP relay for homelab-api\'s /api/v1/mail/* gateway '
+                . '(real protocol clients - dovecot for IMAP, postfix for SMTP; '
+                . 'see `homelab-cli admin fleet status` for which hosts). Not Roundcube (browser-facing, '
+                . 'talks to dovecot/postfix directly), not LMTP (internal postfix->dovecot '
+                . 'delivery), not DKIM (postfix/OpenDKIM, invisible to this relay).',
+            log => $self->log,
+        );
     }
 
     # Paths match homelab-api's own /api/v1/mail/* gateway paths exactly

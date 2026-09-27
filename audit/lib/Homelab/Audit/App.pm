@@ -6,7 +6,7 @@ use Mojo::JSON qw(encode_json);
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
-use Homelab::Common::Registry qw(register);
+use Homelab::Common::Registry qw(register_recurring);
 use Homelab::Common::AuthClient qw(introspect);
 
 has 'pg';
@@ -33,14 +33,12 @@ sub startup ($self) {
 
     my $me = $config->{registry} // {};
     if ($me->{host} && $me->{port}) {
-        eval {
-            register(
-                api_base => $self->api_base, feature_name => 'homelab-audit',
-                host => $me->{host}, port => $me->{port}, health_check_url => '/health',
-                description => 'Audit trail: drains api.audit_queue, serves /api/v1/audit/*',
-            );
-        };
-        $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
+        register_recurring(
+            api_base => $self->api_base, feature_name => 'homelab-audit',
+            host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+            description => 'Audit trail: drains api.audit_queue, serves /api/v1/audit/*',
+            log => $self->log,
+        );
     }
 
     # Self-scoped-by-default auth helper, mirroring homelab-domain-

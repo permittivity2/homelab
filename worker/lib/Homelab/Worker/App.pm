@@ -8,7 +8,7 @@ use Mojo::IOLoop::Subprocess;
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
-use Homelab::Common::Registry qw(register);
+use Homelab::Common::Registry qw(register_recurring);
 use Homelab::Worker::JobType::Zip;
 
 has 'pg';
@@ -61,14 +61,12 @@ sub startup ($self) {
 
     my $me = $config->{registry} // {};
     if ($me->{host} && $me->{port}) {
-        eval {
-            register(
-                api_base => $self->api_base, feature_name => 'homelab-worker',
-                host => $me->{host}, port => $me->{port}, health_check_url => '/health',
-                description => 'Background jobs: zip-job pipeline, serves /api/v1/jobs/*',
-            );
-        };
-        $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
+        register_recurring(
+            api_base => $self->api_base, feature_name => 'homelab-worker',
+            host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+            description => 'Background jobs: zip-job pipeline, serves /api/v1/jobs/*',
+            log => $self->log,
+        );
     }
 
     # Bare lowercase controller name -- Mojolicious prepends this app's
