@@ -1,3 +1,9 @@
+homelab-agent (0.1.7) unstable; urgency=medium
+
+  * Release v0.1.7
+
+ -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 14:45:42 -0500
+
 homelab-agent (0.1.6) unstable; urgency=medium
 
   * Release v0.1.6

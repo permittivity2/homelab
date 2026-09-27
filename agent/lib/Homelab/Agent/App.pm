@@ -1,7 +1,7 @@
 package Homelab::Agent::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
-our $VERSION = '0.1.6';
+our $VERSION = '0.1.7';
 
 use Fcntl qw(:flock O_CREAT O_RDWR);
 use Mojo::Promise;
@@ -295,6 +295,8 @@ sub _check_one_p ($self, $entry) {
     my @checks;
     push @checks, $self->_check_systemd_unit_p($check->{systemd_unit}) if $check->{systemd_unit};
     push @checks, $self->_check_tcp_port_p($check->{tcp_port})         if $check->{tcp_port};
+    push @checks, $self->_check_remote_tcp_port_p($check->{remote_tcp_port}{host}, $check->{remote_tcp_port}{port})
+        if $check->{remote_tcp_port};
 
     my $build_result = sub ($actual) {
         return {
@@ -332,6 +334,19 @@ sub _check_systemd_unit_p ($self, $unit) {
 }
 
 sub _check_tcp_port_p ($self, $port) {
+    return $self->_check_remote_tcp_port_p('127.0.0.1', $port);
+}
+
+# Same as _check_tcp_port_p above but against an arbitrary host, not
+# just this one's own loopback -- the only way to give a manifest
+# entry like homelab-edge-forward's a real, meaningful health check:
+# a forward/proxy entry's `fronts` field (what real backend it routes
+# to) used to be purely descriptive, "this agent never acts on it,
+# just carries it through" per the comment on fronts in _check_one_p's
+# build_result -- a local-only tcp_port check proves nothing about
+# whether traffic actually reaches the real backend. Declared in a
+# manifest as `check: { remote_tcp_port: { host: ..., port: ... } }`.
+sub _check_remote_tcp_port_p ($self, $host, $port) {
     my $promise = Mojo::Promise->new;
     # Mojo::IOLoop::Client reports outcomes via connect/error events
     # (->on(...)), never a trailing callback to connect() itself --
@@ -358,7 +373,7 @@ sub _check_tcp_port_p ($self, $port) {
         $promise->resolve(0);
         delete $self->_pending_tcp_clients->{$key};
     });
-    $client->connect(address => '127.0.0.1', port => $port, timeout => 3);
+    $client->connect(address => $host, port => $port, timeout => 3);
     return $promise;
 }
 
