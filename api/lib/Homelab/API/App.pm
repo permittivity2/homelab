@@ -2,6 +2,7 @@ package Homelab::API::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
 use Mojo::Promise;
+use Mojo::UserAgent;
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
@@ -9,6 +10,7 @@ use Homelab::API::Auth qw(hash_password verify_password generate_jwt verify_jwt 
 use Homelab::API::Registry;
 use Homelab::Common::Proxy qw(forward);
 use Homelab::Common::AuditClient qw(enqueue enqueue_p);
+use Homelab::Common::Registry qw(system_agent_token);
 
 has 'pg';
 has 'registry';
@@ -51,6 +53,17 @@ sub startup ($self) {
     $r->post('/api/v1/auth/refresh'  => sub ($c) { $self->_refresh($c) });
     $r->post('/api/v1/auth/logout'   => sub ($c) { $self->_logout($c) });
 
+    # Account-creation + recovery helpers, all system_agent-gated (never
+    # public): they're called server-to-server by the packages that own
+    # the browser-facing pages -- homelab-invite's acceptance page for
+    # username-availability, homelab-sso's forgot/reset pages for the
+    # password-reset pair. Keeping them off the public surface means the
+    # "does this username/account exist" oracle they necessarily are is
+    # only reachable by a trusted fleet caller, not an anonymous enumerator.
+    $r->post('/api/v1/auth/username-availability'  => sub ($c) { $self->_username_availability($c) });
+    $r->post('/api/v1/auth/password-reset/request' => sub ($c) { $self->_password_reset_request($c) });
+    $r->post('/api/v1/auth/password-reset/confirm' => sub ($c) { $self->_password_reset_confirm($c) });
+
     # Session visibility/revocation -- JWT-only for the caller's own
     # (?user= honored only for site_admin, see _sessions_scope_target
     # below). Two DELETE routes coexist fine (no *capture wildcard
@@ -74,6 +87,17 @@ sub startup ($self) {
     $r->get('/api/v1/admin/users'                => sub ($c) { $self->_admin_list_users($c) });
     $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
     $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
+    # Mints a real api.users row for a system-owned mailbox identity
+    # (e.g. invites@<domain>, used by homelab-invite to send mail with
+    # no logged-in human behind it) -- reuses hash_password() so this
+    # identity authenticates IMAP/SMTP exactly like a human account,
+    # same unified-identity model as everything else, no second
+    # credential system. Prints the plaintext password exactly once in
+    # the response, same one-time-reveal choreography as homelab-sso's
+    # own OAuth client secrets (see sso/debian/postinst) -- the caller
+    # (homelab-cli admin users create-service-account) is responsible
+    # for showing it to the operator and never logging it.
+    $r->post('/api/v1/admin/users/service-account' => sub ($c) { $self->_admin_create_service_account($c) });
 
     # --- Role/permission management (fast-follow to 003-rbac.sql's own
     # "no per-endpoint role_permissions table yet" comment -- see
@@ -179,6 +203,24 @@ sub startup ($self) {
     $r->any('/api/v1/audit' => sub ($c) { $self->_gateway($c, 'homelab-audit', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
     $r->any('/api/v1/audit/*capture' => sub ($c) { $self->_gateway($c, 'homelab-audit', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
 
+    # homelab-invite's own routes are already /internal/v1/invites/...
+    # -- same strip-"/api/v1"-then-reprepend-"/internal/v1" transform,
+    # and the same two-routes-not-one requirement, as domains/jobs/audit
+    # above (a *capture wildcard never matches the bare "/api/v1/invites"
+    # with nothing after it -- list/create hit that bare path).
+    $r->any('/api/v1/invites' => sub ($c) { $self->_gateway($c, 'homelab-invite', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+    $r->any('/api/v1/invites/*capture' => sub ($c) { $self->_gateway($c, 'homelab-invite', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+
+    # homelab-block-link's own routes are already /internal/v1/
+    # block-link/... -- same strip-"/api/v1"-then-reprepend-
+    # "/internal/v1" transform as invites/domains/jobs/audit above.
+    # No bare "/api/v1/block-link" route (unlike domains/jobs/audit):
+    # every real client path under this prefix already has at least one
+    # segment after it (domains/:domain, account) -- confirmed against
+    # homelab-block-link's own route table before assuming, not copied
+    # blindly from the domains/jobs precedent.
+    $r->any('/api/v1/block-link/*capture' => sub ($c) { $self->_gateway($c, 'homelab-block-link', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+
     return;
 }
 
@@ -258,16 +300,60 @@ sub _log_attempt_p ($self, %fields) {
     );
 }
 
-# POST /api/v1/auth/register {email, password}
-# Deliberately open (no auth required) for now — this is a test/dev
-# domain (test.mailmasker.org) and the fastest path to real test
-# accounts. Revisit (admin-only, or an invite flow) before this is ever
-# pointed at anything resembling production.
+# POST /api/v1/auth/register {email, password, invite_token?}
+# Was unconditionally open (no auth required) -- this is still true by
+# default (config auth.require_invite: false), since this is a test/dev
+# domain and the fastest path to real test accounts shouldn't regress
+# for anyone not opting into the invite package. When
+# auth.require_invite is true (an operator has installed homelab-invite
+# and wants it enforced), invite_token becomes mandatory and is
+# consumed via a server-to-server call BEFORE any api.users row is
+# created -- fails closed (never silently skips the check) if the token
+# is missing/invalid/already-used, or if homelab-invite itself is
+# unreachable, same "verify at every hop, don't assume the caller
+# already checked" posture as every other cross-feature call in this
+# codebase.
 sub _register ($self, $c) {
-    my $body     = $c->req->json // {};
-    my $email    = $body->{email};
-    my $password = $body->{password};
-    my $ip       = $c->tx->remote_address;
+    my $body         = $c->req->json // {};
+    my $email        = $body->{email};
+    my $password     = $body->{password};
+    my $invite_token = $body->{invite_token};
+    my $ip           = $c->tx->remote_address;
+
+    # A trusted internal caller may supply the REAL originating
+    # client's IP in client_ip, instead of $ip above reflecting ITS
+    # OWN address -- the only real caller today is homelab-invite's
+    # own /invite/:token/accept, relaying a real end user's browser
+    # request as a fresh server-to-server call of its own (there is no
+    # way to "forward" the original TCP connection itself; the IP has
+    # to be passed as data). Without this, EVERY invite acceptance
+    # fleet-wide shares homelab-invite's own host as its apparent IP
+    # for _rate_limited below -- found live, 2026-09-26: a burst of
+    # unrelated rejected acceptances from different real invitees
+    # locked out invite acceptance fleet-wide for 15 minutes, since
+    # the shared counter couldn't tell them apart. Gated on the SAME
+    # system_agent credential every other internal service-to-service
+    # trust decision in this codebase already uses (filesystem-
+    # permission-gated, never just a bare client-supplied field a
+    # public caller could fake to dodge rate limiting entirely) --
+    # _is_system_agent is a non-rendering check specifically so a
+    # normal public registration (no such credential at all) isn't
+    # affected.
+    if ($body->{client_ip}) {
+        my $caller = $self->_authenticated_user($c);
+        $ip = $body->{client_ip} if $caller && $self->_is_system_agent($caller);
+    }
+
+    # Optional failsafe address for password recovery (see
+    # migrations/013-recovery-email.sql). At invite acceptance this
+    # defaults to the invite's own recipient_email -- the external
+    # contact address the invite was sent to -- so a locked-out user has
+    # a route back in that doesn't depend on the fleet mailbox they
+    # can't reach. Nullable; validated only for basic shape when present.
+    my $recovery_email = $body->{recovery_email};
+    $recovery_email = undef if defined $recovery_email && $recovery_email eq '';
+    return $c->render(json => { error => 'recovery_email is not a valid email address' }, status => 400)
+        if defined $recovery_email && $recovery_email !~ /^[^@\s]+\@[^@\s]+\.[^@\s]+$/;
 
     return $c->render(json => { error => 'email and password are required' }, status => 400)
         unless $email && $password;
@@ -276,16 +362,59 @@ sub _register ($self, $c) {
         return $c->render(json => { error => 'Too many attempts. Please wait 15 minutes.' }, status => 429);
     }
 
+    # Checked BEFORE consuming the invite, deliberately: consuming burns
+    # the one-time token, and "email already registered" is a real,
+    # not-uncommon outcome (a stale invite link re-clicked after the
+    # account was already created some other way) -- getting this order
+    # backwards would permanently burn a token for a registration that
+    # never actually happened. Found in review, not live, but the same
+    # "don't consume before every other precondition is confirmed"
+    # discipline this codebase's atomic-consume design already assumes.
+    #
+    # Deliberately NOT logged via _log_attempt (unlike a genuine
+    # credential-guessing failure, e.g. a wrong password at LOGIN,
+    # which still counts): "this email already exists" is a
+    # deterministic fact about the input, not a signal that someone is
+    # guessing at anything, and login's own brute-force protection
+    # (the actual reason _rate_limited exists) shares this same
+    # counter -- letting a burst of these silently exhaust it would
+    # incidentally rate-limit login too, for a reason unrelated to
+    # login security. Same reasoning applies to the domain-rejection
+    # check below.
     my $existing = $self->pg->db->query('SELECT id FROM api.users WHERE email = ?', $email)->hash;
     if ($existing) {
-        $self->_log_attempt(ip => $ip, email => $email, endpoint => 'register', success => 0);
         return $c->render(json => { error => 'email already registered' }, status => 409);
+    }
+
+    my $require_invite = $self->config->{auth}{require_invite} // 0;
+    if ($require_invite) {
+        return $c->render(json => { error => 'invite_token is required' }, status => 400)
+            unless $invite_token;
+
+        # The recipient-DOMAIN restriction (an invite may not be accepted
+        # for a fleet-managed CONTACT address) used to live here, checked
+        # against the registration email. It moved to homelab-invite's
+        # own accept()/show() as of 2026-09-27, and for a real reason,
+        # not tidiness: the account being created here is now a freshly
+        # CHOSEN fleet-domain login (<username>@<account_domain>) that is
+        # DELIBERATELY on a fleet-managed domain -- checking the
+        # registration email for "is this fleet-managed" would now reject
+        # every legitimate invite acceptance. The thing that must not be
+        # fleet-managed is the invite's RECIPIENT (contact) address, which
+        # only homelab-invite knows -- so that's where the check now
+        # lives, operating on recipient_email. See homelab-invite's
+        # Controller::Invites _recipient_domain_error + its README.
+        my $consume_error = $self->_consume_invite($invite_token, $email);
+        if ($consume_error) {
+            $self->_log_attempt(ip => $ip, email => $email, endpoint => 'register', success => 0);
+            return $c->render(json => { error => $consume_error }, status => 403);
+        }
     }
 
     my $hash = hash_password($password);
     my $user = $self->pg->db->query(
-        'INSERT INTO api.users (email, password_hash) VALUES (?, ?) RETURNING id',
-        $email, $hash,
+        'INSERT INTO api.users (email, password_hash, recovery_email) VALUES (?, ?, ?) RETURNING id',
+        $email, $hash, $recovery_email,
     )->hash;
 
     my $user_role_id = $self->pg->db->query(q{SELECT id FROM api.roles WHERE name = 'user'})->hash->{id};
@@ -296,6 +425,210 @@ sub _register ($self, $c) {
 
     $self->_log_attempt(ip => $ip, email => $email, endpoint => 'register', success => 1);
     return $c->render(json => { id => $user->{id}, email => $email }, status => 201);
+}
+
+# Blocking on purpose (unlike _gateway's non-blocking lookup_p+forward
+# chain above): _register is one of the few routes in this file NOT
+# yet converted to Mojo::Pg's non-blocking API (see the comment above
+# _sessions_list's own conversion for why that migration matters on hot
+# paths) -- registration is low-volume and already does several
+# blocking ->query calls in a row, so one more blocking HTTP round trip
+# here isn't a new class of problem. Returns undef on success, or a
+# user-facing error string on failure -- deliberately not a thrown
+# exception, since "invite already used" is an expected, common outcome
+# here, not a real error condition.
+sub _consume_invite ($self, $token, $email) {
+    my $entry = $self->pg->db->query(
+        'SELECT feature_name, host, port FROM api.service_registry
+         WHERE feature_name = ? ORDER BY updated_at DESC LIMIT 1',
+        'homelab-invite',
+    )->hash;
+    return 'invite service is not currently available' unless $entry && $entry->{host} && $entry->{port};
+
+    # One bounded retry on EITHER a bare transport-level failure OR a
+    # 403 -- found live, 2026-09-26, and actually root-caused (not just
+    # patched around): homelab-agent rotates this host's own
+    # system_agent JWT on every heartbeat (see system_agent_token()'s
+    # own doc comment on why it's re-read from disk fresh every call,
+    # never cached), and homelab-invite's authenticated_system_agent
+    # verifies it by calling BACK into this same service's /introspect
+    # -- a real, if narrow, race: a token read here can be valid at
+    # read time and already rotated-out by the time introspect checks
+    # it a moment later, correctly producing a real 403 (not a
+    # transport error, which is exactly why the earlier version of this
+    # retry -- transport-failures only -- didn't catch it: confirmed
+    # live, a fast ~0.3s 403, not a ~10s timeout). Re-fetching a FRESH
+    # token on the retry (not reusing the same, possibly already-stale
+    # one) is what actually makes the retry useful here, unlike a
+    # generic 403 on some OTHER endpoint that would just fail the same
+    # way twice. A 409 (already used/expired) or 404 (not found) is a
+    # stable, real outcome either way -- never retried, same as before.
+    my $ua = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10);
+    my $tx;
+    for my $attempt (1, 2) {
+        my $agent_token = eval { system_agent_token() };
+        unless ($agent_token) {
+            return 'invite service credential unavailable' if $attempt == 2;
+            next;
+        }
+        $tx = $ua->post(
+            "http://$entry->{host}:$entry->{port}/internal/v1/invites/consume",
+            { Authorization => "Bearer $agent_token" },
+            json => { token => $token, email => $email },
+        );
+        last unless $tx->error && (!$tx->error->{code} || $tx->error->{code} == 403);
+    }
+    if (my $err = $tx->error) {
+        return 'invite already used or expired' if $err->{code} && $err->{code} == 409;
+        return 'invite not found' if $err->{code} && $err->{code} == 404;
+        # Logged, not silently swallowed as before -- the generic
+        # fallback message gave no way to tell "homelab-invite is
+        # genuinely down" apart from "got some OTHER real error back"
+        # (e.g. a genuine 500 on ITS side). The specific 403/token-race
+        # case this used to also fall into is now retried above instead
+        # of reaching here at all -- this branch is for whatever's left.
+        $self->log->warn(
+            "homelab-api: _consume_invite got " . ($err->{code} // 'no response')
+            . " from homelab-invite's /consume: " . ($err->{message} // ''),
+        );
+        return 'invite could not be verified';
+    }
+    return undef;
+}
+
+# POST /api/v1/auth/username-availability {local_part, domain}
+# system_agent-gated (only homelab-invite's acceptance page calls it,
+# server-to-server) -- deliberately NOT public: this is unavoidably a
+# "does <name> already exist" oracle, and keeping it behind the
+# system_agent credential means only a trusted fleet caller can probe
+# it, not an anonymous enumerator. Response is always 200 (a taken name
+# is a normal UX outcome, not an error): { available: bool } plus, when
+# taken, { suggestions: [local_part, ...] } of names that ARE free, and
+# when the input isn't a usable local-part at all, { available: false,
+# invalid: true, error: "..." } so the caller can tell "try another"
+# apart from "that's malformed".
+sub _username_availability ($self, $c) {
+    $self->_require_system_agent($c) or return;
+    my $body   = $c->req->json // {};
+    my $local  = lc($body->{local_part} // '');
+    my $domain = lc($body->{domain} // '');
+    return $c->render(json => { error => 'local_part and domain are required' }, status => 400)
+        unless length $local && length $domain;
+
+    unless (_valid_local_part($local)) {
+        return $c->render(json => {
+            available => \0, invalid => \1,
+            error => 'Usernames may use lowercase letters, numbers, dots, dashes and '
+                   . 'underscores, must start and end with a letter or number, and be 1-64 characters.',
+        });
+    }
+
+    if ($self->_email_taken("$local\@$domain")) {
+        return $c->render(json => { available => \0, suggestions => $self->_username_suggestions($local, $domain, 4) });
+    }
+    return $c->render(json => { available => \1 });
+}
+
+# Lowercased local-part rules -- intentionally conservative (a strict
+# subset of what SMTP technically permits) so every account login is a
+# clean, unambiguous mailbox name: starts/ends alphanumeric, inner chars
+# may add . _ - , total length 1-64.
+sub _valid_local_part ($local) {
+    return $local =~ /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
+}
+
+sub _email_taken ($self, $email) {
+    return !!$self->pg->db->query('SELECT 1 FROM api.users WHERE lower(email) = lower(?)', $email)->hash;
+}
+
+# A short list of free variations on a taken local-part, checked against
+# the real table so every returned name is actually claimable at the
+# moment of the call (a later racing registration is still caught by the
+# UNIQUE constraint on INSERT -- this is a UX convenience, not a
+# reservation). Numeric suffixes first (the least surprising), then a
+# couple of dotted forms, stopping as soon as $count free ones are found.
+sub _username_suggestions ($self, $local, $domain, $count) {
+    my @candidates = map { "$local$_" } (1 .. 20);
+    push @candidates, "$local.1", "$local.2", "the.$local", "$local.mail";
+    my @free;
+    for my $cand (@candidates) {
+        last if @free >= $count;
+        next unless _valid_local_part($cand);
+        push @free, $cand unless $self->_email_taken("$cand\@$domain");
+    }
+    return \@free;
+}
+
+# POST /api/v1/auth/password-reset/request {email, client_ip?}
+# system_agent-gated (homelab-sso's public /forgot page calls it). Mints
+# a one-time reset token ONLY when the account exists AND has a recovery
+# address on file, and returns that token + the recovery address to the
+# caller (SSO) to email. Returning found/recovery to a TRUSTED caller is
+# fine -- SSO is responsible for collapsing this into a uniform,
+# non-enumerable "if an account exists we've emailed a link" message to
+# the actual browser. A light per-user throttle (no fresh token if an
+# unused one was minted in the last 60s) blunts using this to spam a
+# victim's recovery inbox, without a second rate-limit store.
+sub _password_reset_request ($self, $c) {
+    $self->_require_system_agent($c) or return;
+    my $body  = $c->req->json // {};
+    my $email = lc($body->{email} // '');
+    return $c->render(json => { error => 'email is required' }, status => 400) unless length $email;
+
+    my $user = $self->pg->db->query(
+        'SELECT id, recovery_email FROM api.users WHERE lower(email) = lower(?) AND active = TRUE', $email,
+    )->hash;
+    return $c->render(json => { found => \0 }) unless $user;
+    return $c->render(json => { found => \1, recovery_email => undef }) unless $user->{recovery_email};
+
+    my $recent = $self->pg->db->query(
+        q{SELECT 1 FROM api.password_resets
+          WHERE user_id = ? AND used = FALSE AND created_at > NOW() - INTERVAL '60 seconds'},
+        $user->{id},
+    )->hash;
+    if ($recent) {
+        return $c->render(json => { found => \1, recovery_email => $user->{recovery_email}, throttled => \1 });
+    }
+
+    my $token = generate_jti();
+    $self->pg->db->query(
+        q{INSERT INTO api.password_resets (token, user_id, expires_at) VALUES (?, ?, NOW() + INTERVAL '1 hour')},
+        $token, $user->{id},
+    );
+    return $c->render(json => { found => \1, recovery_email => $user->{recovery_email}, token => $token });
+}
+
+# POST /api/v1/auth/password-reset/confirm {token, password}
+# system_agent-gated (homelab-sso's /reset/:token page calls it).
+# Single-use via an atomic UPDATE ... WHERE used=FALSE AND expires_at>NOW()
+# RETURNING -- two concurrent confirms on the same token: exactly one
+# matches a row. On success sets the new password AND revokes every
+# existing session for that user (a password reset is exactly the moment
+# you want any still-live stolen session gone), so the user re-logs in
+# everywhere.
+sub _password_reset_confirm ($self, $c) {
+    $self->_require_system_agent($c) or return;
+    my $body     = $c->req->json // {};
+    my $token    = $body->{token};
+    my $password = $body->{password};
+    return $c->render(json => { error => 'token and password are required' }, status => 400)
+        unless $token && $password;
+    return $c->render(json => { error => 'password must be at least 8 characters' }, status => 400)
+        if length($password) < 8;
+
+    my $row = $self->pg->db->query(
+        q{UPDATE api.password_resets SET used = TRUE
+          WHERE token = ? AND used = FALSE AND expires_at > NOW() RETURNING user_id},
+        $token,
+    )->hash;
+    return $c->render(json => { error => 'this reset link is invalid or has expired' }, status => 410)
+        unless $row;
+
+    $self->pg->db->query('UPDATE api.users SET password_hash = ? WHERE id = ?',
+        hash_password($password), $row->{user_id});
+    $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE user_id = ? AND revoked = FALSE',
+        $row->{user_id});
+    return $c->render(json => { ok => \1 });
 }
 
 # Converted to Mojo::Pg's non-blocking API (see $ALREADY_RENDERED above
@@ -615,15 +948,23 @@ sub _require_system_agent ($self, $c) {
         $c->render(json => { error => 'authentication required' }, status => 401);
         return undef;
     }
-    my $has_role = $self->pg->db->query(
-        q{SELECT 1 FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
-          WHERE ur.user_id = ? AND r.name = 'system_agent'}, $user->{id},
-    )->hash;
-    unless ($has_role) {
+    unless ($self->_is_system_agent($user)) {
         $c->render(json => { error => 'system_agent role required' }, status => 403);
         return undef;
     }
     return $user;
+}
+
+# Non-rendering twin of the role check inside _require_system_agent
+# above -- for callers that need to know "is this a trusted internal
+# caller" without failing the whole request when it isn't (e.g.
+# _register below, where a system_agent credential is optional: most
+# callers are real public self-registrations with no such thing).
+sub _is_system_agent ($self, $user) {
+    return !!$self->pg->db->query(
+        q{SELECT 1 FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+          WHERE ur.user_id = ? AND r.name = 'system_agent'}, $user->{id},
+    )->hash;
 }
 
 # Shared by _agent_enroll_redeem below (a real login mint would be
@@ -745,15 +1086,23 @@ sub _agent_heartbeat ($self, $c) {
         $body->{hostname}, $body->{address}, $body->{agent_port}, $body->{agent_version},
     );
 
+    # Delete-then-insert, not a plain per-service upsert: a pure upsert
+    # loop only ever adds/updates rows for services THIS heartbeat
+    # mentions, so a service removed from a host's manifest (package
+    # uninstalled, or a whole service relocated off this host -- see
+    # the PowerDNS-off-the-edge-host move) leaves a permanently stale
+    # row behind forever, `fleet status` silently lying about a service
+    # still running here long after it's gone. Deleting this host's
+    # rows first and re-inserting exactly what THIS heartbeat reports
+    # makes the table an accurate mirror of the current manifest, not
+    # an accumulating superset of every manifest this host has ever had.
+    $self->pg->db->query('DELETE FROM api.host_service_status WHERE hostname = ?', $body->{hostname});
+
     for my $svc (@{ $body->{services} // [] }) {
         $self->pg->db->query(
             q{INSERT INTO api.host_service_status
                   (hostname, service_name, package_name, kind, expected, actual, description, fronts, checked_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
-              ON CONFLICT (hostname, service_name) DO UPDATE
-                  SET package_name = EXCLUDED.package_name, kind = EXCLUDED.kind,
-                      expected = EXCLUDED.expected, actual = EXCLUDED.actual,
-                      description = EXCLUDED.description, fronts = EXCLUDED.fronts, checked_at = NOW()},
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())},
             $body->{hostname}, $svc->{name}, $svc->{package}, $svc->{kind},
             ($svc->{expected} ? 1 : 0), ($svc->{actual} ? 1 : 0), $svc->{description}, $svc->{fronts},
         );
@@ -1099,6 +1448,63 @@ sub _admin_revoke_role ($self, $c) {
         detail => { role => $role },
     );
     return $c->render(json => { ok => \1 });
+}
+
+# POST /api/v1/admin/users/service-account {email, password?}
+# Same shape as a normal registration (real api.users row, real
+# Argon2id hash, unified identity model) but site_admin-only and with
+# no invite_token/require_invite gating -- an operator creating a
+# system mailbox (e.g. invites@<domain>) isn't the self-service flow
+# that gate exists for, and (see _invite_recipient_domain_check above)
+# that gate now actively REJECTS any address on a domain this fleet
+# manages mail for -- exactly the domain a real system mailbox or an
+# operator's own test/admin account almost always needs to live on.
+# `password` is optional: omitted (the original, still-default case)
+# auto-generates one and returns it, same reasoning as homelab-sso's
+# own client-secret generation -- nobody should be typing a pure
+# system identity's password in anywhere, it only ever needs to be
+# pasted once into another package's debconf (mailer_smtp_password).
+# Given explicitly, it's used as-is (still Argon2id-hashed the same
+# way) -- for an operator's own admin account (needs a password they
+# already know) or an automated test suite's disposable fixture
+# accounts (needs a password the test code itself controls) -- both
+# real, site_admin-authenticated callers, so accepting a caller-chosen
+# secret here is no different a trust boundary than _register already
+# has for a self-service signup.
+sub _admin_create_service_account ($self, $c) {
+    my $admin = $self->_require_site_admin($c) or return;
+
+    my $body = $c->req->json // {};
+    my $email = $body->{email};
+    return $c->render(json => { error => 'email is required' }, status => 400) unless $email;
+    return $c->render(json => { error => 'password must be at least 8 characters' }, status => 400)
+        if defined($body->{password}) && length($body->{password}) < 8;
+
+    my $existing = $self->pg->db->query('SELECT id FROM api.users WHERE email = ?', $email)->hash;
+    return $c->render(json => { error => 'email already registered' }, status => 409) if $existing;
+
+    my $password = $body->{password}
+        // unpack('H*', do { open(my $fh, '<', '/dev/urandom') or die $!; read($fh, my $b, 24); $b });
+    my $hash     = hash_password($password);
+    my $user     = $self->pg->db->query(
+        'INSERT INTO api.users (email, password_hash) VALUES (?, ?) RETURNING id',
+        $email, $hash,
+    )->hash;
+
+    my $user_role_id = $self->pg->db->query(q{SELECT id FROM api.roles WHERE name = 'user'})->hash->{id};
+    $self->pg->db->query(
+        'INSERT INTO api.user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING',
+        $user->{id}, $user_role_id,
+    );
+
+    enqueue(
+        $self->pg->db, actor_email => $admin->{email}, affected_user => $email,
+        jti => $self->_jwt_jti($c), action => 'user.create_service_account',
+        resource_type => 'user', resource_id => $user->{id}, source_service => 'homelab-api',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => {},
+    );
+    return $c->render(json => { id => $user->{id}, email => $email, password => $password }, status => 201);
 }
 
 # Capability check used both locally (nothing in THIS service gates on

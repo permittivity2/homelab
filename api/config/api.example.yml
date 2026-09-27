@@ -30,6 +30,18 @@ jwt:
   expiry_seconds: 1800        # 30 minutes
   refresh_expiry_days: 30
 
+auth:
+  # false (default): /api/v1/auth/register works exactly as it always
+  # has, invite_token ignored if sent. true: an operator has installed
+  # homelab-invite and wants self-registration gated behind it --
+  # invite_token becomes mandatory and is verified via a
+  # server-to-server call into homelab-invite before any account is
+  # created. Flip this only after homelab-invite is installed and
+  # registered (homelab-cli admin fleet status should show it), or
+  # every registration attempt will fail closed with "invite service is
+  # not currently available".
+  require_invite: false
+
 server:
   listen: "http://0.0.0.0:3000"
   # Each hypnotoad worker is a forked Perl/Mojolicious process; measured

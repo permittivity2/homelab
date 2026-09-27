@@ -1,0 +1,16 @@
+-- Optional failsafe email for password recovery. Captured at invite
+-- acceptance (defaulting to the invite's own recipient_email -- the
+-- external contact address the invite was actually sent to), so a
+-- locked-out user has a route back in that does NOT depend on the fleet
+-- mailbox they can't currently reach. This is the whole point of a
+-- recovery address: the account's own login IS a fleet mailbox
+-- (<chosen>@<account_domain>), so "email a reset link to your account"
+-- is useless when the reason you're resetting is that you can't get
+-- into that mailbox.
+--
+-- Nullable, deliberately: pre-existing accounts and service accounts
+-- (homelab-cli admin users create-service-account) have none, and that
+-- is fine -- the password-reset flow (see 014-password-resets.sql)
+-- simply has nowhere to send for such an account and says so generically
+-- rather than treating "no recovery address" as an error.
+ALTER TABLE api.users ADD COLUMN IF NOT EXISTS recovery_email TEXT;

@@ -164,4 +164,28 @@ ok((grep { $_->{feature_name} eq 'homelab-test-feature' } @$listed), 'list inclu
 
 $t->app->pg->db->query('DELETE FROM api.service_registry WHERE feature_name = ?', 'homelab-test-feature');
 
+# --- auth.require_invite gating (the invite mechanism's hook into
+# registration) -- mutated directly on the already-loaded app config
+# rather than a second config.yml, since it's just a hash the app
+# object holds at runtime; real end-to-end coverage of a full
+# send->accept->register chain against a real homelab-invite lives in
+# that package's own e2e tests, not here. -----------------------------
+{
+    local $t->app->config->{auth}{require_invite} = 1;
+
+    my $gated_email = 'invite-gated-' . time . '-' . $$ . '@test.mailmasker.org';
+    $t->post_ok('/api/v1/auth/register', json => { email => $gated_email, password => $password })
+      ->status_is(400, 'require_invite=true rejects registration with no invite_token at all');
+
+    # No homelab-invite registered in api.service_registry at all right
+    # now (the block above cleaned its own fake entry up) -- this must
+    # fail closed, not silently let the registration through.
+    $t->post_ok('/api/v1/auth/register', json => { email => $gated_email, password => $password, invite_token => 'deadbeef' })
+      ->status_is(403, 'require_invite=true with an unreachable homelab-invite fails closed, not open')
+      ->json_like('/error', qr/invite/i);
+
+    my $still_missing = $t->app->pg->db->query('SELECT id FROM api.users WHERE email = ?', $gated_email)->hash;
+    ok(!$still_missing, 'no api.users row was created for the rejected gated registration');
+}
+
 done_testing;
