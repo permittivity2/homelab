@@ -5,9 +5,21 @@ use Test::Mojo;
 use Mojo::UserAgent;
 use Mojolicious::Lite;
 use File::Temp qw(tempfile);
+use YAML::XS qw(DumpFile);
 
 use lib 'lib';
 use Homelab::Common::Proxy qw(forward);
+
+# forward() -> Registry::lookup() now authenticates its registry read
+# with this host's homelab-agent system_agent token, read from a local
+# credential file (see Registry::_system_agent_token). A test runner has
+# no real /etc/homelab/agent/credential.yml, so -- exactly as t/registry.t
+# already does -- write a throwaway one and thread its path through
+# forward()'s own credential_file passthrough. The fake backend below
+# doesn't check the token's value (it's not testing auth, just routing),
+# so any non-empty token works.
+my (undef, $credential_file) = tempfile(SUFFIX => '.yml', UNLINK => 1);
+DumpFile($credential_file, { token => 'fake-system-agent-token', refresh_token => 'irrelevant-here' });
 
 # Same "real subprocess, not an in-process fake" reasoning as
 # t/registry.t: a single subprocess plays BOTH roles a real deployment
@@ -83,15 +95,18 @@ unless ($ready) {
 # route -- exercises forward() exactly the way it's really used.
 get '/gateway/*capture' => sub {
     my $c = shift;
-    forward($c, feature_name => 'homelab-fake', api_base => $api_base, strip_prefix => '/gateway');
+    $c->render_later;
+    forward($c, feature_name => 'homelab-fake', api_base => $api_base, strip_prefix => '/gateway', credential_file => $credential_file);
 };
 post '/gateway/*capture' => sub {
     my $c = shift;
-    forward($c, feature_name => 'homelab-fake', api_base => $api_base, strip_prefix => '/gateway');
+    $c->render_later;
+    forward($c, feature_name => 'homelab-fake', api_base => $api_base, strip_prefix => '/gateway', credential_file => $credential_file);
 };
 get '/gateway-unregistered/*capture' => sub {
     my $c = shift;
-    forward($c, feature_name => 'homelab-nonexistent', api_base => $api_base, strip_prefix => '/gateway-unregistered');
+    $c->render_later;
+    forward($c, feature_name => 'homelab-nonexistent', api_base => $api_base, strip_prefix => '/gateway-unregistered', credential_file => $credential_file);
 };
 # Mirrors homelab-api's real /api/v1/drive/* route exactly: strips the
 # gateway-only /gw2/drive prefix AND re-prepends /api/v1, landing on
@@ -99,8 +114,9 @@ get '/gateway-unregistered/*capture' => sub {
 # land on /files, which doesn't exist on the real homelab-drive.
 get '/gw2/drive/*capture' => sub {
     my $c = shift;
+    $c->render_later;
     forward($c, feature_name => 'homelab-fake', api_base => $api_base,
-             strip_prefix => '/gw2/drive', backend_prefix => '/api/v1');
+             strip_prefix => '/gw2/drive', backend_prefix => '/api/v1', credential_file => $credential_file);
 };
 
 my $t = Test::Mojo->new;

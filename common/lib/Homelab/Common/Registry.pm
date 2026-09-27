@@ -1,10 +1,11 @@
 package Homelab::Common::Registry;
 use Mojo::Base -strict;
+use Mojo::IOLoop;
 use Mojo::UserAgent;
 use YAML::XS qw(LoadFile);
 use Exporter 'import';
 
-our @EXPORT_OK = qw(register lookup);
+our @EXPORT_OK = qw(register register_recurring lookup system_agent_token);
 
 # The registry table itself lives inside homelab-api's own schema —
 # every other feature reaches it over HTTP (these two endpoints), never
@@ -31,6 +32,13 @@ my $CACHE_TTL = 60;     # seconds
 # always have a live token, and it's a local stat+read, not a network
 # call, so the cost is negligible next to the HTTP round trip it feeds.
 my $CREDENTIAL_FILE = '/etc/homelab/agent/credential.yml';
+
+# Exported (unlike the rest of this file's internals) — homelab-api's
+# own _register handler reuses this directly to authenticate its
+# server-to-server call into homelab-invite's /internal/v1/invites/
+# consume, same credential/rotation story as register()/lookup() above,
+# just without also POSTing to the registry endpoint.
+sub system_agent_token { return _system_agent_token(@_) }
 
 sub _system_agent_token {
     my (%opts) = @_;
@@ -75,6 +83,50 @@ sub register {
         },
     );
     die 'Registry registration failed: ' . _tx_error($tx) . "\n" if $tx->error;
+    return 1;
+}
+
+# The actual "once at startup, and again on a periodic keep-alive" from
+# register()'s own doc comment above -- every caller used to implement
+# (or, in practice, forget to implement) this by hand as a one-shot
+# eval{}/warn with no retry, which is exactly how mailbridge and audit
+# both went silently unregistered for the better part of an hour after
+# starting before their host's homelab-agent credential existed: the
+# one attempt failed, got warned once, and nothing ever tried again.
+# This absorbs that boilerplate so a call site is one line, and keeps
+# retrying for the service's whole lifetime (not just until the first
+# success) so a homelab-api restart that drops its registry table gets
+# repopulated too, per register()'s own doc comment.
+#
+# %opts: same as register(), plus:
+#   interval => seconds between keep-alive attempts (default 60)
+#   log      => optional Mojo::Log-like object (->warn/->info) for
+#               transition-only logging -- silent on steady-state
+#               success/failure, one line each way a state actually
+#               flips, so a genuinely-down homelab-api doesn't spam
+#               the journal every $interval forever.
+sub register_recurring {
+    my (%opts) = @_;
+    my $interval = delete $opts{interval} // 60;
+    my $log      = delete $opts{log};
+
+    my $failed = 0;
+    my $attempt = sub {
+        my $ok = eval { register(%opts); 1 };
+        if ($ok) {
+            $log->info("registry: registered '$opts{feature_name}'") if $log && $failed;
+            $failed = 0;
+        }
+        else {
+            $log->warn("registry: registration failed for '$opts{feature_name}' "
+                . "(will keep retrying every ${interval}s): $@") if $log && !$failed;
+            $failed = 1;
+        }
+        return $ok;
+    };
+
+    $attempt->();
+    Mojo::IOLoop->recurring($interval => $attempt);
     return 1;
 }
 

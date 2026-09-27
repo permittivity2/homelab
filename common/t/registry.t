@@ -1,12 +1,21 @@
 use strict;
 use warnings;
 use Test::More;
+use Mojo::IOLoop;
 use Mojo::UserAgent;
 use File::Temp qw(tempfile);
 use YAML::XS qw(DumpFile);
 
 use lib 'lib';
-use Homelab::Common::Registry qw(register lookup);
+use Homelab::Common::Registry qw(register register_recurring lookup);
+
+# Minimal fake logger for register_recurring()'s transition-only logging --
+# just records call counts, doesn't need to format anything real.
+package Test::FakeLog;
+sub new  { return bless { warn => [], info => [] }, shift }
+sub warn { my $self = shift; push @{ $self->{warn} }, "@_"; }
+sub info { my $self = shift; push @{ $self->{info} }, "@_"; }
+package main;
 
 # Both registry routes now require a system_agent-role Bearer token (see
 # the incident writeup on the commit that added this) -- register()/
@@ -110,6 +119,44 @@ eval {
     );
 };
 like($@, qr/no homelab-agent credential found/, 'register() dies clearly when no local agent credential exists');
+
+# register_recurring(): absorbs a failing initial attempt without dying
+# (unlike bare register()), logs exactly once for it, and self-heals on
+# its next periodic attempt once the underlying problem is fixed -- this
+# is the exact bug (mailbridge/audit silently unregistered for the
+# better part of an hour after starting before their host's
+# homelab-agent credential file existed) this sub exists to fix.
+{
+    my (undef, $healable_credential_file) = tempfile(SUFFIX => '.yml', UNLINK => 1);
+    unlink $healable_credential_file;    # starts out MISSING, not just empty
+
+    my $log = Test::FakeLog->new;
+    my $ok = eval {
+        register_recurring(
+            api_base => $api_base, feature_name => 'homelab-recurring-test',
+            host => '10.10.0.77', port => 9999, health_check_url => '/health',
+            credential_file => $healable_credential_file, interval => 1, log => $log,
+        );
+        1;
+    };
+    ok($ok, 'register_recurring() does not die even when the initial register() attempt fails');
+    is(scalar @{ $log->{warn} }, 1, 'exactly one warning logged for the initial failure');
+    is(scalar @{ $log->{info} }, 0, 'no recovery message logged yet');
+
+    eval { lookup('homelab-recurring-test', api_base => $api_base, credential_file => $credential_file) };
+    like($@, qr/failed/, 'feature is genuinely not registered yet after the failed attempt');
+
+    # Fix the credential -- no restart, just wait for the recurring
+    # timer's next tick to pick it up.
+    DumpFile($healable_credential_file, { token => 'fake-system-agent-token', refresh_token => 'irrelevant-here' });
+    Mojo::IOLoop->timer(2.5 => sub { Mojo::IOLoop->stop });
+    Mojo::IOLoop->start;
+
+    my $found = lookup('homelab-recurring-test', api_base => $api_base, credential_file => $credential_file);
+    is($found->{host}, '10.10.0.77', 'self-healed into the registry on the next periodic attempt, no restart needed');
+    is(scalar @{ $log->{info} }, 1, 'exactly one recovery message logged');
+    is(scalar @{ $log->{warn} }, 1, 'no additional warnings logged once recovered, even across multiple ticks');
+}
 
 kill('TERM', $pid);
 waitpid($pid, 0);

@@ -1,3 +1,24 @@
+homelab-common (0.1.23) unstable; urgency=medium
+
+  * Release v0.1.23
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 15:08:38 -0500
+
+homelab-common (0.1.23) unstable; urgency=medium
+
+  * Registry.pm: export system_agent_token() so a service can present
+    its own host's system_agent credential on an OUTBOUND
+    server-to-server call, not just for register()/lookup() -- needed
+    by homelab-api's own call into homelab-invite's consume endpoint.
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 00:00:00 -0500
+
+homelab-common (0.1.22) unstable; urgency=medium
+
+  * Release v0.1.22
+
+ -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 14:28:28 -0500
+
 homelab-common (0.1.21) unstable; urgency=medium
 
   * Release v0.1.21

@@ -102,7 +102,13 @@ sub forward {
     }
     else {
         my $api_base = $opts{api_base} // die "forward(): api_base required (unless host+port are given directly)\n";
-        $entry = eval { lookup($feature_name, api_base => $api_base) };
+        # credential_file is normally omitted -- lookup() then reads the
+        # real /etc/homelab/agent/credential.yml that every host running
+        # a forwarding service has (see Registry::_system_agent_token).
+        # It's a passthrough purely so a test harness (common/t/proxy.t)
+        # can point the registry lookup at a fake credential file instead
+        # of the real path it can't create; production never passes it.
+        $entry = eval { lookup($feature_name, api_base => $api_base, credential_file => $opts{credential_file}) };
     }
     unless ($entry && $entry->{host} && $entry->{port}) {
         $c->render(json => { error => "$feature_name is not currently available" }, status => 502);
