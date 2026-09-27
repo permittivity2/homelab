@@ -1,0 +1,19 @@
+# Copy to /etc/homelab/edge-forward/forwards.yml, edit, then run
+# homelab-edge-forward-apply (postinst does this automatically on
+# every install/upgrade once the real file exists).
+#
+# public_interface: the interface holding this host's public IP (the
+# DNAT prerouting rules only match traffic arriving on it).
+# snat_to: this host's own data-plane IP -- the backend's reply gets
+# its source address rewritten to this, so it routes back through this
+# host instead of out the backend's own default gateway (which can't
+# answer as this host's public IP).
+public_interface: eth5
+snat_to: 10.50.2.144
+
+forwards:
+  - name: dns
+    protocols: [udp, tcp]
+    public_port: 53
+    backend_host: 10.50.2.162
+    backend_port: 53

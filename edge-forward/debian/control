@@ -1,0 +1,41 @@
+Source: homelab-edge-forward
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-edge-forward
+Architecture: all
+Depends: perl (>= 5.36), libyaml-libyaml-perl, homelab-common (>= 0.1.19), nftables
+Recommends: homelab-agent
+Description: DNAT+SNAT port-forwarding from a public IP to an internal backend
+ Ships homelab-edge-forward-apply, which reads an editable
+ /etc/homelab/edge-forward/forwards.yml (public port -> backend
+ host:port, one or more L4 protocols each) and regenerates a
+ self-contained /etc/nftables.d/50-edge-forward.conf owning its own
+ `table ip nat` (real DNAT+SNAT, not plain interface forwarding --
+ the backend has no public IP of its own, so without SNAT its replies
+ would route out its own default gateway and never reach the real
+ client). Validates with `nft -c -f` (which follows the resulting
+ `include` directive itself) before ever touching the live ruleset.
+ .
+ Exists for the same reason homelab-haproxy does -- decoupling "holds
+ the public IP" from "runs the actual service" -- but for protocols
+ HAProxy structurally can't front (UDP; see homelab-haproxy's own
+ Description). The first real user is PowerDNS: keeping authoritative
+ DNS off the same host as the public-facing HAProxy/webproxy edge
+ (separate blast radius for DNS-specific risks like UDP
+ amplification), while its public port keeps answering from the same
+ IP the domain's NS records already delegate to.
+ .
+ Deliberately does NOT load-balance across multiple backends behind
+ one forward: when real multi-nameserver redundancy is needed, an
+ independent second host with its own public IP and its own NS record
+ is DNS's own native mechanism for that, not something to build here.
+ .
+ Also idempotently adds a narrow accept rule to the EXISTING
+ `inet filter` table's `chain forward` for each configured forward --
+ unavoidable, since a new `ip nat` table's own chains don't bypass a
+ different table's independently-hooked `forward` chain policy.

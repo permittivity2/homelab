@@ -1,0 +1,23 @@
+homelab-edge-forward (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 14:54:14 -0500
+
+homelab-edge-forward (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 14:50:11 -0500
+
+homelab-edge-forward (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 14:45:02 -0500
+
+homelab-edge-forward (0.0.0) unstable; urgency=medium
+
+  * Initial placeholder entry -- build-package.sh prepends real releases above this.
+
+ -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 00:00:00 -0500

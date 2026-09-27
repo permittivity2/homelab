@@ -1,0 +1,53 @@
+#!/bin/sh
+set -e
+
+CONFIG_DIR=/etc/homelab/edge-forward
+FORWARDS_FILE="$CONFIG_DIR/forwards.yml"
+SHARE_DIR=/usr/share/homelab-edge-forward
+
+case "$1" in
+    configure)
+        echo "homelab-edge-forward post-installation setup..."
+        mkdir -p "$CONFIG_DIR"
+        mkdir -p /etc/nftables.d
+
+        # Hard prerequisite for this package's entire purpose, and
+        # independent of every nftables rule it manages: without
+        # kernel-level IP forwarding, a packet arriving on the public
+        # interface never gets routed to the DNAT'd backend at all, no
+        # matter how correct the DNAT/SNAT/forward-chain rules are.
+        # Found live: nftables validated and applied cleanly, DNAT/SNAT
+        # rules were all correct, and a real external resolver's query
+        # still got no reply -- root cause was net.ipv4.ip_forward=0,
+        # nftables' own domain entirely, sysctl's.
+        echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-homelab-edge-forward.conf
+        sysctl -p /etc/sysctl.d/99-homelab-edge-forward.conf >/dev/null
+        echo "  enabled net.ipv4.ip_forward (persisted in /etc/sysctl.d/99-homelab-edge-forward.conf)"
+
+        if [ ! -f "$FORWARDS_FILE" ]; then
+            cp "$SHARE_DIR/config/forwards.example.yml" "$FORWARDS_FILE"
+            echo "  wrote a starter $FORWARDS_FILE -- edit it (real public_interface,"
+            echo "  snat_to, and forward entries), then run: homelab-edge-forward-apply"
+        else
+            echo "  applying $FORWARDS_FILE..."
+            homelab-edge-forward-apply \
+                || echo "  WARNING: homelab-edge-forward-apply reported a problem -- see output above."
+        fi
+
+        systemctl enable nftables >/dev/null 2>&1 || true
+
+        echo ""
+        echo "homelab-edge-forward configured."
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

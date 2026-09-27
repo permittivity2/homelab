@@ -1,0 +1,266 @@
+#!/usr/bin/perl
+# Reads /etc/homelab/edge-forward/forwards.yml and:
+#   1. renders /etc/nftables.d/50-edge-forward.conf (a self-contained
+#      `table ip nat` owning DNAT+SNAT for each configured forward),
+#   2. idempotently ensures /etc/nftables.conf has both an
+#      `include "/etc/nftables.d/*.conf";` line (placed after the
+#      closing brace of the existing `table inet filter { ... }`
+#      block specifically -- nft loads sequentially, and the included
+#      file's own `add rule inet filter forward ...` line needs that
+#      chain to already exist earlier in the same load) and a narrow
+#      accept rule inside that SAME table's `chain forward { ... }`
+#      for each forward. Both are unavoidable: multiple base chains
+#      hooked at the same netfilter point are evaluated independently
+#      in priority order regardless of which table owns them, so a new
+#      `ip nat` table's prerouting/postrouting does NOT bypass the
+#      existing `inet filter` table's `forward` chain, which is
+#      `policy drop` with nothing else in it by default.
+#   3. validates with `nft -c -f` (which itself follows `include`
+#      directives, so this validates the fragment in place, not in
+#      isolation) before ever touching the live ruleset, applies with
+#      `nft -f`,
+#   4. regenerates /etc/homelab/services/edge-forward.yml wholesale --
+#      same "what exists on this host" fleet-topology pattern as
+#      homelab-haproxy-apply-backends -- one manifest entry per
+#      forward, kind udp-nat-forward, a description that explicitly
+#      says "DNAT+SNAT, single backend, no load-balancing" (so
+#      `homelab-cli admin fleet status` answers that question in plain
+#      text, not just implicitly), and a remote_tcp_port check against
+#      the REAL backend host:port -- not a local-only check, which
+#      would prove nothing about whether the forward path actually
+#      works end to end.
+#
+# SNAT (not just DNAT) is required, not optional: without it, the
+# backend host's reply routes back out via ITS OWN default gateway
+# (never through this host), and never reaches the real client -- this
+# matters specifically because the backend has no public IP of its own
+# to answer with directly.
+#
+# Known, accepted limitation: removing a forward from forwards.yml
+# regenerates the self-contained nat-table fragment correctly (the
+# removed forward's DNAT/SNAT rules disappear), but does NOT retract
+# its now-orphaned accept line from the shared /etc/nftables.conf --
+# only additive edits are made to that shared, hand-maintained file, to
+# avoid the much higher risk of a programmatic removal corrupting
+# unrelated rules. The orphaned accept line is harmless dead code once
+# its matching DNAT rule is gone (nothing can be forwarded to that
+# destination anymore for it to apply to).
+use strict;
+use warnings;
+use YAML::XS qw(LoadFile DumpFile);
+
+my $FORWARDS_CONFIG = $ENV{HOMELAB_EDGE_FORWARD_CONFIG}          // '/etc/homelab/edge-forward/forwards.yml';
+my $NFTABLES_CONF    = $ENV{HOMELAB_EDGE_FORWARD_NFTABLES_CONF}  // '/etc/nftables.conf';
+my $NFTABLES_D       = $ENV{HOMELAB_EDGE_FORWARD_NFTABLES_D}     // '/etc/nftables.d';
+my $FRAGMENT_FILE    = "$NFTABLES_D/50-edge-forward.conf";
+
+unless (-f $FORWARDS_CONFIG) {
+    print "homelab-edge-forward: no $FORWARDS_CONFIG yet — nothing to apply.\n";
+    print "  Copy /usr/share/homelab-edge-forward/config/forwards.example.yml there and re-run.\n";
+    exit 0;
+}
+
+my $config   = LoadFile($FORWARDS_CONFIG);
+my $iface    = $config->{public_interface} // die "forwards.yml: public_interface is required\n";
+my $snat_to  = $config->{snat_to}          // die "forwards.yml: snat_to is required\n";
+my @forwards = @{ $config->{forwards} // [] };
+
+for my $fwd (@forwards) {
+    my $name = $fwd->{name} // die "forwards.yml: a forward is missing 'name'\n";
+    die "forwards.yml: forward '$name' is missing 'public_port'\n"  unless defined $fwd->{public_port};
+    die "forwards.yml: forward '$name' is missing 'backend_host'\n" unless defined $fwd->{backend_host};
+    die "forwards.yml: forward '$name' is missing 'backend_port'\n" unless defined $fwd->{backend_port};
+    die "forwards.yml: forward '$name' needs 'protocols' (a list, e.g. [udp, tcp])\n"
+        unless ref($fwd->{protocols}) eq 'ARRAY' && @{ $fwd->{protocols} };
+}
+
+# --- 1. Render the self-contained nat-table fragment, wholesale. ---
+my $frag = <<'HEADER';
+# Managed by homelab-edge-forward's homelab-edge-forward-apply — do not
+# hand-edit; edit /etc/homelab/edge-forward/forwards.yml and re-run
+# homelab-edge-forward-apply instead. Regenerated wholesale on every
+# run, not merged.
+table ip nat {
+    chain prerouting {
+        type nat hook prerouting priority dstnat;
+HEADER
+
+for my $fwd (@forwards) {
+    for my $proto (@{ $fwd->{protocols} }) {
+        $frag .= "        iifname \"$iface\" $proto dport $fwd->{public_port} "
+            . "dnat to $fwd->{backend_host}:$fwd->{backend_port}\n";
+    }
+}
+
+$frag .= <<'MID';
+    }
+
+    chain postrouting {
+        type nat hook postrouting priority srcnat;
+MID
+
+for my $fwd (@forwards) {
+    for my $proto (@{ $fwd->{protocols} }) {
+        $frag .= "        ip daddr $fwd->{backend_host} $proto dport $fwd->{backend_port} snat to $snat_to\n";
+    }
+}
+
+$frag .= <<'FOOTER';
+    }
+}
+FOOTER
+
+mkdir($NFTABLES_D) unless -d $NFTABLES_D;
+open(my $ffh, '>', $FRAGMENT_FILE) or die "Cannot write $FRAGMENT_FILE: $!\n";
+print $ffh $frag;
+close($ffh);
+
+# --- 2. Idempotently ensure the include line + forward-chain accepts
+#        exist in the existing monolithic nftables.conf. ---
+_ensure_include_and_forward_accepts($NFTABLES_CONF, $NFTABLES_D, \@forwards);
+
+# --- 3. Validate the FULL ruleset (base file + includes) before ever
+#        touching the live one. ---
+my $check_rc = system('nft', '-c', '-f', $NFTABLES_CONF);
+if ($check_rc != 0) {
+    die "nftables validation failed for the new config — NOT applying; the previously-loaded ruleset is untouched.\n"
+        . "($NFTABLES_CONF and $FRAGMENT_FILE were written, but never loaded — fix the error above and re-run)\n";
+}
+
+system('nft', '-f', $NFTABLES_CONF) == 0
+    or die "nftables config validated but apply failed — check 'nft -f $NFTABLES_CONF' by hand.\n";
+
+print 'homelab-edge-forward: applied ' . scalar(@forwards) . " forward(s), reloaded.\n";
+
+# --- 4. Fleet-topology visibility (`homelab-cli admin fleet status`,
+#        via homelab-agent) -- same pattern as
+#        homelab-haproxy-apply-backends. Regenerated wholesale on every
+#        run: a forward removed from forwards.yml disappears from the
+#        fleet view too, not just the live nat table. ---
+my $manifest_dir  = $ENV{HOMELAB_SERVICES_MANIFEST_DIR} // '/etc/homelab/services';
+my $manifest_file = "$manifest_dir/edge-forward.yml";
+if (-d $manifest_dir) {
+    my @manifest = map {
+        my $f = $_;
+        {
+            name        => "edge-forward-$f->{name}",
+            package     => 'homelab-edge-forward',
+            kind        => 'udp-nat-forward',
+            check       => { remote_tcp_port => { host => $f->{backend_host}, port => $f->{backend_port} } },
+            description => 'DNAT+SNAT (full NAT) forward of public ' . join('+', @{ $f->{protocols} })
+                . " $f->{public_port} -> $f->{backend_host}:$f->{backend_port} (single backend, no load-balancing)",
+            fronts      => ["$f->{name}\@$f->{backend_host}:$f->{backend_port}"],
+        };
+    } @forwards;
+    eval { DumpFile($manifest_file, \@manifest); 1 }
+        or print "  WARNING: failed to write $manifest_file -- fleet status view may be stale: $@\n";
+}
+else {
+    print "  NOTE: $manifest_dir doesn't exist (homelab-agent not installed here yet) -- skipping manifest write.\n";
+}
+
+sub _ensure_include_and_forward_accepts {
+    my ($conf_file, $nftables_d, $forwards) = @_;
+    open(my $rfh, '<', $conf_file) or die "Cannot read $conf_file: $!\n";
+    my @lines = <$rfh>;
+    close($rfh);
+
+    # Match ANY existing include whose path already globs this exact
+    # directory (e.g. a pre-existing `include "/etc/nftables.d/*";` for
+    # something else entirely, like a badips table), not just our own
+    # literal line -- nft doesn't dedupe overlapping includes, so two
+    # separate include directives that both match this fragment file
+    # load (and apply) it twice, silently doubling every rule in it.
+    # Found live: a host with an existing bare `/etc/nftables.d/*`
+    # catch-all already loaded our new `*.conf`-suffixed file once on
+    # its own, and adding our own more-specific include on top loaded
+    # it a second time.
+    my $include_line = qq{include "$nftables_d/*.conf";\n};
+    my $has_include   = grep { /^\s*include\s+"\Q$nftables_d\E\/[^"]*"\s*;?\s*$/ } @lines;
+
+    # Find the line range of the FIRST `table inet filter { ... }`
+    # block via brace-depth counting (not a guessed line number -- the
+    # file has other chains, and possibly other tables, around it).
+    # Set-literal syntax like `tcp dport { 22, 53 }` is depth-neutral
+    # within a single line (its `{`/`}` both land on that same line, so
+    # they cancel in the running total) and doesn't perturb this, as
+    # long as no set literal ever spans multiple lines -- true of every
+    # file this project generates or hand-edits.
+    my ($filter_start, $filter_end);
+    for my $i (0 .. $#lines) {
+        next unless $lines[$i] =~ /^\s*table\s+inet\s+filter\s*\{/;
+        $filter_start = $i;
+        my $depth = 0;
+        for my $j ($i .. $#lines) {
+            $depth += () = $lines[$j] =~ /\{/g;
+            $depth -= () = $lines[$j] =~ /\}/g;
+            if ($depth == 0) { $filter_end = $j; last; }
+        }
+        last;
+    }
+    die "$conf_file: could not find a 'table inet filter { ... }' block to anchor to\n"
+        unless defined $filter_end;
+
+    # Within that range, find `chain forward { ... }`'s own line range
+    # (via the same depth-counting as the table search above) and its
+    # `policy drop;` line, to insert accept rules right after it --
+    # searching only from the chain's own opening line onward (within
+    # the filter table's range) so this can't accidentally land on
+    # input's or output's policy line instead.
+    my ($forward_chain_start, $forward_chain_end, $forward_policy_line);
+    for my $i ($filter_start .. $filter_end) {
+        next unless $lines[$i] =~ /chain\s+forward\s*\{/;
+        $forward_chain_start = $i;
+        my $depth = 0;
+        for my $j ($i .. $filter_end) {
+            $depth += () = $lines[$j] =~ /\{/g;
+            $depth -= () = $lines[$j] =~ /\}/g;
+            if ($lines[$j] =~ /policy\s+drop;/) { $forward_policy_line //= $j; }
+            if ($depth == 0) { $forward_chain_end = $j; last; }
+        }
+        last;
+    }
+    die "$conf_file: could not find 'chain forward { ... policy drop; ... }' to anchor to\n"
+        unless defined $forward_policy_line;
+
+    # The initial (client -> backend) leg matches on backend_host/port
+    # explicitly below, but the REPLY leg (backend -> client) has a
+    # completely different-looking header after SNAT/DNAT rewriting --
+    # nothing about it matches "dport $backend_port daddr $backend_host"
+    # in reverse. Without this, the reply gets silently dropped by this
+    # same chain's own policy drop, even though the request got through
+    # cleanly -- found live via a real external resolver's query
+    # reaching PowerDNS (confirmed via tcpdump) but the answer never
+    # making it back out. `ct state established,related` is the
+    # standard, connection-tracking-based way to admit a flow's return
+    # traffic without writing an explicit reverse-direction rule per
+    # forward; added once, not per-forward, since it covers all of them.
+    # Scoped to the forward chain's own line range specifically, not
+    # the whole file -- `ct state established,related accept` is a very
+    # common, generic line that routinely already exists in the input/
+    # output chains (as it does in every nftables.conf this project has
+    # ever generated or hand-edited); a whole-file search would find
+    # THAT one and wrongly conclude the forward chain already has its
+    # own, leaving the reply leg dropped exactly as before.
+    my @forward_chain_lines = @lines[$forward_chain_start .. $forward_chain_end];
+    my @needed;
+    my $ct_rule = "        ct state established,related accept\n";
+    push @needed, $ct_rule unless grep { $_ eq $ct_rule } @forward_chain_lines;
+    for my $fwd (@$forwards) {
+        for my $proto (@{ $fwd->{protocols} }) {
+            my $rule = "        $proto dport $fwd->{backend_port} ip daddr $fwd->{backend_host} accept\n";
+            push @needed, $rule unless grep { $_ eq $rule } @forward_chain_lines;
+        }
+    }
+
+    if (@needed) {
+        splice(@lines, $forward_policy_line + 1, 0, @needed);
+        $filter_end += scalar(@needed);    # every later index just shifted down
+    }
+
+    splice(@lines, $filter_end + 1, 0, $include_line) unless $has_include;
+
+    open(my $wfh, '>', $conf_file) or die "Cannot write $conf_file: $!\n";
+    print $wfh @lines;
+    close($wfh);
+}
