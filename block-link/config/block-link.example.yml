@@ -1,0 +1,56 @@
+# Homelab Block-Link Configuration
+#
+# Backend for the click-to-block-from-your-inbox mechanism: owns the
+# on/off + mode settings (per-domain default, per-account override) and
+# the public management page a recipient reaches via the link
+# homelab-postfix-block-link's milter injects into inbound mail. Two
+# faces on one process (see README.md): /internal/v1/block-link/*
+# (gateway-fronted by homelab-api, JWT-authenticated) and /l/:token
+# (public, unauthenticated, fronted by homelab-webproxy's own
+# blockemail.<domain> vhost). This service never blocks anyone directly
+# -- POST /l/:token calls homelab-domain-admin's own
+# /internal/v1/domains/recipient-access/on-behalf, which does the real
+# domainadmin.recipient_access write (the SAME table `homelab-cli mail
+# block`/the recipient_blocking Roundcube plugin already use).
+
+homelab_api:
+  base_url: https://api.test.mailmasker.org
+
+# RUNTIME connection -- CRUD only, no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_block_link_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection -- direct to Postgres, bypassing pgbouncer. Only
+# used by homelab-block-link-migrate at install/upgrade time.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_block_link_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+block_link:
+  # How long a management link (embedded in a real delivered email)
+  # stays valid -- deliberately long, unlike homelab-invite's one-time-
+  # use tokens, since revisiting the same link to adjust a decision
+  # later is the normal, expected use (see README.md).
+  link_ttl_days: 90
+  # The public URL a management link points at -- must match whatever
+  # homelab-webproxy's sites.yml actually fronts this service as.
+  public_base_url: https://blockemail.test.mailmasker.org
+
+# What this instance announces itself as in homelab-api's service
+# registry -- host/port only. homelab-api's gateway forwards
+# /api/v1/block-link/* here.
+registry:
+  host: 127.0.0.1
+  port: 2515
+
+server:
+  listen: "http://127.0.0.1:2515"
+  workers: 2
+  pid_file: /var/lib/homelab/block-link-hypnotoad.pid

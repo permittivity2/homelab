@@ -1,0 +1,54 @@
+Source: homelab-postfix-block-link
+Section: mail
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-postfix-block-link
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common (>= 0.1.23),
+         homelab-postfix,
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         libsendmail-pmilter-perl,
+         adduser,
+         sudo
+Recommends: homelab-block-link, homelab-domain-admin, homelab-api, homelab-agent
+Description: Postfix add-on: injects a click-to-block link into inbound mail
+ A Perl Sendmail-Milter-protocol daemon (Sendmail::PMilter), installed
+ onto an already-running homelab-postfix host (hard Depends -- this
+ package is nothing standalone) and wired into its smtpd_milters/
+ non_smtpd_milters chain the same idempotent postconf -e
+ read-current-then-append pattern homelab-postfix's own postinst
+ already uses for OpenDKIM -- lands after OpenDKIM by construction
+ (milters see each other's changes in list order), so OpenDKIM's own
+ inbound Authentication-Results verification always reflects the
+ untouched original message.
+ .
+ For each inbound recipient, resolves the envelope address to a
+ destination account using the SAME domainadmin.mail_aliases exact-
+ then-catch-all lookup Postfix's own routing already does, checks that
+ account's click-to-block setting (a per-domain default, per-account
+ override -- see homelab-block-link, the companion package that owns
+ those settings and the public management page), and if enabled, adds
+ a List-Unsubscribe header (and, for domains configured for it, a
+ plain-text body footer on unsigned text/plain messages only) pointing
+ at a real, unique management link.
+ .
+ Fails open unconditionally: any database error or unexpected failure
+ logs and lets the message through completely unmodified -- this sits
+ on the hot SMTP delivery path for every host it's installed on and
+ must never become a new way to break core mail delivery.
+ .
+ Holds its own narrow Postgres role (bespoke bootstrap script, not the
+ generic homelab-bootstrap-app-role -- this needs cross-schema grants
+ into domainadmin's and homelab-block-link's own schemas, which the
+ generic script doesn't produce) with SELECT-only access to alias/
+ domain/settings data and INSERT-only access to homelab-block-link's
+ own pending_links table. Must be installed AFTER homelab-block-link on
+ any given host -- see that package's own README.md "Install order"
+ section.

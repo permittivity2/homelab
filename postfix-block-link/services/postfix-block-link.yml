@@ -1,0 +1,6 @@
+name: postfix-block-link
+package: homelab-postfix-block-link
+kind: milter
+check:
+  systemd_unit: homelab-postfix-block-link
+description: "Injects a click-to-block link into inbound mail when enabled for the recipient's domain/account -- see homelab-block-link"

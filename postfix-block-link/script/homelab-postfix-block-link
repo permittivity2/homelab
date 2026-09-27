@@ -1,0 +1,166 @@
+#!/usr/bin/env perl
+# The milter half of the click-to-block-link mechanism. Real
+# Sendmail::PMilter API confirmed against the actual installed module
+# source (/usr/share/perl5/Sendmail/PMilter{,/Context}.pm) before
+# writing this, not assumed -- see block-link's own plan/README for
+# the citations. Fails open throughout: any DB error or unexpected
+# exception logs and lets the message through completely unmodified,
+# never rejects/defers/delays real mail delivery over this feature
+# (see README.md's "Fail open" section) -- a milter sitting on the hot
+# SMTP delivery path for every host it's installed on must never
+# become a new way to break core mail.
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Sendmail::PMilter qw(:all);
+use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(runtime_pg);
+use Homelab::PostfixBlockLink::Milter qw(
+    resolve_recipient effective_setting is_signed_mime
+    generate_token build_header_value insert_pending_link
+);
+use Mojo::JSON qw(encode_json);
+
+my $config = load_config('HOMELAB_POSTFIX_BLOCK_LINK_CONFIG', '/etc/homelab/postfix-block-link/config.yml');
+my $bl_cfg = $config->{block_link} // die "config: block_link.* is required\n";
+my $listen = $config->{milter}{listen} // die "config: milter.listen is required\n";
+
+sub log_line { print STDERR "[homelab-postfix-block-link] @_\n" }
+
+# Lazy, fork-safe DB handle -- deliberately NOT a single connection
+# created once at file scope. prefork_dispatcher (below) forks worker
+# processes AFTER this script's top-level code runs, and a Postgres
+# connection (like any DBI connection) does not survive fork() safely
+# -- multiple children sharing one inherited socket would corrupt the
+# wire protocol. Re-creates the connection the first time any callback
+# touches it in a given process, and again if $$ (the pid) ever
+# changes from when it was created -- covers both prefork's own
+# up-front fork and any other dispatcher style that forks later.
+my $pg;
+my $pg_pid = 0;
+sub _pg {
+    if (!$pg || $pg_pid != $$) {
+        $pg = runtime_pg(%{ $config->{database} });
+        $pg_pid = $$;
+    }
+    return $pg;
+}
+
+my %cbs;
+
+$cbs{envrcpt} = sub {
+    my ($ctx, $addr, @esmtp) = @_;
+    my $priv = $ctx->getpriv() // {};
+    $priv->{candidates} //= [];
+
+    # Strip SMTP envelope angle brackets ("<user@domain>" -> "user@domain")
+    # -- PMilter hands this callback the raw envelope token verbatim.
+    (my $clean = $addr) =~ s/^<//;
+    $clean =~ s/>$//;
+
+    eval {
+        my $account = resolve_recipient(_pg()->db, $clean);
+        if ($account) {
+            my $setting = effective_setting(_pg()->db, $account);
+            push @{ $priv->{candidates} }, {
+                address => $clean, account_email => $account,
+                enabled => $setting->{enabled}, mode => $setting->{mode},
+            } if $setting->{enabled};
+        }
+    };
+    log_line("envrcpt resolution failed for $clean (failing open, continuing unmodified): $@") if $@;
+
+    $ctx->setpriv($priv);
+    return SMFIS_CONTINUE;
+};
+
+$cbs{header} = sub {
+    my ($ctx, $name, $value) = @_;
+    my $priv = $ctx->getpriv() // {};
+    if (lc($name) eq 'content-type') {
+        $priv->{content_type} = $value;
+    }
+    elsif (lc($name) eq 'message-id') {
+        $priv->{message_id} = $value;
+    }
+    $ctx->setpriv($priv);
+    return SMFIS_CONTINUE;
+};
+
+$cbs{body} = sub {
+    my ($ctx, $chunk) = @_;
+    my $priv = $ctx->getpriv() // {};
+    $priv->{body} = '' unless defined $priv->{body};
+    $priv->{body} .= $chunk;
+    $ctx->setpriv($priv);
+    return SMFIS_CONTINUE;
+};
+
+$cbs{eom} = sub {
+    my ($ctx) = @_;
+    my $priv = $ctx->getpriv() // {};
+    my @enabled = grep { $_->{enabled} } @{ $priv->{candidates} // [] };
+
+    return SMFIS_CONTINUE unless @enabled;
+
+    eval {
+        my $token = generate_token();
+        my $candidates_json = encode_json([
+            map { { account_email => $_->{account_email}, address => $_->{address} } } @enabled
+        ]);
+        insert_pending_link(
+            _pg()->db, token => $token, candidates_json => $candidates_json,
+            message_id => $priv->{message_id}, ttl_days => $bl_cfg->{link_ttl_days},
+        );
+
+        my $link = build_header_value($bl_cfg->{public_base_url}, $token);
+        $ctx->addheader('List-Unsubscribe', $link);
+
+        # body mode: if ANY enabled recipient's own domain wants body
+        # content, include it -- see README.md's "Mixed-mode
+        # transactions" note on why this is a deliberate, documented
+        # choice (favor coverage) rather than a per-recipient split a
+        # milter structurally can't do (one shared body per
+        # transaction, not one per recipient).
+        my $want_body = grep { $_->{mode} eq 'body' || $_->{mode} eq 'both' } @enabled;
+        # No Content-Type header at all defaults to text/plain per RFC
+        # 2045 -- the simplest, safest case to append to, not one to
+        # exclude by treating "undef" as "unknown, skip it".
+        my $is_plain = !defined($priv->{content_type}) || lc($priv->{content_type}) =~ m{^\s*text/plain};
+        if ($want_body
+            && $is_plain
+            && !is_signed_mime($priv->{content_type})
+        ) {
+            my $footer = "\r\n\r\n--\r\nDon't want mail like this? Manage blocked addresses: "
+                . "$bl_cfg->{public_base_url}/l/$token\r\n";
+            $ctx->replacebody(($priv->{body} // '') . $footer);
+        }
+    };
+    if ($@) {
+        log_line("eom injection failed (failing open, message delivered unmodified): $@");
+    }
+
+    return SMFIS_CONTINUE;
+};
+
+$cbs{close} = sub {
+    my ($ctx) = @_;
+    $ctx->setpriv(undef);
+    return SMFIS_CONTINUE;
+};
+
+my $milter = Sendmail::PMilter->new();
+$milter->setconn($listen) or die "cannot bind to $listen: $!\n";
+$milter->register('homelab-postfix-block-link', \%cbs, SMFIF_ADDHDRS | SMFIF_CHGBODY);
+
+my $dispatcher = Sendmail::PMilter::prefork_dispatcher(
+    max_children => 10,
+    max_requests_per_child => 200,
+);
+$milter->set_dispatcher($dispatcher);
+
+log_line("listening on $listen");
+$milter->main();

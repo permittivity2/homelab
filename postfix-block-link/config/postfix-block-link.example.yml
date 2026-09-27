@@ -1,0 +1,27 @@
+# Homelab Postfix Block-Link Configuration
+#
+# The milter half of the click-to-block-link mechanism -- see
+# ../../block-link/README.md for the full picture. This config is read
+# once at milter startup, not per-message (settings themselves ARE
+# read per-message, live from Postgres -- see README.md's "Why no
+# reload is needed for settings changes").
+
+# RUNTIME connection -- CRUD only (INSERT on pending_links, SELECT
+# elsewhere), no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_postfix_block_link_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+block_link:
+  public_base_url: https://blockemail.test.mailmasker.org
+  link_ttl_days: 90
+
+milter:
+  # inet:PORT@HOST, matching Sendmail::PMilter's own setconn() syntax
+  # and the same style OpenDKIM's own Socket directive already uses in
+  # this fleet (inet:8891@0.0.0.0) -- loopback-only here since nothing
+  # outside this host should ever speak the milter protocol to it.
+  listen: "inet:8892@127.0.0.1"

@@ -1,0 +1,51 @@
+Template: homelab-block-link/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-block-link/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
+Template: homelab-block-link/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url -- every gateway-routed
+ request this app handles is authenticated by introspecting the
+ caller's JWT here, and this service's own /l/:token submit handler
+ looks up homelab-domain-admin's address via this same homelab-api's
+ service registry.
+
+Template: homelab-block-link/listen_port
+Type: string
+Default: 2515
+Description: Port for homelab-block-link to listen on:
+
+Template: homelab-block-link/advertise_host
+Type: string
+Default: 127.0.0.1
+Description: This host's own address to advertise in the service registry:
+ Written into config.yml's registry.host -- what homelab-api's gateway
+ actually connects to when forwarding /api/v1/block-link/* requests
+ here. Leave as 127.0.0.1 only if this service runs on the SAME host as
+ homelab-api itself; set it to this host's real reachable address for
+ any distributed deployment.
+
+Template: homelab-block-link/public_base_url
+Type: string
+Default: https://blockemail.test.mailmasker.org
+Description: Public URL where the management page is reachable:
+ Written into every generated management link -- must match whatever
+ homelab-webproxy's sites.yml actually fronts this service as.
+
+Template: homelab-block-link/link_ttl_days
+Type: string
+Default: 90
+Description: Days a management link stays valid before it expires:
+ Long-lived by design (unlike homelab-invite's one-time-use tokens) --
+ revisiting the same link later to adjust a decision is the normal use.

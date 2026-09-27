@@ -1,0 +1,30 @@
+[Unit]
+Description=Homelab Block-Link
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_BLOCK_LINK_CONFIG=/etc/homelab/block-link/config.yml"
+# Reached two ways, both real proxy hops: homelab-api's own gateway
+# (/api/v1/block-link/*) for the internal routes, AND
+# homelab-webproxy's blockemail.<domain> vhost for the public /l/*
+# management page. Without trusting this, $c->tx->remote_address would
+# resolve to whichever proxy's own loopback address instead of the
+# real client -- same fix already applied for homelab-invite's
+# identical two-faced shape.
+Environment="MOJO_REVERSE_PROXY=1"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-block-link
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-block-link
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-block-link
+
+[Install]
+WantedBy=multi-user.target

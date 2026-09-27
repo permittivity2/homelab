@@ -1,0 +1,7 @@
+name: block-link
+package: homelab-block-link
+kind: http_service
+check:
+  systemd_unit: homelab-block-link
+  tcp_port: 2515
+description: "Click-to-block-from-inbox settings + link resolution (serves /api/v1/block-link/*) + public management page at blockemail.<domain>"

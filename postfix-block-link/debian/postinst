@@ -1,0 +1,163 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/postfix-block-link
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-postfix-block-link
+
+case "$1" in
+    configure)
+        echo "homelab-postfix-block-link post-installation setup..."
+
+        if ! command -v postconf >/dev/null 2>&1; then
+            echo "ERROR: postconf not found -- is homelab-postfix actually installed on this host?"
+            db_stop
+            exit 1
+        fi
+
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services
+        cp "$SHARE_DIR/services/postfix-block-link.yml" /etc/homelab/services/postfix-block-link.yml
+
+        mkdir -p "$CONFIG_DIR"
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-postfix-block-link/db_host || true;         DB_HOST="${RET:-localhost}"
+            db_get homelab-postfix-block-link/pgbouncer_host || true;  PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-postfix-block-link/instance_id || true;     INSTANCE_ID="$RET"
+            db_get homelab-postfix-block-link/milter_listen || true;   MILTER_LISTEN="${RET:-inet:8892@127.0.0.1}"
+            db_get homelab-postfix-block-link/public_base_url || true; PUBLIC_BASE_URL="${RET:-https://blockemail.test.mailmasker.org}"
+            db_get homelab-postfix-block-link/link_ttl_days || true;   LINK_TTL_DAYS="${RET:-90}"
+
+            ROLE_SUFFIX_ARGS=""
+            [ -n "$INSTANCE_ID" ] && ROLE_SUFFIX_ARGS="--role-suffix $INSTANCE_ID"
+
+            echo "  bootstrapping 'homelab_postfix_block_link_runtime${INSTANCE_ID:+_$INSTANCE_ID}' on $DB_HOST..."
+            echo "  (needs homelab-api, homelab-domain-admin, and homelab-block-link already"
+            echo "   installed/migrated there -- see README.md's \"Install order\" section)"
+            # Makefile.PL's EXE_FILES installs this straight to /usr/bin
+            # (standard perl_makemaker layout), NOT under
+            # $SHARE_DIR/script -- unlike homelab-postfix's own bootstrap
+            # script, which its debian/rules copies into $SHARE_DIR
+            # explicitly. Confirmed via `dpkg -c` on the built .deb
+            # before fixing this (real bug hit on first live install,
+            # not caught by syntax-checking alone).
+            BOOTSTRAP_OUT="$(homelab-postfix-block-link-bootstrap-role --db-host "$DB_HOST" $ROLE_SUFFIX_ARGS)"
+
+            ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^ROLE=//p')"
+            PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^PASSWORD=//p')"
+            SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^SCRAM_SECRET=//p')"
+
+            if [ -z "$ROLE" ]; then
+                echo "ERROR: homelab-postfix-block-link-bootstrap-role did not report success -- see output above."
+                echo "       Not writing $CONFIG_FILE or wiring the milter into Postfix;"
+                echo "       re-run 'dpkg-reconfigure homelab-postfix-block-link' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$ROLE" \
+                --scram-secret "$SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$ROLE' by hand."
+
+            sed \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$PASSWORD#g" \
+                -e "s#homelab_postfix_block_link_runtime#$ROLE#g" \
+                -e "s#https://blockemail\.test\.mailmasker\.org#$PUBLIC_BASE_URL#g" \
+                -e "s#link_ttl_days: 90#link_ttl_days: $LINK_TTL_DAYS#g" \
+                -e "s#\"inet:8892@127\.0\.0\.1\"#\"$MILTER_LISTEN\"#g" \
+                "$SHARE_DIR/config/postfix-block-link.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE" 2>/dev/null || true
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+            echo "  (dpkg-reconfigure homelab-postfix-block-link to redo the prompts, e.g. after a password rotation)"
+            MILTER_LISTEN="$(sed -n 's/^  listen: "\(.*\)"/\1/p' "$CONFIG_FILE" | head -1)"
+            MILTER_LISTEN="${MILTER_LISTEN:-inet:8892@127.0.0.1}"
+        fi
+
+        # --- Wire into Postfix's own milter chain, same idempotent
+        # read-current-then-append postconf -e pattern homelab-postfix's
+        # own postinst already uses for OpenDKIM (see its DKIM section).
+        # Appending -- never overwriting -- means this milter lands
+        # AFTER whatever's already in the list (OpenDKIM included, if
+        # enabled on this host), which is the correct order: OpenDKIM's
+        # own inbound Authentication-Results verification should see the
+        # untouched original message, not one this milter has already
+        # added a header/footer to.
+        #
+        # Postfix's own smtpd_milters/non_smtpd_milters connect syntax
+        # is "inet:HOST:PORT" -- the REVERSE of Sendmail::PMilter's own
+        # setconn()/milter.listen syntax "inet:PORT@HOST" used above.
+        # Converted here, not stored twice, so config.yml stays the one
+        # source of truth for what this milter actually binds to.
+        MILTER_PORT="$(echo "$MILTER_LISTEN" | sed -n 's/^inet:\([0-9]*\)@.*/\1/p')"
+        MILTER_HOST="$(echo "$MILTER_LISTEN" | sed -n 's/^inet:[0-9]*@\(.*\)/\1/p')"
+        if [ -n "$MILTER_PORT" ] && [ -n "$MILTER_HOST" ]; then
+            MILTER_CONNECT="inet:$MILTER_HOST:$MILTER_PORT"
+
+            CURRENT_SMTPD_MILTERS="$(postconf -h smtpd_milters 2>/dev/null || true)"
+            CURRENT_NON_SMTPD_MILTERS="$(postconf -h non_smtpd_milters 2>/dev/null || true)"
+            case "$CURRENT_SMTPD_MILTERS" in
+                *"$MILTER_CONNECT"*) ;;
+                "") postconf -e "smtpd_milters = $MILTER_CONNECT" ;;
+                *)  postconf -e "smtpd_milters = $CURRENT_SMTPD_MILTERS, $MILTER_CONNECT" ;;
+            esac
+            case "$CURRENT_NON_SMTPD_MILTERS" in
+                *"$MILTER_CONNECT"*) ;;
+                "") postconf -e "non_smtpd_milters = $MILTER_CONNECT" ;;
+                *)  postconf -e "non_smtpd_milters = $CURRENT_NON_SMTPD_MILTERS, $MILTER_CONNECT" ;;
+            esac
+            postconf -e 'milter_default_action = accept' 'milter_protocol = 6'
+            echo "  added $MILTER_CONNECT to smtpd_milters/non_smtpd_milters"
+        else
+            echo "  WARNING: could not parse milter.listen ('$MILTER_LISTEN') as inet:PORT@HOST --"
+            echo "           NOT wiring into Postfix's milter chain. Fix milter.listen in $CONFIG_FILE"
+            echo "           and re-run 'dpkg-reconfigure homelab-postfix-block-link', or wire it by hand:"
+            echo "           postconf -e 'smtpd_milters = \$smtpd_milters, inet:127.0.0.1:8892'"
+        fi
+
+        if postfix check >/dev/null 2>&1; then
+            systemctl reload-or-restart postfix \
+                || echo "  WARNING: postfix reload/restart failed -- check 'systemctl status postfix' by hand."
+        else
+            echo "  WARNING: 'postfix check' reports a config error -- NOT reloading postfix."
+            echo "           Run 'postfix check' by hand to see it; the previous running config is untouched."
+        fi
+
+        systemctl enable homelab-postfix-block-link >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-postfix-block-link; then
+            systemctl restart homelab-postfix-block-link \
+                || echo "  WARNING: homelab-postfix-block-link restart failed -- check 'systemctl status homelab-postfix-block-link' by hand."
+        else
+            systemctl start homelab-postfix-block-link \
+                || echo "  WARNING: homelab-postfix-block-link failed to start -- check 'systemctl status homelab-postfix-block-link' / 'journalctl -xeu homelab-postfix-block-link' by hand."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-postfix-block-link configured."
+        echo "config:        $CONFIG_FILE"
+        echo "milter socket: $MILTER_LISTEN"
+        echo "Next steps:"
+        echo "  homelab-cli admin block-link domain set <domain> --enabled --mode header"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

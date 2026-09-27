@@ -1,0 +1,21 @@
+#!/usr/bin/env perl
+# Applies homelab-block-link's own migrations/*.sql via the migrate
+# role. Same template as homelab-invite-migrate -- see that file's
+# comment.
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(migrate_dbh);
+use Homelab::Common::Migrate qw(run_migrations);
+
+my $config = load_config('HOMELAB_BLOCK_LINK_CONFIG', '/etc/homelab/block-link/config.yml');
+my $dbh    = migrate_dbh(%{ $config->{database_migrate} });
+
+my $migrations_dir = $ENV{HOMELAB_BLOCK_LINK_MIGRATIONS_DIR} // '/usr/share/homelab-block-link/migrations';
+my $applied = run_migrations(dbh => $dbh, schema => 'block_link', migrations_dir => $migrations_dir);
+
+print "homelab-block-link: applied $applied migration(s)\n";

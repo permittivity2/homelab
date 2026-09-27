@@ -1,0 +1,20 @@
+[Unit]
+Description=Homelab Postfix Block-Link Milter
+After=network.target postgresql.service
+Before=postfix.service
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_POSTFIX_BLOCK_LINK_CONFIG=/etc/homelab/postfix-block-link/config.yml"
+ExecStart=/usr/bin/homelab-postfix-block-link
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-postfix-block-link
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,130 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/block-link
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-block-link
+
+case "$1" in
+    configure)
+        echo "homelab-block-link post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services
+        cp "$SHARE_DIR/services/block-link.yml" "/etc/homelab/services/block-link.yml"
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-block-link/db_host || true;             DB_HOST="${RET:-localhost}"
+            db_get homelab-block-link/pgbouncer_host || true;      PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-block-link/api_base || true;            API_BASE="${RET:-http://localhost:3000}"
+            db_get homelab-block-link/listen_port || true;         LISTEN_PORT="${RET:-2515}"
+            db_get homelab-block-link/advertise_host || true;      ADVERTISE_HOST="${RET:-127.0.0.1}"
+            db_get homelab-block-link/public_base_url || true;     PUBLIC_BASE_URL="${RET:-https://blockemail.test.mailmasker.org}"
+            db_get homelab-block-link/link_ttl_days || true;       LINK_TTL_DAYS="${RET:-90}"
+
+            echo "  bootstrapping Postgres roles for 'homelab_block_link' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_block_link --schema block_link --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success — see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-block-link' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
+
+            sed \
+                -e "s#https://api\.test\.mailmasker\.org#$API_BASE#g" \
+                -e "s#https://blockemail\.test\.mailmasker\.org#$PUBLIC_BASE_URL#g" \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_block_link_runtime#$RUNTIME_ROLE#g" \
+                -e "s#YOUR_POSTGRES_HOST#$DB_HOST#g" \
+                -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
+                -e "s#homelab_block_link_migrate#$MIGRATE_ROLE#g" \
+                -e "s#link_ttl_days: 90#link_ttl_days: $LINK_TTL_DAYS#g" \
+                -e "s#\"http://127\.0\.0\.1:2515\"#\"http://0.0.0.0:$LISTEN_PORT\"#g" \
+                -e "s#  port: 2515#  port: $LISTEN_PORT#g" \
+                -e "s#  host: 127\.0\.0\.1#  host: $ADVERTISE_HOST#g" \
+                "$SHARE_DIR/config/block-link.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+            echo "  (dpkg-reconfigure homelab-block-link to redo the prompts)"
+        fi
+
+        if [ -z "$RUNTIME_ROLE" ]; then
+            RUNTIME_ROLE="$(sed -n '/^database:/,/^database_migrate:/{s/^[[:space:]]*user: //p}' "$CONFIG_FILE" | head -1)"
+        fi
+        if [ -n "$RUNTIME_ROLE" ]; then
+            echo "  granting '$RUNTIME_ROLE' INSERT access on audit.queue (for the block-link audit trail)..."
+            DB_HOST_FOR_GRANT="${DB_HOST:-$(sed -n '/^database_migrate:/,/^database:/{s/^[[:space:]]*host: //p}' "$CONFIG_FILE" | head -1)}"
+            homelab-audit-grant-queue-insert --role "$RUNTIME_ROLE" --db-host "${DB_HOST_FOR_GRANT:-localhost}" \
+                || echo "  WARNING: could not grant audit.queue access -- if homelab-audit isn't installed/migrated yet, install it and re-run this grant by hand (see homelab-audit/README.md); audited settings changes will fail closed until this grant exists."
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_BLOCK_LINK_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
+            HOMELAB_BLOCK_LINK_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-block-link-migrate
+
+        systemctl enable homelab-block-link >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-block-link; then
+            systemctl restart homelab-block-link || echo "WARNING: homelab-block-link restart failed -- check 'systemctl status homelab-block-link' by hand."
+        else
+            systemctl start homelab-block-link || echo "WARNING: homelab-block-link failed to start -- check 'systemctl status homelab-block-link' by hand."
+        fi
+
+        sleep 2
+        if command -v curl >/dev/null 2>&1; then
+            if ! curl -fsS "http://127.0.0.1:${LISTEN_PORT:-2515}/health" >/dev/null 2>&1; then
+                echo "  WARNING: homelab-block-link did not answer its own /health check --"
+                echo "           check 'systemctl status homelab-block-link' and the journal by hand."
+            fi
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-block-link configured."
+        echo "config: $CONFIG_FILE"
+        echo "Next steps:"
+        echo "  1. Point homelab-webproxy's sites.yml at this host's advertise_host:"
+        echo "     - domain: <your blockemail.<domain>> upstream: 127.0.0.1:${LISTEN_PORT:-2515}"
+        echo "  2. Install homelab-postfix-block-link on each postfix host that should"
+        echo "     inject links -- it needs this service's schema to already exist,"
+        echo "     which it now does."
+        echo "  3. homelab-cli admin block-link domain set <domain> --enabled --mode header"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

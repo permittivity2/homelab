@@ -1,0 +1,60 @@
+Template: homelab-postfix-block-link/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's role on:
+ Used only once, at first install, to run
+ homelab-postfix-block-link-bootstrap-role. Must already have
+ homelab-api, homelab-domain-admin, and homelab-block-link installed/
+ migrated on it -- this role's grants reach into all three.
+
+Template: homelab-postfix-block-link/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the milter connects through the pooler -- it sits
+ on the hot SMTP delivery path, same reasoning as homelab-postfix's
+ own runtime role.
+
+Template: homelab-postfix-block-link/instance_id
+Type: string
+Default:
+Description: Unique identifier for this specific postfix instance (blank = single-instance):
+ Only needed when installing on more than one postfix host behind the
+ same HAProxy pool (e.g. "ct05", "ct06") -- appends _<value> to this
+ app's own Postgres role name, exactly like homelab-postfix's own
+ instance_id already does, to give each instance its own credential
+ instead of sharing one (a shared role means the LAST install's
+ password silently rotates out from under every other already-running
+ instance -- found live and fixed for postfix/dovecot/roundcube's own
+ roles this project's history, not repeated here).
+
+Template: homelab-postfix-block-link/milter_listen
+Type: string
+Default: inet:8892@127.0.0.1
+Description: Socket for this milter to listen on:
+ Sendmail::PMilter connection-descriptor syntax (same style OpenDKIM's
+ own Socket directive already uses in this fleet, inet:8891@0.0.0.0) --
+ loopback-only by default, since only this host's own Postfix should
+ ever speak the milter protocol to it.
+
+Template: homelab-postfix-block-link/public_base_url
+Type: string
+Default: https://blockemail.test.mailmasker.org
+Description: Public URL used in generated links (must match homelab-block-link's own setting):
+ NOT auto-synced with homelab-block-link's own identically-named
+ config value -- same deliberate "two related settings, kept in sync
+ by hand" pattern already used for Roundcube's session_lifetime vs
+ homelab-sso's JWT lifetime elsewhere in this project. If
+ homelab-block-link's public_base_url ever changes, update this too
+ (dpkg-reconfigure homelab-postfix-block-link) or generated links will
+ point at the wrong place.
+
+Template: homelab-postfix-block-link/link_ttl_days
+Type: string
+Default: 90
+Description: Days a generated link stays valid (cosmetic hint only):
+ The REAL expiry is enforced entirely by homelab-block-link itself
+ (its own link_ttl_days). This value only affects what this milter
+ writes into block_link.pending_links.expires_at at insert time --
+ keep it equal to homelab-block-link's own setting.

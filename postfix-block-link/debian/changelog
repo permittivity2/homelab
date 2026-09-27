@@ -1,0 +1,32 @@
+homelab-postfix-block-link (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 20:59:44 -0500
+
+homelab-postfix-block-link (0.1.1) unstable; urgency=medium
+
+  * Fix postinst: homelab-postfix-block-link-bootstrap-role is installed
+    to /usr/bin by Makefile.PL's EXE_FILES (standard perl_makemaker
+    layout), not under $SHARE_DIR/script -- postinst was invoking the
+    wrong path and failed on first live install (exit 127, package left
+    half-configured). Found deploying to ct05.
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 20:46:57 -0500
+
+homelab-postfix-block-link (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 20:46:57 -0500
+
+homelab-postfix-block-link (0.1.0) unstable; urgency=medium
+
+  * Initial release: Postfix milter add-on injecting a click-to-block
+    link into inbound mail. Wires into smtpd_milters/non_smtpd_milters
+    alongside OpenDKIM via the same idempotent postconf -e pattern
+    homelab-postfix's own postinst already uses. Requires
+    homelab-postfix and a pre-existing homelab-block-link schema (see
+    that package's own README.md "Install order" section).
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 00:00:00 -0500

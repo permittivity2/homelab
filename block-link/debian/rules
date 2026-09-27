@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/block-link.example.yml \
+		debian/homelab-block-link/usr/share/homelab-block-link/config/block-link.example.yml
+	install -D -m 644 services/block-link.yml \
+		debian/homelab-block-link/usr/share/homelab-block-link/services/block-link.yml
+	find migrations -type f -exec install -D -m 644 {} \
+		debian/homelab-block-link/usr/share/homelab-block-link/{} \;

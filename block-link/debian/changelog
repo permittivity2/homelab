@@ -1,0 +1,32 @@
+homelab-block-link (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 21:10:11 -0500
+
+homelab-block-link (0.1.1) unstable; urgency=medium
+
+  * Fix GET/POST /l/:token: block_link.pending_links.candidates is a
+    JSONB column and comes back from Mojo::Pg as raw JSON text, not an
+    inflated arrayref -- both handlers dereferenced it directly and
+    500'd on every real request. Found on first live end-to-end test.
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 20:37:40 -0500
+
+homelab-block-link (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 20:37:40 -0500
+
+homelab-block-link (0.1.0) unstable; urgency=medium
+
+  * Initial release: click-to-block-link settings backend + public
+    management page. Own `block_link` Postgres schema (domain_settings/
+    account_settings/pending_links), /internal/v1/block-link/* fronted
+    by homelab-api's /api/v1/block-link/* gateway route, and the public
+    /l/:token management page. Requires homelab-api >= 0.1.30 (the
+    gateway route) and homelab-domain-admin >= 0.1.22 (the on-behalf
+    recipient-access endpoint this service calls).
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 00:00:00 -0500

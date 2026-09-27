@@ -1,0 +1,38 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        systemctl stop homelab-postfix-block-link 2>/dev/null || true
+
+        # Deliberately NOT stripping our inet:HOST:PORT entry back out
+        # of smtpd_milters/non_smtpd_milters here -- same precedent as
+        # homelab-postfix's own postrm, which never unwinds its
+        # postconf -e additions either. milter_default_action=accept
+        # means a stale entry pointing at a now-stopped milter just logs
+        # a harmless "Connection refused" per message and is skipped,
+        # not a delivery failure. Unwiring it is a deliberate, explicit
+        # admin action (postconf -e to edit smtpd_milters/
+        # non_smtpd_milters by hand), same reasoning as never touching
+        # the bootstrapped Postgres role/grant on removal either.
+        ;;
+
+    purge)
+        rm -rf /etc/homelab/postfix-block-link
+        rm -f /etc/homelab/services/postfix-block-link.yml
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0
