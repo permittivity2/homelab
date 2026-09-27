@@ -30,6 +30,20 @@ public_base_url: https://drive.test.mailmasker.org
 # ../sso/README.md's "Wiring in a relying party").
 sso:
   base_url: YOUR_SSO_BASE_URL_HERE
+  # Optional. base_url above is a BROWSER redirect target (login/logout)
+  # and must be an address the user's own browser can reach -- once this
+  # app and homelab-sso are on separate hosts, that's a public vhost, not
+  # an internal IP. internal_base_url is for THIS app's OWN server-to-
+  # server oauth/token call and should point at homelab-sso's internal
+  # address in that case. Defaults to base_url itself (correct for the
+  # single-host case). Found live, 2026-09-26, the hard way: base_url
+  # was set to homelab-sso's internal address (server-to-server calls
+  # worked, browser redirects didn't); correcting it to the public URL
+  # then broke the server-to-server call the other way, since nothing
+  # else was covering that side. Same split already applied to
+  # homelab-roundcube's oauth_token_uri/oauth_identity_uri -- see that
+  # package's config.inc.php.template for the fuller writeup.
+  internal_base_url: YOUR_SSO_INTERNAL_BASE_URL_HERE
   client_id: drive
   client_secret: YOUR_SSO_CLIENT_SECRET_HERE
   redirect_uri: https://drive.test.mailmasker.org/oauth/callback

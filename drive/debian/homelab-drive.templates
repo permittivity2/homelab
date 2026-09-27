@@ -42,6 +42,35 @@ Description: Base URL where homelab-sso is reachable:
  Written into config.yml's sso.base_url. homelab-sso is the only place
  a user ever types a password -- this app redirects here for /login
  and /logout.
+ .
+ IMPORTANT once this app and homelab-sso are on different hosts: this
+ is a BROWSER redirect, not a server-to-server call -- it must be an
+ address the end user's own browser can actually reach (e.g.
+ homelab-sso's own public homelab-webproxy vhost, https://login.
+ example.com), never an internal-only data-plane IP/port. A raw
+ internal address here produces a login redirect the browser can't
+ connect to at all -- found live (2026-09-26) on this exact field,
+ same mistake this project's own homelab-roundcube package already
+ hit and documented for its own sso_base_url -- see that package's
+ debian/homelab-roundcube.templates for the fuller writeup. See
+ sso_internal_base_url below for this app's OWN server-to-server call.
+
+Template: homelab-drive/sso_internal_base_url
+Type: string
+Default:
+Description: Internal (server-to-server) base URL for homelab-sso (blank = same as the public URL above):
+ Written into config.yml's sso.internal_base_url only -- the one OAuth
+ call this app's own backend makes directly (exchanging a code for a
+ token), never through the end user's browser. Leave blank on a
+ single-host install (falls back to homelab-drive/sso_base_url,
+ unchanged behavior). Set this explicitly, to an internal address like
+ http://10.50.2.48:2502, once this app and homelab-sso are on separate
+ hosts -- confirmed live (2026-09-26) that reusing the PUBLIC url for
+ this call breaks once that's true, the exact same hairpin-routing
+ failure already found for homelab-roundcube's own oauth_token_uri
+ (this app's own backend calling out to its own fleet's public IP has
+ to loop back through the edge proxy to reach a different internal
+ host, which this environment's network doesn't support).
 
 Template: homelab-drive/sso_redirect_uri
 Type: string

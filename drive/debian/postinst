@@ -33,6 +33,7 @@ case "$1" in
             db_get homelab-drive/listen_port || true;     LISTEN_PORT="${RET:-2501}"
             db_get homelab-drive/advertise_host || true;  ADVERTISE_HOST="${RET:-127.0.0.1}"
             db_get homelab-drive/sso_base_url || true;      SSO_BASE_URL="${RET:-http://127.0.0.1:2502}"
+            db_get homelab-drive/sso_internal_base_url || true; SSO_INTERNAL_BASE_URL="${RET:-$SSO_BASE_URL}"
             db_get homelab-drive/sso_redirect_uri || true;  SSO_REDIRECT_URI="${RET:-https://drive.test.mailmasker.org/oauth/callback}"
             db_get homelab-drive/sso_client_secret || true; SSO_CLIENT_SECRET="$RET"
 
@@ -80,6 +81,7 @@ case "$1" in
                 -e "s#host: 127\.0\.0\.1#host: $ADVERTISE_HOST#g" \
                 -e "s#port: 2501#port: $LISTEN_PORT#g" \
                 -e "s#YOUR_SSO_BASE_URL_HERE#$SSO_BASE_URL#g" \
+                -e "s#YOUR_SSO_INTERNAL_BASE_URL_HERE#$SSO_INTERNAL_BASE_URL#g" \
                 -e "s#https://drive.test.mailmasker.org/oauth/callback#$SSO_REDIRECT_URI#g" \
                 -e "s#YOUR_SSO_CLIENT_SECRET_HERE#$SSO_CLIENT_SECRET#g" \
                 "$SHARE_DIR/config/drive.example.yml" > "$CONFIG_FILE"

@@ -8,13 +8,14 @@ use Mojo::UserAgent;
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
-use Homelab::Common::Registry qw(register lookup);
+use Homelab::Common::Registry qw(register_recurring lookup);
 use Homelab::Common::AuthClient qw(introspect);
 
 has 'pg';
 has 'api_base';
 has 'storage_path';
 has 'sso_base';
+has 'sso_internal_base';
 has 'sso_client_id';
 has 'sso_client_secret';
 has 'sso_redirect_uri';
@@ -40,6 +41,20 @@ sub startup ($self) {
     });
 
     $self->secrets([$config->{session}{secret} // die "config: session.secret is required\n"]);
+    # Distinct name, not Mojolicious's generic default ('mojolicious',
+    # shared by every homelab-* app that doesn't set this) -- same
+    # convention homelab-sso already uses for its own session cookie.
+    # Also load-bearing the moment this app is ever load-balanced across
+    # more than one instance: this session holds real OAuth login state
+    # (oauth_state, token, refresh_token -- see the /sso/callback
+    # handler below), stored server-side per-instance same as
+    # Roundcube's own PHP session was, which broke Roundcube's login
+    # under a naive round-robin pool (confirmed live 2026-09-25, fixed
+    # via homelab-webproxy's own per-site sticky_cookie support -- see
+    # that package's README). Naming this cookie now, while drive is
+    # still single-instance, means a future pool needs only one new line
+    # in sites.yml (sticky_cookie: homelab-drive) with no app change.
+    $self->sessions->cookie_name('homelab-drive');
 
     $self->pg(runtime_pg(%{ $config->{database} }));
     $self->api_base($config->{homelab_api}{base_url} // die "config: homelab_api.base_url is required\n");
@@ -50,6 +65,21 @@ sub startup ($self) {
 
     my $sso = $config->{sso} // die "config: sso.* is required (see config/drive.example.yml)\n";
     $self->sso_base($sso->{base_url} // die "config: sso.base_url is required\n");
+    # sso.base_url is a BROWSER redirect target (login/logout) and must
+    # be public; internal_base_url is for THIS app's own server-to-server
+    # exchange_code() call and should point at an internal address once
+    # this app and homelab-sso are on separate hosts. Defaults to
+    # sso_base itself (correct for the single-host case). Split out
+    # 2026-09-26 after the exact same bug already found and fixed for
+    # homelab-roundcube's oauth_token_uri/oauth_identity_uri hit this
+    # app too: sso.base_url here had been set to homelab-sso's internal
+    # address (fine for exchange_code(), wrong for the browser redirect)
+    # -- fixing THAT regressed exchange_code() in the other direction
+    # the moment sso.base_url was corrected to the public URL, since
+    # nothing else was using an internal address for the server-to-
+    # server call. See roundcube/config/config.inc.php.template's own
+    # comment on this exact split for the fuller story.
+    $self->sso_internal_base($sso->{internal_base_url} // $sso->{base_url});
     $self->sso_client_id($sso->{client_id} // die "config: sso.client_id is required\n");
     $self->sso_client_secret($sso->{client_secret} // die "config: sso.client_secret is required\n");
     $self->sso_redirect_uri($sso->{redirect_uri} // die "config: sso.redirect_uri is required\n");
@@ -61,14 +91,12 @@ sub startup ($self) {
     # address — see Homelab::Common::Registry.
     my $me = $config->{registry} // {};
     if ($me->{host} && $me->{port}) {
-        eval {
-            register(
-                api_base => $self->api_base, feature_name => 'homelab-drive',
-                host => $me->{host}, port => $me->{port}, health_check_url => '/health',
-                description => 'File storage web app + JSON API, serves /api/v1/drive/*',
-            );
-        };
-        $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
+        register_recurring(
+            api_base => $self->api_base, feature_name => 'homelab-drive',
+            host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+            description => 'File storage web app + JSON API, serves /api/v1/drive/*',
+            log => $self->log,
+        );
     }
 
     # Delivers a completed homelab-worker zip job into this user's own
@@ -452,7 +480,7 @@ sub oauth_callback ($c) {
     }
 
     my $result = exchange_code($code,
-        sso_base      => $c->app->sso_base,
+        sso_base      => $c->app->sso_internal_base,
         client_id     => $c->app->sso_client_id,
         client_secret => $c->app->sso_client_secret,
         redirect_uri  => $c->app->sso_redirect_uri,
