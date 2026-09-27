@@ -1,0 +1,5 @@
+% layout 'auth';
+% title 'Check your email';
+<h2>Check your email</h2>
+<div class="ok-banner">If an account with that login exists and has a recovery email on file, we've sent a password-reset link to it.</div>
+<p>The link expires in 1 hour and can be used once. If nothing arrives, check the address is right and that a recovery email was set on the account.</p>

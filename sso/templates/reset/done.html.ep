@@ -1,0 +1,5 @@
+% layout 'auth';
+% title 'Password updated';
+<h2>Password updated</h2>
+<div class="ok-banner">Your password has been changed. You've been signed out everywhere for security.</div>
+<p>Head back to whichever app you were using and sign in with your new password.</p>

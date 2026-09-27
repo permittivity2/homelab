@@ -1,0 +1,12 @@
+% layout 'auth';
+% title 'Forgot your password?';
+<h2>Forgot your password?</h2>
+<p>Enter your Homelab login. If it has a recovery email on file, we'll send a link to reset your password.</p>
+% if (my $error = stash 'error') {
+  <div class="error-banner"><%= $error %></div>
+% }
+<form method="post" action="/forgot">
+  <label for="email">Your login (email)</label>
+  <input type="email" id="email" name="email" required autofocus>
+  <button type="submit">Send reset link</button>
+</form>

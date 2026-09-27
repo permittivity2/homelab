@@ -55,6 +55,41 @@ unusable if the token exchange landed on another. Codes are single-use
 (`_take_code` is an atomic `DELETE ... RETURNING`) and expire quickly;
 `_purge_expired` sweeps stale rows.
 
+## Self-service password reset (2026-09-27)
+
+The login page carries a "Forgot password?" link to a small flow served
+from this same public `login.<domain>` vhost (`Controller::Reset`,
+templates under `templates/reset/`):
+
+- `GET/POST /forgot` — enter your login. Always renders the SAME "if an
+  account exists and has a recovery email, we've sent a link"
+  confirmation, whatever the real outcome, so it can't be used to
+  enumerate accounts. Only when homelab-api actually mints a token (the
+  account exists AND has a recovery address) and this instance has a
+  working mailer does an email go out.
+- `GET/POST /reset/:token` — set a new password (entered twice).
+
+This service owns only the pages and the email; the token and the
+password write are homelab-api's job — `POST /auth/password-reset/request`
+mints a one-time, 1-hour token (returned to SSO to email) and
+`/confirm` sets the new password and revokes every existing session.
+Both are system_agent-gated; SSO calls them with its host's homelab-agent
+credential (`Homelab::Common::Registry::system_agent_token`), the same
+machinery homelab-invite's own accept flow uses in reverse.
+
+The reset email is sent by `Homelab::SSO::Mailer` (a near-verbatim port
+of homelab-invite's Mailer — authenticated SMTP submission as a real
+`api.users` service mailbox, `mailer.*` in config, created via
+`homelab-cli admin users create-service-account`). `public_base_url` (the
+login.<domain> vhost) is used to build the emailed link; both are
+optional — blank leaves the flow rendering its uniform page but sending
+nothing, so the service still installs before a mailer is set up.
+
+Gotcha (found live, 2026-09-27): SSO's own host firewall
+(`/etc/nftables.conf` output chain) must allow outbound 587 to the mail
+VIP — it previously didn't, because SSO never sent mail before this
+feature. Same class as homelab-postfix's own outbound-25 note.
+
 ## Wiring in a relying party
 
 Add an entry under `clients:` in `config.yml` (see

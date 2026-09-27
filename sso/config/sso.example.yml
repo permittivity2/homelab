@@ -22,6 +22,24 @@ database_migrate:
 homelab_api:
   base_url: http://127.0.0.1:3000
 
+# THIS service's own public, browser-reachable base URL (its login.<domain>
+# vhost). Used ONLY to build the password-reset links emailed to users,
+# so it must be the public address, never an internal one. Blank disables
+# the self-service password-reset flow entirely.
+public_base_url: https://login.test.mailmasker.org
+
+# Outbound mail identity for password-reset emails -- a real api.users
+# service mailbox (created via `homelab-cli admin users
+# create-service-account`), authenticating over real SMTP submission,
+# same model as homelab-invite's own mailer. A blank smtp_password
+# leaves reset emails unsent (the /forgot page still shows its uniform
+# confirmation), so the service installs cleanly before this is set up.
+mailer:
+  email: noreply@test.mailmasker.org
+  smtp_host: 127.0.0.1
+  smtp_port: 587
+  smtp_password: YOUR_MAILER_ACCOUNT_PASSWORD_HERE
+
 server:
   listen: http://0.0.0.0:2502
   workers: 2

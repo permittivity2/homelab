@@ -31,6 +31,11 @@ case "$1" in
             db_get homelab-sso/db_host || true;             DB_HOST="${RET:-localhost}"
             db_get homelab-sso/pgbouncer_host || true;       PGBOUNCER_HOST="${RET:-localhost}"
             db_get homelab-sso/homelab_api_base_url || true; API_BASE="${RET:-http://127.0.0.1:3000}"
+            db_get homelab-sso/public_base_url || true;      PUBLIC_BASE_URL="${RET:-https://login.test.mailmasker.org}"
+            db_get homelab-sso/mailer_email || true;         MAILER_EMAIL="${RET:-noreply@test.mailmasker.org}"
+            db_get homelab-sso/mailer_smtp_host || true;     MAILER_SMTP_HOST="${RET:-127.0.0.1}"
+            db_get homelab-sso/mailer_smtp_port || true;     MAILER_SMTP_PORT="${RET:-587}"
+            db_get homelab-sso/mailer_smtp_password || true; MAILER_SMTP_PASSWORD="$RET"
             db_get homelab-sso/listen_port || true;          LISTEN_PORT="${RET:-2502}"
             db_get homelab-sso/advertise_host || true;       ADVERTISE_HOST="${RET:-127.0.0.1}"
             db_get homelab-sso/drive_redirect_uri || true;      DRIVE_REDIRECT_URI="$RET"
@@ -97,6 +102,11 @@ case "$1" in
                 -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
                 -e "s#homelab_sso_migrate#$MIGRATE_ROLE#g" \
                 -e "s#http://127\.0\.0\.1:3000#$API_BASE#g" \
+                -e "s#https://login\.test\.mailmasker\.org#$PUBLIC_BASE_URL#g" \
+                -e "s#email: noreply@test\.mailmasker\.org#email: $MAILER_EMAIL#g" \
+                -e "s#smtp_host: 127\.0\.0\.1#smtp_host: $MAILER_SMTP_HOST#g" \
+                -e "s#smtp_port: 587#smtp_port: $MAILER_SMTP_PORT#g" \
+                -e "s#YOUR_MAILER_ACCOUNT_PASSWORD_HERE#$MAILER_SMTP_PASSWORD#g" \
                 -e "s#0\.0\.0\.0:2502#0.0.0.0:$LISTEN_PORT#g" \
                 -e "s#  port: 2502#  port: $LISTEN_PORT#g" \
                 -e "s#  host: 127\.0\.0\.1#  host: $ADVERTISE_HOST#g" \

@@ -1,0 +1,13 @@
+% layout 'auth';
+% title 'Choose a new password';
+<h2>Choose a new password</h2>
+% if (my $error = stash 'error') {
+  <div class="error-banner"><%= $error %></div>
+% }
+<form method="post" action="/reset/<%= stash 'token' %>">
+  <label for="password">New password</label>
+  <input type="password" id="password" name="password" required autofocus placeholder="At least 8 characters">
+  <label for="password_confirm">Confirm new password</label>
+  <input type="password" id="password_confirm" name="password_confirm" required placeholder="Re-enter your password">
+  <button type="submit">Set new password</button>
+</form>

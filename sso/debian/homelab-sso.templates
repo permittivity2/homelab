@@ -18,6 +18,41 @@ Description: Base URL where homelab-api is reachable:
  Written into config.yml's homelab_api.base_url -- every login,
  introspect, refresh, and revoke this app does proxies through here.
 
+Template: homelab-sso/public_base_url
+Type: string
+Default: https://login.test.mailmasker.org
+Description: Public URL a browser reaches this SSO service at:
+ Its own login.<domain> vhost. Used only to build the password-reset
+ links emailed to users, so it must be the public browser-facing
+ address, never an internal one. Blank disables self-service password
+ reset.
+
+Template: homelab-sso/mailer_email
+Type: string
+Default: noreply@test.mailmasker.org
+Description: Service mailbox password-reset emails are sent FROM:
+ A real api.users identity (create it via `homelab-cli admin users
+ create-service-account`), used to send the reset-link email over
+ authenticated SMTP submission -- same model as homelab-invite's mailer.
+
+Template: homelab-sso/mailer_smtp_host
+Type: string
+Default: 127.0.0.1
+Description: SMTP submission host for password-reset email:
+
+Template: homelab-sso/mailer_smtp_port
+Type: string
+Default: 587
+Description: SMTP submission port for password-reset email:
+
+Template: homelab-sso/mailer_smtp_password
+Type: password
+Description: Password for the password-reset mailer mailbox (blank = leave unset):
+ The plaintext password printed once when that service account was
+ created. Leave blank to install now and set it later via
+ dpkg-reconfigure -- reset emails simply won't be sent until it's set
+ (the /forgot page still shows its uniform confirmation regardless).
+
 Template: homelab-sso/listen_port
 Type: string
 Default: 2502
