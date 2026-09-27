@@ -73,6 +73,40 @@ for my $site (@sites) {
         print $pfh "# and re-run homelab-webproxy-apply-sites instead. Regenerated\n";
         print $pfh "# wholesale on every run, not merged.\n";
         print $pfh "upstream $pool_name {\n";
+        # 'sticky_cookie: <NAME>' (optional) -- session affinity keyed on
+        # the app's own session cookie, via nginx's stock (no Plus, no
+        # third-party module needed -- confirmed live 2026-09-25 with a
+        # real nginx -t) ngx_http_upstream_hash_module. Needed for any
+        # pooled app that keeps server-side session state per-instance
+        # (Roundcube's own PHP file sessions; any homelab-* Mojolicious
+        # app using $c->session for browser-based OAuth login state, e.g.
+        # homelab-drive) -- a request that starts a stateful handshake on
+        # one backend and lands on a DIFFERENT one for the next leg (e.g.
+        # the SSO callback) finds no matching session and the flow fails.
+        # Confirmed live: this broke the 3x roundcube pool's OAuth login
+        # non-deterministically (~2 times out of 3) before being fixed.
+        #
+        # An EARLIER version of this script used ip_hash unconditionally
+        # for every multi-backend pool instead -- replaced here because
+        # ip_hash keys on the CLIENT'S IP, not the session, which breaks
+        # the exact same way the moment a client's IP changes mid-session
+        # (e.g. a phone moving between WiFi and cellular) even though the
+        # cookie/session itself is still perfectly valid. Hashing the
+        # session cookie survives that; only the very first request of a
+        # brand new session (before the cookie exists yet) hashes an
+        # empty value, which is harmless -- it just means every
+        # cookie-less first-hit lands on the same one pool member until
+        # that member's response sets the cookie.
+        #
+        # No 'sticky_cookie' at all means plain round-robin (nginx's own
+        # default) -- correct for a genuinely stateless pool (e.g. a pure
+        # JWT-Bearer API with no server-side session), which shouldn't
+        # pay for affinity it doesn't need.
+        if (my $cookie = $site->{sticky_cookie}) {
+            die "sites.yml: site '$domain''s 'sticky_cookie' must be a plain cookie name (letters, digits, _, -)\n"
+                unless $cookie =~ /^[A-Za-z0-9_-]+$/;
+            print $pfh "    hash \$cookie_$cookie consistent;\n";
+        }
         print $pfh "    server $_;\n" for @upstream_targets;
         print $pfh "}\n";
         close($pfh);

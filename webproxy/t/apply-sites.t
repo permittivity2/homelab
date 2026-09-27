@@ -105,16 +105,23 @@ is($after_drive, $before_drive, "drive's vhost is untouched by the second run");
 # 'upstreams' (a list) -- HA/load-balanced group, added for 3x roundcube
 # instances behind one vhost. nginx has no multi-target proxy_pass, so
 # this must generate a real upstream{} pool file and point proxy_pass
-# at its name instead of a literal host:port.
+# at its name instead of a literal host:port. 'sticky_cookie' (optional)
+# requests session-affinity hashing on that cookie's value -- covers
+# both the with- and without- cases below.
 open(my $mfh, '>', $sites_yml) or die $!;
 print $mfh <<YAML;
 letsencrypt_email: admin\@test.mailmasker.org
 sites:
   - domain: pooled.test.mailmasker.org
+    sticky_cookie: PHPSESSID
     upstreams:
       - 10.50.2.52:8080
       - 10.50.2.59:8080
       - 10.50.2.60:8080
+  - domain: stateless-pooled.test.mailmasker.org
+    upstreams:
+      - 10.50.2.52:9090
+      - 10.50.2.59:9090
 YAML
 close($mfh);
 
@@ -125,11 +132,16 @@ my $pool_conf = "$confd/pooled.test.mailmasker.org-upstream.conf";
 ok(-f $pool_conf, 'upstream pool conf file was written');
 my $pool = do { local (@ARGV, $/) = $pool_conf; <> };
 like($pool, qr/upstream pool_pooled_test_mailmasker_org \{/, 'upstream block named after the domain');
+like($pool, qr/hash \$cookie_PHPSESSID consistent;/, 'sticky_cookie requests cookie-hash affinity, keyed on that exact cookie name');
 like($pool, qr/server 10\.50\.2\.52:8080;/, 'first pool member present');
 like($pool, qr/server 10\.50\.2\.59:8080;/, 'second pool member present');
 like($pool, qr/server 10\.50\.2\.60:8080;/, 'third pool member present');
 
 my $pooled_vhost = do { local (@ARGV, $/) = "$available/pooled.test.mailmasker.org"; <> };
 like($pooled_vhost, qr{proxy_pass http://pool_pooled_test_mailmasker_org;}, 'vhost proxy_pass targets the upstream pool by name, not a literal host:port');
+
+my $stateless_pool_conf = "$confd/stateless-pooled.test.mailmasker.org-upstream.conf";
+my $stateless_pool = do { local (@ARGV, $/) = $stateless_pool_conf; <> };
+unlike($stateless_pool, qr/hash \$cookie/, 'no sticky_cookie means plain round-robin -- no hash directive at all');
 
 done_testing;
