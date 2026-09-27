@@ -4,7 +4,7 @@ use Mojo::Base 'Mojolicious', -signatures;
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
-use Homelab::Common::Registry qw(register);
+use Homelab::Common::Registry qw(register_recurring);
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::DomainAdmin::PowerDNS;
 use Homelab::DomainAdmin::App::Controller::Dkim;
@@ -48,15 +48,13 @@ sub startup ($self) {
 
     my $me = $config->{registry} // {};
     if ($me->{host} && $me->{port}) {
-        eval {
-            register(
-                api_base => $self->api_base, feature_name => 'homelab-domain-admin',
-                host => $me->{host}, port => $me->{port}, health_check_url => '/health',
-                description => 'DNS/domain/DKIM/recipient-access admin, serves /api/v1/domains/*'
-                    . ' (talks to a remote PowerDNS API - see `homelab-cli admin fleet status`)',
-            );
-        };
-        $self->log->warn("registry registration failed (continuing anyway): $@") if $@;
+        register_recurring(
+            api_base => $self->api_base, feature_name => 'homelab-domain-admin',
+            host => $me->{host}, port => $me->{port}, health_check_url => '/health',
+            description => 'DNS/domain/DKIM/recipient-access admin, serves /api/v1/domains/*'
+                . ' (talks to a remote PowerDNS API - see `homelab-cli admin fleet status`)',
+            log => $self->log,
+        );
     }
 
     # Shared per-request auth check -- every route in this service
@@ -118,6 +116,29 @@ sub startup ($self) {
         return $result->{email};
     });
 
+    # NOT a human -- checks for the system_agent role instead, same
+    # introspect()-based mechanism as the two helpers above (this
+    # service doesn't hold the JWT signing secret, unlike homelab-api's
+    # own in-process _require_system_agent). The only caller today is
+    # homelab-block-link's own web service, presenting its own host's
+    # homelab-agent credential (Homelab::Common::Registry::
+    # system_agent_token) to reach the on_behalf recipient-access
+    # route below -- same shape as homelab-invite's identical helper,
+    # reused verbatim rather than re-derived.
+    $self->helper(authenticated_system_agent => sub ($c) {
+        my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+        unless ($jwt) {
+            $c->render(json => { error => 'authentication required' }, status => 401);
+            return undef;
+        }
+        my $result = introspect($jwt, api_base => $self->api_base);
+        unless ($result && grep { $_ eq 'system_agent' } @{ $result->{roles} // [] }) {
+            $c->render(json => { error => 'system_agent role required' }, status => 403);
+            return undef;
+        }
+        return 1;
+    });
+
     # Marks that PowerDNS needs a restart before a just-written zone/
     # record NAME becomes servable (see README.md's "PowerDNS caches its
     # zone list at process start" gotcha) -- a plain upsert on a
@@ -171,6 +192,15 @@ sub startup ($self) {
     $r->get('/internal/v1/domains/recipient-access')                             ->to('recipient_access#list');
     $r->post('/internal/v1/domains/recipient-access')                            ->to('recipient_access#upsert');
     $r->delete('/internal/v1/domains/recipient-access/:recipient' => [recipient => qr/[^\/]+/])->to('recipient_access#delete_entry');
+    # Server-to-server only (system_agent role) -- the one route that
+    # can create a recipient_access row attributed to a DIFFERENT
+    # user's user_email than the caller's own. Every other route above
+    # deliberately has no such capability (see RecipientAccess.pm's own
+    # comment on `list`'s ?user= param: "no route letting them create/
+    # remove on that user's behalf"). Registered after 'mine' and the
+    # plain admin routes for readability; no ordering risk with them
+    # (distinct literal path segment, not a placeholder).
+    $r->post('/internal/v1/domains/recipient-access/on-behalf')                  ->to('recipient_access#on_behalf');
 
     # Same registration-order requirement as recipient-access above --
     # "mail-aliases" is a single path segment right where an unqualified
@@ -184,6 +214,13 @@ sub startup ($self) {
     $r->post('/internal/v1/domains/mail-aliases')                                ->to('mail_aliases#create');
     $r->patch('/internal/v1/domains/mail-aliases/:source_pattern' => [source_pattern => qr/[^\/]+/])->to('mail_aliases#update');
     $r->delete('/internal/v1/domains/mail-aliases/:source_pattern' => [source_pattern => qr/[^\/]+/])->to('mail_aliases#delete_entry');
+
+    # Same registration-order requirement as recipient-access/mail-
+    # aliases above -- "mail-managed" is a literal path segment right
+    # where an unqualified :domain catch-all would otherwise greedily
+    # match it (domain="mail-managed"). system_agent-gated, not
+    # site_admin -- see Domains::mail_managed's own comment for why.
+    $r->get('/internal/v1/domains/mail-managed/:domain' => [domain => qr/[^\/]+/])->to('domains#mail_managed');
 
     $r->get('/internal/v1/domains/:domain'    => [domain => qr/[^\/]+/])->to('domains#show');
     $r->patch('/internal/v1/domains/:domain'  => [domain => qr/[^\/]+/])->to('domains#update');

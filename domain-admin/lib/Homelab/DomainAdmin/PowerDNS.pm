@@ -61,7 +61,21 @@ sub rrset_exists ($self, $zone, $name, $type) {
 }
 
 sub create_zone ($self, $name, %opts) {
-    my $nameservers = $opts{nameservers} // ['ns-test.mailmasker.org.'];
+    # Default derived from THIS domain, not hardcoded to
+    # test.mailmasker.org's own value -- found live, 2026-09-26,
+    # onboarding test.forge.name: every domain this fleet has actually
+    # delegated so far (test.mailmasker.org -> ns-test.mailmasker.org,
+    # test.forge.name -> ns-test.forge.name, both confirmed live in
+    # production PowerDNS as real A records pointing at this fleet's
+    # own public IP) follows the same "ns-test.<zone>" convention, so
+    # that's the sensible default -- the old hardcoded literal was only
+    # ever correct for the one domain it was written for, and would
+    # have produced a self-referencing-but-wrong NS rrset (pointing at
+    # a DIFFERENT zone's nameserver name) for every domain onboarded
+    # since. Still fully overridable via the `nameservers` option (see
+    # POST /internal/v1/domains {nameservers?}) for a domain that
+    # doesn't follow this convention.
+    my $nameservers = $opts{nameservers} // ["ns-test.$name."];
     $nameservers = [ map { _fqdn($_) } @$nameservers ];
     my $tx = $self->_tx(POST => '/zones', json => {
         name        => _fqdn($name),
@@ -87,10 +101,30 @@ sub create_zone ($self, $name, %opts) {
 # already passed a pre-quoted value (starts and ends with an unescaped
 # ") is left alone rather than double-wrapped.
 sub _format_record_content ($type, $content) {
-    return $content unless $type eq 'TXT' || $type eq 'SPF';
     return $content if $content =~ /^"(?:[^"\\]|\\.)*"$/;
-    (my $escaped = $content) =~ s/([\\"])/\\$1/g;
-    return qq{"$escaped"};
+    if ($type eq 'TXT' || $type eq 'SPF') {
+        (my $escaped = $content) =~ s/([\\"])/\\$1/g;
+        return qq{"$escaped"};
+    }
+    # NS/CNAME/PTR content IS a bare hostname; MX/SRV content is "PRIO
+    # HOST"/"PRIO WEIGHT PORT HOST" with the hostname as the LAST
+    # token -- either way, PowerDNS's REST API validates that hostname
+    # against its own canonical (trailing-dot) form and rejects the
+    # whole rrset write with a confusing "Not in expected format
+    # (parsed as '...')" 422 if the submitted content doesn't already
+    # carry the dot. Found live, 2026-09-26, onboarding test.forge.
+    # name's own MX and NS records via this exact API path (test.
+    # mailmasker.org's already-existing records predate this code path
+    # entirely, seeded before this package existed -- this bug was
+    # never exercised for real until a second domain actually went
+    # through it). Harmless no-op for A/AAAA/SOA content, which never
+    # matches this branch's own record types.
+    if ($type eq 'NS' || $type eq 'CNAME' || $type eq 'PTR' || $type eq 'MX' || $type eq 'SRV') {
+        my @parts = split /\s+/, $content;
+        $parts[-1] = _fqdn($parts[-1]) if @parts;
+        return join(' ', @parts);
+    }
+    return $content;
 }
 
 # changetype REPLACE -- creates the rrset if absent, replaces its full

@@ -53,6 +53,29 @@ sub create ($c) {
     return $c->render(json => $row, status => 201);
 }
 
+# GET /internal/v1/domains/mail-managed/:domain -- system_agent-only,
+# not site_admin (unlike every other route in this controller): the
+# only caller is homelab-api's own _register (see that method's own
+# comment on _invite_recipient_domain_check), checking whether an
+# invite's recipient address is on a domain this fleet already accepts
+# mail for -- deliberately the narrowest possible read (a bare boolean,
+# not the full row show() returns) for a server-to-server credential
+# that has no business seeing every domain's dns_managed/created_by/etc.
+# mail_enabled AND active is the exact same condition
+# idx_domains_mail_lookup indexes and homelab-postfix's own
+# virtual_mailbox_domains pgsql map query filters on (see migrations/
+# 001-domains.sql) -- "managed" here means precisely "this fleet would
+# accept/deliver mail for this domain itself", nothing broader.
+sub mail_managed ($c) {
+    $c->authenticated_system_agent or return;
+    my $domain = lc($c->stash('domain'));
+    my $row = $c->app->pg->db->query(
+        'SELECT 1 FROM domainadmin.domains WHERE domain_name = ? AND mail_enabled = TRUE AND active = TRUE',
+        $domain,
+    )->hash;
+    return $c->render(json => { domain => $domain, managed => ($row ? \1 : \0) });
+}
+
 # GET /internal/v1/domains/:domain
 sub show ($c) {
     $c->authenticated_email or return;

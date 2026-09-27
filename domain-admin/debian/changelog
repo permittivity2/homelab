@@ -1,3 +1,38 @@
+homelab-domain-admin (0.1.24) unstable; urgency=medium
+
+  * Release v0.1.24
+
+ -- Gardner <gardner@homelab>  Sat, 26 Sep 2026 19:06:01 -0500
+
+homelab-domain-admin (0.1.23) unstable; urgency=medium
+
+  * Release v0.1.23
+
+ -- Gardner <gardner@homelab>  Sat, 26 Sep 2026 13:15:59 -0500
+
+homelab-domain-admin (0.1.22) unstable; urgency=medium
+
+  * Release v0.1.22
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 21:03:34 -0500
+
+homelab-domain-admin (0.1.22) unstable; urgency=medium
+
+  * Add authenticated_system_agent helper + POST /internal/v1/domains/
+    recipient-access/on-behalf (system_agent-only): the one route that
+    can create a recipient_access row attributed to a user OTHER than
+    the caller, for homelab-block-link's own anonymous-click accept
+    flow. No existing route could do this (see RecipientAccess.pm's own
+    comment on `list`'s ?user= param).
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 00:00:00 -0500
+
+homelab-domain-admin (0.1.21) unstable; urgency=medium
+
+  * Release v0.1.21
+
+ -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 14:28:53 -0500
+
 homelab-domain-admin (0.1.20) unstable; urgency=medium
 
   * Release v0.1.20

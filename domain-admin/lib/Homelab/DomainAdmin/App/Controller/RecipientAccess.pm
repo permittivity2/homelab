@@ -63,6 +63,46 @@ sub upsert ($c) {
     return $c->render(json => $row, status => 201);
 }
 
+# POST /internal/v1/domains/recipient-access/on-behalf
+# {user_email, recipient, action, reason?}
+# system_agent-only -- the one route in this controller that creates a
+# row attributed to a user_email OTHER than the caller's own, because
+# the caller here isn't a human at all (see App.pm's
+# authenticated_system_agent helper). Built for homelab-block-link's
+# own /l/:token accept flow: an anonymous mail recipient clicking a
+# link in their inbox has no JWT of their own to present, so the
+# block-link service validates its own token server-side and calls
+# here on that user's behalf -- same shape as homelab-invite's
+# /consume endpoint trusting a server-to-server caller instead of a
+# human bearer token. Same upsert semantics as the admin-tier `upsert`
+# above (re-blocking updates in place, not a 409), just with an
+# explicit target user_email instead of the (absent) caller's own.
+sub on_behalf ($c) {
+    $c->authenticated_system_agent or return;
+    my $body = $c->req->json // {};
+    my ($user_email, $recipient, $action) = @{$body}{qw(user_email recipient action)};
+    return $c->render(json => { error => 'user_email, recipient, and action are required' }, status => 400)
+        unless $user_email && $recipient && $action;
+
+    my $row = $c->app->pg->db->query(
+        q{INSERT INTO domainadmin.recipient_access (recipient, action, reason, created_by, user_email)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (recipient) DO UPDATE
+              SET action = EXCLUDED.action, reason = EXCLUDED.reason,
+                  user_email = EXCLUDED.user_email, updated_at = NOW()
+          RETURNING *},
+        $recipient, $action, $body->{reason}, $user_email, $user_email,
+    )->hash;
+    enqueue(
+        $c->app->pg->db, actor_email => $user_email, affected_user => $user_email, jti => undef,
+        action => _recipient_access_action_name($action), resource_type => 'recipient_access',
+        resource_id => $recipient, source_service => 'homelab-block-link',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { tier => 'block_link', action => $action, reason => $body->{reason} },
+    );
+    return $c->render(json => $row, status => 201);
+}
+
 # DELETE /internal/v1/domains/recipient-access/:recipient
 sub delete_entry ($c) {
     my $email = $c->authenticated_email or return;
