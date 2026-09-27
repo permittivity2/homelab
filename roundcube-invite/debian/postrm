@@ -1,0 +1,45 @@
+#!/bin/sh
+set -e
+
+RC_CONFIG=/etc/roundcube/config.inc.php
+RC_PLUGIN_DIR=/usr/share/roundcube/plugins/invite_sender
+
+case "$1" in
+    remove)
+        # The symlink's TARGET (this package's own $SHARE_DIR) is
+        # already gone or about to be by the time this runs -- remove
+        # the now-dangling link so Roundcube's own directory listing
+        # stays clean, and restore config.inc.php from the pre-edit
+        # backup this package's own postinst made. Without this,
+        # $config['plugins'] would still list 'invite_sender' pointing
+        # at a broken symlink, and Roundcube fatal-errors loading a
+        # nonexistent plugin class on every single page load -- removing
+        # this package must not leave Roundcube itself broken.
+        rm -f "$RC_PLUGIN_DIR"
+        if [ -f "$RC_CONFIG.pre-invite-sender.bak" ]; then
+            cp "$RC_CONFIG.pre-invite-sender.bak" "$RC_CONFIG"
+            PHP_VERSION="$(ls /etc/php/ 2>/dev/null | sort -V | tail -1)"
+            if [ -n "$PHP_VERSION" ]; then
+                systemctl restart "php$PHP_VERSION-fpm" 2>/dev/null || true
+            fi
+        fi
+        ;;
+
+    purge)
+        rm -f "$RC_CONFIG.pre-invite-sender.bak"
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

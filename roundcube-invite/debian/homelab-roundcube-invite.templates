@@ -1,0 +1,18 @@
+Template: homelab-roundcube-invite/api_base
+Type: string
+Default: http://127.0.0.1:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.inc.php's $config['invite_sender_api_base'] --
+ every call this plugin makes goes through homelab-api's own
+ /api/v1/invites/* gateway route, using the Bearer token Roundcube's
+ own OAuth login already holds for this session (same field/pattern as
+ the existing recipient_blocking plugin's own recipient_blocking_api_base).
+
+Template: homelab-roundcube-invite/ttl_days_hint
+Type: string
+Default: 14
+Description: Invite expiry (days) shown in the invite email's own text:
+ Cosmetic only -- the REAL expiry is enforced entirely by homelab-invite
+ itself (its own invite_ttl_days config). Keep this in sync with that
+ value by hand; a mismatch here would only ever show the wrong number
+ in the email body, never actually change how long the link stays valid.

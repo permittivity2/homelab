@@ -1,0 +1,140 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+RC_CONFIG=/etc/roundcube/config.inc.php
+# Debian's roundcube-core does NOT scan /usr/share/roundcube/plugins/
+# directly -- rcube_plugin_api::load_plugin() resolves plugins against
+# /var/lib/roundcube/plugins/ (confirmed empirically, same gotcha
+# homelab-roundcube's own postinst already documents for its
+# recipient_blocking symlink: without a symlink placed THERE, a real
+# request logs "Failed to load plugin file /var/lib/roundcube/plugins/
+# invite_sender/invite_sender.php" and the plugin silently never loads
+# -- no error surfaced to the user, just a missing "Send Invite"
+# button. This package's own first release linked into
+# /usr/share/roundcube/plugins/ instead and shipped broken as a result
+# -- fixed here to match the proven convention.)
+RC_PLUGIN_DIR=/var/lib/roundcube/plugins/invite_sender
+SHARE_DIR=/usr/share/homelab-roundcube-invite
+OWN_PLUGIN_DIR="$SHARE_DIR/plugins/invite_sender"
+
+case "$1" in
+    configure)
+        echo "homelab-roundcube-invite post-installation setup..."
+
+        # Belt-and-suspenders on top of the hard dpkg Depends on
+        # homelab-roundcube: dpkg only guarantees homelab-roundcube's
+        # OWN postinst ran, not that ITS bootstrap actually succeeded
+        # (it could have hit its own failure branch and left config.inc.
+        # php.bootstrapped unwritten -- see that package's postinst).
+        # Refuse gracefully here rather than corrupting/half-configuring
+        # a Roundcube that was never really finished, and don't fail the
+        # whole apt transaction over it -- same "warn, don't wedge"
+        # posture used elsewhere in this project.
+        if [ ! -f "$RC_CONFIG.bootstrapped" ]; then
+            echo "  homelab-roundcube is installed but not configured yet -- run"
+            echo "  'dpkg-reconfigure homelab-roundcube' first, then re-run"
+            echo "  'dpkg-reconfigure homelab-roundcube-invite'."
+            db_stop
+            exit 0
+        fi
+
+        db_get homelab-roundcube-invite/api_base || true;      API_BASE="${RET:-http://127.0.0.1:3000}"
+        db_get homelab-roundcube-invite/ttl_days_hint || true; TTL_DAYS_HINT="${RET:-14}"
+
+        # Mandatory symlink, not a copy -- Roundcube's plugin loader
+        # only resolves against /var/lib/roundcube/plugins/, not the
+        # $SHARE_DIR this package's own files actually live under (see
+        # the RC_PLUGIN_DIR comment above). Linking rather than copying
+        # means an upgrade of THIS package (new plugin code under
+        # $SHARE_DIR) takes effect immediately with no re-link needed.
+        # -f: safe to re-run on an upgrade.
+        mkdir -p "$(dirname "$RC_PLUGIN_DIR")"
+        ln -sf "$OWN_PLUGIN_DIR" "$RC_PLUGIN_DIR"
+        echo "  linked $RC_PLUGIN_DIR -> $OWN_PLUGIN_DIR"
+
+        # Backup once, not on every reconfigure -- a second run
+        # (upgrade, or dpkg-reconfigure to change api_base) must not
+        # overwrite an already-good backup with an already-edited file.
+        if [ ! -f "$RC_CONFIG.pre-invite-sender.bak" ]; then
+            cp "$RC_CONFIG" "$RC_CONFIG.pre-invite-sender.bak"
+        fi
+
+        echo "  registering invite_sender in \$config['plugins']..."
+        EDIT_RESULT="$(php "$SHARE_DIR/apply-plugin.php" "$RC_CONFIG")" || {
+            echo "  ERROR: could not add invite_sender to \$config['plugins'] -- see error above."
+            echo "         $RC_CONFIG was NOT modified. Add 'invite_sender' to its plugins"
+            echo "         array by hand, then restart php-fpm."
+            db_stop
+            exit 0
+        }
+        echo "  $EDIT_RESULT"
+
+        # Validate BEFORE reloading php-fpm -- catching a broken
+        # config.inc.php here (should be unreachable given apply-
+        # plugin.php's own preg_replace is narrowly scoped, but cheap
+        # insurance against ever leaving Roundcube 500ing) means
+        # restoring the pre-edit backup instead of reloading a broken
+        # config into every php-fpm worker.
+        if ! php -l "$RC_CONFIG" >/dev/null 2>&1; then
+            echo "  ERROR: $RC_CONFIG failed php -l after the edit -- restoring the backup."
+            cp "$RC_CONFIG.pre-invite-sender.bak" "$RC_CONFIG"
+            db_stop
+            exit 0
+        fi
+
+        # Idempotent append -- only add these two lines the first time;
+        # a dpkg-reconfigure that changes api_base needs a real sed
+        # replace, not another append (which would leave the OLD value
+        # in place, shadowed by a duplicate assignment further down the
+        # file -- PHP takes the LAST assignment, so it would silently
+        # still work, but two contradictory lines in one file is
+        # confusing to read and worth avoiding outright).
+        if grep -q "invite_sender_api_base" "$RC_CONFIG"; then
+            sed -i "s#\$config\['invite_sender_api_base'\] = '[^']*';#\$config['invite_sender_api_base'] = '$API_BASE';#" "$RC_CONFIG"
+            sed -i "s#\$config\['invite_sender_ttl_days_hint'\] = [0-9]*;#\$config['invite_sender_ttl_days_hint'] = $TTL_DAYS_HINT;#" "$RC_CONFIG"
+        else
+            {
+                echo ""
+                echo "// Added by homelab-roundcube-invite's postinst -- do not hand-edit,"
+                echo "// use dpkg-reconfigure homelab-roundcube-invite instead."
+                echo "\$config['invite_sender_api_base'] = '$API_BASE';"
+                echo "\$config['invite_sender_ttl_days_hint'] = $TTL_DAYS_HINT;"
+            } >> "$RC_CONFIG"
+        fi
+
+        if ! php -l "$RC_CONFIG" >/dev/null 2>&1; then
+            echo "  ERROR: $RC_CONFIG failed php -l after appending config -- restoring the backup."
+            cp "$RC_CONFIG.pre-invite-sender.bak" "$RC_CONFIG"
+            db_stop
+            exit 0
+        fi
+
+        PHP_VERSION="$(ls /etc/php/ 2>/dev/null | sort -V | tail -1)"
+        if [ -n "$PHP_VERSION" ]; then
+            systemctl restart "php$PHP_VERSION-fpm" \
+                || echo "  WARNING: php$PHP_VERSION-fpm restart failed -- check 'systemctl status php$PHP_VERSION-fpm' by hand."
+        else
+            echo "  WARNING: no PHP version found under /etc/php/ -- could not restart php-fpm to pick up the change."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-roundcube-invite configured."
+        echo "plugin:  $RC_PLUGIN_DIR -> $OWN_PLUGIN_DIR"
+        echo "config:  $RC_CONFIG (invite_sender_api_base/invite_sender_ttl_days_hint)"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

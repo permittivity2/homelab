@@ -1,0 +1,42 @@
+Source: homelab-roundcube-invite
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-roundcube-invite
+Architecture: all
+Depends: ${misc:Depends}, homelab-roundcube (>= 0.1.17)
+Description: "Send Invite" add-on for an already-installed homelab-roundcube
+ A pure PHP Roundcube plugin (invite_sender), shipped as its own
+ package rather than bundled into homelab-roundcube itself -- this is
+ nothing without Roundcube already installed and configured (hence the
+ hard Depends, not a Recommends), so it's an add-on in the true sense:
+ postinst verifies homelab-roundcube's own config.inc.php.bootstrapped
+ marker exists before touching anything, refusing gracefully (not
+ failing the whole apt transaction) if Roundcube isn't set up yet.
+ .
+ Adds a "Send Invite" Settings tab, calling homelab-invite's own
+ /api/v1/invites/* through homelab-api's gateway with the SAME JWT
+ Roundcube's own OAuth core already holds for this session's IMAP/SMTP
+ (same trust boundary as the existing recipient_blocking plugin, which
+ this package's own code is directly modeled on). Holds NO database
+ credential of its own -- see homelab-invite/README.md for why this
+ split was chosen over giving the plugin its own Postgres role.
+ .
+ Sends the actual invite email itself, using Roundcube's own native,
+ already-authenticated mail delivery (real DKIM alignment to the
+ sender's own domain, zero new mail-sending code) -- homelab-invite
+ only mints the token/link for this channel, unlike CLI-initiated
+ invites where homelab-invite sends the email itself.
+ .
+ Because Roundcube writes config.inc.php exactly once (a
+ .bootstrapped marker, never rewritten by dpkg-reconfigure), this
+ package's own postinst makes a structurally-anchored, idempotent edit
+ to the ALREADY-WRITTEN $config['plugins'] array to register itself --
+ the first package in this ecosystem to mutate a sibling package's live
+ config rather than only ever writing its own. See README.md for the
+ exact technique and its safety net (backs the file up first, validates
+ with php -l, restores on failure).

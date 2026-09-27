@@ -1,0 +1,2 @@
+plugins/invite_sender usr/share/homelab-roundcube-invite/plugins
+plugins/apply-plugin.php usr/share/homelab-roundcube-invite/

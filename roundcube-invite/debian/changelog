@@ -1,0 +1,27 @@
+homelab-roundcube-invite (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Fri, 25 Sep 2026 14:08:44 -0500
+
+homelab-roundcube-invite (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Fri, 25 Sep 2026 14:06:42 -0500
+
+homelab-roundcube-invite (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 15:08:09 -0500
+
+homelab-roundcube-invite (0.1.0) unstable; urgency=medium
+
+  * Initial release: "Send Invite" Settings tab, calling homelab-invite
+    via homelab-api's gateway with the session's own OAuth token. No
+    database credential of its own. Requires homelab-roundcube >=
+    0.1.17 (the instance_id/.bootstrapped marker this package's
+    postinst checks for).
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 00:00:00 -0500

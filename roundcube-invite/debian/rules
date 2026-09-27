@@ -1,0 +1,13 @@
+#!/usr/bin/make -f
+
+# No Perl/compiled content at all (unlike every other homelab-* package)
+# -- just PHP files to drop into a package-owned share directory (see
+# debian/install), symlinked into roundcube-core's own real plugin
+# directory by postinst at install time, not by debian/rules at build
+# time -- this package can't assume where a lower/where-this-ever-gets-
+# installed host's roundcube-core actually lives, and shouldn't own
+# files under another package's directory anyway.
+%:
+	dh $@
+
+override_dh_auto_test:
