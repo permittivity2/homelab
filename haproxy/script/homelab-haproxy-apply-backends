@@ -53,8 +53,15 @@ defaults
     mode    tcp
     option  tcplog
     timeout connect 5s
-    timeout client  1m
-    timeout server  1m
+    # IMAP/IMAPS connections are long-lived by design (IDLE, pauses
+    # between reading messages) -- a short client/server timeout here
+    # silently kills them mid-session, surfacing to the user as random
+    # "connection to storage server failed" errors with no log trace on
+    # the backend, since the drop happens at the proxy, not dovecot.
+    # Found live: 1m was in effect and killed IMAP sessions any time a
+    # user paused over a minute between actions.
+    timeout client  30m
+    timeout server  30m
 
 HEADER
 

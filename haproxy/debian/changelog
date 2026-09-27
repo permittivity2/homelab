@@ -1,3 +1,16 @@
+homelab-haproxy (0.1.6) unstable; urgency=medium
+
+  * Release v0.1.6
+
+ -- Gardner <gardner@homelab>  Thu, 17 Sep 2026 05:51:58 -0500
+
+homelab-haproxy (0.1.6) unstable; urgency=medium
+
+  * Raise default timeout client/server from 1m to 30m -- 1m was
+    silently killing long-lived IMAP/IMAPS sessions mid-use.
+
+ -- Gardner <gardner@homelab>  Thu, 17 Sep 2026 05:50:00 -0500
+
 homelab-haproxy (0.1.5) unstable; urgency=medium
 
   * Release v0.1.5
