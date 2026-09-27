@@ -1,0 +1,29 @@
+# gitleaks config for the homelab monorepo.
+#
+# Extends gitleaks' full default ruleset (every built-in secret detector
+# stays active across the whole repo -- see `[extend] useDefault`), and
+# adds ONE narrow allowlist: the end-to-end test suite under tests/e2e/.
+#
+# Every credential in that suite is a throwaway test-fleet login by
+# construction (the suite's entire job is exercising the disposable
+# ct-fleet -- e.g. `new_password = "..."`, `TestAdmin2026!`), never a
+# real or production secret. Real secrets live only in gitignored,
+# never-committed config (see CLAUDE.md's secret-safety notes and
+# .gitignore's `credentials*`/`secrets*`/`.env`/`*.pem` backstops).
+# Without this, gitleaks' generic-api-key rule flags those test
+# passwords -- a false positive that would otherwise keep secret-scan
+# red every time the e2e suite gains a test.
+#
+# Deliberately scoped to tests/e2e/*.py ONLY -- application/config code
+# everywhere else is still fully scanned.
+
+title = "homelab"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Throwaway test-fleet credentials in the e2e regression suite are not real secrets"
+paths = [
+    '''tests/e2e/.*\.py''',
+]
