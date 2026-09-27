@@ -236,7 +236,7 @@ def cmd_configure(args):
 def cmd_register(args):
     password = args.password or getpass.getpass("Password: ")
     try:
-        result = _client(args).register(args.email, password)
+        result = _client(args).register(args.email, password, invite_token=args.invite_token)
     except ApiError as e:
         _emit_error(args, f"Registration failed: {e.message}")
         return 1
@@ -419,6 +419,37 @@ def cmd_admin_agent_enroll(args):
     print()
     print("Preseed this on the new host BEFORE installing homelab-agent, e.g.:")
     print(f"  echo 'homelab-agent homelab-agent/enrollment_code password {result['code']}' | sudo debconf-set-selections")
+    return 0
+
+
+def cmd_admin_block_link_domain_show(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        d = _client(args).block_link_domain_show(session["token"], args.domain_name)
+    except ApiError as e:
+        _emit_error(args, f"Could not show domain block-link setting: {e.message}")
+        return 1
+    if _emit(args, d):
+        return 0
+    for key in ("domain_name", "enabled", "mode", "updated_by_email", "updated_at"):
+        print(f"{key}: {d.get(key)}")
+    return 0
+
+
+def cmd_admin_block_link_domain_set(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).block_link_domain_set(session["token"], args.domain_name, args.enabled, args.mode)
+    except ApiError as e:
+        _emit_error(args, f"Could not set domain block-link setting: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"{args.domain_name}: enabled={args.enabled} mode={args.mode}")
     return 0
 
 
@@ -1053,6 +1084,45 @@ def cmd_mail_blocked(args):
     return 0
 
 
+def cmd_mail_block_link_show(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        setting = _client(args).block_link_show(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not show block-link setting: {e.message}")
+        return 1
+    if _emit(args, setting):
+        return 0
+    print(f"enabled: {setting.get('enabled')} (domain default: {setting.get('domain_default')})")
+    print(f"mode: {setting.get('mode')}")
+    return 0
+
+
+def _cmd_mail_block_link_set(args, enabled):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).block_link_set(session["token"], enabled)
+    except ApiError as e:
+        _emit_error(args, f"Could not update block-link setting: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Block-link {'enabled' if enabled else 'disabled'} for your account")
+    return 0
+
+
+def cmd_mail_block_link_enable(args):
+    return _cmd_mail_block_link_set(args, True)
+
+
+def cmd_mail_block_link_disable(args):
+    return _cmd_mail_block_link_set(args, False)
+
+
 # --- drive: homelab-api's /api/v1/drive/* gateway -> homelab-drive's
 # own JSON API (see ../../drive/README.md's "JSON API" section). -------
 
@@ -1235,6 +1305,96 @@ def cmd_jobs_download(args):
     if _emit(args, {"downloaded_to": dest, "size_bytes": Path(dest).stat().st_size}):
         return 0
     print(f"Downloaded to {dest}")
+    return 0
+
+
+# --- invites: send/list/revoke your own, plus site_admin-only quota
+# management -- see ../../invite/README.md. Mixed self-service +
+# admin-gated-by-flag shape, same as `mail`/`jobs`/`sessions` above, not
+# `dns`'s all-site_admin shape (see ../../invite/README.md's API
+# section for the exact server-side gating this client just calls
+# through to). ---
+def cmd_invite_send(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).invite_send(session["token"], args.to, message=args.message)
+    except ApiError as e:
+        _emit_error(args, f"Could not send invite: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Invite sent to {args.to} (expires {result.get('expires_at')})")
+    print(result.get("url", ""))
+    return 0
+
+
+def cmd_invite_list(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        invites = _client(args).invite_list(session["token"], all=args.all)
+    except ApiError as e:
+        _emit_error(args, f"Could not list invites: {e.message}")
+        return 1
+    if _emit(args, invites):
+        return 0
+    if not invites:
+        print("(no invites)")
+        return 0
+    rows = [
+        [i["id"], i["recipient_email"], i["status"], i["sender_email"], i["created_at"]]
+        for i in invites
+    ]
+    _print_table(["ID", "RECIPIENT", "STATUS", "SENDER", "CREATED"], rows)
+    return 0
+
+
+def cmd_invite_revoke(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).invite_revoke(session["token"], args.id, user=args.user)
+    except ApiError as e:
+        _emit_error(args, f"Could not revoke invite: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Revoked invite {args.id}.")
+    return 0
+
+
+def cmd_invite_quota_show(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        quota = _client(args).invite_quota_show(session["token"], user=args.user)
+    except ApiError as e:
+        _emit_error(args, f"Could not show quota: {e.message}")
+        return 1
+    if _emit(args, quota):
+        return 0
+    print(f"max_pending: {quota.get('max_pending')}")
+    print(f"max_per_day: {quota.get('max_per_day')}")
+    return 0
+
+
+def cmd_invite_quota_set(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).invite_quota_set(session["token"], args.user, args.max_pending, args.max_per_day)
+    except ApiError as e:
+        _emit_error(args, f"Could not set quota: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Set quota for {args.user}: max_pending={args.max_pending}, max_per_day={args.max_per_day}")
     return 0
 
 
@@ -1481,6 +1641,24 @@ def cmd_admin_users_list(args):
     return 0
 
 
+def cmd_admin_users_create_service_account(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).admin_create_service_account(session["token"], args.email, args.password)
+    except ApiError as e:
+        _emit_error(args, f"Could not create account: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    if args.password:
+        print(f"Created {result['email']} (id {result['id']})")
+    else:
+        print(f"Created {result['email']} (id {result['id']}) with generated password: {result['password']}")
+    return 0
+
+
 def cmd_admin_grant_role(args):
     session = _require_session(args)
     if not session:
@@ -1704,6 +1882,7 @@ def build_parser():
     p = sub.add_parser("register", help="Create a new account")
     p.add_argument("email")
     p.add_argument("--password", help="Prompted for if omitted")
+    p.add_argument("--invite-token", help="Required if the server has auth.require_invite enabled (see 'invite send')")
     p.set_defaults(func=cmd_register)
 
     p = sub.add_parser("login", help="Log in as an account and make it the active profile (see 'profile list' for every stored login)")
@@ -1920,6 +2099,18 @@ def build_parser():
     p.add_argument("--search", help="Only show addresses containing this substring")
     p.set_defaults(func=cmd_mail_blocked)
 
+    block_link = mail_sub.add_parser(
+        "block-link",
+        help="Your own click-to-block-from-inbox setting (see 'admin block-link domain' for the per-domain default/mode)",
+    )
+    block_link_sub = block_link.add_subparsers(dest="mail_block_link_command", required=True)
+    p = block_link_sub.add_parser("show", help="Show your effective setting (your own override, or the domain default if unset)")
+    p.set_defaults(func=cmd_mail_block_link_show)
+    p = block_link_sub.add_parser("enable", help="Turn on click-to-block links for your account, overriding the domain default")
+    p.set_defaults(func=cmd_mail_block_link_enable)
+    p = block_link_sub.add_parser("disable", help="Turn off click-to-block links for your account, overriding the domain default")
+    p.set_defaults(func=cmd_mail_block_link_disable)
+
     drive = sub.add_parser("drive", help="File storage, via homelab-api's drive gateway")
     drive_sub = drive.add_subparsers(dest="drive_command", required=True)
 
@@ -1968,6 +2159,36 @@ def build_parser():
     p.add_argument("--output", help="Destination path (defaults to the job's own output_name)")
     p.set_defaults(func=cmd_jobs_download)
 
+    invite = sub.add_parser("invite", help="Invite someone, via homelab-api's invites gateway -> homelab-invite")
+    invite_sub = invite.add_subparsers(dest="invite_command", required=True)
+
+    p = invite_sub.add_parser("send", help="Send an invite")
+    p.add_argument("--to", required=True, help="Recipient email address")
+    p.add_argument("--message", help="Optional personal note, shown on the acceptance page")
+    p.set_defaults(func=cmd_invite_send)
+
+    p = invite_sub.add_parser("list", help="List invites (your own by default; --all requires site_admin)")
+    p.add_argument("--all", action="store_true", help="List every user's invites, not just your own (site_admin only)")
+    p.set_defaults(func=cmd_invite_list)
+
+    p = invite_sub.add_parser("revoke", help="Revoke a pending invite")
+    p.add_argument("id")
+    p.add_argument("--user", help="Revoke on behalf of this sender instead of yourself (site_admin only)")
+    p.set_defaults(func=cmd_invite_revoke)
+
+    invite_quota = invite_sub.add_parser("quota", help="Show or set invite quotas (site_admin required to set, or to show anyone but yourself)")
+    invite_quota_sub = invite_quota.add_subparsers(dest="invite_quota_command", required=True)
+
+    p = invite_quota_sub.add_parser("show", help="Show effective quota (your own by default)")
+    p.add_argument("--user", help="Show this sender's quota instead of your own (site_admin only)")
+    p.set_defaults(func=cmd_invite_quota_show)
+
+    p = invite_quota_sub.add_parser("set", help="Set a per-sender quota override (site_admin only)")
+    p.add_argument("--user", required=True)
+    p.add_argument("--max-pending", type=int, required=True, dest="max_pending")
+    p.add_argument("--max-per-day", type=int, required=True, dest="max_per_day")
+    p.set_defaults(func=cmd_invite_quota_set)
+
     sessions = sub.add_parser("sessions", help="See and revoke active login sessions (device/IP tracking)")
     sessions_sub = sessions.add_subparsers(dest="sessions_command", required=True)
 
@@ -1999,6 +2220,17 @@ def build_parser():
 
     p = users_sub.add_parser("list", help="List every user and their roles")
     p.set_defaults(func=cmd_admin_users_list)
+
+    p = users_sub.add_parser(
+        "create-service-account",
+        help="Create an account with no invite required (system mailboxes, operator/test accounts on a fleet-managed domain)",
+    )
+    p.add_argument("--email", required=True)
+    p.add_argument(
+        "--password",
+        help="Use this password instead of generating a random one (needed for an account a human/test suite must log into)",
+    )
+    p.set_defaults(func=cmd_admin_users_create_service_account)
 
     # No choices=KNOWN_ROLES here (there used to be one) -- `admin roles
     # add` below means the set of real roles is no longer just the two
@@ -2055,6 +2287,26 @@ def build_parser():
     p.add_argument("hostname", help="The host's own logical name, e.g. 'ct07' -- must match what its agent is configured with")
     p.add_argument("--ttl-minutes", type=int, help="How long the code stays redeemable (default: 10)")
     p.set_defaults(func=cmd_admin_agent_enroll)
+
+    block_link_admin = admin_sub.add_parser(
+        "block-link",
+        help="Per-domain click-to-block-from-inbox defaults (see 'mail block-link' for a user's own override)",
+    )
+    block_link_admin_sub = block_link_admin.add_subparsers(dest="admin_block_link_command", required=True)
+    domain = block_link_admin_sub.add_parser("domain", help="Per-domain default enabled/mode")
+    domain_sub = domain.add_subparsers(dest="admin_block_link_domain_command", required=True)
+
+    p = domain_sub.add_parser("show", help="Show a domain's click-to-block-link default")
+    p.add_argument("domain_name")
+    p.set_defaults(func=cmd_admin_block_link_domain_show)
+
+    p = domain_sub.add_parser("set", help="Set a domain's click-to-block-link default")
+    p.add_argument("domain_name")
+    enabled_group = p.add_mutually_exclusive_group(required=True)
+    enabled_group.add_argument("--enabled", dest="enabled", action="store_true", help="Inject links by default for accounts on this domain")
+    enabled_group.add_argument("--disabled", dest="enabled", action="store_false", help="Do not inject links by default for accounts on this domain")
+    p.add_argument("--mode", choices=["header", "body", "both"], required=True, help="How the link is injected -- header only, a plain-text body footer, or both")
+    p.set_defaults(func=cmd_admin_block_link_domain_set)
 
     fleet = admin_sub.add_parser(
         "fleet",

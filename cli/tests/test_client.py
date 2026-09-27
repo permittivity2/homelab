@@ -28,6 +28,18 @@ def test_login_success(client):
     assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/auth/login")
 
 
+def test_register_without_invite_token_omits_it_from_payload(client):
+    with patch("requests.request", return_value=_mock_response(200, {"email": "a@b.com", "id": 1})) as m:
+        client.register("a@b.com", "pw")
+    assert m.call_args.kwargs["json"] == {"email": "a@b.com", "password": "pw"}
+
+
+def test_register_with_invite_token_includes_it_in_payload(client):
+    with patch("requests.request", return_value=_mock_response(200, {"email": "a@b.com", "id": 1})) as m:
+        client.register("a@b.com", "pw", invite_token="abc123")
+    assert m.call_args.kwargs["json"] == {"email": "a@b.com", "password": "pw", "invite_token": "abc123"}
+
+
 def test_login_failure_raises_api_error_with_message(client):
     with patch("requests.request", return_value=_mock_response(401, {"error": "invalid email or password"})):
         with pytest.raises(ApiError) as exc_info:
@@ -219,6 +231,32 @@ def test_mail_blocked_with_search(client):
     with patch("requests.request", return_value=_mock_response(200, [])) as m:
         client.mail_blocked("t", q="spam")
     assert m.call_args.kwargs["params"] == {"q": "spam"}
+
+
+def test_block_link_show_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, {"enabled": False, "mode": "header"})) as m:
+        client.block_link_show("t")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/block-link/account")
+
+
+def test_block_link_set_sends_enabled(client):
+    with patch("requests.request", return_value=_mock_response(200, {"enabled": True})) as m:
+        client.block_link_set("t", True)
+    assert m.call_args.args[:2] == ("PUT", "http://localhost:3000/api/v1/block-link/account")
+    assert m.call_args.kwargs["json"] == {"enabled": True}
+
+
+def test_block_link_domain_show_builds_correct_path(client):
+    with patch("requests.request", return_value=_mock_response(200, {"domain_name": "example.org"})) as m:
+        client.block_link_domain_show("t", "example.org")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/block-link/domains/example.org")
+
+
+def test_block_link_domain_set_sends_enabled_and_mode(client):
+    with patch("requests.request", return_value=_mock_response(200, {})) as m:
+        client.block_link_domain_set("t", "example.org", True, "both")
+    assert m.call_args.args[:2] == ("PUT", "http://localhost:3000/api/v1/block-link/domains/example.org")
+    assert m.call_args.kwargs["json"] == {"enabled": True, "mode": "both"}
 
 
 def test_api_base_trailing_slash_is_stripped():

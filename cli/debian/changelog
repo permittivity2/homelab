@@ -1,3 +1,42 @@
+homelab-cli (0.6.2) unstable; urgency=medium
+
+  * Release v0.6.2
+
+ -- Gardner <gardner@homelab>  Sat, 26 Sep 2026 19:08:26 -0500
+
+homelab-cli (0.6.1) unstable; urgency=medium
+
+  * Release v0.6.1
+
+ -- Gardner <gardner@homelab>  Fri, 25 Sep 2026 15:29:12 -0500
+
+homelab-cli (0.6.0) unstable; urgency=medium
+
+  * Release v0.6.0
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 20:49:33 -0500
+
+homelab-cli (0.6.0) unstable; urgency=medium
+
+  * Add `mail block-link show/enable/disable` (self-service) and
+    `admin block-link domain show/set` (site_admin), via homelab-api's
+    new /api/v1/block-link/* gateway -> homelab-block-link.
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 20:49:26 -0500
+
+homelab-cli (0.5.0) unstable; urgency=medium
+
+  * Release v0.5.0
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 15:42:08 -0500
+
+homelab-cli (0.5.0) unstable; urgency=medium
+
+  * Add `invite send/list/revoke/quota show/quota set`, via homelab-api's
+    new /api/v1/invites/* gateway -> homelab-invite.
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 00:00:00 -0500
+
 homelab-cli (0.4.0) unstable; urgency=medium
 
   * Release v0.4.0

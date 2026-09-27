@@ -121,8 +121,11 @@ class Client:
         return {"Authorization": f"Bearer {token}", **extra}
 
     # --- Auth -----------------------------------------------------------
-    def register(self, email, password):
-        return self._request("POST", "/api/v1/auth/register", json={"email": email, "password": password})
+    def register(self, email, password, invite_token=None):
+        payload = {"email": email, "password": password}
+        if invite_token:
+            payload["invite_token"] = invite_token
+        return self._request("POST", "/api/v1/auth/register", json=payload)
 
     def login(self, email, password):
         return self._request("POST", "/api/v1/auth/login", json={"email": email, "password": password})
@@ -213,6 +216,21 @@ class Client:
 
     def admin_list_roles(self, token):
         return self._request("GET", "/api/v1/admin/roles", headers=self._auth(token))
+
+    # site_admin-only, no invite_token/require_invite gating -- see
+    # App.pm's own _admin_create_service_account comment for why this
+    # is the right bypass for a system mailbox (invites@<domain>) OR an
+    # operator/test account that needs to live on a domain this fleet
+    # manages mail for (invite acceptance now actively rejects exactly
+    # that -- see _invite_recipient_domain_check). password is optional:
+    # omitted, the server generates and returns one (a pure system
+    # identity that should never have a human-typed password); given,
+    # it's used as-is.
+    def admin_create_service_account(self, token, email, password=None):
+        body = {"email": email}
+        if password:
+            body["password"] = password
+        return self._request("POST", "/api/v1/admin/users/service-account", headers=self._auth(token), json=body)
 
     def admin_create_role(self, token, name, description=None):
         body = {"name": name}
@@ -409,6 +427,26 @@ class Client:
         params = {"q": q} if q else {}
         return self._request("GET", "/api/v1/domains/recipient-access/mine", headers=self._auth(token), params=params)
 
+    # --- Block-link, via homelab-api's /api/v1/block-link/* gateway ->
+    # homelab-block-link (see ../../block-link/README.md). The account
+    # methods are self-service (any logged-in user, own account only);
+    # the domain methods are site_admin-gated server-side, same
+    # enforcement shape as the dns_* domain methods above. ---
+    def block_link_show(self, token):
+        return self._request("GET", "/api/v1/block-link/account", headers=self._auth(token))
+
+    def block_link_set(self, token, enabled):
+        return self._request("PUT", "/api/v1/block-link/account", headers=self._auth(token), json={"enabled": enabled})
+
+    def block_link_domain_show(self, token, domain_name):
+        return self._request("GET", f"/api/v1/block-link/domains/{domain_name}", headers=self._auth(token))
+
+    def block_link_domain_set(self, token, domain_name, enabled, mode):
+        return self._request(
+            "PUT", f"/api/v1/block-link/domains/{domain_name}", headers=self._auth(token),
+            json={"enabled": enabled, "mode": mode},
+        )
+
     # --- Jobs, via homelab-api's /api/v1/jobs/* gateway -> homelab-worker
     # (see ../../worker/README.md). A generic background-job engine --
     # zip-and-download (submitted by homelab-drive, not this CLI) is the
@@ -438,6 +476,39 @@ class Client:
         with open(dest_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
+
+    # --- Invites, via homelab-api's /api/v1/invites/* gateway ->
+    # homelab-invite (see ../../invite/README.md). channel is always
+    # 'cli' here (homelab-invite sends the actual email itself for this
+    # channel) -- 'roundcube_plugin' is only ever set by the Roundcube
+    # add-on, which sends the email itself instead. ---
+    def invite_send(self, token, recipient_email, message=None):
+        payload = {"recipient_email": recipient_email, "channel": "cli"}
+        if message:
+            payload["message"] = message
+        return self._request("POST", "/api/v1/invites", headers=self._auth(token), json=payload)
+
+    def invite_list(self, token, all=False):
+        params = {"all": "true"} if all else {}
+        return self._request("GET", "/api/v1/invites", headers=self._auth(token), params=params)
+
+    def invite_revoke(self, token, invite_id, user=None):
+        params = {"user": user} if user else {}
+        return self._request("DELETE", f"/api/v1/invites/{invite_id}", headers=self._auth(token), params=params)
+
+    # No ?user= param the way sessions_list/revoke have -- homelab-invite
+    # exposes two distinct routes instead (GET /quota for the caller's
+    # own effective quota, GET /quota/:sender_email for a specific one,
+    # site_admin-only -- see invite/README.md's API section), so which
+    # URL to call is decided here rather than always hitting one path
+    # with an optional filter.
+    def invite_quota_show(self, token, user=None):
+        path = f"/api/v1/invites/quota/{user}" if user else "/api/v1/invites/quota"
+        return self._request("GET", path, headers=self._auth(token))
+
+    def invite_quota_set(self, token, user, max_pending, max_per_day):
+        payload = {"max_pending": max_pending, "max_per_day": max_per_day}
+        return self._request("PUT", f"/api/v1/invites/quota/{user}", headers=self._auth(token), json=payload)
 
 
 def _error_message(resp):
