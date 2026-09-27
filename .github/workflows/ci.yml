@@ -1,13 +1,28 @@
 name: CI
 
-# Package-local unit tests only — these must run without any live
-# infrastructure. The full tests/e2e/ regression suite needs a real,
-# pre-provisioned host (test-static-internet-ip) and is run separately,
-# on-demand/scheduled, not from these runners. See CLAUDE.md.
+# Package-local unit tests (perl-unit-tests / python-unit-tests) run on
+# every push/PR on GitHub-hosted runners and need no live infrastructure.
+# e2e-suite-lint below only collects/lints tests/e2e/ on those same
+# hosted runners (still no live infra, syntax-check only).
+#
+# e2e-suite-live actually RUNS tests/e2e/ for real against the live
+# ct-fleet test environment (see tests/e2e/env.example.yml) -- but only
+# on the nightly `schedule:` below or a manual workflow_dispatch, and
+# only on a registered self-hosted runner that already has real SSH
+# access to the fleet configured, since GitHub's hosted runners have no
+# path into this private network at all. See CLAUDE.md and
+# tests/e2e/README.md for the full story, including why that job may
+# not have an actual runner to pick it up yet.
 
 on:
   push:
   pull_request:
+  schedule:
+    # Nightly real run of tests/e2e/ (e2e-suite-live below). Off the
+    # hour on purpose -- avoids the :00 load spike GitHub's own docs
+    # warn scheduled workflows pile onto.
+    - cron: "17 5 * * *"
+  workflow_dispatch:
 
 jobs:
   secret-scan:
@@ -110,3 +125,46 @@ jobs:
           python-version: "3.12"
       - run: pip install -r tests/e2e/requirements.txt
       - run: python -m pytest tests/e2e/ --collect-only
+
+  e2e-suite-live:
+    # The real thing: actually runs tests/e2e/ against the live ct-fleet
+    # test environment (tests/e2e/env.example.yml), not just collecting
+    # it. Deliberately gated to the nightly schedule or a manual
+    # workflow_dispatch -- never push/pull_request -- because this needs
+    # real SSH access into the fleet, and a random PR from this
+    # workflow's push/pull_request triggers must not get that.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # No GitHub-hosted runner has (or should have) a path into this
+    # private fleet -- `ubuntu-latest` is an ephemeral VM with no route
+    # to homelab-ct0X at all, and this repo has no secrets-based
+    # SSH-key-injection convention to bridge that gap (checked: the only
+    # secret used anywhere in this workflow is the built-in
+    # GITHUB_TOKEN gitleaks needs above, and `gh api
+    # repos/<owner>/<repo>/actions/runners` currently lists zero
+    # self-hosted runners registered for this repo). So this targets a
+    # self-hosted runner instead.
+    #
+    # For this job to actually execute, someone must register a
+    # self-hosted runner carrying the `homelab-fleet` label against
+    # this repo (Settings -> Actions -> Runners -> New self-hosted
+    # runner), on a machine that already has working SSH access to the
+    # ct-fleet hosts -- the same homelab-ctNN aliases
+    # tests/e2e/env.example.yml's ct-fleet target uses (e.g. the admin
+    # workstation's ~/.ssh/config.d/homelab-ct.conf already has these).
+    # Until that registration exists, this job has no runner to claim
+    # it and just sits queued forever -- this is scaffolding for that
+    # runner, not yet a working pipeline.
+    runs-on: [self-hosted, homelab-fleet]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r tests/e2e/requirements.txt
+      - name: Point the suite at the live ct-fleet target
+        # No secrets to fill in -- env.example.yml already carries the
+        # real ct-fleet hostnames (see its own header comment: "No
+        # secrets belong here -- hostnames/ports only"). This mirrors
+        # the Setup step in tests/e2e/README.md.
+        run: cp tests/e2e/env.example.yml tests/e2e/env.yml
+      - run: python -m pytest tests/e2e/

@@ -33,11 +33,11 @@ path specifically, which is a real, deliberately-accepted reduction in
 what this file can verify, not an oversight.
 """
 
-import subprocess
 import time
 import urllib.error
 import urllib.request
 
+from conftest import register_account, retry_open
 from test_sso_flow import DRIVE_LOGIN_URL, SSO_URL, _new_opener, _submit_credentials
 
 BASE_URL = "https://mail.test.mailmasker.org"
@@ -69,7 +69,7 @@ def test_bare_visit_auto_redirects_to_sso():
     # as a normal response — the HTTPError object itself is what carries
     # the real status/headers here, not a separate response object.
     try:
-        resp = opener.open(f"{BASE_URL}/", timeout=15)
+        resp = retry_open(opener.open, f"{BASE_URL}/", timeout=15)
         status, headers = resp.status, resp.headers
     except urllib.error.HTTPError as e:
         status, headers = e.code, e.headers
@@ -92,16 +92,12 @@ def test_live_drive_session_reaches_inbox_on_a_bare_mail_visit(ssh_host):
     history for why)."""
     email = f"e2e-roundcube-bare-{int(time.time())}@test.mailmasker.org"
     password = "E2eRoundcubeBareTest1Aa"
-    result = subprocess.run(
-        ["ssh", ssh_host, "homelab-cli", "register", email, "--password", password],
-        capture_output=True, text=True, timeout=20,
-    )
-    assert result.returncode == 0, f"test account registration failed: {result.stderr}"
+    register_account(ssh_host, email, password)
 
     opener = _new_opener()
     _submit_credentials(opener, DRIVE_LOGIN_URL, email, password)
 
-    mail_html = opener.open(f"{BASE_URL}/", timeout=15).read().decode()
+    mail_html = retry_open(opener.open, f"{BASE_URL}/", timeout=15).read().decode()
     assert "Inbox" in mail_html or "taskbar" in mail_html, (
         "a live Drive session did not carry over to a bare Mail visit — "
         "check oauth_login_redirect in roundcube's config.inc.php"

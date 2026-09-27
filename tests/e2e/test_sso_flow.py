@@ -33,12 +33,13 @@ of this file took that shortcut and got a false failure as a result.
 import html
 import http.cookiejar
 import re
-import subprocess
 import time
 import urllib.parse
 import urllib.request
 
 import pytest
+
+from conftest import register_account, retry_open
 
 DRIVE_URL = "https://drive.test.mailmasker.org"
 MAIL_URL = "https://mail.test.mailmasker.org"
@@ -55,11 +56,7 @@ def sso_account(ssh_host):
     interfere with each other's IdP session state)."""
     email = f"e2e-sso-flow-{int(time.time() * 1000)}@test.mailmasker.org"
     password = "E2eSsoFlowTest1Aa"
-    result = subprocess.run(
-        ["ssh", ssh_host, "homelab-cli", "register", email, "--password", password],
-        capture_output=True, text=True, timeout=20,
-    )
-    assert result.returncode == 0, f"test account registration failed: {result.stderr}"
+    register_account(ssh_host, email, password)
     return email, password
 
 
@@ -74,7 +71,7 @@ def _start_login(opener, entry_url):
     the whole redirect chain (app -> homelab-sso -> back to the app) and
     returns (True, final_html). With no session, it stops at
     homelab-sso's own login form and returns (False, login_form_html)."""
-    resp = opener.open(entry_url, timeout=15)
+    resp = retry_open(opener.open, entry_url, timeout=15)
     page_html = resp.read().decode()
     return (not resp.geturl().startswith(SSO_URL)), page_html
 
@@ -86,7 +83,7 @@ def _submit_credentials(opener, sso_login_form_url, email, password):
     chain to completion. Returns the final page's HTML."""
     # homelab-sso's login form posts back to /oauth/authorize with
     # client_id/redirect_uri/state carried as hidden fields.
-    resp = opener.open(sso_login_form_url, timeout=15)
+    resp = retry_open(opener.open, sso_login_form_url, timeout=15)
     page_html = resp.read().decode()
     # html.unescape() the scraped values: Mojolicious's <%= %> HTML-escapes
     # interpolated values (see sso/templates/oauth/login.html.ep), so a
@@ -100,7 +97,7 @@ def _submit_credentials(opener, sso_login_form_url, email, password):
     data = urllib.parse.urlencode({**hidden, "email": email, "password": password}).encode()
     req = urllib.request.Request(f"{SSO_URL}/oauth/authorize", data=data, method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    resp = opener.open(req, timeout=15)
+    resp = retry_open(opener.open, req, timeout=15)
     return resp.read().decode()
 
 
@@ -146,7 +143,7 @@ def test_logout_via_drive_kills_roundcube_session(sso_account):
     assert landed, "setup failed: Roundcube should already be silently logged in before testing logout"
 
     req = urllib.request.Request(f"{DRIVE_URL}/logout", data=b"", method="POST")
-    opener.open(req, timeout=15).read()
+    retry_open(opener.open, req, timeout=15).read()
 
     landed, _ = _start_login(opener, ROUNDCUBE_LOGIN_URL)
     assert not landed, "logging out via Drive did not kill the shared session -- Roundcube could still silently re-authenticate"
@@ -169,12 +166,12 @@ def test_logout_via_roundcube_kills_drive_session(sso_account):
     # Roundcube's own logout needs a real CSRF _token from a real
     # Roundcube-rendered page first -- core rejects a bare ?_task=logout
     # with no/wrong token rather than actually logging out.
-    mail_html = opener.open(f"{MAIL_URL}/", timeout=15).read().decode()
+    mail_html = retry_open(opener.open, f"{MAIL_URL}/", timeout=15).read().decode()
     m = re.search(r'"request_token"\s*:\s*"([a-zA-Z0-9]+)"', mail_html)
     assert m, f"no request_token found on Roundcube's own page -- can't drive a real logout without it: {mail_html[:300]}"
     token = m.group(1)
 
-    logout_html = opener.open(f"{MAIL_URL}/?_task=logout&_token={token}", timeout=15).read().decode()
+    logout_html = retry_open(opener.open, f"{MAIL_URL}/?_task=logout&_token={token}", timeout=15).read().decode()
     # Now that oauth_login_redirect is true (see roundcube/README.md),
     # the final landing page can legitimately be EITHER Roundcube's own
     # login page OR homelab-sso's: logout_after() redirects through

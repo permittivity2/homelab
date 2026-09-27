@@ -32,15 +32,22 @@ package (see dovecot/README.md's Gotchas section for the full writeup):
     it delivers over real LMTP, not IMAP, so it fails the same way a
     real inbound email would if this regresses.
 
-External connectivity is NOT exercised here — the same upstream firewall
-blocker documented for ports 80/443 (see webproxy/README.md) also times
-out ports 143/993 from outside the network, confirmed 2026-09-09; ss -tlnp
-on the host itself confirms dovecot IS genuinely listening on 0.0.0.0.
-This test forwards the real IMAPS port through the existing SSH channel
-instead — that still exercises every line of homelab-dovecot's own
-config (TLS handshake, SASL PLAIN, the SQL passdb round trip, Maildir
-storage) end to end; only "is the host reachable from the raw internet"
-is out of scope until that firewall opens.
+External (raw-internet) reachability is NOT exercised here — this test
+forwards the real IMAPS port through the existing SSH channel instead,
+to the real HAProxy IMAPS VIP (see conftest.py's imaps_vip fixture), not
+any one pool member's own loopback — that still exercises every real
+line of the stack this suite can reach: HAProxy's own frontend, its
+load-balancing across the live 3-node Dovecot pool, and every line of
+homelab-dovecot's own config (TLS handshake, SASL PLAIN, the SQL passdb
+round trip, Maildir storage) end to end. This file previously asserted
+ports 143/993 were unreachable from outside the network "confirmed
+2026-09-09" — that claim was never re-verified after this same kind of
+"external timeout" turned out, on 2026-09-25, to be this admin
+workstation's own restricted egress in an unrelated case (port 80 to
+this same fleet), not a real fleet-side block. Treat "is the raw
+internet path open" as genuinely unknown, not confirmed-closed, until
+someone tests it directly from an actual external network the way that
+port-80 case eventually was.
 """
 
 import contextlib
@@ -53,20 +60,34 @@ import time
 
 import pytest
 
+from conftest import register_account
+
 LOCAL_FORWARD_PORT = 19993
 LOCAL_LMTP_FORWARD_PORT = 19024
 
 
 @contextlib.contextmanager
-def _tunnel(ssh_host, local_port, remote_port):
-    """Forwards local_port on the admin workstation to 127.0.0.1:remote_port
-    as seen FROM the target host, over the existing SSH channel — avoids
-    any remote shell-quoting entirely (see test_bootstrap_roles.py for why
-    that matters) since the actual protocol conversation happens as plain
-    local Python code against a forwarded socket, not via a remote
-    python invocation threaded through ssh's own argv-joining."""
+def _tunnel(ssh_host, local_port, remote_host_port):
+    """Forwards local_port on the admin workstation to remote_host_port
+    ("host:port") as reachable FROM ssh_host over the internal fleet
+    network, via the existing SSH channel — avoids any remote
+    shell-quoting entirely (see test_bootstrap_roles.py for why that
+    matters) since the actual protocol conversation happens as plain
+    local Python code against a forwarded socket, not via a remote python
+    invocation threaded through ssh's own argv-joining.
+
+    remote_host_port is deliberately NOT always ssh_host's own loopback:
+    IMAPS goes to the real HAProxy VIP (a genuinely different host from
+    ssh_host, load-balanced across the real 3-node Dovecot pool); LMTP
+    goes to whichever single host Postfix's own virtual_transport
+    actually points at (also not necessarily ssh_host). Tunneling
+    through ssh_host's loopback instead of the real target was the
+    original design here and meant this suite never actually exercised
+    the pool or the real delivery path — see env.example.yml's own
+    comments on imaps_vip/lmtp_target for the full story.
+    """
     proc = subprocess.Popen(
-        ["ssh", "-N", "-L", f"{local_port}:127.0.0.1:{remote_port}", ssh_host],
+        ["ssh", "-N", "-L", f"{local_port}:{remote_host_port}", ssh_host],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
@@ -78,19 +99,26 @@ def _tunnel(ssh_host, local_port, remote_port):
             except OSError:
                 time.sleep(0.3)
         else:
-            raise RuntimeError(f"SSH port-forward to {remote_port} never came up")
+            raise RuntimeError(f"SSH port-forward to {remote_host_port} never came up")
         yield local_port
     finally:
         proc.terminate()
         proc.wait(timeout=5)
 
 
-def _imaps_tunnel(ssh_host):
-    return _tunnel(ssh_host, LOCAL_FORWARD_PORT, 993)
+def _imaps_tunnel(haproxy_host, imaps_vip):
+    # Jumps through haproxy_host (ct00, the HAProxy host itself), not the
+    # general ssh_host -- confirmed live that ssh_host's own egress
+    # firewall has no rule for port 993 at all (see env.example.yml's
+    # own comment on haproxy_host for the full story).
+    return _tunnel(haproxy_host, LOCAL_FORWARD_PORT, imaps_vip)
 
 
-def _lmtp_tunnel(ssh_host):
-    return _tunnel(ssh_host, LOCAL_LMTP_FORWARD_PORT, 24)
+def _lmtp_tunnel(postfix_host, lmtp_target):
+    # Jumps through postfix_host, a real Postfix host -- its own
+    # virtual_transport is the actual, legitimate caller of lmtp_target
+    # in this fleet (see env.example.yml's own comment on postfix_host).
+    return _tunnel(postfix_host, LOCAL_LMTP_FORWARD_PORT, lmtp_target)
 
 
 @pytest.fixture(scope="module")
@@ -101,11 +129,7 @@ def mail_account(ssh_host):
     unified identity rather than a mail-specific test fixture."""
     email = f"e2e-dovecot-{int(time.time())}@test.mailmasker.org"
     password = "E2eDovecotTest1Aa"
-    result = subprocess.run(
-        ["ssh", ssh_host, "homelab-cli", "register", email, "--password", password],
-        capture_output=True, text=True, timeout=20,
-    )
-    assert result.returncode == 0, f"test account registration failed: {result.stderr}"
+    register_account(ssh_host, email, password)
     return email, password
 
 
@@ -119,9 +143,9 @@ def _connect(port):
     return imaplib.IMAP4_SSL("127.0.0.1", port, ssl_context=ctx)
 
 
-def test_imap_login_against_sql_passdb(ssh_host, mail_account):
+def test_imap_login_against_sql_passdb(haproxy_host, imaps_vip, mail_account):
     email, password = mail_account
-    with _imaps_tunnel(ssh_host) as port:
+    with _imaps_tunnel(haproxy_host, imaps_vip) as port:
         m = _connect(port)
         try:
             typ, _ = m.login(email, password)
@@ -145,9 +169,9 @@ def test_imap_login_against_sql_passdb(ssh_host, mail_account):
                 m.logout()
 
 
-def test_wrong_password_rejected(ssh_host, mail_account):
+def test_wrong_password_rejected(haproxy_host, imaps_vip, mail_account):
     email, _ = mail_account
-    with _imaps_tunnel(ssh_host) as port:
+    with _imaps_tunnel(haproxy_host, imaps_vip) as port:
         m = _connect(port)
         with pytest.raises(imaplib.IMAP4.error):
             m.login(email, "definitely-wrong-password")
@@ -155,7 +179,7 @@ def test_wrong_password_rejected(ssh_host, mail_account):
             m.logout()
 
 
-def test_lmtp_delivery(ssh_host, mail_account):
+def test_lmtp_delivery(haproxy_host, imaps_vip, postfix_host, lmtp_target, mail_account):
     """The actual regression test for the auth_username_format gotcha —
     goes over real LMTP (what homelab-postfix's virtual_transport uses),
     not IMAP, so it fails the same way a real inbound email would if
@@ -165,7 +189,7 @@ def test_lmtp_delivery(ssh_host, mail_account):
     email, password = mail_account
     marker = f"e2e-lmtp-{int(time.time())}"
 
-    with _lmtp_tunnel(ssh_host) as port:
+    with _lmtp_tunnel(postfix_host, lmtp_target) as port:
         lmtp = smtplib.LMTP()
         lmtp.connect("127.0.0.1", port)
         lmtp.helo("e2e-test-client")
@@ -179,7 +203,7 @@ def test_lmtp_delivery(ssh_host, mail_account):
             with contextlib.suppress(Exception):
                 lmtp.quit()
 
-    with _imaps_tunnel(ssh_host) as port:
+    with _imaps_tunnel(haproxy_host, imaps_vip) as port:
         m = _connect(port)
         try:
             typ, _ = m.login(email, password)
@@ -194,12 +218,12 @@ def test_lmtp_delivery(ssh_host, mail_account):
                 m.logout()
 
 
-def test_lmtp_rejects_unknown_recipient(ssh_host):
+def test_lmtp_rejects_unknown_recipient(postfix_host, lmtp_target):
     """A recipient that doesn't exist in api.users must be rejected at
     the protocol level (550), not silently accepted and dropped —
     matters once homelab-postfix relies on this to decide accept/reject
     at RCPT TO time for real inbound mail."""
-    with _lmtp_tunnel(ssh_host) as port:
+    with _lmtp_tunnel(postfix_host, lmtp_target) as port:
         lmtp = smtplib.LMTP()
         lmtp.connect("127.0.0.1", port)
         lmtp.helo("e2e-test-client")
@@ -214,13 +238,15 @@ def test_lmtp_rejects_unknown_recipient(ssh_host):
                 lmtp.quit()
 
 
-def test_userdb_resolves_shared_vmail_uid(ssh_host, mail_account):
+def test_userdb_resolves_shared_vmail_uid(dovecot_host, mail_account):
     """Regression test for the first_valid_uid gotcha specifically —
     confirms the account resolves to the fixed vmail uid/gid (5000),
-    not whatever adduser --system happened to auto-allocate."""
+    not whatever adduser --system happened to auto-allocate. Runs
+    directly on a real Dovecot pool member (doveadm isn't installed on
+    ssh_host in general -- see conftest.py's dovecot_host fixture)."""
     email, _ = mail_account
     result = subprocess.run(
-        ["ssh", ssh_host, "sudo", "doveadm", "user", email],
+        ["ssh", dovecot_host, "sudo", "doveadm", "user", email],
         capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, f"doveadm user lookup failed: {result.stderr}"
