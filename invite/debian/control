@@ -1,0 +1,54 @@
+Source: homelab-invite
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-invite
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common (>= 0.1.23),
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         libio-socket-ssl-perl,
+         libauthen-sasl-perl,
+         adduser,
+         openssl,
+         sudo
+Recommends: homelab-api, homelab-postfix, homelab-dovecot, homelab-webproxy, homelab-audit, homelab-agent
+Description: Invite mechanism backend + public acceptance page for the homelab-* ecosystem
+ Owns the whole invite lifecycle as one singleton service, the only
+ process in this fleet holding credentials to the `invite` Postgres
+ schema (token issuance, per-sender quota/dedup enforcement, and the
+ public one-time-use acceptance page an invitee actually clicks into).
+ Fronted two ways from one process: /internal/v1/invites/* via
+ homelab-api's own /api/v1/invites/* gateway route (JWT-authenticated,
+ same as homelab-domain-admin/homelab-mailbridge), and /invite/* on its
+ own public webproxy vhost (unauthenticated -- see README.md's
+ "Deployment" section).
+ .
+ Deliberately never writes to api.users itself: creating the actual
+ login-capable account is homelab-api's own job (an extended
+ /api/v1/auth/register, gated behind config auth.require_invite),
+ reusing its already-proven Argon2id hashing rather than duplicating
+ security-critical code in a second, public-facing codebase. This
+ service's own role is validating the invite token was real and
+ unused, atomically marking it consumed via a server-to-server call
+ homelab-api makes into /internal/v1/invites/consume (system_agent
+ role required, checked via introspect() -- see App.pm).
+ .
+ Sends its own mail (the invite itself for CLI-initiated invites, and
+ the "your account is ready" welcome email either way) as a real,
+ dedicated api.users mailbox identity over authenticated SMTP
+ submission -- not an unauthenticated local relay, which
+ homelab-postfix's own anti-relay policy correctly rejects for
+ external recipients anyway. See `homelab-cli admin users
+ create-service-account`.
+ .
+ The companion package homelab-roundcube-invite adds a "Send Invite"
+ button to an already-installed homelab-roundcube, calling this
+ service's /api/v1/invites/* through the same gateway with the logged-
+ in user's own JWT -- it holds no database credential of its own.

@@ -1,0 +1,32 @@
+[Unit]
+Description=Homelab Invite
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_INVITE_CONFIG=/etc/homelab/invite/config.yml"
+# Reached two ways, both real proxy hops: homelab-api's own gateway
+# (/api/v1/invites/*, Homelab::Common::Proxy::forward()) for the
+# internal routes, AND homelab-webproxy's invite.<domain> vhost for the
+# public /invite/* acceptance page. Without trusting this,
+# $c->tx->remote_address would resolve to whichever proxy's own
+# loopback address instead of the real client -- the rate-limiting
+# table (invite.verification_attempts) and the audit trail both depend
+# on the real IP. Same fix already applied for homelab-domain-admin's
+# gateway-only case; this service needs it for both paths.
+Environment="MOJO_REVERSE_PROXY=1"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-invite
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-invite
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-invite
+
+[Install]
+WantedBy=multi-user.target

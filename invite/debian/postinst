@@ -1,0 +1,164 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/invite
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-invite
+
+case "$1" in
+    configure)
+        echo "homelab-invite post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        # Shared manifest dir -- may not exist yet if homelab-agent
+        # isn't installed on this host first (install order isn't
+        # guaranteed either way); ensure it, then drop this package's
+        # own declarative entry into it unconditionally (static
+        # metadata, not user config -- always refresh, unlike
+        # $CONFIG_FILE below).
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services
+        cp "$SHARE_DIR/services/invite.yml" "/etc/homelab/services/invite.yml"
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-invite/db_host || true;                DB_HOST="${RET:-localhost}"
+            db_get homelab-invite/pgbouncer_host || true;         PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-invite/api_base || true;               API_BASE="${RET:-http://localhost:3000}"
+            db_get homelab-invite/listen_port || true;            LISTEN_PORT="${RET:-2514}"
+            db_get homelab-invite/advertise_host || true;         ADVERTISE_HOST="${RET:-127.0.0.1}"
+            db_get homelab-invite/public_base_url || true;        PUBLIC_BASE_URL="${RET:-https://invite.test.mailmasker.org}"
+            db_get homelab-invite/account_domain || true;         ACCOUNT_DOMAIN="$RET"
+            db_get homelab-invite/invite_ttl_days || true;        INVITE_TTL_DAYS="${RET:-14}"
+            db_get homelab-invite/default_max_pending || true;    DEFAULT_MAX_PENDING="${RET:-10}"
+            db_get homelab-invite/default_max_per_day || true;    DEFAULT_MAX_PER_DAY="${RET:-5}"
+            db_get homelab-invite/mailer_email || true;           MAILER_EMAIL="${RET:-invites@test.mailmasker.org}"
+            db_get homelab-invite/mailer_smtp_host || true;       MAILER_SMTP_HOST="${RET:-127.0.0.1}"
+            db_get homelab-invite/mailer_smtp_port || true;       MAILER_SMTP_PORT="${RET:-587}"
+            db_get homelab-invite/mailer_smtp_password || true;   MAILER_SMTP_PASSWORD="$RET"
+
+            echo "  bootstrapping Postgres roles for 'homelab_invite' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_invite --schema invite --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success — see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-invite' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
+
+            # Bound to 0.0.0.0, not 127.0.0.1 (only the port ever
+            # substituted) -- same "bind broadly, firewall is the
+            # boundary" posture as every other homelab-* service's
+            # postinst, needed here for real reasons TWICE over: both
+            # homelab-api's gateway (internal) AND homelab-webproxy's
+            # public vhost (external) need to reach this same listener.
+            sed \
+                -e "s#https://api\.test\.mailmasker\.org#$API_BASE#g" \
+                -e "s#https://invite\.test\.mailmasker\.org#$PUBLIC_BASE_URL#g" \
+                -e "s#^  account_domain:\$#  account_domain: $ACCOUNT_DOMAIN#" \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_invite_runtime#$RUNTIME_ROLE#g" \
+                -e "s#YOUR_POSTGRES_HOST#$DB_HOST#g" \
+                -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
+                -e "s#homelab_invite_migrate#$MIGRATE_ROLE#g" \
+                -e "s#ttl_days: 14#ttl_days: $INVITE_TTL_DAYS#g" \
+                -e "s#default_max_pending: 10#default_max_pending: $DEFAULT_MAX_PENDING#g" \
+                -e "s#default_max_per_day: 5#default_max_per_day: $DEFAULT_MAX_PER_DAY#g" \
+                -e "s#email: invites@test\.mailmasker\.org#email: $MAILER_EMAIL#g" \
+                -e "s#smtp_host: 127\.0\.0\.1#smtp_host: $MAILER_SMTP_HOST#g" \
+                -e "s#smtp_port: 587#smtp_port: $MAILER_SMTP_PORT#g" \
+                -e "s#YOUR_MAILER_ACCOUNT_PASSWORD_HERE#$MAILER_SMTP_PASSWORD#g" \
+                -e "s#\"http://127\.0\.0\.1:2514\"#\"http://0.0.0.0:$LISTEN_PORT\"#g" \
+                -e "s#  port: 2514#  port: $LISTEN_PORT#g" \
+                -e "s#  host: 127\.0\.0\.1#  host: $ADVERTISE_HOST#g" \
+                "$SHARE_DIR/config/invite.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+            if [ -z "$MAILER_SMTP_PASSWORD" ]; then
+                echo "  NOTE: mailer_smtp_password was left blank -- invite/welcome mail will"
+                echo "        fail until you run 'dpkg-reconfigure homelab-invite' with it set."
+                echo "        Create the account first: homelab-cli admin users"
+                echo "        create-service-account --email $MAILER_EMAIL"
+            fi
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+            echo "  (dpkg-reconfigure homelab-invite to redo the prompts)"
+        fi
+
+        # RUNTIME_ROLE is only set above on a fresh install -- on an
+        # upgrade, derive it from the config already on disk.
+        if [ -z "$RUNTIME_ROLE" ]; then
+            RUNTIME_ROLE="$(sed -n '/^database:/,/^database_migrate:/{s/^[[:space:]]*user: //p}' "$CONFIG_FILE" | head -1)"
+        fi
+        if [ -n "$RUNTIME_ROLE" ]; then
+            echo "  granting '$RUNTIME_ROLE' INSERT access on audit.queue (for the invite audit trail)..."
+            DB_HOST_FOR_GRANT="${DB_HOST:-$(sed -n '/^database_migrate:/,/^database:/{s/^[[:space:]]*host: //p}' "$CONFIG_FILE" | head -1)}"
+            homelab-audit-grant-queue-insert --role "$RUNTIME_ROLE" --db-host "${DB_HOST_FOR_GRANT:-localhost}" \
+                || echo "  WARNING: could not grant audit.queue access -- if homelab-audit isn't installed/migrated yet, install it and re-run this grant by hand (see homelab-audit/README.md); audited invite actions will fail closed until this grant exists."
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_INVITE_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
+            HOMELAB_INVITE_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-invite-migrate
+
+        systemctl enable homelab-invite >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-invite; then
+            systemctl restart homelab-invite || echo "WARNING: homelab-invite restart failed -- check 'systemctl status homelab-invite' by hand."
+        else
+            systemctl start homelab-invite || echo "WARNING: homelab-invite failed to start -- check 'systemctl status homelab-invite' by hand."
+        fi
+
+        # Soft health probe -- warn, don't fail the whole apt
+        # transaction, same posture as every other non-blocking check in
+        # this project's postinst scripts (e.g. domain-admin's pdns
+        # config-check). Give hypnotoad's forked workers a moment to
+        # actually bind before probing.
+        sleep 2
+        if command -v curl >/dev/null 2>&1; then
+            if ! curl -fsS "http://127.0.0.1:${LISTEN_PORT:-2514}/health" >/dev/null 2>&1; then
+                echo "  WARNING: homelab-invite did not answer its own /health check --"
+                echo "           check 'systemctl status homelab-invite' and the journal by hand."
+            fi
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-invite configured."
+        echo "config: $CONFIG_FILE"
+        echo "Next: point homelab-webproxy's sites.yml at this host's advertise_host:"
+        echo "  - domain: <your invite.<domain>> upstream: 127.0.0.1:${LISTEN_PORT:-2514}"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,107 @@
+Template: homelab-invite/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-invite/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
+Template: homelab-invite/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url -- every gateway-routed
+ request this app handles is authenticated by introspecting the
+ caller's JWT here, and the public /invite/:token/accept page calls
+ this same address's /api/v1/auth/register to actually create the
+ account.
+
+Template: homelab-invite/listen_port
+Type: string
+Default: 2514
+Description: Port for homelab-invite to listen on:
+
+Template: homelab-invite/advertise_host
+Type: string
+Default: 127.0.0.1
+Description: This host's own address to advertise in the service registry:
+ Written into config.yml's registry.host -- what homelab-api's gateway
+ actually connects to when forwarding /api/v1/invites/* requests here,
+ and what homelab-api's own _register handler dials directly for the
+ /internal/v1/invites/consume call. Leave as 127.0.0.1 only if this
+ service runs on the SAME host as homelab-api itself; set it to this
+ host's real reachable address for any distributed deployment.
+
+Template: homelab-invite/public_base_url
+Type: string
+Default: https://invite.test.mailmasker.org
+Description: Public URL where the invite acceptance page is reachable:
+ Written into every invite email's link -- must match whatever
+ homelab-webproxy's sites.yml actually fronts this service as (see
+ README.md's "Deployment" section). This is a completely different
+ address from api_base above: that one is homelab-api's internal
+ gateway, this one is the public page an invitee actually clicks.
+
+Template: homelab-invite/account_domain
+Type: string
+Default:
+Description: Fleet mail domain new invite-accepted logins are created under:
+ When someone accepts an invite they choose a username, and their new
+ account login becomes <username>@<this-domain>. Leave BLANK to derive
+ it automatically from the mailer email's own domain below
+ (invites@test.mailmasker.org -> test.mailmasker.org), which is the
+ right answer on a normal single-domain install. Set it explicitly only
+ if new accounts should live on a different fleet domain than the one
+ the invite-sender mailbox is on.
+
+Template: homelab-invite/invite_ttl_days
+Type: string
+Default: 14
+Description: Days an invite link stays valid before it expires:
+
+Template: homelab-invite/default_max_pending
+Type: string
+Default: 10
+Description: Default max simultaneously-pending invites per sender:
+ Per-sender overrides can be set later via `homelab-cli invite quota
+ set` (site_admin only).
+
+Template: homelab-invite/default_max_per_day
+Type: string
+Default: 5
+Description: Default max invites a sender can send per rolling 24 hours:
+
+Template: homelab-invite/mailer_email
+Type: string
+Default: invites@test.mailmasker.org
+Description: System mailbox identity this service sends mail as:
+ Must be a real, already-created account -- see `homelab-cli admin
+ users create-service-account --email <this address>` (run this BEFORE
+ finishing this install, or leave mailer_smtp_password blank and set it
+ later with dpkg-reconfigure). See README.md's "Email sending" section
+ for why this can't be an unauthenticated local relay.
+
+Template: homelab-invite/mailer_smtp_host
+Type: string
+Default: 127.0.0.1
+Description: SMTP submission host for the mailer identity above:
+ 127.0.0.1 only if homelab-postfix runs on this same host; otherwise
+ that host's real reachable address.
+
+Template: homelab-invite/mailer_smtp_port
+Type: string
+Default: 587
+Description: SMTP submission port for the mailer identity above:
+
+Template: homelab-invite/mailer_smtp_password
+Type: password
+Description: Password for the mailer identity above (blank = fill in later):
+ The plaintext password `homelab-cli admin users create-service-account`
+ printed once. Leave blank to finish this install anyway (outbound
+ invite/welcome mail will fail until this is set) and paste it in later
+ with dpkg-reconfigure homelab-invite.

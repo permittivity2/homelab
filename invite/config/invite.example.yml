@@ -1,0 +1,77 @@
+# Homelab Invite Configuration
+#
+# The whole invite mechanism's backend: token issuance/validation,
+# quota/dedup enforcement, and the public acceptance page an invitee
+# actually clicks into. Two faces on one process (see README.md):
+# /internal/v1/invites/* (gateway-fronted by homelab-api, JWT-
+# authenticated) and /invite/* (public, unauthenticated, fronted by
+# homelab-webproxy's own invite.<domain> vhost). Identity creation
+# itself is NOT done here -- POST /invite/:token/accept calls
+# homelab-api's own /api/v1/auth/register, which does the actual
+# api.users INSERT. This service never writes to api.users.
+
+homelab_api:
+  base_url: https://api.test.mailmasker.org
+
+# RUNTIME connection -- CRUD only, no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_invite_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection -- direct to Postgres, bypassing pgbouncer. Only
+# used by homelab-invite-migrate at install/upgrade time.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_invite_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+invite:
+  # How long a freshly-sent invite stays valid before it flips to
+  # 'expired' on its own (checked at read/accept time, not a background
+  # sweep -- see README.md).
+  ttl_days: 14
+  # Applied to any sender with no row in invite.invite_quotas.
+  default_max_pending: 10
+  default_max_per_day: 5
+  # The public URL an invite email's link points at -- must match
+  # whatever homelab-webproxy's sites.yml actually fronts this service
+  # as (see README.md's "Deployment" section).
+  public_base_url: https://invite.test.mailmasker.org
+  # The fleet mail domain a NEW invite-accepted login is created under:
+  # the invitee picks a username and their account becomes
+  # <username>@<account_domain>. Blank = derive from the mailer email's
+  # own domain below (invites@test.mailmasker.org -> test.mailmasker.org),
+  # which is always a real fleet domain since that mailbox lives on it.
+  account_domain:
+
+# System mailbox identity this service sends mail AS (the invite email
+# itself when sent via `homelab-cli invite send`, and the "your account
+# is ready" welcome email after a real acceptance) -- a real api.users
+# row created once via `homelab-cli admin users create-service-account`,
+# authenticating over real SMTP submission exactly like any other
+# account (see README.md's "Email sending" section for why this is NOT
+# an unauthenticated local relay).
+mailer:
+  email: invites@test.mailmasker.org
+  smtp_host: 127.0.0.1
+  smtp_port: 587
+  smtp_password: YOUR_MAILER_ACCOUNT_PASSWORD_HERE
+
+# What this instance announces itself as in homelab-api's service
+# registry -- host/port only. homelab-api's gateway forwards
+# /api/v1/invites/* here; homelab-api's own _register handler also
+# calls this service's /internal/v1/invites/consume directly the same
+# way.
+registry:
+  host: 127.0.0.1
+  port: 2514
+
+server:
+  listen: "http://127.0.0.1:2514"
+  workers: 2
+  pid_file: /var/lib/homelab/invite-hypnotoad.pid

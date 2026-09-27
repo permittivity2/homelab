@@ -1,0 +1,74 @@
+homelab-invite (0.1.6) unstable; urgency=medium
+
+  * Release v0.1.6
+
+ -- Gardner <gardner@homelab>  Sun, 27 Sep 2026 01:16:29 -0500
+
+homelab-invite (0.1.5) unstable; urgency=medium
+
+  * Release v0.1.5
+
+ -- Gardner <gardner@homelab>  Sun, 27 Sep 2026 00:43:06 -0500
+
+homelab-invite (0.1.4) unstable; urgency=medium
+
+  * Release v0.1.4
+
+ -- Gardner <gardner@homelab>  Sun, 27 Sep 2026 00:33:32 -0500
+
+homelab-invite (0.1.3) unstable; urgency=medium
+
+  * Release v0.1.3
+
+ -- Gardner <gardner@homelab>  Sun, 27 Sep 2026 00:32:27 -0500
+
+homelab-invite (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Sat, 26 Sep 2026 21:12:33 -0500
+
+homelab-invite (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 15:01:40 -0500
+
+homelab-invite (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 15:01:27 -0500
+
+homelab-invite (0.1.1) unstable; urgency=medium
+
+  * Fix: package the systemd unit -- debhelper reads debian/<pkg>.service,
+    not the system/ source-of-truth copy, so the built 0.1.0 package
+    silently shipped with no unit file at all (postinst's systemctl
+    enable/start would have failed outright). Never deployed anywhere.
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 15:05:00 -0500
+
+homelab-invite (0.1.0) unstable; urgency=medium
+
+  * Initial release: invite mechanism backend + public acceptance page.
+    Own `invite` Postgres schema (invites/invite_quotas/verification_
+    attempts), /internal/v1/invites/* fronted by homelab-api's
+    /api/v1/invites/* gateway route, and the public /invite/:token
+    acceptance page. Requires homelab-api >= 0.1.29 (invite_token
+    support on /api/v1/auth/register + the gateway route) and
+    homelab-common >= 0.1.23 (system_agent_token export).
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 00:00:00 -0500
+
+homelab-invite (0.1.0) unstable; urgency=medium
+
+  * Initial release: invite mechanism backend + public acceptance page.
+    Own `invite` Postgres schema (invites/invite_quotas/verification_
+    attempts), /internal/v1/invites/* fronted by homelab-api's
+    /api/v1/invites/* gateway route, and the public /invite/:token
+    acceptance page. Requires homelab-api >= 0.1.29 (invite_token
+    support on /api/v1/auth/register + the gateway route) and
+    homelab-common >= 0.1.23 (system_agent_token export).
+
+ -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 00:00:00 -0500

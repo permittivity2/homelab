@@ -1,0 +1,7 @@
+name: invite
+package: homelab-invite
+kind: http_service
+check:
+  systemd_unit: homelab-invite
+  tcp_port: 2514
+description: "Invite mechanism: token issuance/quota (serves /api/v1/invites/*) + public acceptance page at invite.<domain>"
