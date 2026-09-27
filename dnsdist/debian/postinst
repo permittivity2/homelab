@@ -1,0 +1,39 @@
+#!/bin/sh
+set -e
+
+CONFIG_DIR=/etc/homelab/dnsdist
+BACKENDS_FILE="$CONFIG_DIR/backends.yml"
+SHARE_DIR=/usr/share/homelab-dnsdist
+
+case "$1" in
+    configure)
+        echo "homelab-dnsdist post-installation setup..."
+        mkdir -p "$CONFIG_DIR"
+
+        if [ ! -f "$BACKENDS_FILE" ]; then
+            cp "$SHARE_DIR/config/backends.example.yml" "$BACKENDS_FILE"
+            echo "  wrote a starter $BACKENDS_FILE -- edit it (real listen_address"
+            echo "  and pool/server entries), then run: homelab-dnsdist-apply-backends"
+        else
+            echo "  applying $BACKENDS_FILE..."
+            homelab-dnsdist-apply-backends \
+                || echo "  WARNING: homelab-dnsdist-apply-backends reported a problem -- see output above."
+        fi
+
+        systemctl enable dnsdist >/dev/null 2>&1 || true
+
+        echo ""
+        echo "homelab-dnsdist configured."
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

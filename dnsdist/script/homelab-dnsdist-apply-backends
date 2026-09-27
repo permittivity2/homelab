@@ -1,0 +1,156 @@
+#!/usr/bin/perl
+# Reads /etc/homelab/dnsdist/backends.yml and regenerates
+# /etc/dnsdist/dnsdist.conf wholesale (a Lua config, not the ini-style
+# haproxy.cfg -- same "own the whole file, re-run after editing"
+# pattern as homelab-haproxy-apply-backends, but this one doesn't need
+# any kernel-level NAT/forwarding to work: dnsdist LISTENS on the
+# public address directly (like haproxy's own frontends, like
+# homelab-webproxy's nginx vhosts) instead of relying on
+# DNAT+SNAT+ip_forward -- see homelab-edge-forward's own README for
+# everything that approach needed that this one doesn't.
+#
+# Validates with `dnsdist --check-config -C <file>` before ever
+# touching the live config -- a validation failure leaves the
+# previously-working config completely untouched and exits non-zero.
+#
+# Deliberately ONE flat list of servers, not multiple named "pools"
+# with their own routing: dnsdist's newServer({pool=...}) assigns a
+# server to a NAMED pool that nothing routes queries to unless a
+# matching addAction(..., PoolAction(name)) rule also exists -- found
+# live, the hard way: every server came up "healthy" (health checks
+# use each server directly, independent of pool routing) while every
+# real client query got silently dropped with zero backend traffic,
+# because they were all being routed to the empty/default pool, which
+# had no servers in it, since every server here had an explicit named
+# pool instead. Since this project has no actual query-based routing
+# need (no qname-based splitting between backend groups), every server
+# is added with NO pool argument at all, which is exactly what puts it
+# in the default pool dnsdist actually uses for unmatched queries --
+# the true, honest behavior, not a `pools:` abstraction implying
+# isolation that doesn't exist without rules this script doesn't write.
+#
+# Every generated `newServer` carries `useProxyProtocol=true` by
+# default so the backend sees the REAL client IP (matters for AXFR
+# ACLs and any IP-based logging), not dnsdist's own -- the same
+# real-client-IP concern homelab-haproxy's own `send-proxy` already
+# solves for postfix/dovecot. The backend must be configured to expect
+# it (homelab-dns's own proxy_protocol_from debconf answer, as a
+# proper CIDR -- a bare IP with no /32 was found live to leave the
+# trusted-sender list empty, so every proxy-protocol-wrapped query got
+# an explicit REFUSED rather than being honored or silently ignored)
+# or every query is rejected outright.
+use strict;
+use warnings;
+use YAML::XS qw(LoadFile DumpFile);
+
+my $BACKENDS_CONFIG = $ENV{HOMELAB_DNSDIST_BACKENDS} // '/etc/homelab/dnsdist/backends.yml';
+my $DNSDIST_CONFIG   = $ENV{HOMELAB_DNSDIST_CONFIG}   // '/etc/dnsdist/dnsdist.conf';
+
+unless (-f $BACKENDS_CONFIG) {
+    print "homelab-dnsdist: no $BACKENDS_CONFIG yet — nothing to apply.\n";
+    print "  Copy /usr/share/homelab-dnsdist/config/backends.example.yml there and re-run.\n";
+    exit 0;
+}
+
+my $config  = LoadFile($BACKENDS_CONFIG);
+my $listen  = $config->{listen_address} // '0.0.0.0:53';
+my $servers = $config->{servers} // [];
+
+die "backends.yml: no servers declared (need at least one entry under 'servers:')\n" unless @$servers;
+die "backends.yml: 'servers' must be a list\n" unless ref($servers) eq 'ARRAY';
+
+my $check_interval     = $config->{check_interval}     // 10;
+my $check_timeout      = $config->{check_timeout}      // 2;
+my $max_check_failures = $config->{max_check_failures} // 3;
+my $rise                = $config->{rise}                // 2;
+my $use_proxy_protocol = ($config->{use_proxy_protocol} // 1) ? 'true' : 'false';
+my $acl                = $config->{acl};
+
+die "backends.yml: 'acl' must be a list of CIDRs (e.g. [\"0.0.0.0/0\", \"::/0\"])\n"
+    if defined $acl && ref($acl) ne 'ARRAY';
+
+my $cfg = <<HEADER;
+-- Managed by homelab-dnsdist's homelab-dnsdist-apply-backends — do not
+-- hand-edit; edit /etc/homelab/dnsdist/backends.yml and re-run
+-- homelab-dnsdist-apply-backends instead. Regenerated wholesale on
+-- every run, not merged.
+addLocal("$listen")
+
+HEADER
+
+# dnsdist's own built-in default ACL is RFC1918 + loopback + link-local
+# ONLY -- it deliberately refuses public-internet queries out of the
+# box (anti-abuse: an accidentally-open resolver is a classic
+# amplification vector). Left UNSET here (dnsdist's own default
+# preserved) unless backends.yml explicitly opens it -- a public
+# authoritative nameserver genuinely needs the whole internet able to
+# query it, but that's a deliberate choice this script shouldn't make
+# silently for every possible future use of this package. Found live:
+# every external resolver (1.1.1.1, 8.8.8.8, ...) timed out against a
+# perfectly-working setup until this was set explicitly.
+if ($acl && @$acl) {
+    my $acl_list = join(', ', map { qq{"$_"} } @$acl);
+    $cfg .= "setACL({$acl_list})\n\n";
+}
+
+for my $server (@$servers) {
+    $cfg .= <<SERVER;
+newServer({
+    address = "$server",
+    useProxyProtocol = $use_proxy_protocol,
+    checkInterval = $check_interval,
+    checkTimeout = $check_timeout,
+    maxCheckFailures = $max_check_failures,
+    rise = $rise,
+})
+SERVER
+}
+
+my $tmp = "$DNSDIST_CONFIG.new";
+open(my $fh, '>', $tmp) or die "Cannot write $tmp: $!\n";
+print $fh $cfg;
+close($fh);
+
+my $check_rc = system('dnsdist', '--check-config', '-C', $tmp);
+if ($check_rc != 0) {
+    unlink($tmp);
+    die "dnsdist config validation failed for the new config — NOT applying; the previous $DNSDIST_CONFIG is untouched.\n";
+}
+
+rename($tmp, $DNSDIST_CONFIG) or die "Cannot install $DNSDIST_CONFIG: $!\n";
+
+# dnsdist's own systemd unit ships no ExecReload= (same as PowerDNS's
+# own pdns.service -- neither daemon supports a config-file reload,
+# only a full restart), so this always restarts, never reloads.
+system('systemctl', 'restart', 'dnsdist') == 0
+    or die "dnsdist config validated and installed but restart failed — check 'systemctl status dnsdist'\n";
+
+print 'homelab-dnsdist: applied ' . scalar(@$servers) . " server(s), restarted.\n";
+
+# Fleet-topology visibility -- same pattern as
+# homelab-haproxy-apply-backends. A local tcp_port check on dnsdist's
+# own listen port, same as haproxy's own frontend entries: this proves
+# dnsdist itself is up and accepting connections, not that every
+# backend behind it is currently healthy (dnsdist's own active health
+# checks and automatic failover handle that at the query-routing
+# layer, invisibly to clients, the same way a real outage of one
+# postfix/dovecot HA instance is invisible behind haproxy).
+my ($listen_port) = $listen =~ /:(\d+)$/;
+$listen_port //= 53;
+my $manifest_dir  = $ENV{HOMELAB_SERVICES_MANIFEST_DIR} // '/etc/homelab/services';
+my $manifest_file = "$manifest_dir/dnsdist.yml";
+if (-d $manifest_dir) {
+    my @manifest = ({
+        name        => 'dnsdist-dns',
+        package     => 'homelab-dnsdist',
+        kind        => 'dns-proxy-frontend',
+        check       => { tcp_port => $listen_port },
+        description => 'dnsdist DNS load-balancer, proxy-protocol to ' . join(', ', @$servers),
+        fronts      => [map { "dns\@$_" } @$servers],
+    });
+    eval { DumpFile($manifest_file, \@manifest); 1 }
+        or print "  WARNING: failed to write $manifest_file -- fleet status view may be stale: $@\n";
+}
+else {
+    print "  NOTE: $manifest_dir doesn't exist (homelab-agent not installed here yet) -- skipping manifest write.\n";
+}

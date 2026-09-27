@@ -1,0 +1,43 @@
+Source: homelab-dnsdist
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-dnsdist
+Architecture: all
+Depends: perl (>= 5.36), libyaml-libyaml-perl, homelab-common (>= 0.1.19), dnsdist
+Recommends: homelab-agent
+Description: dnsdist DNS load-balancer edge for the homelab-* ecosystem
+ Ships homelab-dnsdist-apply-backends, which reads an editable
+ /etc/homelab/dnsdist/backends.yml (listen address -> one or more pools
+ of backend PowerDNS servers) and regenerates /etc/dnsdist/dnsdist.conf
+ wholesale, validating with `dnsdist --check-config` before ever
+ touching the live config.
+ .
+ Exists for the same reason homelab-haproxy/homelab-webproxy do --
+ decoupling "holds the public IP" from "runs the actual service" -- but
+ for DNS specifically, using PowerDNS's own purpose-built edge tool
+ rather than raw kernel NAT (see homelab-edge-forward, this package's
+ predecessor for this exact use case). Unlike raw DNAT+SNAT, dnsdist:
+ .
+  * LISTENS directly on the public address (same model as haproxy's
+    frontends / webproxy's vhosts) instead of relying on
+    DNAT+SNAT+ip_forward -- no kernel-level IP forwarding, no
+    conntrack/forward-chain rules to get right.
+  * Does real ACTIVE health-checking of each backend with automatic
+    failover -- the one thing raw nftables genuinely cannot do.
+  * Supports real load-balancing across multiple backend PowerDNS
+    instances in a pool (HA, same idea as postfix/dovecot's own HA
+    trios elsewhere in this fleet) -- not a substitute for genuine
+    multi-nameserver redundancy behind a SECOND public IP, which
+    remains DNS's own native mechanism for that (independent NS
+    records), not something to build here either.
+  * Preserves the real client IP to the backend via PROXY protocol
+    (useProxyProtocol=true on every generated backend) -- same
+    real-client-IP concern homelab-haproxy's own send-proxy already
+    solves for postfix/dovecot. The backend PowerDNS must be
+    configured to expect it (proxy-protocol-from) or queries are
+    rejected.

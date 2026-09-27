@@ -1,0 +1,23 @@
+homelab-dnsdist (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Thu, 17 Sep 2026 00:24:51 -0500
+
+homelab-dnsdist (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Thu, 17 Sep 2026 00:22:56 -0500
+
+homelab-dnsdist (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Thu, 17 Sep 2026 00:14:25 -0500
+
+homelab-dnsdist (0.0.0) unstable; urgency=medium
+
+  * Initial placeholder entry -- build-package.sh prepends real releases above this.
+
+ -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 00:00:00 -0500

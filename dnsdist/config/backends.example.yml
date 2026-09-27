@@ -1,0 +1,47 @@
+# Copy to /etc/homelab/dnsdist/backends.yml, edit, then run
+# homelab-dnsdist-apply-backends (postinst does this automatically on
+# every install/upgrade once the real file exists).
+#
+# listen_address: where dnsdist itself accepts DNS queries (UDP+TCP
+# both, from one bind) -- wildcard is fine here, same "bind broadly,
+# firewall is the boundary" convention this project already uses for
+# haproxy/webproxy; the existing input-chain rule already allows
+# inbound 53.
+listen_address: 0.0.0.0:53
+
+# Deliberately a flat list, not multiple named pools -- dnsdist only
+# routes queries to a named pool if a rule says so, and this project
+# has no query-based routing need. Every server here lands in
+# dnsdist's real default pool (the one unmatched queries actually use)
+# and is load-balanced/health-checked as one HA group.
+servers:
+  - 10.50.2.162:53
+
+# Real active health-checking with automatic failover -- the thing raw
+# nftables DNAT genuinely can't do. Defaults shown; only need to
+# override if the defaults don't fit.
+check_interval: 10        # seconds between health checks
+check_timeout: 2          # seconds before a check counts as failed
+max_check_failures: 3     # consecutive failures before marking DOWN
+rise: 2                   # consecutive successes before marking back UP
+
+# Preserves the real client IP to the backend (matters for AXFR ACLs /
+# IP-based logging) -- the backend PowerDNS must be configured to
+# expect it (proxy-protocol-from, as a real CIDR like "10.50.2.144/32"
+# -- a bare IP with no mask leaves the trusted-sender list effectively
+# empty, and PowerDNS explicitly REFUSES a proxy-protocol-wrapped query
+# from an untrusted sender rather than falling back to treating it as
+# a normal query) or every query gets rejected outright. Default true;
+# only ever turn off for a backend you know doesn't support it.
+use_proxy_protocol: true
+
+# dnsdist's own built-in ACL only allows RFC1918/loopback/link-local by
+# default (anti-abuse: an accidentally-open resolver is a classic
+# amplification vector) -- left commented out, every EXTERNAL query
+# (real internet resolvers) gets silently dropped even though
+# everything else works. A real public-facing authoritative nameserver
+# needs this open; uncomment for that case (same exposure PowerDNS
+# itself already had with no ACL at all before this package existed).
+# acl:
+#   - "0.0.0.0/0"
+#   - "::/0"
