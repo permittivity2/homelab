@@ -41,6 +41,15 @@ Description: Roundcube webmail wired to the homelab-* shared identity
  unqualified SQL, so its tables land in "roundcube" rather than
  "public".
  .
+ Multiple instances behind the same homelab-webproxy upstream pool need
+ their own Postgres role each (homelab-roundcube/instance_id debconf,
+ same shared-role problem homelab-dovecot/homelab-postfix already had
+ -- confirmed live: without it, every new instance's install silently
+ rotated the shared role's password out from under every other
+ already-running instance, breaking webmail login on roughly 2 of every
+ 3 requests). All instances still share the SAME "roundcube"
+ schema/data either way -- only the credential is ever per-instance.
+ .
  Ships its own internal-only nginx+PHP-FPM vhost (loopback only) so
  homelab-webproxy's existing HTTP-upstream reverse-proxy model --
  designed around already-HTTP-speaking backends like homelab-drive's

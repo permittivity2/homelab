@@ -158,8 +158,29 @@ class recipient_blocking extends rcube_plugin
             // 'plugin.body' is elastic's own generic template object name
             // (confirmed real: skins/elastic/templates/plugin.html), not a
             // plugin-specific one -- reusing it means this plugin ships no
-            // skin template of its own at all.
-            $this->register_handler('plugin.body', [$this, 'blockedaddresses_body']);
+            // skin template of its own at all. But it also means only ONE
+            // plugin can hold it at a time -- register_handler() silently
+            // REJECTS (rcube_plugin_api::register_handler(), error 525,
+            // logged not fatal -- confirmed by reading that method's real
+            // source, not assumed) a second plugin's attempt to claim a
+            // name already owned by a different plugin; it does NOT throw
+            // and does NOT overwrite the first owner. Since this plugin
+            // loads before invite_sender in $config['plugins'], claiming
+            // this unconditionally for the whole settings task meant THIS
+            // plugin always won the name first -- including on invite_
+            // sender's own "Send Invite" settings page, whose later,
+            // already-correctly-gated registration attempt then got
+            // silently rejected. Net effect, confirmed live (2026-09-26):
+            // clicking "Send Invite" rendered the Blocked Addresses list
+            // under the Send Invite page title, since plugin.body still
+            // resolved to THIS plugin's handler. Gating on this plugin's
+            // OWN action (matching invite_sender's own identical fix for
+            // the reverse case, see that plugin's header comment) means
+            // each plugin only claims the name while it's actually the one
+            // whose page is being rendered.
+            if ($this->rc->action === 'plugin.blockedaddresses') {
+                $this->register_handler('plugin.body', [$this, 'blockedaddresses_body']);
+            }
             $this->include_script('recipient_blocking.js');
             $this->rc->output->add_label('recipient_blocking.unblocking');
         }

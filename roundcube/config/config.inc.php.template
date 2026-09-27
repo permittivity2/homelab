@@ -92,13 +92,33 @@ $config['use_https'] = true;
 // key -- it's read by that same patch, to redirect a Roundcube-initiated
 // logout through homelab-sso's own /logout (single logout -- see
 // ../sso/README.md) instead of only clearing Roundcube's own session.
+// oauth_auth_uri/oauth_logout_uri are BROWSER redirects -- must be
+// __SSO_BASE_URL__ (a public, browser-reachable address). oauth_token_uri/
+// oauth_identity_uri are genuinely server-to-server calls made directly
+// by this PHP process, and deliberately point at __SSO_INTERNAL_BASE_URL__
+// instead (defaults to the same value as __SSO_BASE_URL__ for a
+// single-host install, override via homelab-roundcube/sso_internal_base_url
+// once this app and homelab-sso are on separate hosts). Using the public
+// URL for these too "worked fine" when this app and homelab-sso shared one
+// host (the public URL just happened to also be reachable), but broke hard
+// once Roundcube became a 3-instance HA pool on hosts separate from
+// homelab-sso: each instance's own outbound call to the public vhost had
+// to hairpin back through the edge proxy to reach a sibling host, which
+// this environment's network doesn't support -- confirmed live 2026-09-25
+// ("OAuth token request failed: Connection refused", found in
+// program/include/rcmail_oauth.php's own error log line, only AFTER
+// ruling out session/cookie/load-balancer-affinity as the cause). Internal
+// server-to-server calls should never depend on public routing at all,
+// same reasoning used throughout this project's other internal gateway
+// calls (see e.g. homelab-block-link's own use of an internal address for
+// its domain-admin on-behalf call).
 $config['oauth_provider']      = 'homelab-sso';
 $config['oauth_provider_name'] = 'Homelab SSO';
 $config['oauth_client_id']     = 'roundcube';
 $config['oauth_client_secret'] = '__SSO_CLIENT_SECRET__';
 $config['oauth_auth_uri']      = '__SSO_BASE_URL__/oauth/authorize';
-$config['oauth_token_uri']     = '__SSO_BASE_URL__/oauth/token';
-$config['oauth_identity_uri']  = '__SSO_BASE_URL__/oauth/userinfo';
+$config['oauth_token_uri']     = '__SSO_INTERNAL_BASE_URL__/oauth/token';
+$config['oauth_identity_uri']  = '__SSO_INTERNAL_BASE_URL__/oauth/userinfo';
 $config['oauth_logout_uri']    = '__SSO_BASE_URL__/logout';
 $config['oauth_scope']         = 'openid';
 // Silent full-page auto-redirect through homelab-sso on any

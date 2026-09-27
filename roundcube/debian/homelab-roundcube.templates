@@ -79,6 +79,25 @@ Description: Base URL where homelab-sso is reachable:
  either way; this one value drives all four, so it has to satisfy the
  stricter browser-facing requirement.)
 
+Template: homelab-roundcube/sso_internal_base_url
+Type: string
+Default:
+Description: Internal (server-to-server) base URL for homelab-sso (blank = same as the public URL above):
+ Written into config.inc.php's oauth_token_uri/oauth_identity_uri only --
+ the two OAuth calls this app's own PHP process makes directly, never
+ through the end user's browser. Leave blank on a single-host install
+ (falls back to homelab-roundcube/sso_base_url, unchanged behavior). Set
+ this explicitly, to an internal address like http://10.50.2.48:2502,
+ once this app and homelab-sso are on separate hosts -- confirmed live
+ (2026-09-25) that reusing the PUBLIC URL for these two calls breaks
+ once that's true: each instance's own outbound HTTP call to the public
+ vhost has to hairpin back through the edge proxy to reach a sibling
+ host, which doesn't work in this environment (fails as "Connection
+ refused", non-deterministically across a load-balanced pool depending
+ on which instance handles a given login). See
+ config.inc.php.template's own comment on this split for the full
+ story.
+
 Template: homelab-roundcube/sso_client_secret
 Type: password
 Description: Shared secret for this app's "roundcube" OAuth client:
@@ -99,3 +118,60 @@ Description: Base URL where homelab-api is reachable:
  native OAuth login already holds in $_SESSION['oauth_token'] for
  IMAP/SMTP -- no separate credential. Same-host loopback by default,
  like sso_base_url above.
+
+Template: homelab-roundcube/cipher_key
+Type: password
+Default:
+Description: Shared session-encryption key (blank = auto-generate a new random one):
+ Roundcube uses this to encrypt/decrypt $_SESSION['password'] (the IMAP/
+ SMTP credential this app's own OAuth login stores per-session) inside
+ whatever session_storage backend is configured -- 'db' here, so every
+ pool member reads and writes the SAME session rows in Postgres (see
+ config.inc.php.template's own session_storage comment; this is
+ deliberate, NOT session affinity, so any instance can serve any
+ request in a session). That sharing only works if every instance
+ decrypts with the SAME key it was encrypted with.
+ .
+ Leave blank for a single, standalone instance -- each install then
+ auto-generates its own fresh random key exactly like every install
+ before this template existed, and nothing above matters.
+ .
+ IMPORTANT for an HA pool (see homelab-roundcube/instance_id above):
+ leaving this blank on more than one instance means EACH ONE generates
+ its own independently-random key, so a session written by one instance
+ can never be decrypted by another -- found live, 2026-09-26: this
+ produced "Connection to storage server failed" / "Server Error: Empty
+ password" on roughly 2 of every 3 requests across a real 3-instance
+ pool, the exact same class of bug instance_id's own description
+ documents for the Postgres role (independent random values instead of
+ one shared value). Generate ONE value yourself (e.g. `openssl rand
+ -base64 32 | head -c 32`) and give every pool member's install the
+ SAME value here. Changing this on an already-bootstrapped instance
+ does nothing (config.inc.php is only written once -- see the
+ "$CONFIG_FILE already bootstrapped" message); edit
+ $config['des_key'] in /etc/roundcube/config.inc.php by hand on every
+ instance instead, then restart each instance's php-fpm.
+
+Template: homelab-roundcube/instance_id
+Type: string
+Default:
+Description: Unique identifier for this HA instance's own Postgres role:
+ Only needed when running more than one homelab-roundcube instance
+ behind the same webproxy upstream pool (see homelab-webproxy's own
+ sites.yml) -- each instance needs its OWN Postgres role, or every new
+ instance's install silently rotates the shared role's password out
+ from under every other already-running instance (confirmed live: this
+ broke webmail login fleet-wide -- "Internal Error" on roughly 2 of
+ every 3 requests -- during a real 3-instance rebuild). Leave blank for
+ a single, standalone instance (keeps the plain homelab_roundcube_
+ runtime role name, matching every install before this template
+ existed). For an HA pool, give each instance its own short, stable
+ value (e.g. its own hostname: "ct14", "ct15", "ct16") -- the role
+ becomes homelab_roundcube_<value>_runtime. All instances still share
+ the SAME "roundcube" schema/data (contacts, preferences, message
+ cache) -- only the credential is per-instance, never the data; a user
+ sees the same mailbox state no matter which instance answers their
+ request. Changing this on an already-bootstrapped instance does NOT
+ migrate the old role; remove /etc/roundcube/config.inc.php.bootstrapped
+ and run 'dpkg-reconfigure homelab-roundcube' afterward to bootstrap
+ the new one.

@@ -24,12 +24,23 @@ case "$1" in
         db_get homelab-roundcube/internal_port || true;  INTERNAL_PORT="${RET:-8080}"
         db_get homelab-roundcube/product_name || true;   PRODUCT_NAME="${RET:-Homelab Webmail}"
         db_get homelab-roundcube/sso_base_url || true;      SSO_BASE_URL="${RET:-http://127.0.0.1:2502}"
+        db_get homelab-roundcube/sso_internal_base_url || true; SSO_INTERNAL_BASE_URL="${RET:-$SSO_BASE_URL}"
         db_get homelab-roundcube/sso_client_secret || true; SSO_CLIENT_SECRET="$RET"
         db_get homelab-roundcube/api_base_url || true;      API_BASE_URL="${RET:-http://127.0.0.1:3000}"
         db_get homelab-roundcube/imap_host || true;         IMAP_HOST="${RET:-localhost}"
         db_get homelab-roundcube/imap_port || true;         IMAP_PORT="${RET:-993}"
         db_get homelab-roundcube/smtp_host || true;         SMTP_HOST="${RET:-localhost}"
         db_get homelab-roundcube/smtp_port || true;         SMTP_PORT="${RET:-587}"
+        db_get homelab-roundcube/instance_id || true;       INSTANCE_ID="$RET"
+        db_get homelab-roundcube/cipher_key || true;        CIPHER_KEY_OVERRIDE="$RET"
+
+        # Blank (the default, and every existing single-instance
+        # install's current state) keeps the plain "homelab_roundcube"
+        # feature name -- only an explicit instance_id changes this.
+        # See homelab-roundcube/instance_id's own description for why
+        # this matters for an HA pool specifically.
+        BOOTSTRAP_FEATURE="homelab_roundcube"
+        [ -n "$INSTANCE_ID" ] && BOOTSTRAP_FEATURE="homelab_roundcube_${INSTANCE_ID}"
 
         # Debian's roundcube-core does NOT scan /usr/share/roundcube/
         # plugins/ directly -- rcube_plugin_api::load_plugin() actually
@@ -70,8 +81,8 @@ case "$1" in
         "$SHARE_DIR/script/homelab-roundcube-patch-oauth-sso"
 
         if [ ! -f "$CONFIG_FILE.bootstrapped" ]; then
-            echo "  bootstrapping split Postgres roles for 'homelab_roundcube' on $DB_HOST..."
-            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_roundcube --schema roundcube --db-host "$DB_HOST")"
+            echo "  bootstrapping split Postgres roles for '$BOOTSTRAP_FEATURE' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature "$BOOTSTRAP_FEATURE" --schema roundcube --db-host "$DB_HOST")"
 
             RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
             RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
@@ -109,7 +120,20 @@ case "$1" in
                 --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
                 || echo "  WARNING: pgbouncer registration failed -- see output above; register '$RUNTIME_ROLE' by hand."
 
-            CIPHER_KEY="$(openssl rand -base64 32 | head -c 32)"
+            # Blank (the default, and every existing single-instance
+            # install's current state) auto-generates a fresh random
+            # key, unchanged from before this field existed. An HA pool
+            # must instead give every instance the SAME explicit value
+            # here -- see homelab-roundcube/cipher_key's own
+            # description for why: this key en/decrypts session data
+            # shared across the whole pool via Postgres, so instances
+            # with different independently-random keys can never read
+            # each other's sessions back. Confirmed live, 2026-09-26.
+            if [ -n "$CIPHER_KEY_OVERRIDE" ]; then
+                CIPHER_KEY="$CIPHER_KEY_OVERRIDE"
+            else
+                CIPHER_KEY="$(openssl rand -base64 32 | head -c 32)"
+            fi
 
             sed \
                 -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
@@ -120,6 +144,7 @@ case "$1" in
                 -e "s#__PRODUCT_NAME__#$PRODUCT_NAME#g" \
                 -e "s#__CIPHER_KEY__#$CIPHER_KEY#g" \
                 -e "s#__SSO_BASE_URL__#$SSO_BASE_URL#g" \
+                -e "s#__SSO_INTERNAL_BASE_URL__#$SSO_INTERNAL_BASE_URL#g" \
                 -e "s#__SSO_CLIENT_SECRET__#$SSO_CLIENT_SECRET#g" \
                 -e "s#__API_BASE_URL__#$API_BASE_URL#g" \
                 -e "s#__IMAP_HOST__#$IMAP_HOST#g" \

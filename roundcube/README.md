@@ -165,6 +165,53 @@ the SSO session does (symptom: a raw "session invalid or expired" page
 instead of a silent SSO bounce, since the OAuth plugin's auto-redirect
 only fires when no local session error is already present).
 
+## Multi-instance HA: every pool member must share the SAME `des_key`
+
+Found live, 2026-09-26, on a real 3-instance Roundcube pool
+(ct14/ct15/ct16 behind homelab-webproxy): real user sessions
+intermittently showed "Connection to storage server failed" / "Server
+Error: Empty password" — roughly 2 of every 3 requests, matching a
+round-robin pool with 1 good instance out of 3 for any given session.
+
+Root cause: `session_storage = 'db'` (see `config.inc.php.template`)
+deliberately shares session rows across the whole pool via Postgres, so
+any instance can serve any request in a session — this part is correct
+and NOT the bug (session affinity was investigated and ruled out
+earlier; don't reintroduce ip_hash/cookie-hash upstream balancing to
+"fix" this). But Roundcube encrypts `$_SESSION['password']` (the IMAP/
+SMTP credential this app's OAuth login stores per-session) with
+`$config['des_key']` before writing it, and decrypts it with the same
+key on every read. This package's own postinst used to generate that
+key with `openssl rand` **independently on every install** — three
+installs, three unrelated random keys. A session written by the
+instance that handled login could only ever be decrypted by that same
+instance; the other two read back garbage, `storage_connect()` failed,
+and Roundcube surfaced it as an empty-password/storage error. Confirmed
+directly: reproduced the failure live, pulled the exact session row
+back out of `roundcube.session` by its real session ID, found a
+substantial, well-formed encrypted `password` blob (not actually
+empty/missing in storage), then found each instance's
+`config.inc.php` had a distinct `des_key`.
+
+This is the exact same class of bug `homelab-roundcube/instance_id`
+already exists to prevent for the Postgres role (independent random
+values where the pool actually needs one shared value) — `des_key` was
+simply the second place the same mistake existed. Fixed the same way:
+a new `homelab-roundcube/cipher_key` debconf field (blank = keep
+today's per-instance random generation, correct for a standalone
+install; set explicitly and identically on every pool member for an
+HA install — see that template's own description for the exact
+`openssl rand -base64 32 | head -c 32` command to generate one shared
+value). Regression-tested by
+`tests/e2e/test_mail_storage_reliability.py`.
+
+**This only takes effect on a fresh bootstrap** (`config.inc.php` is
+written once — see the "already bootstrapped" message in `postinst`).
+An already-deployed pool with mismatched keys must be fixed by hand:
+pick one instance's existing `$config['des_key']` value (or generate a
+new shared one), edit it into `/etc/roundcube/config.inc.php` on every
+other instance, then restart each instance's `phpN.N-fpm`.
+
 ## Testing
 
 Package-local: none — like `homelab-dns`, `homelab-dovecot`, and

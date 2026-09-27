@@ -132,17 +132,31 @@ sub main {
       :                           ('ssh', @SSH_OPTS, $DB_HOST, 'sudo -u postgres psql');
     my @admin_cmd = (@admin_prefix, '-d', $DB, '-X', '-tA');
 
-    if (schema_already_applied(@admin_cmd)) {
-        log_msg("$SCHEMA_NAME.users already exists -- leaving existing data untouched");
-        return;
-    }
-
+    # Always set search_path for THIS role pair, unconditionally and
+    # idempotently, BEFORE the already-applied check below -- with
+    # per-instance roles (see homelab-roundcube's own instance_id
+    # debconf template), every HA instance gets its OWN runtime/migrate
+    # role pair but shares the SAME "roundcube" schema/data, so
+    # schema_already_applied() is true for every instance after the
+    # first one. It must only skip re-running Roundcube's OWN vendor
+    # schema SQL a second time -- it must NOT also skip configuring
+    # search_path for a role pair that's never been configured before,
+    # or that instance's entirely-unqualified queries ("SELECT * FROM
+    # users") silently resolve against "public" instead, finding no
+    # tables at all. Found live while wiring up per-instance roles: the
+    # old code gated both steps behind the same check, so only the
+    # first-bootstrapped instance's roles ever got search_path set.
     log_msg("setting search_path on '$RUNTIME_ROLE'/'$MIGRATE_ROLE' to '$SCHEMA_NAME'...");
     my @admin_apply_cmd =
         is_local_host($DB_HOST) ? ('sudo', '-u', 'postgres', 'psql', '-q', '-d', $DB, '-X', '-v', 'ON_ERROR_STOP=1')
       :                           ('ssh', @SSH_OPTS, $DB_HOST, "sudo -u postgres psql -q -d $DB -X -v ON_ERROR_STOP=1");
     run_sql(search_path_sql(), @admin_apply_cmd)
         or die_msg('failed to set search_path -- see output above');
+
+    if (schema_already_applied(@admin_cmd)) {
+        log_msg("$SCHEMA_NAME.users already exists -- leaving existing data untouched");
+        return;
+    }
 
     log_msg("applying Roundcube's own vendor schema ($SCHEMA_FILE)...");
     my @migrate_cmd =
