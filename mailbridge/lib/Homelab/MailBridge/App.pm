@@ -71,6 +71,7 @@ sub startup ($self) {
     $r->get('/api/v1/mail/messages')     ->to('mail#list_messages');
     $r->get('/api/v1/mail/messages/:uid')->to('mail#read_message');
     $r->post('/api/v1/mail/send')        ->to('mail#send_message');
+    $r->get('/api/v1/mail/usage')        ->to('mail#api_usage');
 
     return;
 }
@@ -205,6 +206,43 @@ sub list_messages ($c) {
         return $c->render(json => { error => 'could not list messages' }, status => 502);
     }
     return $c->render(json => \@messages);
+}
+
+# GET /api/v1/mail/usage -- the user's own dovecot mailbox usage/limit,
+# read over IMAP GETQUOTAROOT with the user's own XOAUTH2 token (same
+# auth as every other handler here). Returns {used_bytes, limit_bytes},
+# byte-identical in shape to homelab-drive's /api/v1/usage so the
+# accountmanage dashboard renders it with the exact same code path as
+# drive usage.
+#
+# Parses getquotaroot's raw response rather than Mail::IMAPClient's
+# quota()/quota_usage() convenience methods: those issue a literal
+# `GETQUOTA INBOX`, but dovecot's quota root is NAMED "User quota" (see
+# ../dovecot/conf.d/91-homelab-dovecot.conf.template), so GETQUOTA INBOX
+# returns "Quota root doesn't exist" and the convenience methods yield
+# undef -- confirmed live. getquotaroot('INBOX') instead returns the
+# `* QUOTA "User quota" (STORAGE <used> <limit>)` line we parse here.
+# RFC 2087 STORAGE numbers are in 1024-byte units, so multiply by 1024
+# to match drive's raw-byte scale (and the dashboard's $fmt_bytes ladder).
+sub api_usage ($c) {
+    my ($email, $token) = _authenticated_email($c) or return;
+    my ($used, $limit);
+    eval {
+        my $imap = _imap_connect($c, $email, $token);
+        my $res = $imap->getquotaroot('INBOX');
+        for my $line (@{ $res // [] }) {
+            if ($line =~ /STORAGE\s+(\d+)\s+(\d+)/) {
+                ($used, $limit) = ($1 * 1024, $2 * 1024);
+                last;
+            }
+        }
+        $imap->logout;
+    };
+    if ($@) {
+        $c->app->log->warn("mailbridge api_usage failed: $@");
+        return $c->render(json => { error => 'could not read mail usage' }, status => 502);
+    }
+    return $c->render(json => { used_bytes => ($used // 0), limit_bytes => ($limit // 0) });
 }
 
 sub read_message ($c) {

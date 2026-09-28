@@ -61,7 +61,17 @@
 % } else {
         <div class="usage-line"><span>Drive</span><span class="amt muted">unavailable</span></div>
 % }
-        <div class="usage-line" style="margin-top:0.9rem;"><span>Mail</span><span class="amt soon">coming soon</span></div>
+% if (defined $mail_usage && defined $mail_usage->{used_bytes}) {
+%   my $used = $mail_usage->{used_bytes};
+%   my $lim  = $mail_usage->{limit_bytes} // 0;
+%   my $pct  = ($lim > 0) ? int($used / $lim * 100) : 0;
+%   $pct = 100 if $pct > 100;
+%   my $cls = $pct >= 100 ? 'full' : ($pct >= 90 ? 'warn' : '');
+        <div class="usage-line" style="margin-top:0.9rem;"><span>Mail</span><span class="amt"><%= $fmt_bytes->($used) %> of <%= $fmt_bytes->($lim) %> (<%= $pct %>%)</span></div>
+        <div class="quota-bar"><span class="<%= $cls %>" style="width: <%= $pct %>%"></span></div>
+% } else {
+        <div class="usage-line" style="margin-top:0.9rem;"><span>Mail</span><span class="amt muted">unavailable</span></div>
+% }
         <p class="muted" style="font-size:0.82rem;margin:0.6rem 0 0;">Every account starts with a 1&nbsp;TB drive limit and a 1&nbsp;TB mail limit.</p>
       </div>
     </section>
@@ -151,126 +161,118 @@
       <div class="flash err"><%= $err %></div>
 % }
 
-      <div class="card">
-        <h2>Users <span class="hint">suspend / re-enable login</span></h2>
-% if (@$admin_users) {
-        <table class="sessions">
-          <thead><tr><th>Email</th><th>Status</th><th>Roles</th><th></th></tr></thead>
-          <tbody>
-% for my $u (@$admin_users) {
-            <tr>
-              <td><%= $u->{email} %></td>
-              <td><%= $u->{active} ? 'Active' : 'Suspended' %></td>
-              <td class="muted"><%= join(', ', @{ $u->{roles} // [] }) || 'user' %></td>
-              <td>
-% if ($u->{email} ne $email) {
-%   if ($u->{active}) {
-                <form method="post" action="/admin/users/<%= $u->{id} %>/active" onsubmit="return confirm('Suspend <%= $u->{email} %>? They will be signed out and unable to log in or receive mail auth.')"><input type="hidden" name="action" value="suspend"><button type="submit" class="btn btn-danger">Suspend</button></form>
-%   } else {
-                <form method="post" action="/admin/users/<%= $u->{id} %>/active"><input type="hidden" name="action" value="enable"><button type="submit" class="btn btn-secondary">Re-enable</button></form>
-%   }
-% } else {
-                <span class="muted" style="font-size:0.8rem;">you</span>
-% }
-              </td>
-            </tr>
-% }
-          </tbody>
-        </table>
-% } else {
-        <p class="muted">No users to show.</p>
-% }
+      <div class="admin-tabs">
+        <button type="button" data-atab="users">👥 Users</button>
+        <button type="button" data-atab="quotas">📊 Quotas</button>
+        <button type="button" data-atab="mail">✉️ Mail domains</button>
       </div>
 
-      <div class="card">
-        <h2>Drive quota</h2>
-        <form method="post" action="/admin/drive-quota">
-          <div class="field"><label>User email</label><input type="email" name="user_email" required placeholder="user@test.mailmasker.org"></div>
-          <div class="field"><label>Limit in GB (blank = reset to the 1 TB default)</label><input type="number" name="limit_gb" min="0" placeholder="1024"></div>
-          <button type="submit" class="btn btn-primary">Set drive quota</button>
-        </form>
+      <div class="admin-panel" data-apanel="users">
+        <div class="card">
+          <h2>Users <span class="hint">search to suspend / re-enable login</span></h2>
+          <div class="field">
+            <label>Find a user</label>
+            <input type="text" id="user-mgmt-search" data-me="<%= $email %>" autocomplete="off" placeholder="type at least 3 characters of an email…">
+          </div>
+          <div id="user-mgmt-results"><p class="muted">Type at least 3 characters to find a user.</p></div>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>Mail quota <span class="hint">dovecot mailbox limit</span></h2>
-        <form method="post" action="/admin/mail-quota">
-          <div class="field"><label>User email</label><input type="email" name="user_email" required placeholder="user@test.mailmasker.org"></div>
-          <div class="field"><label>Limit in GB (blank = reset to the 1 TB default)</label><input type="number" name="limit_gb" min="0" placeholder="1024"></div>
-          <button type="submit" class="btn btn-primary">Set mail quota</button>
-        </form>
+      <div class="admin-panel" data-apanel="quotas">
+        <div class="card">
+          <h2>Drive quota</h2>
+          <form method="post" action="/admin/drive-quota">
+            <div class="field"><label>User email</label><input class="user-fill" type="email" name="user_email" required autocomplete="off" placeholder="type at least 3 characters…"></div>
+            <div class="field"><label>Limit in GB (blank = reset to the 1 TB default)</label><input type="number" name="limit_gb" min="0" placeholder="1024"></div>
+            <button type="submit" class="btn btn-primary">Set drive quota</button>
+            <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">Setting a limit below what the user is already storing blocks new uploads but keeps existing files — they free space by deleting.</p>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2>Mail quota <span class="hint">dovecot mailbox limit</span></h2>
+          <form method="post" action="/admin/mail-quota">
+            <div class="field"><label>User email</label><input class="user-fill" type="email" name="user_email" required autocomplete="off" placeholder="type at least 3 characters…"></div>
+            <div class="field"><label>Limit in GB (blank = reset to the 1 TB default)</label><input type="number" name="limit_gb" min="0" placeholder="1024"></div>
+            <button type="submit" class="btn btn-primary">Set mail quota</button>
+            <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">Setting a limit below current mailbox usage bounces new incoming mail to senders and blocks saving to Sent until they delete mail down — existing mail is kept.</p>
+          </form>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>Block-link footer <span class="hint">appended "manage blocked addresses" link</span></h2>
-        <form method="post" action="/admin/block-link">
-          <div class="field"><label>Domain</label>
-            <select name="domain" required>
+      <div class="admin-panel" data-apanel="mail">
+        <div class="card">
+          <h2>Block-link footer <span class="hint">appended "manage blocked addresses" link</span></h2>
+          <form method="post" action="/admin/block-link">
+            <div class="field"><label>Domain</label>
+              <select name="domain" required>
 % for my $d (@$admin_domains) {
-              <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
+                <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
 % }
-            </select>
-          </div>
-          <div class="field"><label><input type="checkbox" name="enabled" value="1"> Enabled for this domain</label></div>
-          <div class="field"><label>Append mode</label>
-            <select name="mode">
-              <option value="header">header only (no body append)</option>
-              <option value="body">append to body</option>
-              <option value="both" selected>header + body append</option>
-            </select>
-          </div>
-          <button type="submit" class="btn btn-primary">Save block-link settings</button>
-        </form>
-      </div>
+              </select>
+            </div>
+            <div class="field"><label><input type="checkbox" name="enabled" value="1"> Enabled for this domain</label></div>
+            <div class="field"><label>Append mode</label>
+              <select name="mode">
+                <option value="header">header only (no body append)</option>
+                <option value="body">append to body</option>
+                <option value="both" selected>header + body append</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Save block-link settings</button>
+          </form>
+        </div>
 
-      <div class="card">
-        <h2>Domain email authentication</h2>
+        <div class="card">
+          <h2>Domain email authentication</h2>
 % unless (@$admin_domains) {
-        <p class="muted">No managed domains yet.</p>
+          <p class="muted">No managed domains yet.</p>
 % }
 % if (@$admin_domains) {
-        <div style="margin-bottom:1rem;">
-          <form method="post" action="/admin/dkim" onsubmit="return confirm('Rotate + activate a new DKIM key for this domain?')">
-            <div class="field"><label>DKIM — rotate &amp; activate a fresh key</label>
-              <select name="domain">
+          <div style="margin-bottom:1rem;">
+            <form method="post" action="/admin/dkim" onsubmit="return confirm('Rotate + activate a new DKIM key for this domain?')">
+              <div class="field"><label>DKIM — rotate &amp; activate a fresh key</label>
+                <select name="domain">
 % for my $d (@$admin_domains) {
-                <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
+                  <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
 % }
-              </select>
-            </div>
-            <button type="submit" class="btn btn-primary">Force-update DKIM</button>
-          </form>
-        </div>
-        <div style="margin-bottom:1rem;">
-          <form method="post" action="/admin/spf">
-            <div class="field"><label>SPF domain</label>
-              <select name="domain">
+                </select>
+              </div>
+              <button type="submit" class="btn btn-primary">Force-update DKIM</button>
+            </form>
+          </div>
+          <div style="margin-bottom:1rem;">
+            <form method="post" action="/admin/spf">
+              <div class="field"><label>SPF domain</label>
+                <select name="domain">
 % for my $d (@$admin_domains) {
-                <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
+                  <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
 % }
-              </select>
-            </div>
-            <div class="field"><label>SPF value</label><input type="text" name="value" value="v=spf1 mx ~all"></div>
-            <button type="submit" class="btn btn-primary">Set SPF</button>
-            <p class="muted" style="font-size:0.8rem;margin:0.4rem 0 0;">Replaces the domain's apex TXT records.</p>
-          </form>
-        </div>
-        <div>
-          <form method="post" action="/admin/dmarc">
-            <div class="field"><label>DMARC domain</label>
-              <select name="domain">
+                </select>
+              </div>
+              <div class="field"><label>SPF value</label><input type="text" name="value" value="v=spf1 mx ~all"></div>
+              <button type="submit" class="btn btn-primary">Set SPF</button>
+              <p class="muted" style="font-size:0.8rem;margin:0.4rem 0 0;">Replaces the domain's apex TXT records.</p>
+            </form>
+          </div>
+          <div>
+            <form method="post" action="/admin/dmarc">
+              <div class="field"><label>DMARC domain</label>
+                <select name="domain">
 % for my $d (@$admin_domains) {
-                <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
+                  <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
 % }
-              </select>
-            </div>
-            <div class="field"><label>Policy</label>
-              <select name="policy"><option value="none">none (monitor)</option><option value="quarantine">quarantine</option><option value="reject">reject</option></select>
-            </div>
-            <div class="field"><label>Aggregate-report email (rua, optional)</label><input type="email" name="rua" placeholder="dmarc@test.mailmasker.org"></div>
-            <button type="submit" class="btn btn-primary">Set DMARC</button>
-          </form>
+                </select>
+              </div>
+              <div class="field"><label>Policy</label>
+                <select name="policy"><option value="none">none (monitor)</option><option value="quarantine">quarantine</option><option value="reject">reject</option></select>
+              </div>
+              <div class="field"><label>Aggregate-report email (rua, optional)</label><input type="email" name="rua" placeholder="dmarc@test.mailmasker.org"></div>
+              <button type="submit" class="btn btn-primary">Set DMARC</button>
+            </form>
+          </div>
+% }
         </div>
-% }
       </div>
     </section>
 % }

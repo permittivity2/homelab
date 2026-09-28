@@ -1545,14 +1545,48 @@ sub _admin_set_mail_quota ($self, $c) {
 sub _admin_list_users ($self, $c) {
     $self->_require_site_admin($c) or return;
 
-    my $users = $self->pg->db->query(
-        'SELECT id, email, active, created_at FROM api.users ORDER BY id',
-    )->hashes;
-    my $roles_by_user = $self->pg->db->query(
-        q{SELECT ur.user_id, r.name FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id},
-    )->hashes;
+    # Optional typeahead search: `?q=<substr>&limit=N`. When `q` is
+    # absent the behaviour is UNCHANGED (full list ordered by id) -- other
+    # callers (accountmanage's email->id resolution) still depend on that.
+    # When present it's a capped, case-insensitive PREFIX match on email
+    # so the admin UI can suggest users without ever pulling the whole
+    # table (which won't scale to thousands of accounts).
+    my $q = $c->param('q');
+    my $users;
+    if (defined $q && $q ne '') {
+        # Enforce the >=3-char minimum server-side too, so a direct call
+        # can't force a 1-char full-table ILIKE scan.
+        return $c->render(json => []) if length($q) < 3;
+        my $limit = $c->param('limit') // 20;
+        $limit = 20 unless $limit =~ /^\d+$/ && $limit >= 1 && $limit <= 100;
+        # Escape LIKE metacharacters in the user input so a typed % or _
+        # stays literal, then bind the pattern as a VALUE (the wildcard is
+        # concatenated onto the bound Perl string, never into the SQL).
+        (my $esc = $q) =~ s/([\\%_])/\\$1/g;
+        $users = $self->pg->db->query(
+            q{SELECT id, email, active, created_at FROM api.users
+              WHERE email ILIKE ? ESCAPE '\' ORDER BY email LIMIT ?},
+            $esc . '%', $limit,
+        )->hashes;
+    }
+    else {
+        $users = $self->pg->db->query(
+            'SELECT id, email, active, created_at FROM api.users ORDER BY id',
+        )->hashes;
+    }
+
+    # Roles only for the rows we're returning (cheap + capped in the
+    # search path; equivalent to the old all-users fetch on the no-q path).
+    my @ids = map { $_->{id} } @$users;
     my %roles;
-    push @{ $roles{ $_->{user_id} } }, $_->{name} for @$roles_by_user;
+    if (@ids) {
+        my $roles_by_user = $self->pg->db->query(
+            q{SELECT ur.user_id, r.name FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+              WHERE ur.user_id = ANY(?)},
+            \@ids,
+        )->hashes;
+        push @{ $roles{ $_->{user_id} } }, $_->{name} for @$roles_by_user;
+    }
 
     return $c->render(json => [
         map { { %$_, roles => ($roles{ $_->{id} } // []) } } @$users,

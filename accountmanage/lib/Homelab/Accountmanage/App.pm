@@ -97,6 +97,8 @@ sub startup ($self) {
     $r->post('/admin/dkim')            ->to('account#admin_dkim');
     $r->post('/admin/spf')             ->to('account#admin_spf');
     $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
+    # Live user search for the admin typeahead (JSON; site_admin gated).
+    $r->get('/admin/users/search')     ->to('account#admin_users_search');
 
     return;
 }
@@ -198,20 +200,23 @@ sub dashboard ($c) {
     return $c->redirect_to('/login') unless $summary;
 
     my $sessions = _api_get($c, $jwt, '/api/v1/auth/sessions') // [];
-    # Drive usage via the api gateway (/api/v1/drive/* -> homelab-drive);
-    # undef if drive is unavailable -> the panel shows "unavailable".
+    # Drive + mail usage via the api gateway (/api/v1/drive/* -> homelab-drive,
+    # /api/v1/mail/* -> homelab-mailbridge); undef if that backend is
+    # unavailable -> the panel shows "unavailable". Both return the same
+    # {used_bytes, limit_bytes} shape so the template renders them identically.
     my $drive_usage = _api_get($c, $jwt, '/api/v1/drive/usage');
+    my $mail_usage  = _api_get($c, $jwt, '/api/v1/mail/usage');
 
     my $roles    = $summary->{roles} // [];
     my $is_admin = grep { $_ eq 'site_admin' } @$roles;
 
-    # Admin pane data (only for site_admins): the user list (to
-    # suspend/re-enable + adjust quota) and the managed domains (for
-    # block-link toggle + DKIM/SPF/DMARC). Best-effort -- a panel degrades
-    # to empty if its backend is unavailable.
-    my ($admin_users, $admin_domains) = ([], []);
+    # Admin pane data (only for site_admins): the managed domains (for the
+    # block-link toggle + DKIM/SPF/DMARC selects). The USER list is NOT
+    # pre-loaded any more -- with potentially thousands of accounts the
+    # Users card and the quota forms use the live /admin/users/search
+    # typeahead instead. Best-effort -- degrades to empty if unavailable.
+    my $admin_domains = [];
     if ($is_admin) {
-        $admin_users   = _api_get($c, $jwt, '/api/v1/admin/users') // [];
         $admin_domains = _api_get($c, $jwt, '/api/v1/domains') // [];
     }
 
@@ -221,9 +226,9 @@ sub dashboard ($c) {
         summary      => $summary,
         sessions     => $sessions,
         drive_usage  => $drive_usage,
+        mail_usage   => $mail_usage,
         roles        => $roles,
         is_admin     => ($is_admin ? 1 : 0),
-        admin_users  => $admin_users,
         admin_domains => $admin_domains,
         sso_forgot_url => $c->app->sso_base . '/forgot',
     );
@@ -308,7 +313,7 @@ sub admin_set_active ($c) {
     my $tx = $UA->post($c->app->api_base . "/api/v1/admin/users/$id/active"
         => { Authorization => "Bearer $jwt" } => json => { active => $enable });
     _admin_flash($c, $tx, ($$enable ? 'User re-enabled.' : 'User suspended (and signed out).'));
-    return $c->redirect_to('/#admin');
+    return $c->redirect_to('/#admin:users');
 }
 
 # Set a user's drive quota (GB). Empty limit clears the override (back to
@@ -323,7 +328,7 @@ sub admin_drive_quota ($c) {
     my $tx = $UA->put($c->app->api_base . '/api/v1/drive/admin/quota'
         => { Authorization => "Bearer $jwt" } => json => \%body);
     _admin_flash($c, $tx, ($gb eq '' ? "Drive quota for $user reset to default." : "Drive quota for $user set to ${gb} GB."));
-    return $c->redirect_to('/#admin');
+    return $c->redirect_to('/#admin:quotas');
 }
 
 # Set a user's mail (dovecot) quota (GB). Empty limit clears the override
@@ -339,14 +344,30 @@ sub admin_mail_quota ($c) {
     my ($u) = grep { ($_->{email} // '') eq $user } @$users;
     unless ($u) {
         $c->flash(admin_err => "No such user: $user");
-        return $c->redirect_to('/#admin');
+        return $c->redirect_to('/#admin:quotas');
     }
     my %body;
     $body{limit_bytes} = int($gb) * 1024 * 1024 * 1024 if $gb ne '' && $gb =~ /^\d+$/;
     my $tx = $UA->post($c->app->api_base . "/api/v1/admin/users/$u->{id}/mail-quota"
         => { Authorization => "Bearer $jwt" } => json => \%body);
     _admin_flash($c, $tx, ($gb eq '' ? "Mail quota for $user reset to default." : "Mail quota for $user set to ${gb} GB."));
-    return $c->redirect_to('/#admin');
+    return $c->redirect_to('/#admin:quotas');
+}
+
+# Live user search for the admin typeahead. Proxies to the api gateway's
+# GET /api/v1/admin/users?q=... (site_admin gated there too; this handler
+# re-checks site_admin locally as defense-in-depth). Returns the JSON
+# array straight through for the front-end. >=3-char minimum is enforced
+# on both sides.
+sub admin_users_search ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => [], status => 403) unless $email;
+    my $q = $c->param('q') // '';
+    return $c->render(json => []) if length($q) < 3;
+    # Mojo::URL->query url-encodes q so a '+'/space/'%' in the typed value
+    # can't corrupt the forwarded request.
+    my $path = Mojo::URL->new('/api/v1/admin/users')->query(q => $q, limit => 20)->to_string;
+    return $c->render(json => (_api_get($c, $jwt, $path) // []));
 }
 
 # Toggle the block-link footer per domain. mode: header (link only, no
@@ -360,7 +381,7 @@ sub admin_block_link ($c) {
     my $tx = $UA->put($c->app->api_base . "/api/v1/block-link/domains/$domain"
         => { Authorization => "Bearer $jwt" } => json => { enabled => $enabled, mode => $mode });
     _admin_flash($c, $tx, "Block-link settings for $domain saved.");
-    return $c->redirect_to('/#admin');
+    return $c->redirect_to('/#admin:mail');
 }
 
 # Force-update DKIM for a domain = rotate a new selector, then activate it.
@@ -372,12 +393,12 @@ sub admin_dkim ($c) {
     my $rot = $UA->post($c->app->api_base . "/api/v1/domains/$domain/dkim/rotate" => $auth => json => {});
     if (($rot->res->code // 0) != 201) {
         _admin_flash($c, $rot, '');
-        return $c->redirect_to('/#admin');
+        return $c->redirect_to('/#admin:mail');
     }
     my $selector = eval { $rot->res->json->{selector} };
     my $act = $UA->post($c->app->api_base . "/api/v1/domains/$domain/dkim/$selector/activate" => $auth => json => {});
     _admin_flash($c, $act, "DKIM rotated + activated for $domain (selector $selector).");
-    return $c->redirect_to('/#admin');
+    return $c->redirect_to('/#admin:mail');
 }
 
 # Set SPF (apex TXT). NOTE: this REPLACES the domain's entire apex TXT
@@ -391,7 +412,7 @@ sub admin_spf ($c) {
         => { Authorization => "Bearer $jwt" }
         => json => { name => $domain, type => 'TXT', content => [$value], ttl => 3600 });
     _admin_flash($c, $tx, "SPF set for $domain.");
-    return $c->redirect_to('/#admin');
+    return $c->redirect_to('/#admin:mail');
 }
 
 # Set DMARC (_dmarc TXT). Builds the value from a policy + optional rua.
@@ -408,7 +429,7 @@ sub admin_dmarc ($c) {
         => { Authorization => "Bearer $jwt" }
         => json => { name => "_dmarc.$domain", type => 'TXT', content => [$value], ttl => 3600 });
     _admin_flash($c, $tx, "DMARC set for $domain (p=$policy).");
-    return $c->redirect_to('/#admin');
+    return $c->redirect_to('/#admin:mail');
 }
 
 1;

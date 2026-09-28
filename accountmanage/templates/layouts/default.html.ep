@@ -53,7 +53,7 @@
     .menu-item:hover { background: #f0f2f5; }
     .menu-item.danger { color: var(--danger); }
 
-    main { max-width: 960px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+    main { max-width: 1400px; margin: 0 auto; padding: 1.5rem 2rem 3rem; }
     h1.page { font-size: 1.4rem; margin: 0.2rem 0 1.25rem; }
 
     /* Two-pane settings layout: options on the left, selected section on
@@ -70,6 +70,32 @@
     .sidenav .ico { width: 1.2rem; text-align: center; }
     .section { display: none; }
     .section.active { display: block; }
+
+    /* Administration sub-tabs (Users / Quotas / Mail domains) inside the
+       single Administration pane -- keeps the left nav short and groups the
+       admin cards. A small JS block (below) toggles .admin-panel like the
+       left nav toggles .section; the flash lives ABOVE the tabs so a
+       post-action redirect's success/error message is visible on any tab. */
+    .admin-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--border); margin: 0.2rem 0 1.1rem; flex-wrap: wrap; }
+    .admin-tabs button { background: none; border: none; border-bottom: 2px solid transparent; padding: 0.5rem 0.85rem; font: inherit; font-size: 0.9rem; color: var(--muted); cursor: pointer; }
+    .admin-tabs button:hover { color: var(--text); }
+    .admin-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+    .admin-panel { display: none; }
+    .admin-panel.active { display: block; }
+
+    /* Typeahead (live user search): a results dropdown anchored under an
+       input. Used for the quota-form email fields and inline in the Users
+       card so we never render thousands of rows up front. */
+    .ta-results {
+      position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: 15;
+      background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.1); max-height: 260px; overflow-y: auto; display: none;
+    }
+    .ta-results.open { display: block; }
+    .ta-item { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.5rem 0.7rem; cursor: pointer; font-size: 0.88rem; }
+    .ta-item:hover { background: #eef1f6; }
+    .ta-item .st { font-size: 0.75rem; color: var(--muted); flex: none; }
+    .ta-empty { padding: 0.5rem 0.7rem; color: var(--muted); font-size: 0.85rem; }
 
     /* Forms */
     .field { margin-bottom: 0.8rem; }
@@ -184,8 +210,102 @@
       navBtns.forEach(function (b) {
         b.addEventListener('click', function () { show(b.dataset.section); if (history.replaceState) history.replaceState(null, '', '#' + b.dataset.section); });
       });
-      var initial = (location.hash || '').replace(/^#/, '');
+      // Hash may carry a sub-tab as "#admin:quotas" -- the part before ':'
+      // selects the left-nav section; the inner-tab block below reads the
+      // part after ':'.
+      var initial = (location.hash || '').replace(/^#/, '').split(':')[0];
       if (!initial || !show(initial)) show(navBtns[0].dataset.section);
+    })();
+
+    // Administration sub-tabs: toggle .admin-panel[data-apanel] from
+    // .admin-tabs button[data-atab], honoring a "#admin:<tab>" hash so a
+    // post-action redirect lands on the right tab. Self-contained (the
+    // left-nav IIFE above only knows about .section), so it's inert when
+    // the Administration pane isn't rendered (non-admin users).
+    (function () {
+      var tabs = Array.prototype.slice.call(document.querySelectorAll('.admin-tabs button[data-atab]'));
+      var panels = Array.prototype.slice.call(document.querySelectorAll('.admin-panel[data-apanel]'));
+      if (!tabs.length) return;
+      function show(tab) {
+        var ok = false;
+        panels.forEach(function (p) { var on = p.dataset.apanel === tab; p.classList.toggle('active', on); if (on) ok = true; });
+        tabs.forEach(function (b) { b.classList.toggle('active', b.dataset.atab === tab); });
+        return ok;
+      }
+      tabs.forEach(function (b) {
+        b.addEventListener('click', function () { show(b.dataset.atab); if (history.replaceState) history.replaceState(null, '', '#admin:' + b.dataset.atab); });
+      });
+      var sub = ((location.hash || '').replace(/^#/, '').split(':')[1]) || '';
+      if (!sub || !show(sub)) show(tabs[0].dataset.atab);
+    })();
+
+    // --- Live user search (admin) ------------------------------------
+    // Shared helpers: debounce + HTML-escape + a fetch to the BFF's
+    // /admin/users/search proxy (site_admin gated server-side; returns
+    // [{id,email,active,roles}] for >=3-char queries, capped).
+    function hlEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+    function hlDebounce(fn, ms) { var t; return function () { var a = arguments, self = this; clearTimeout(t); t = setTimeout(function () { fn.apply(self, a); }, ms); }; }
+    function hlFetchUsers(q) {
+      if (!q || q.length < 3) return Promise.resolve([]);
+      return fetch('/admin/users/search?q=' + encodeURIComponent(q), { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .catch(function () { return []; });
+    }
+
+    // (a) Quota-form email typeahead: any input.user-fill gets a dropdown
+    // of matching users; picking one fills the input's value.
+    (function () {
+      Array.prototype.forEach.call(document.querySelectorAll('input.user-fill'), function (input) {
+        input.parentNode.style.position = 'relative';
+        var box = document.createElement('div'); box.className = 'ta-results';
+        input.parentNode.appendChild(box);
+        function close() { box.classList.remove('open'); box.innerHTML = ''; }
+        input.addEventListener('input', hlDebounce(function () {
+          var q = input.value.trim();
+          if (q.length < 3) { close(); return; }
+          hlFetchUsers(q).then(function (users) {
+            box.innerHTML = '';
+            if (!users.length) { box.innerHTML = '<div class="ta-empty">No matching users</div>'; box.classList.add('open'); return; }
+            users.forEach(function (u) {
+              var it = document.createElement('div'); it.className = 'ta-item';
+              it.innerHTML = '<span>' + hlEsc(u.email) + '</span><span class="st">' + (u.active ? '' : 'suspended') + '</span>';
+              it.addEventListener('mousedown', function (e) { e.preventDefault(); input.value = u.email; close(); });
+              box.appendChild(it);
+            });
+            box.classList.add('open');
+          });
+        }, 200));
+        input.addEventListener('blur', function () { setTimeout(close, 150); });
+      });
+    })();
+
+    // (b) Users management search: #user-mgmt-search renders matching rows
+    // (with Suspend/Re-enable) into #user-mgmt-results, client-side, so the
+    // whole user table is never pulled up front.
+    (function () {
+      var input = document.getElementById('user-mgmt-search');
+      var out = document.getElementById('user-mgmt-results');
+      if (!input || !out) return;
+      var me = (input.dataset.me || '').toLowerCase();
+      input.addEventListener('input', hlDebounce(function () {
+        var q = input.value.trim();
+        if (q.length < 3) { out.innerHTML = '<p class="muted">Type at least 3 characters to find a user.</p>'; return; }
+        out.innerHTML = '<p class="muted">Searching…</p>';
+        hlFetchUsers(q).then(function (users) {
+          if (!users.length) { out.innerHTML = '<p class="muted">No matching users.</p>'; return; }
+          var rows = users.map(function (u) {
+            var isSelf = u.email.toLowerCase() === me;
+            var roles = (u.roles && u.roles.length) ? u.roles.join(', ') : 'user';
+            var action = isSelf
+              ? '<span class="muted" style="font-size:0.8rem;">you</span>'
+              : (u.active
+                ? '<form method="post" action="/admin/users/' + u.id + '/active" onsubmit="return confirm(\'Suspend this user? They will be signed out and unable to log in or receive mail auth.\')"><input type="hidden" name="action" value="suspend"><button class="btn btn-danger">Suspend</button></form>'
+                : '<form method="post" action="/admin/users/' + u.id + '/active"><input type="hidden" name="action" value="enable"><button class="btn btn-secondary">Re-enable</button></form>');
+            return '<tr><td>' + hlEsc(u.email) + '</td><td>' + (u.active ? 'Active' : 'Suspended') + '</td><td class="muted">' + hlEsc(roles) + '</td><td>' + action + '</td></tr>';
+          }).join('');
+          out.innerHTML = '<table class="sessions"><thead><tr><th>Email</th><th>Status</th><th>Roles</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+        });
+      }, 250));
     })();
   </script>
 </body>
