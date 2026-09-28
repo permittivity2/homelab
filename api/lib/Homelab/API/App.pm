@@ -34,6 +34,11 @@ sub startup ($self) {
         listen   => [$srv->{listen} // 'http://127.0.0.1:3000'],
         pid_file => $srv->{pid_file} // '/var/lib/homelab/api-hypnotoad.pid',
         workers  => $srv->{workers} // 4,
+        # A 4GB drive upload forwarded through the gateway is one long
+        # request; the default 15s inactivity timeout would drop it on a
+        # brief network stall. Generous, config-overridable defaults.
+        inactivity_timeout => $srv->{inactivity_timeout} // 1200,
+        heartbeat_timeout  => $srv->{heartbeat_timeout}  // 120,
     });
 
     $self->pg(runtime_pg(%{ $config->{database} }));

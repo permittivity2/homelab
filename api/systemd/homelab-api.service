@@ -17,6 +17,16 @@ Environment="HOMELAB_API_CONFIG=/etc/homelab/api/config.yml"
 # like it came from 127.0.0.1, defeating the per-IP login-attempt
 # tracking in Homelab::API::App (_login/_register) entirely.
 Environment="MOJO_REVERSE_PROXY=1"
+# homelab-api is the gateway for CLI/API drive uploads (/api/v1/drive/*,
+# Homelab::Common::Proxy::forward): a 4GB `homelab-cli drive upload`
+# streams through THIS process on its way to homelab-drive, so this hop
+# needs the same 4GB-capable ceiling drive itself has, or the gateway
+# rejects the body before forwarding. 5GB leaves multipart headroom.
+Environment="MOJO_MAX_MESSAGE_SIZE=5368709120"
+# Spool large forwarded bodies to real disk, NEVER the default /tmp
+# (a RAM tmpfs on this fleet -- a 4GB spool there would OOM the box).
+# postinst creates this dir (homelab-owned).
+Environment="MOJO_TMPDIR=/var/lib/homelab/api-uploads-tmp"
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-api
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-api
 TimeoutStopSec=10

@@ -13,8 +13,12 @@ case "$1" in
 
         adduser --system --group --home /var/lib/homelab --no-create-home \
             --shell /usr/sbin/nologin homelab 2>/dev/null || true
-        mkdir -p /var/lib/homelab "$CONFIG_DIR"
-        chown homelab:homelab /var/lib/homelab
+        # api-uploads-tmp is MOJO_TMPDIR (see homelab-api.service): large
+        # gateway-forwarded upload bodies (4GB drive uploads via
+        # /api/v1/drive/*) spool here on real disk, never the RAM-backed
+        # /tmp tmpfs this fleet uses.
+        mkdir -p /var/lib/homelab "$CONFIG_DIR" /var/lib/homelab/api-uploads-tmp
+        chown homelab:homelab /var/lib/homelab /var/lib/homelab/api-uploads-tmp
 
         # Shared manifest dir -- may not exist yet if homelab-agent isn't
         # installed on this host first (install order isn't guaranteed
