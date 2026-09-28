@@ -2,6 +2,7 @@
 
 import argparse
 import getpass
+import hashlib
 import json
 import re
 import sys
@@ -1181,6 +1182,35 @@ def cmd_drive_rmdir(args):
     return 0
 
 
+# Files larger than this use the resumable chunked protocol; smaller
+# ones use the one-shot multipart upload, for which chunking would just
+# add a round trip and buy no resilience worth the complexity.
+CHUNK_UPLOAD_THRESHOLD = 8 * 1024 * 1024
+
+
+def _upload_sidecar(client, path, total_size, folder_id):
+    """A per-(server, file, size, mtime, folder) sidecar path that
+    remembers an in-progress chunked upload's session id, so re-running
+    the SAME `drive upload` after an interruption resumes instead of
+    starting over. Keyed tightly enough that editing the file (mtime/size
+    changes) or aiming at a different folder/server starts fresh rather
+    than resuming onto stale bytes."""
+    key = "\0".join([
+        client.api_base, str(path.resolve()), str(total_size),
+        str(path.stat().st_mtime_ns), str(folder_id or ""),
+    ])
+    digest = hashlib.sha256(key.encode()).hexdigest()[:32]
+    directory = cfgmod.CONFIG_DIR / "uploads"
+    return directory, directory / f"{digest}.json"
+
+
+def _read_sidecar(sidecar):
+    try:
+        return json.loads(sidecar.read_text()).get("upload_id")
+    except (OSError, ValueError):
+        return None
+
+
 def cmd_drive_upload(args):
     session = _require_session(args)
     if not session:
@@ -1189,14 +1219,76 @@ def cmd_drive_upload(args):
     if not path.is_file():
         _emit_error(args, f"No such file: {path}")
         return 1
+    client = _client(args)
+    token = session["token"]
+    total_size = path.stat().st_size
+
+    # Small files: the plain one-shot upload -- chunking buys nothing.
+    if total_size <= CHUNK_UPLOAD_THRESHOLD:
+        try:
+            result = client.drive_upload_file(token, path, folder_id=args.folder)
+        except ApiError as e:
+            _emit_error(args, f"Upload failed: {e.message}")
+            return 1
+        if _emit(args, result):
+            return 0
+        print(f"Uploaded: {result['filename']} (id {result['id']})")
+        return 0
+
+    # Large files: resumable chunked upload.
+    sidecar_dir, sidecar = _upload_sidecar(client, path, total_size, args.folder)
+    upload_id = _read_sidecar(sidecar)
+
+    def on_session(uid):
+        # Best-effort: persist the session id the instant it exists, so an
+        # interrupt (Ctrl-C, crash, dropped link) leaves something to
+        # resume from. A failure here just means "can't resume later".
+        try:
+            sidecar_dir.mkdir(parents=True, exist_ok=True)
+            sidecar.write_text(json.dumps({"upload_id": uid}))
+        except OSError:
+            pass
+
+    show_progress = not getattr(args, "json", False) and sys.stderr.isatty()
+
+    def progress(sent, total):
+        if show_progress:
+            pct = (sent / total * 100) if total else 100
+            print(
+                f"\r  uploading {path.name}: {sent/1048576:.1f}/{total/1048576:.1f} MiB ({pct:.0f}%)   ",
+                end="", file=sys.stderr, flush=True,
+            )
+
     try:
-        result = _client(args).drive_upload_file(session["token"], path, folder_id=args.folder)
+        result = client.drive_upload_chunked(
+            token, path, total_size, folder_id=args.folder,
+            upload_id=upload_id, on_session=on_session, progress=progress,
+        )
     except ApiError as e:
-        _emit_error(args, f"Upload failed: {e.message}")
+        if show_progress:
+            print(file=sys.stderr)
+        _emit_error(args, f"Upload failed: {e.message}  (re-run to resume)")
         return 1
+    if show_progress:
+        print(file=sys.stderr)
+
+    # Only a real file id is success. drive_upload_chunked raises rather
+    # than returning an incomplete result, but guard anyway: never claim
+    # success or drop the resume sidecar (the anchor for a re-run) without
+    # one.
+    if not (result.get("done") and result.get("file_id")):
+        _emit_error(args, "Upload did not complete -- re-run to resume.")
+        return 1
+
+    # Completed -- drop the resume sidecar.
+    try:
+        sidecar.unlink()
+    except OSError:
+        pass
+
     if _emit(args, result):
         return 0
-    print(f"Uploaded: {result['filename']} (id {result['id']})")
+    print(f"Uploaded: {path.name} (id {result['file_id']})")
     return 0
 
 
@@ -1224,13 +1316,80 @@ def cmd_drive_delete(args):
     if not session:
         return 1
     try:
-        result = _client(args).drive_delete_file(session["token"], args.file_id)
+        result = _client(args).drive_delete_file(session["token"], args.file_id, soft=args.trash)
     except ApiError as e:
         _emit_error(args, f"Delete failed: {e.message}")
         return 1
     if _emit(args, result or {"success": True}):
         return 0
-    print("Deleted")
+    print("Moved to Trash" if args.trash else "Deleted")
+    return 0
+
+
+def cmd_drive_trash(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).drive_trash_list(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not list Trash: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    folders = result.get("folders", [])
+    files = result.get("files", [])
+    if not folders and not files:
+        print("Trash is empty.")
+        return 0
+    rows = [["folder", f["id"], f["name"], "", f.get("deleted_at_display", "")] for f in folders]
+    rows += [["file", f["id"], f["filename"], f.get("size_bytes", ""), f.get("deleted_at_display", "")] for f in files]
+    _print_table(["TYPE", "ID", "NAME", "SIZE", "DELETED"], rows)
+    print("\nRestore with: homelab-cli drive restore <id> [--folder]")
+    return 0
+
+
+def cmd_drive_restore(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    kind = "folder" if args.folder else "file"
+    try:
+        result = _client(args).drive_restore(session["token"], args.id, kind=kind)
+    except ApiError as e:
+        _emit_error(args, f"Restore failed: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Restored {kind} {args.id}")
+    return 0
+
+
+def cmd_drive_append(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        file_ids = [int(x) for x in args.file_ids]
+    except ValueError:
+        _emit_error(args, "file ids must be integers -- run 'drive list' to see them")
+        return 1
+    if len(file_ids) < 2:
+        _emit_error(args, "give at least two file ids to combine")
+        return 1
+    try:
+        result = _client(args).drive_append_files(
+            session["token"], file_ids, output_name=args.output, folder_id=args.folder,
+        )
+    except ApiError as e:
+        _emit_error(args, f"Could not start combine: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(
+        f"Combining {len(file_ids)} file(s), in the order given, into '{result['output_name']}' "
+        f"(job {result['id']}). It'll appear in drive once the worker finishes."
+    )
     return 0
 
 
@@ -2128,9 +2287,29 @@ def build_parser():
     p.add_argument("--output", help="Destination path (defaults to the file id in the current directory)")
     p.set_defaults(func=cmd_drive_download)
 
-    p = drive_sub.add_parser("delete", help="Delete a file by id")
+    p = drive_sub.add_parser("delete", help="Delete a file by id (immediate + permanent unless --trash)")
     p.add_argument("file_id")
+    p.add_argument("--trash", action="store_true",
+                   help="Soft-delete: move to Trash (recoverable) instead of deleting immediately, like the web interface")
     p.set_defaults(func=cmd_drive_delete)
+
+    p = drive_sub.add_parser("trash", help="List items in Trash (soft-deleted, recoverable)")
+    p.set_defaults(func=cmd_drive_trash)
+
+    p = drive_sub.add_parser("restore", help="Restore an item from Trash by id")
+    p.add_argument("id", help="File id to restore (or folder id with --folder)")
+    p.add_argument("--folder", action="store_true", help="The id is a folder id, not a file id")
+    p.set_defaults(func=cmd_drive_restore)
+
+    p = drive_sub.add_parser(
+        "append",
+        help="Combine files into one, concatenating their bytes IN THE ORDER given (reassemble split files)",
+    )
+    p.add_argument("file_ids", nargs="+",
+                   help="File ids to join, in the exact order you want them concatenated (see 'drive list')")
+    p.add_argument("--output", "-o", help="Name for the combined file (default: derived from the first file)")
+    p.add_argument("--folder", help="Destination folder id (default: the first file's own folder)")
+    p.set_defaults(func=cmd_drive_append)
 
     p = drive_sub.add_parser("mkdir", help="Create a folder")
     p.add_argument("name")

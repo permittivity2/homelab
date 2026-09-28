@@ -265,16 +265,19 @@ class Client:
 
     def drive_upload_file(self, token, path, folder_id=None):
         data = {"folder_id": folder_id} if folder_id else {}
+        # timeout is per-read, not total (requests streams the file object
+        # so RAM stays flat) -- 60s was far too short for a multi-GB
+        # upload; 3600s gives a slow link room without hanging forever.
         with open(path, "rb") as f:
             return self._request(
                 "POST", "/api/v1/drive/files", headers=self._auth(token),
-                files={"file": (path.name, f)}, data=data, timeout=60,
+                files={"file": (path.name, f)}, data=data, timeout=3600,
             )
 
     def drive_download_file(self, token, file_id, dest_path):
         resp = self._send(
             "GET", f"/api/v1/drive/files/{file_id}", headers=self._auth(token),
-            timeout=60, stream=True,
+            timeout=3600, stream=True,
         )
         if not resp.ok:
             raise ApiError(resp.status_code, _error_message(resp))
@@ -282,8 +285,19 @@ class Client:
             for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
 
-    def drive_delete_file(self, token, file_id):
-        return self._request("DELETE", f"/api/v1/drive/files/{file_id}", headers=self._auth(token))
+    def drive_delete_file(self, token, file_id, soft=False):
+        # Hard delete by default (immediate + permanent). soft=True opts
+        # into Trash (?soft=1), matching the web interface's recoverable
+        # delete -- see the drive backend's api_delete.
+        params = {"soft": "1"} if soft else {}
+        return self._request("DELETE", f"/api/v1/drive/files/{file_id}", headers=self._auth(token), params=params)
+
+    def drive_trash_list(self, token):
+        return self._request("GET", "/api/v1/drive/trash", headers=self._auth(token))
+
+    def drive_restore(self, token, item_id, kind="file"):
+        seg = "folders" if kind == "folder" else "files"
+        return self._request("POST", f"/api/v1/drive/{seg}/{item_id}/restore", headers=self._auth(token))
 
     def drive_list_folders(self, token, parent_id=None):
         params = {"parent_id": parent_id} if parent_id else {}
@@ -297,6 +311,158 @@ class Client:
 
     def drive_delete_folder(self, token, folder_id):
         return self._request("DELETE", f"/api/v1/drive/folders/{folder_id}", headers=self._auth(token))
+
+    def drive_append_files(self, token, file_ids, output_name=None, folder_id=None):
+        # Concatenate several files into one, IN THE GIVEN ORDER of
+        # file_ids (order is load-bearing -- see the drive backend's
+        # create_append_job). The byte-work runs drive-local in a forked
+        # subprocess; this returns immediately with the job id +
+        # output_name, and the finished file appears in drive shortly.
+        body = {"file_ids": file_ids}
+        if output_name:
+            body["output_name"] = output_name
+        if folder_id:
+            body["folder_id"] = folder_id
+        return self._request("POST", "/api/v1/drive/append-jobs", headers=self._auth(token), json=body)
+
+    # --- Chunked / resumable uploads (see the drive backend's
+    # migrations/006-upload-sessions.sql for the protocol). These four
+    # are the low-level primitives; drive_upload_chunked() below drives
+    # the loop. ---
+    def drive_create_upload(self, token, filename, total_size, folder_id=None):
+        body = {"filename": filename, "total_size": total_size}
+        if folder_id:
+            body["folder_id"] = folder_id
+        return self._request("POST", "/api/v1/drive/uploads", headers=self._auth(token), json=body)
+
+    def drive_get_upload(self, token, upload_id):
+        return self._request("GET", f"/api/v1/drive/uploads/{upload_id}", headers=self._auth(token))
+
+    def drive_delete_upload(self, token, upload_id):
+        return self._request("DELETE", f"/api/v1/drive/uploads/{upload_id}", headers=self._auth(token))
+
+    def drive_patch_chunk(self, token, upload_id, offset, data):
+        # Sends one chunk. A 409 is NOT an error here -- it's the server
+        # telling us the true offset to continue from (resume, or a
+        # duplicate chunk) -- so its JSON body is returned like a success;
+        # the caller re-aligns to body["offset"]. Every other non-2xx is
+        # a real error and raises.
+        headers = self._auth(token)
+        headers["Upload-Offset"] = str(offset)
+        headers["Content-Type"] = "application/octet-stream"
+        resp = self._send(
+            "PATCH", f"/api/v1/drive/uploads/{upload_id}",
+            headers=headers, data=data, timeout=3600,
+        )
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if resp.status_code == 409:
+            return body
+        if not resp.ok:
+            raise ApiError(resp.status_code, body.get("error", resp.text))
+        return body
+
+    def drive_upload_chunked(self, token, path, total_size, folder_id=None,
+                             upload_id=None, chunk_size=None, progress=None, on_session=None):
+        """Upload `path` via the resumable chunked protocol.
+
+        If `upload_id` names a still-open prior session it's resumed from
+        wherever the server last had complete bytes; otherwise a new
+        session is created (and `on_session(upload_id)` is called
+        immediately, so the caller can persist it for cross-invocation
+        resume). `progress(sent, total)` is called as bytes land.
+        Returns the final server dict (with `upload_id`, `file_id`,
+        `done`). Transient network drops mid-upload are retried by
+        re-syncing to the server's real offset -- the whole point of the
+        protocol.
+        """
+        chunk = chunk_size or 8 * 1024 * 1024
+        offset = 0
+
+        # Resume an existing session if we were handed one and it's still
+        # usable; fall back to a fresh session otherwise.
+        started_fresh = True
+        if upload_id:
+            try:
+                st = self.drive_get_upload(token, upload_id)
+            except ApiError as e:
+                st = None if e.status_code == 404 else self._reraise(e)
+            if st and st.get("state") == "completed":
+                if progress:
+                    progress(total_size, total_size)
+                return {"upload_id": upload_id, "done": True, "file_id": st.get("file_id")}
+            if st and st.get("state") == "open" and int(st.get("total_size", -1)) == int(total_size):
+                offset = int(st.get("offset", 0))
+                chunk = st.get("chunk_size") or chunk
+                started_fresh = False
+
+        if started_fresh:
+            info = self.drive_create_upload(token, path.name, total_size, folder_id)
+            upload_id = info["upload_id"]
+            if on_session:
+                on_session(upload_id)
+            if info.get("done"):   # zero-byte file: finalized on create
+                if progress:
+                    progress(total_size, total_size)
+                return {"upload_id": upload_id, "done": True, "file_id": info.get("file_id")}
+            offset = int(info.get("offset", 0))
+            chunk = info.get("chunk_size") or chunk
+
+        # Loop until the server reports done (not just "until offset ==
+        # total"): when all bytes are already present but the session
+        # isn't finalized yet -- e.g. resuming a session whose finalizing
+        # PATCH response was lost -- we still need to send one more
+        # (possibly empty) chunk at offset==total to trigger finalization
+        # and learn the file_id. Only a done response with a real file_id
+        # is success; anything else raises rather than silently claiming a
+        # completed upload.
+        max_retries = 5
+        retries = 0
+        stalls = 0
+        with open(path, "rb") as f:
+            while True:
+                prev = offset
+                f.seek(offset)
+                data = f.read(chunk)   # b"" once offset >= total_size
+                try:
+                    resp = self.drive_patch_chunk(token, upload_id, offset, data)
+                except ApiError:
+                    retries += 1
+                    if retries > max_retries:
+                        raise
+                    # Re-sync to the server's real offset and try again.
+                    try:
+                        offset = int(self.drive_get_upload(token, upload_id).get("offset", offset))
+                    except ApiError:
+                        pass
+                    continue
+                if resp.get("state") == "aborted":
+                    raise ApiError(409, "upload was aborted server-side -- re-run to restart")
+                offset = int(resp.get("offset", offset))
+                if resp.get("done"):
+                    if progress:
+                        progress(total_size, total_size)
+                    return {"upload_id": upload_id, "done": True, "file_id": resp.get("file_id")}
+                if progress:
+                    progress(offset, total_size)
+                # No forward progress this iteration (a 409 re-align that
+                # didn't advance, or an empty chunk at EOF the server
+                # hasn't finalized) -- bail after a few tries rather than
+                # spinning. This also catches a file shorter than the
+                # declared total_size.
+                if offset <= prev:
+                    stalls += 1
+                    if stalls > max_retries:
+                        raise ApiError(500, "upload did not finalize (server offset stopped advancing)")
+                else:
+                    stalls = 0
+                    retries = 0
+
+    @staticmethod
+    def _reraise(e):
+        raise e
 
     # --- DNS + mail-domain admin, via homelab-api's /api/v1/domains/*
     # gateway -> homelab-domain-admin (see ../../domain-admin/README.md).
