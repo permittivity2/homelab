@@ -78,6 +78,13 @@ sub startup ($self) {
     $r->delete('/api/v1/auth/sessions'       => sub ($c) { $self->_sessions_revoke_others($c) });
     $r->delete('/api/v1/auth/sessions/:jti'  => sub ($c) { $self->_sessions_revoke($c) });
 
+    # Account summary for the caller's OWN account (bearer JWT) -- the
+    # profile panel homelab-accountmanage renders: email, created_at,
+    # recovery_email, active, roles. Introspect deliberately stays minimal
+    # (email/exp/roles/jti, hit on every request by every service); this
+    # is the fuller account view, so it's its own endpoint.
+    $r->get('/api/v1/account/summary' => sub ($c) { $self->_account_summary($c) });
+
     # --- Service registry (see Homelab::Common::Registry — this is what
     # every OTHER feature's register()/lookup() calls hit) ------------
     $r->post('/api/v1/registry/register' => sub ($c) { $self->_registry_register($c) });
@@ -815,6 +822,58 @@ sub _introspect ($self, $c) {
         })->catch(sub ($err) {
             return if ref $err eq 'SCALAR' && $err == $ALREADY_RENDERED;
             $c->app->log->error("_introspect failed: $err");
+            $c->render(json => { error => 'internal server error' }, status => 500);
+        });
+
+    return;
+}
+
+# GET /api/v1/account/summary -- the caller's own account, for the
+# account-management dashboard. Bearer JWT (same verify + session-
+# revocation check as _introspect). Returns email, created_at,
+# recovery_email, active, roles[].
+sub _account_summary ($self, $c) {
+    my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+    return $c->render(json => { error => 'Token required' }, status => 401) unless $jwt;
+
+    my $payload = verify_jwt($jwt, secret => $self->config->{jwt}{secret});
+    return $c->render(json => { error => 'invalid or expired token' }, status => 401) unless $payload;
+
+    $c->render_later;
+    my $email = $payload->{email};
+
+    $self->pg->db->query_p('SELECT revoked FROM api.sessions WHERE jti = ?', $payload->{jti} // '')
+        ->then(sub ($results) {
+            my $session = $results->hash;
+            unless ($session && !$session->{revoked}) {
+                $c->render(json => { error => 'session revoked' }, status => 401);
+                return Mojo::Promise->reject($ALREADY_RENDERED);
+            }
+            return $self->pg->db->query_p(
+                'SELECT email, created_at, recovery_email, active FROM api.users WHERE email = ?', $email);
+        })->then(sub ($results) {
+            my $user = $results->hash;
+            unless ($user) {
+                $c->render(json => { error => 'account not found' }, status => 404);
+                return Mojo::Promise->reject($ALREADY_RENDERED);
+            }
+            $c->stash(_acct => $user);
+            return $self->pg->db->query_p(
+                q{SELECT r.name FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+                  JOIN api.users u ON u.id = ur.user_id WHERE u.email = ?}, $email);
+        })->then(sub ($results) {
+            my $roles = $results->hashes->map(sub { $_->{name} })->to_array;
+            my $u = $c->stash('_acct');
+            $c->render(json => {
+                email          => $u->{email},
+                created_at     => $u->{created_at},
+                recovery_email => $u->{recovery_email},
+                active         => ($u->{active} ? \1 : \0),
+                roles          => $roles,
+            });
+        })->catch(sub ($err) {
+            return if ref $err eq 'SCALAR' && $err == $ALREADY_RENDERED;
+            $c->app->log->error("_account_summary failed: $err");
             $c->render(json => { error => 'internal server error' }, status => 500);
         });
 
