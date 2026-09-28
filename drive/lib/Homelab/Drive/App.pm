@@ -265,6 +265,10 @@ sub startup ($self) {
     # its storage panel. Counts live files only (trashed-but-not-purged
     # blobs still occupy disk but aren't the user's "usage").
     $r->get('/api/v1/usage')            ->to('drive#api_usage');
+    # Admin: set a user's drive quota override (site_admin only, checked
+    # in the handler). Reached by homelab-accountmanage via the gateway
+    # (/api/v1/drive/admin/quota).
+    $r->put('/api/v1/admin/quota')      ->to('drive#api_admin_set_quota');
 
     return;
 }
@@ -1576,6 +1580,39 @@ sub api_usage ($c) {
         used_bytes  => _user_used($c, $email),
         limit_bytes => _user_limit($c, $email),
     });
+}
+
+# Returns the caller's email IFF they hold the site_admin role (from
+# introspect's roles), else undef. Used to gate the admin quota write.
+sub _site_admin_email ($c) {
+    my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+    $jwt //= $c->session('token');
+    return undef unless $jwt;
+    my $r = introspect($jwt, api_base => $c->app->api_base);
+    return undef unless $r && grep { $_ eq 'site_admin' } @{ $r->{roles} // [] };
+    return $r->{email};
+}
+
+# PUT /api/v1/admin/quota { user_email, limit_bytes } -- site_admin sets
+# (or clears, limit_bytes omitted/null) a user's drive quota override.
+sub api_admin_set_quota ($c) {
+    return $c->render(json => { error => 'site_admin role required' }, status => 403) unless _site_admin_email($c);
+    my $body = $c->req->json // {};
+    my $user = $body->{user_email};
+    return $c->render(json => { error => 'user_email is required' }, status => 400)
+        unless defined $user && $user =~ /\S/;
+    my $limit = $body->{limit_bytes};
+    if (!defined $limit || $limit eq '') {
+        $c->app->pg->db->query('DELETE FROM drive.quotas WHERE user_email = ?', $user);
+        return $c->render(json => { ok => \1, user_email => $user, limit_bytes => undef, note => 'reset to default' });
+    }
+    return $c->render(json => { error => 'limit_bytes must be a non-negative integer' }, status => 400)
+        unless "$limit" =~ /^\d+$/;
+    $c->app->pg->db->query(
+        q{INSERT INTO drive.quotas (user_email, limit_bytes) VALUES (?, ?)
+          ON CONFLICT (user_email) DO UPDATE SET limit_bytes = EXCLUDED.limit_bytes, updated_at = NOW()},
+        $user, $limit + 0);
+    return $c->render(json => { ok => \1, user_email => $user, limit_bytes => $limit + 0 });
 }
 
 # --- Folders -------------------------------------------------------
