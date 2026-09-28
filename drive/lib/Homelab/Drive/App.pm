@@ -791,6 +791,32 @@ my $MAX_UPLOAD_BYTES  = 50 * 1024 * 1024 * 1024;  # 50 GiB
 # any real parallel-upload UI, low enough to bound abuse.
 my $MAX_OPEN_SESSIONS_PER_USER = 100;
 
+# Default per-user drive quota: 1 TiB. Applied when a user has no row in
+# drive.quotas (see migration 010); an admin sets a row to override one
+# user's limit. Usage counts live (non-trashed) bytes only, matching the
+# usage figure shown to the user.
+my $DEFAULT_QUOTA_BYTES = 1024 ** 4;   # 1 TiB
+
+# This user's live usage (bytes).
+sub _user_used ($c, $email) {
+    my $row = $c->app->pg->db->query(
+        'SELECT COALESCE(SUM(size_bytes), 0) AS used FROM drive.files WHERE user_email = ? AND deleted_at IS NULL',
+        $email)->hash;
+    return ($row->{used} // 0) + 0;
+}
+
+# This user's quota limit (their override, else the default).
+sub _user_limit ($c, $email) {
+    my $row = $c->app->pg->db->query('SELECT limit_bytes FROM drive.quotas WHERE user_email = ?', $email)->hash;
+    return $row ? $row->{limit_bytes} + 0 : $DEFAULT_QUOTA_BYTES;
+}
+
+# True if adding $incoming bytes would push this user over their quota.
+sub _quota_would_exceed ($c, $email, $incoming) {
+    return 0 unless defined $incoming && $incoming > 0;
+    return (_user_used($c, $email) + $incoming) > _user_limit($c, $email) ? 1 : 0;
+}
+
 # Returns the logged-in user's email, or undef (and does NOT redirect —
 # callers decide what "not logged in" means for their own route).
 # Re-checks the JWT against homelab-api on every request rather than
@@ -1130,6 +1156,12 @@ sub upload ($c) {
     # handlers.
     $folder_id = undef unless _owned_folder($c, $email, $folder_id);
 
+    # Quota: refuse an upload that would push the user over their limit.
+    if (_quota_would_exceed($c, $email, $upload->size)) {
+        $c->flash(error => 'Upload would exceed your storage quota.');
+        return $c->redirect_to($back);
+    }
+
     _save_upload($c, $email, $upload, $folder_id);
     return $c->redirect_to($folder_id ? "/folders/$folder_id" : '/');
 }
@@ -1152,6 +1184,9 @@ sub api_upload ($c) {
         return $c->render(json => { error => 'folder not found' }, status => 404)
             unless _owned_folder($c, $email, $folder_id);
     }
+
+    return $c->render(json => { error => 'upload would exceed your storage quota' }, status => 413)
+        if _quota_would_exceed($c, $email, $upload->size);
 
     my $row = _save_upload($c, $email, $upload, $folder_id);
     return $c->render(json => $row, status => 201);
@@ -1276,6 +1311,10 @@ sub create_upload_session ($c) {
     $total += 0;
     return $c->render(json => { error => "total_size exceeds the maximum of $MAX_UPLOAD_BYTES bytes" }, status => 413)
         if $total > $MAX_UPLOAD_BYTES;
+    # Quota: refuse up front (before allocating a session) if the declared
+    # size would push the user over their limit.
+    return $c->render(json => { error => 'upload would exceed your storage quota' }, status => 413)
+        if _quota_would_exceed($c, $email, $total);
 
     my $folder_id = _normalize_folder_id($body->{folder_id});
     if (defined $folder_id) {
@@ -1533,10 +1572,10 @@ sub api_list ($c) {
 sub api_usage ($c) {
     my $email = _current_email($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
-    my $row = $c->app->pg->db->query(
-        'SELECT COALESCE(SUM(size_bytes), 0) AS used FROM drive.files WHERE user_email = ? AND deleted_at IS NULL',
-        $email)->hash;
-    return $c->render(json => { used_bytes => ($row->{used} // 0) + 0 });
+    return $c->render(json => {
+        used_bytes  => _user_used($c, $email),
+        limit_bytes => _user_limit($c, $email),
+    });
 }
 
 # --- Folders -------------------------------------------------------
@@ -2297,17 +2336,24 @@ sub create_append_job ($c) {
     # owner, then re-order the rows back into the caller's given order.
     my $placeholders = join(',', ('?') x scalar @$file_ids);
     my $rows = $c->app->pg->db->query(
-        qq{SELECT id, uuid, filename, folder_id FROM drive.files WHERE id IN ($placeholders) AND user_email = ? AND deleted_at IS NULL},
+        qq{SELECT id, uuid, filename, folder_id, size_bytes FROM drive.files WHERE id IN ($placeholders) AND user_email = ? AND deleted_at IS NULL},
         @$file_ids, $email,
     )->hashes->to_array;
     my %by_id = map { $_->{id} => $_ } @$rows;
 
     my @ordered;
+    my $combined_size = 0;
     for my $id (@$file_ids) {
         my $r = $by_id{$id}
             or return $c->render(json => { error => "file $id not found (or not yours) -- every piece must exist to combine" }, status => 400);
         push @ordered, $r;
+        $combined_size += $r->{size_bytes} // 0;
     }
+
+    # Quota: the combined file is a NEW blob (~sum of the pieces), added on
+    # top of the pieces that already count -- refuse if it wouldn't fit.
+    return $c->render(json => { error => 'combined file would exceed your storage quota' }, status => 413)
+        if _quota_would_exceed($c, $email, $combined_size);
 
     # Default the output name off the first piece with a trailing split
     # suffix stripped (bigfile.iso.001 -> bigfile.iso, bigfile.part1 ->
