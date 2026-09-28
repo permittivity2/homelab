@@ -1,0 +1,7 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: homelab-accountmanage
+Source: https://github.com/permittivity2/homelab
+
+Files: *
+Copyright: 2026 Jeff Gardner
+License: AGPL-3.0+

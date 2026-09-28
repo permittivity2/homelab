@@ -1,0 +1,23 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+# Declare the unit the debhelper way (debian/homelab-accountmanage.service)
+# so dh_installsystemd generates prerm/postrm that stop the service on
+# purge -- see the same note in drive/debian/rules. --no-enable/--no-start
+# because this package's own postinst does the enable/start with the right
+# ordering (config must exist first).
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/accountmanage.example.yml \
+		debian/homelab-accountmanage/usr/share/homelab-accountmanage/config/accountmanage.example.yml
+	install -D -m 644 services/accountmanage.yml \
+		debian/homelab-accountmanage/usr/share/homelab-accountmanage/services/accountmanage.yml
+	find templates -type f -exec install -D -m 644 {} \
+		debian/homelab-accountmanage/usr/share/homelab-accountmanage/{} \;

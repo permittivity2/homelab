@@ -1,0 +1,26 @@
+[Unit]
+Description=Homelab Account Management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_ACCOUNTMANAGE_CONFIG=/etc/homelab/accountmanage/config.yml"
+Environment="HOMELAB_ACCOUNTMANAGE_HOME=/usr/share/homelab-accountmanage"
+# Browser traffic arrives via homelab-webproxy (myaccount.<domain>), so
+# trust X-Forwarded-* to build correct absolute OAuth redirect URLs.
+Environment="MOJO_REVERSE_PROXY=1"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-accountmanage
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-accountmanage
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-accountmanage
+
+[Install]
+WantedBy=multi-user.target

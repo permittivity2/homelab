@@ -1,0 +1,41 @@
+# Homelab Account Management configuration
+#
+# A thin BFF web app (same pattern as homelab-drive): the browser talks
+# only to this app, which delegates login to homelab-sso (OAuth2
+# authorization-code) and then aggregates calls to the existing services
+# (homelab-api for account info/sessions, homelab-drive for storage
+# usage, ...) using the logged-in user's own token. It owns no database.
+
+server:
+  listen: http://0.0.0.0:2503
+  workers: 2
+
+# Signed-session-cookie secret (holds OAuth login state). Use a long
+# random string; changing it logs everyone out.
+session:
+  secret: CHANGE_ME_TO_A_LONG_RANDOM_STRING
+
+# homelab-api is reached server-to-server for EVERY panel (introspect,
+# account summary, sessions, and the /api/v1/drive/* gateway for drive
+# usage). Point at wherever the api gateway is reachable from this host
+# (an internal/data-plane address in the fleet).
+homelab_api:
+  base_url: http://127.0.0.1:3000
+
+# This app's own public address.
+public_base_url: https://myaccount.test.mailmasker.org
+
+# homelab-sso: the only place a user types a password.
+sso:
+  base_url: https://login.test.mailmasker.org        # BROWSER redirect target -- MUST be the public SSO vhost
+  internal_base_url: http://127.0.0.1:2502            # server-to-server token exchange (defaults to base_url)
+  client_id: accountmanage
+  client_secret: YOUR_SSO_CLIENT_SECRET_HERE          # must match what homelab-sso registered for this client
+  redirect_uri: https://myaccount.test.mailmasker.org/oauth/callback
+
+# Announce this instance in homelab-api's service registry (needs
+# homelab-agent enrolled on this host for the auth token). host = this
+# host's own reachable/data-plane address; port = the listen port.
+registry:
+  host: 127.0.0.1
+  port: 2503

@@ -1,0 +1,96 @@
+% layout 'default';
+% title 'My Account';
+<h1 class="page">Account</h1>
+
+<% my $fmt_bytes = sub {
+     my $n = shift;
+     return '0 B' unless $n;
+     my @u = ('B', 'KB', 'MB', 'GB', 'TB');
+     my $i = 0;
+     while ($n >= 1024 && $i < $#u) { $n /= 1024; $i++; }
+     return sprintf('%.1f %s', $n, $u[$i]);
+}; %>
+
+<div class="card">
+  <h2>Profile</h2>
+  <dl class="kv">
+    <dt>Email</dt><dd><%= $email %></dd>
+    <dt>Account created</dt><dd><%= $summary->{created_at} // '—' %></dd>
+    <dt>Recovery email</dt><dd><%= $summary->{recovery_email} // '(none set)' %></dd>
+    <dt>Status</dt><dd><%= $summary->{active} ? 'Active' : 'Suspended' %></dd>
+    <dt>Access</dt>
+    <dd>
+% if (@$roles) {
+%   for my $r (@$roles) {
+      <span class="badge <%= $r eq 'site_admin' ? 'admin' : '' %>"><%= $r %></span>
+%   }
+% } else {
+      <span class="muted">user</span>
+% }
+    </dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2>Storage usage</h2>
+  <div class="usage-line">
+    <span>Drive</span>
+    <span class="amt">
+% if (defined $drive_usage && defined $drive_usage->{used_bytes}) {
+      <%= $fmt_bytes->($drive_usage->{used_bytes}) %>
+% } else {
+      <span class="muted">unavailable</span>
+% }
+    </span>
+  </div>
+  <div class="usage-line"><span>Mail</span><span class="amt soon">coming soon</span></div>
+  <p class="muted" style="font-size:0.82rem;margin:0.6rem 0 0;">No storage limits are set on your account yet.</p>
+</div>
+
+<div class="card">
+  <h2>Security</h2>
+  <p class="muted" style="margin:0 0 0.4rem;">Change your password by email-verified reset. (In-place change with your current password is coming soon.)</p>
+  <div class="btn-row">
+    <a class="btn btn-secondary" href="<%= $sso_forgot_url %>">Reset password by email</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Active sessions <span class="hint">devices &amp; tokens signed in to your account</span></h2>
+% if (@$sessions) {
+  <table class="sessions">
+    <thead><tr><th>Device</th><th>IP address</th><th>Signed in</th><th></th></tr></thead>
+    <tbody>
+% for my $s (@$sessions) {
+      <tr>
+        <td>
+          <%= $s->{user_agent} // 'unknown' %>
+% if ($s->{current}) {
+          <span class="this-session">· this session</span>
+% }
+        </td>
+        <td><%= $s->{ip_address} // '—' %></td>
+        <td><%= $s->{first_seen_at} // '—' %></td>
+        <td>
+% unless ($s->{current}) {
+          <form method="post" action="/sessions/<%= $s->{jti} %>/revoke"><button type="submit" class="btn btn-danger">Revoke</button></form>
+% }
+        </td>
+      </tr>
+% }
+    </tbody>
+  </table>
+  <div class="btn-row">
+    <form method="post" action="/sessions/revoke-others"><button type="submit" class="btn btn-secondary">Sign out everywhere else</button></form>
+  </div>
+% } else {
+  <p class="muted">No active sessions to show.</p>
+% }
+</div>
+
+% if ($is_admin) {
+<div class="card">
+  <h2>Administration <span class="badge admin">site_admin</span></h2>
+  <p class="muted" style="margin:0;">You have administrator access. Management tools — suspend/re-enable users, storage limits, domain mail routing, and DNS — are coming in a later iteration.</p>
+</div>
+% }

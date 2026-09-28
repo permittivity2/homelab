@@ -1,0 +1,7 @@
+name: accountmanage
+package: homelab-accountmanage
+kind: http_service
+check:
+  systemd_unit: homelab-accountmanage
+  tcp_port: 2503
+description: "Account self-service + administration web UI"

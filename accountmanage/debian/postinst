@@ -1,0 +1,42 @@
+#!/bin/sh
+set -e
+
+CONFIG_DIR=/etc/homelab/accountmanage
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-accountmanage
+
+case "$1" in
+    configure)
+        echo "homelab-accountmanage post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        # Static service manifest for homelab-agent to report (always refresh).
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services
+        cp "$SHARE_DIR/services/accountmanage.yml" "/etc/homelab/services/accountmanage.yml"
+
+        # First install: seed config from the example for in-place editing
+        # (this app has no debconf prompts, and owns no database). It will
+        # not start cleanly until session.secret + sso.client_secret are set.
+        if [ ! -f "$CONFIG_FILE" ]; then
+            cp "$SHARE_DIR/config/accountmanage.example.yml" "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE from the example -- EDIT IT before the service will run:"
+            echo "  set session.secret, sso.client_secret (from homelab-sso), homelab_api.base_url,"
+            echo "  the sso.* URLs, and registry.host."
+        fi
+        chown root:homelab "$CONFIG_FILE" 2>/dev/null || true
+        chmod 640 "$CONFIG_FILE" 2>/dev/null || true
+
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable homelab-accountmanage 2>/dev/null || true
+        systemctl restart homelab-accountmanage 2>/dev/null || true
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= title %></title>
+  <style>
+    /* --- Shared homelab visual language (kept intentionally simple so it
+       ports cleanly to the other apps' top bars). --- */
+    :root {
+      --bg: #f6f7f9; --card: #ffffff; --border: #e3e5e9;
+      --text: #1a1a1a; --muted: #6b7280;
+      --accent: #3562d4; --accent-hover: #2a4fb0;
+      --danger: #d1453b; --ok: #1f9d55;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--bg); }
+
+    /* Top bar with the Google-style profile button on the right. */
+    .topbar {
+      display: flex; align-items: center; gap: 1rem;
+      padding: 0.7rem 1.25rem; background: var(--card); border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 20;
+    }
+    .brand { font-weight: 700; font-size: 1.05rem; display: flex; align-items: center; gap: 0.45rem; }
+    .topbar .spacer { flex: 1; }
+    .profile { position: relative; }
+    .profile-btn {
+      display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
+      background: none; border: 1px solid transparent; border-radius: 999px; padding: 0.25rem 0.5rem 0.25rem 0.3rem;
+      font: inherit; color: var(--text);
+    }
+    .profile-btn:hover { background: #eef1f6; }
+    .avatar {
+      width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff;
+      display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.95rem; flex: none;
+    }
+    .profile-btn .who { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
+    .profile-btn .caret { color: var(--muted); font-size: 0.7rem; }
+    .menu {
+      display: none; position: absolute; right: 0; top: calc(100% + 0.4rem);
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 220px; overflow: hidden;
+    }
+    .menu.open { display: block; }
+    .menu-email { padding: 0.7rem 0.9rem; color: var(--muted); font-size: 0.82rem; border-bottom: 1px solid var(--border); word-break: break-all; }
+    .menu form { margin: 0; }
+    .menu-item {
+      display: block; width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+      padding: 0.7rem 0.9rem; font: inherit; color: var(--text); text-decoration: none;
+    }
+    .menu-item:hover { background: #f0f2f5; }
+    .menu-item.danger { color: var(--danger); }
+
+    main { max-width: 860px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+    h1.page { font-size: 1.4rem; margin: 0.2rem 0 1.25rem; }
+
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.1rem 1.2rem; margin-bottom: 1.1rem; }
+    .card h2 { font-size: 1rem; margin: 0 0 0.9rem; display: flex; align-items: center; gap: 0.5rem; }
+    .card h2 .hint { font-weight: 400; color: var(--muted); font-size: 0.82rem; }
+
+    .kv { display: grid; grid-template-columns: 170px 1fr; gap: 0.4rem 1rem; font-size: 0.92rem; }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; }
+
+    .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.78rem; background: #eef1f6; color: #33415c; margin-right: 0.3rem; }
+    .badge.admin { background: #efe3ff; color: #5b2ea6; }
+
+    table.sessions { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    table.sessions th, table.sessions td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #eef0f3; vertical-align: top; }
+    table.sessions th { color: var(--muted); font-weight: 600; }
+    table.sessions tr:last-child td { border-bottom: none; }
+    .this-session { color: var(--ok); font-weight: 600; font-size: 0.8rem; }
+
+    .btn { display: inline-block; border: none; border-radius: 7px; padding: 0.4rem 0.75rem; font: inherit; font-size: 0.85rem; cursor: pointer; text-decoration: none; }
+    .btn-secondary { background: #eef1f6; color: var(--text); }
+    .btn-secondary:hover { background: #e2e7ef; }
+    .btn-danger { background: none; color: var(--danger); border: 1px solid #e6b8b4; }
+    .btn-danger:hover { background: #fdecea; }
+    .btn-row { margin-top: 0.9rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+    /* Usage bar (no quota limit yet -> shown as a plain used figure). */
+    .usage-line { display: flex; justify-content: space-between; font-size: 0.92rem; margin-bottom: 0.3rem; }
+    .usage-line .amt { font-weight: 600; }
+    .muted { color: var(--muted); }
+    .soon { color: var(--muted); font-size: 0.85rem; font-style: italic; }
+
+    @media (max-width: 640px) {
+      main { padding: 1rem 0.85rem 2.5rem; }
+      .kv { grid-template-columns: 1fr; gap: 0.15rem; }
+      .kv dt { margin-top: 0.5rem; }
+      .profile-btn .who { display: none; }          /* avatar only on small screens */
+      table.sessions thead { display: none; }
+      table.sessions td { display: block; border: none; padding: 0.15rem 0; }
+      table.sessions tr { display: block; border-bottom: 1px solid #eef0f3; padding: 0.6rem 0; }
+      .btn { min-height: 40px; display: inline-flex; align-items: center; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🔐 My Account</div>
+    <div class="spacer"></div>
+    <div class="profile" id="profile">
+      <button class="profile-btn" id="profile-btn" aria-haspopup="true" aria-expanded="false">
+        <span class="avatar"><%= uc(substr(($email // '?'), 0, 1)) %></span>
+        <span class="who"><%= $email %></span>
+        <span class="caret">▾</span>
+      </button>
+      <div class="menu" id="profile-menu" role="menu">
+        <div class="menu-email"><%= $email %></div>
+        <form method="post" action="/logout"><button type="submit" class="menu-item danger">Sign out</button></form>
+      </div>
+    </div>
+  </header>
+  <main><%= content %></main>
+  <script>
+    (function () {
+      var btn = document.getElementById('profile-btn');
+      var menu = document.getElementById('profile-menu');
+      if (!btn || !menu) return;
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var open = menu.classList.toggle('open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+      document.addEventListener('click', function () { menu.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); });
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { menu.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); } });
+    })();
+  </script>
+</body>
+</html>
