@@ -269,6 +269,7 @@ sub startup ($self) {
     # in the handler). Reached by homelab-accountmanage via the gateway
     # (/api/v1/drive/admin/quota).
     $r->put('/api/v1/admin/quota')      ->to('drive#api_admin_set_quota');
+    $r->get('/api/v1/admin/usage')      ->to('drive#api_admin_usage');
 
     return;
 }
@@ -1591,6 +1592,23 @@ sub _site_admin_email ($c) {
     my $r = introspect($jwt, api_base => $c->app->api_base);
     return undef unless $r && grep { $_ eq 'site_admin' } @{ $r->{roles} // [] };
     return $r->{email};
+}
+
+# GET /api/v1/admin/usage?user_email=<addr> -- site_admin reads ANY user's
+# live drive usage + effective limit (for the admin quota form to show
+# "currently using X of Y" and warn before setting a limit below it).
+# Cheap: homelab-drive owns drive.files, so this is the same _user_used /
+# _user_limit the self endpoint uses, just for an arbitrary email.
+sub api_admin_usage ($c) {
+    return $c->render(json => { error => 'site_admin role required' }, status => 403) unless _site_admin_email($c);
+    my $user = $c->param('user_email');
+    return $c->render(json => { error => 'user_email is required' }, status => 400)
+        unless defined $user && $user =~ /\S/;
+    return $c->render(json => {
+        user_email  => $user,
+        used_bytes  => _user_used($c, $user),
+        limit_bytes => _user_limit($c, $user),
+    });
 }
 
 # PUT /api/v1/admin/quota { user_email, limit_bytes } -- site_admin sets

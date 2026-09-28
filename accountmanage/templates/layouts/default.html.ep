@@ -97,6 +97,11 @@
     .ta-item .st { font-size: 0.75rem; color: var(--muted); flex: none; }
     .ta-empty { padding: 0.5rem 0.7rem; color: var(--muted); font-size: 0.85rem; }
 
+    /* Live "currently using X of Y" preview under a quota form's user field,
+       with a below-usage warning when the entered limit is under it. */
+    .usage-note { font-size: 0.82rem; color: var(--muted); margin: -0.4rem 0 0.7rem; min-height: 1em; }
+    .usage-note .warn-below { color: var(--danger); font-weight: 600; }
+
     /* Forms */
     .field { margin-bottom: 0.8rem; }
     .field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
@@ -269,13 +274,58 @@
             users.forEach(function (u) {
               var it = document.createElement('div'); it.className = 'ta-item';
               it.innerHTML = '<span>' + hlEsc(u.email) + '</span><span class="st">' + (u.active ? '' : 'suspended') + '</span>';
-              it.addEventListener('mousedown', function (e) { e.preventDefault(); input.value = u.email; close(); });
+              it.addEventListener('mousedown', function (e) { e.preventDefault(); input.value = u.email; close(); input.dispatchEvent(new Event('change')); });
               box.appendChild(it);
             });
             box.classList.add('open');
           });
         }, 200));
         input.addEventListener('blur', function () { setTimeout(close, 150); });
+      });
+    })();
+
+    // (a2) Live usage preview + below-limit warning on quota forms. Any
+    // [data-usage-type] element inside a quota form fetches the selected
+    // user's usage (drive or mail) and shows "currently using X of Y", plus
+    // a red warning when the entered GB limit is below current usage.
+    function hlBytes(n) {
+      if (!n || n < 0) return '0 B';
+      var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+      while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+      return (Math.round(n * 10) / 10) + ' ' + u[i];
+    }
+    (function () {
+      Array.prototype.forEach.call(document.querySelectorAll('[data-usage-type]'), function (note) {
+        var type = note.dataset.usageType;
+        var form = note.closest('form'); if (!form) return;
+        var emailInput = form.querySelector('input[name="user_email"]');
+        var gbInput = form.querySelector('input[name="limit_gb"]');
+        if (!emailInput) return;
+        var current = null;
+        function render() {
+          if (!current || current.used_bytes == null) { note.innerHTML = ''; return; }
+          var used = current.used_bytes, lim = current.limit_bytes || 0;
+          var pct = lim > 0 ? Math.min(100, Math.round(used / lim * 100)) : 0;
+          var msg = 'Currently using <strong>' + hlBytes(used) + '</strong> of ' + hlBytes(lim) + ' (' + pct + '%).';
+          var gb = gbInput && gbInput.value.trim();
+          if (gb && /^\d+$/.test(gb)) {
+            var newLimit = parseInt(gb, 10) * 1024 * 1024 * 1024;
+            if (newLimit < used) msg += ' <span class="warn-below">⚠ Below current usage — they will be over quota.</span>';
+          }
+          note.innerHTML = msg;
+        }
+        function fetchUsage() {
+          var email = (emailInput.value || '').trim();
+          if (email.indexOf('@') < 0) { current = null; render(); return; }
+          note.innerHTML = '<span class="muted">Checking usage…</span>';
+          fetch('/admin/usage?type=' + type + '&user_email=' + encodeURIComponent(email), { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) { current = (d && d.used_bytes != null) ? d : null; if (!current) { note.innerHTML = '<span class="muted">usage unavailable</span>'; } else { render(); } })
+            .catch(function () { current = null; note.innerHTML = '<span class="muted">usage unavailable</span>'; });
+        }
+        emailInput.addEventListener('change', fetchUsage);
+        emailInput.addEventListener('blur', fetchUsage);
+        if (gbInput) gbInput.addEventListener('input', render);
       });
     })();
 

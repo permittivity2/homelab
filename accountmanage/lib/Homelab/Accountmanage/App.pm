@@ -99,6 +99,8 @@ sub startup ($self) {
     $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
     # Live user search for the admin typeahead (JSON; site_admin gated).
     $r->get('/admin/users/search')     ->to('account#admin_users_search');
+    # Live usage-by-user for the quota forms (JSON; site_admin gated).
+    $r->get('/admin/usage')            ->to('account#admin_user_usage');
 
     return;
 }
@@ -368,6 +370,28 @@ sub admin_users_search ($c) {
     # can't corrupt the forwarded request.
     my $path = Mojo::URL->new('/api/v1/admin/users')->query(q => $q, limit => 20)->to_string;
     return $c->render(json => (_api_get($c, $jwt, $path) // []));
+}
+
+# GET /admin/usage?type=drive|mail&user_email=<addr> -- proxies to the
+# owning service's admin usage-by-user endpoint so the quota forms can show
+# "currently using X of Y" and warn before setting a limit below it. Returns
+# {used_bytes, limit_bytes} (or an error the front-end renders as
+# "unavailable"). site_admin gated here + re-checked by the backend.
+sub admin_user_usage ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => {}, status => 403) unless $email;
+    my $type = $c->param('type') // 'drive';
+    my $user = $c->param('user_email') // '';
+    return $c->render(json => { error => 'bad email' }, status => 400) unless $user =~ /\@/;
+    my %backend = (
+        drive => '/api/v1/drive/admin/usage',
+        mail  => '/api/v1/mail/admin/usage',
+    );
+    my $base = $backend{$type}
+        or return $c->render(json => { error => 'bad type' }, status => 400);
+    my $path = Mojo::URL->new($base)->query(user_email => $user)->to_string;
+    my $r = _api_get($c, $jwt, $path);
+    return $c->render(json => ($r // { error => 'unavailable' }), status => ($r ? 200 : 502));
 }
 
 # Toggle the block-link footer per domain. mode: header (link only, no

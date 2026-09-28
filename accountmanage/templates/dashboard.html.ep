@@ -183,6 +183,7 @@
           <h2>Drive quota</h2>
           <form method="post" action="/admin/drive-quota">
             <div class="field"><label>User email</label><input class="user-fill" type="email" name="user_email" required autocomplete="off" placeholder="type at least 3 characters…"></div>
+            <div class="usage-note" data-usage-type="drive"></div>
             <div class="field"><label>Limit in GB (blank = reset to the 1 TB default)</label><input type="number" name="limit_gb" min="0" placeholder="1024"></div>
             <button type="submit" class="btn btn-primary">Set drive quota</button>
             <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">Setting a limit below what the user is already storing blocks new uploads but keeps existing files — they free space by deleting.</p>
@@ -193,6 +194,7 @@
           <h2>Mail quota <span class="hint">dovecot mailbox limit</span></h2>
           <form method="post" action="/admin/mail-quota">
             <div class="field"><label>User email</label><input class="user-fill" type="email" name="user_email" required autocomplete="off" placeholder="type at least 3 characters…"></div>
+            <div class="usage-note" data-usage-type="mail"></div>
             <div class="field"><label>Limit in GB (blank = reset to the 1 TB default)</label><input type="number" name="limit_gb" min="0" placeholder="1024"></div>
             <button type="submit" class="btn btn-primary">Set mail quota</button>
             <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">Setting a limit below current mailbox usage bounces new incoming mail to senders and blocks saving to Sent until they delete mail down — existing mail is kept.</p>
