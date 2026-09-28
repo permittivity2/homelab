@@ -1,0 +1,130 @@
+<!-- Trash view: this user's soft-deleted files + folders, with Restore
+     and Delete-forever per item, plus Empty Trash. Restore/purge/empty
+     hit the JSON endpoints via fetch (same pattern as index's bulk
+     actions) and reload. See Homelab::Drive::App's trash/_restore_*/
+     _purge_* handlers and migrations/009-soft-delete-trash.sql. -->
+<title>Trash — Homelab Drive</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #1a1a1a; background: #f6f7f9; }
+  header { display: flex; align-items: center; gap: 1rem; padding: 0.9rem 1.25rem; background: #fff; border-bottom: 1px solid #e3e5e9; }
+  header h1 { font-size: 1.15rem; margin: 0; }
+  header .back { color: #3562d4; text-decoration: none; font-size: 0.9rem; }
+  header .back:hover { text-decoration: underline; }
+  header .spacer { flex: 1; }
+  .empty-btn { padding: 0.45rem 0.9rem; border: none; border-radius: 6px; background: #d1453b; color: #fff; cursor: pointer; font-size: 0.9rem; }
+  .empty-btn:hover:not(:disabled) { background: #ad342c; }
+  .empty-btn:disabled { background: #e0a9a4; cursor: default; }
+  main { padding: 1.25rem; max-width: 1000px; margin: 0 auto; }
+  .note { color: #6b7280; font-size: 0.85rem; margin: 0 0 1rem; }
+  .empty-state { color: #9aa0ab; padding: 3rem 1rem; text-align: center; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e3e5e9; border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 0.6rem 0.8rem; border-bottom: 1px solid #eef0f3; font-size: 0.9rem; }
+  th { background: #fafbfc; color: #6b7280; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  .kind { color: #9aa0ab; }
+  .deleted-at { color: #9aa0ab; white-space: nowrap; }
+  .row-actions { white-space: nowrap; text-align: right; }
+  .row-actions button { border: none; border-radius: 5px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.82rem; margin-left: 0.35rem; }
+  .btn-restore { background: #1f9d55; color: #fff; }
+  .btn-restore:hover { background: #187c43; }
+  .btn-purge { background: none; color: #d1453b; border: 1px solid #e6b8b4 !important; }
+  .btn-purge:hover { background: #fdecea; }
+  .overflow { overflow-x: auto; }
+</style>
+
+<header>
+  <a class="back" href="/">← Back to Drive</a>
+  <h1>🗑 Trash</h1>
+  <span class="spacer"></span>
+  <button type="button" class="empty-btn" id="empty-trash">Empty Trash</button>
+</header>
+
+<main>
+  <p class="note">
+    Items you delete in the web interface are kept here and can be restored.
+    They're permanently removed automatically after the retention period, or immediately when you Empty Trash / Delete forever.
+  </p>
+
+% my $total = scalar(@$trash_folders) + scalar(@$trash_files);
+% if (!$total) {
+  <div class="empty-state">Trash is empty.</div>
+% } else {
+  <div class="overflow">
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Type</th><th>Size</th><th>Deleted</th><th></th></tr>
+    </thead>
+    <tbody>
+% for my $f (@$trash_folders) {
+      <tr>
+        <td>📁 <%= $f->{name} %></td>
+        <td class="kind">folder</td>
+        <td class="kind">—</td>
+        <td class="deleted-at"><%= $f->{deleted_at_display} %></td>
+        <td class="row-actions">
+          <button type="button" class="btn-restore" data-kind="folders" data-id="<%= $f->{id} %>" data-restore>Restore</button>
+          <button type="button" class="btn-purge" data-kind="folders" data-id="<%= $f->{id} %>" data-name="<%= $f->{name} %>" data-purge>Delete forever</button>
+        </td>
+      </tr>
+% }
+% for my $f (@$trash_files) {
+      <tr>
+        <td><%= $f->{filename} %></td>
+        <td class="kind">file</td>
+        <td><%= $f->{size_bytes} %> bytes</td>
+        <td class="deleted-at"><%= $f->{deleted_at_display} %></td>
+        <td class="row-actions">
+          <button type="button" class="btn-restore" data-kind="files" data-id="<%= $f->{id} %>" data-restore>Restore</button>
+          <button type="button" class="btn-purge" data-kind="files" data-id="<%= $f->{id} %>" data-name="<%= $f->{filename} %>" data-purge>Delete forever</button>
+        </td>
+      </tr>
+% }
+    </tbody>
+  </table>
+  </div>
+% }
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  async function post(url) {
+    try {
+      var r = await fetch(url, { method: 'POST', credentials: 'same-origin' });
+      return r.ok;
+    } catch (e) { return false; }
+  }
+
+  document.querySelectorAll('[data-restore]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      btn.disabled = true;
+      var ok = await post('/' + btn.dataset.kind + '/' + btn.dataset.id + '/restore');
+      if (ok) location.reload();
+      else { alert('Restore failed.'); btn.disabled = false; }
+    });
+  });
+
+  document.querySelectorAll('[data-purge]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      if (!confirm('Permanently delete "' + btn.dataset.name + '"? This cannot be undone.')) return;
+      btn.disabled = true;
+      var ok = await post('/' + btn.dataset.kind + '/' + btn.dataset.id + '/purge');
+      if (ok) location.reload();
+      else { alert('Delete failed.'); btn.disabled = false; }
+    });
+  });
+
+  var emptyBtn = document.getElementById('empty-trash');
+  if (emptyBtn) {
+    emptyBtn.addEventListener('click', async function () {
+      if (!confirm('Permanently delete EVERYTHING in Trash? This cannot be undone.')) return;
+      emptyBtn.disabled = true;
+      var ok = await post('/trash/empty');
+      if (ok) location.reload();
+      else { alert('Empty Trash failed.'); emptyBtn.disabled = false; }
+    });
+  }
+})();
+</script>

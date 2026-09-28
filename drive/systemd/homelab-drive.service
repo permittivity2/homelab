@@ -10,15 +10,23 @@ Group=homelab
 WorkingDirectory=/var/lib/homelab
 Environment="HOMELAB_DRIVE_CONFIG=/etc/homelab/drive/config.yml"
 Environment="HOMELAB_DRIVE_HOME=/usr/share/homelab-drive"
-# Mojolicious defaults to a 16MB request-size ceiling (Mojo::Message's
-# own default, unrelated to and independent of nginx's own
-# client_max_body_size in front of this -- both have to be raised
-# together, or whichever is lower silently wins). 100MB is a deliberate,
-# generous-but-bounded choice for a general file-storage app; found this
-# needed raising at all only by a real user hitting the previous default
-# with an ordinary 1.1MB file upload (nginx's OWN 1MB default was the
-# one actually hit that time, but this would have been next).
-Environment="MOJO_MAX_MESSAGE_SIZE=104857600"
+# Request-size ceiling. Mojolicious defaults to 16MB; this must be
+# raised in lockstep with the nginx client_max_body_size in front of
+# this on EVERY hop -- for the browser that's homelab-webproxy's own
+# drive.<domain> vhost, and for CLI/API traffic it's ALSO homelab-api's
+# gateway (/api/v1/drive/*) + its api.<domain> vhost (each with its own
+# MOJO_MAX_MESSAGE_SIZE + client_max_body_size) -- whichever hop is
+# lowest silently wins. 5GB (not exactly 4) leaves headroom for a full
+# 4GB file plus multipart/form-data framing overhead.
+Environment="MOJO_MAX_MESSAGE_SIZE=5368709120"
+# Where Mojo spools an upload body too big for memory (anything over
+# MOJO_MAX_MEMORY_SIZE, default 256KB). MUST NOT be the default /tmp,
+# which on this fleet is a RAM-backed tmpfs -- a 4GB upload there would
+# be buffered entirely in RAM and OOM the box. Pointed at a dir on the
+# SAME filesystem as storage.path so the spill lands on real disk AND
+# $upload->move_to into storage is a cheap rename, not a 4GB copy. The
+# postinst creates this dir (owned by the homelab user).
+Environment="MOJO_TMPDIR=/var/lib/homelab/drive-storage/.uploads-tmp"
 # Reached two ways, both needing this: directly, fronted by homelab-
 # webproxy for browser traffic (drive.test.mailmasker.org), AND via
 # homelab-api's own gateway (/api/v1/drive/*, Homelab::Common::Proxy::

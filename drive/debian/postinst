@@ -13,8 +13,17 @@ case "$1" in
 
         adduser --system --group --home /var/lib/homelab --no-create-home \
             --shell /usr/sbin/nologin homelab 2>/dev/null || true
-        mkdir -p /var/lib/homelab "$CONFIG_DIR" /var/lib/homelab/drive-storage
-        chown homelab:homelab /var/lib/homelab /var/lib/homelab/drive-storage
+        # .uploads-tmp is MOJO_TMPDIR (see homelab-drive.service): large
+        # upload bodies spool here, on the SAME filesystem as storage so
+        # move_to is a rename. Deliberately a subdir of drive-storage,
+        # never /tmp (a RAM tmpfs on this fleet -- a 4GB spill there OOMs).
+        # .partials holds in-progress CHUNKED uploads (one file per
+        # session; see migrations/006-upload-sessions.sql) -- same
+        # real-disk, same-filesystem reasoning so finalizing is a rename.
+        mkdir -p /var/lib/homelab "$CONFIG_DIR" /var/lib/homelab/drive-storage \
+            /var/lib/homelab/drive-storage/.uploads-tmp /var/lib/homelab/drive-storage/.partials
+        chown homelab:homelab /var/lib/homelab /var/lib/homelab/drive-storage \
+            /var/lib/homelab/drive-storage/.uploads-tmp /var/lib/homelab/drive-storage/.partials
 
         # Shared manifest dir -- may not exist yet if homelab-agent isn't
         # installed on this host first (install order isn't guaranteed

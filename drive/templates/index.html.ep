@@ -71,6 +71,11 @@
     cursor: pointer; font-size: 0.85rem;
   }
   form.new-folder button:hover { background: #2a4fb0; }
+  .trash-link {
+    display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 1rem;
+    color: #6b7280; text-decoration: none; font-size: 0.9rem;
+  }
+  .trash-link:hover { color: #1a1a1a; text-decoration: underline; }
 
   main {
     flex: 1; min-width: 0; position: relative; border-radius: 8px;
@@ -144,6 +149,9 @@
   .bulk-toolbar button { padding: 0.4rem 0.8rem; border: none; border-radius: 5px; cursor: pointer; font-size: 0.85rem; }
   .bulk-toolbar .btn-zip { background: #3562d4; color: #fff; }
   .bulk-toolbar .btn-zip:hover { background: #2a4fb0; }
+  .bulk-toolbar .btn-combine { background: #6b3fd4; color: #fff; }
+  .bulk-toolbar .btn-combine:hover:not(:disabled) { background: #5733b0; }
+  .bulk-toolbar .btn-combine:disabled { background: #c3b7e6; color: #f2eefb; cursor: default; }
   .bulk-toolbar .btn-delete { background: #d1453b; color: #fff; }
   .bulk-toolbar .btn-delete:hover { background: #ad342c; }
   .bulk-toolbar .btn-clear { background: none; border: 1px solid #b9cdf5; color: #1a1a1a; }
@@ -310,7 +318,7 @@
         <input type="checkbox" class="select-checkbox" data-kind="folder" data-id="<%= $f->{id} %>" data-name="<%= $f->{name} %>" aria-label="Select <%= $f->{name} %>">
         <a href="/folders/<%= $f->{id} %>">📁 <%= $f->{name} %></a>
         <form method="post" action="/folders/<%= $f->{id} %>/delete"
-              onsubmit="return confirm('Delete \'<%= $f->{name} %>\' and everything inside it?')">
+              onsubmit="return confirm('Move \'<%= $f->{name} %>\' and everything inside it to Trash?')">
           <button type="submit" class="icon-btn" title="Delete folder">✕</button>
         </form>
       </li>
@@ -321,6 +329,7 @@
       <input type="text" name="name" placeholder="New folder" required maxlength="255">
       <button type="submit">+</button>
     </form>
+    <a class="trash-link" href="/trash">🗑 Trash</a>
   </aside>
 
   <main id="drop-main" data-folder-id="<%= $current_folder_id // '' %>">
@@ -346,6 +355,7 @@
     <div class="bulk-toolbar" id="bulk-toolbar">
       <span class="count"><span id="bulk-count">0</span> selected</span>
       <button type="button" class="btn-zip" id="bulk-zip">Download as zip</button>
+      <button type="button" class="btn-combine" id="bulk-combine" disabled title="Select two or more files to combine them">Combine into one file</button>
       <button type="button" class="btn-delete" id="bulk-delete">Delete all selected</button>
       <button type="button" class="btn-clear" id="bulk-clear">Clear selection</button>
       <span class="zip-status" id="zip-status"></span>
@@ -386,7 +396,7 @@
         <td><%= $f->{uploaded_at_display} %></td>
         <td class="file-actions">
           <form method="post" action="/files/<%= $f->{id} %>/delete"
-                onsubmit="return confirm('Delete <%= $f->{filename} %>?')">
+                onsubmit="return confirm('Move <%= $f->{filename} %> to Trash?')">
             <button type="submit">Delete</button>
           </form>
         </td>
@@ -543,7 +553,10 @@
     if (entry.isFile) {
       return new Promise(function (resolve) {
         entry.file(async function (file) {
-          var ok = await uploadFile(file, targetFolderId);
+          var ok = await uploadFile(file, targetFolderId, function (sent, total) {
+            var pct = total ? Math.round(sent / total * 100) : 100;
+            progressText.textContent = 'Uploading ' + file.name + '… ' + pct + '% (' + counts.uploaded + ' done)';
+          });
           if (ok) counts.uploaded++; else counts.failed++;
           progressText.textContent = 'Uploading… (' + counts.uploaded + ' done)';
           resolve();
@@ -611,15 +624,107 @@
     return folderId;
   }
 
-  async function uploadFile(file, folderId) {
-    var form = new FormData();
-    form.append('file', file, file.name);
-    if (folderId) form.append('folder_id', folderId);
+  // Files bigger than this go up in resumable chunks (see the drive
+  // backend's migrations/006-upload-sessions.sql); smaller ones use the
+  // one-shot multipart POST, for which chunking would just add a round
+  // trip. onProgress(sent, total) is optional.
+  var CHUNK_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
+
+  async function uploadFile(file, folderId, onProgress) {
+    if (file.size <= CHUNK_UPLOAD_THRESHOLD) {
+      var form = new FormData();
+      form.append('file', file, file.name);
+      if (folderId) form.append('folder_id', folderId);
+      try {
+        var resp = await fetch('/api/v1/files', { method: 'POST', credentials: 'same-origin', body: form });
+        if (resp.ok && onProgress) onProgress(file.size, file.size);
+        return resp.ok;
+      } catch (e) {
+        return false;
+      }
+    }
+    var result = await chunkedUpload(file, folderId, onProgress);
+    return result.ok;
+  }
+
+  // Ask the server how many bytes it actually has for this session --
+  // the authoritative resume offset after a dropped connection.
+  async function syncOffset(uploadId) {
     try {
-      var resp = await fetch('/api/v1/files', { method: 'POST', credentials: 'same-origin', body: form });
-      return resp.ok;
+      var r = await fetch('/uploads/' + uploadId, { credentials: 'same-origin' });
+      if (!r.ok) return null;
+      var j = await r.json();
+      return (typeof j.offset === 'number') ? j.offset : null;
     } catch (e) {
-      return false;
+      return null;
+    }
+  }
+
+  // Resumable chunked upload: open a session, then PATCH slices of the
+  // File one at a time, each tagged with the Upload-Offset it begins at.
+  // A dropped chunk is retried after re-syncing to the server's real
+  // offset (a 409 also just carries the true offset back), so a flaky
+  // link resumes rather than restarting. Returns { ok, file_id }.
+  async function chunkedUpload(file, folderId, onProgress) {
+    var CHUNK = CHUNK_UPLOAD_THRESHOLD;
+    var body = { filename: file.name, total_size: file.size };
+    if (folderId) body.folder_id = folderId;
+
+    var resp;
+    try {
+      resp = await fetch('/uploads', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+    } catch (e) { return { ok: false }; }
+    if (!resp.ok) return { ok: false };
+    var info = await resp.json();
+    var uploadId = info.upload_id;
+    if (info.done) { if (onProgress) onProgress(file.size, file.size); return { ok: true, file_id: info.file_id }; }
+    var offset = info.offset || 0;
+    if (info.chunk_size) CHUNK = info.chunk_size;
+
+    // Loop until the server reports done (not merely "until offset ==
+    // size"): if all bytes are already present but the session isn't
+    // finalized, an empty final chunk at offset==size triggers finalize
+    // and returns the file_id. Success requires a real file_id; anything
+    // else (including a server-side abort) fails so the caller can retry.
+    var maxRetries = 5, retries = 0, stalls = 0;
+    while (true) {
+      var prev = offset;
+      var slice = file.slice(offset, offset + CHUNK);   // empty Blob once offset >= size
+      var patchResp;
+      try {
+        patchResp = await fetch('/uploads/' + uploadId, {
+          method: 'PATCH', credentials: 'same-origin',
+          headers: { 'Upload-Offset': String(offset), 'Content-Type': 'application/octet-stream' },
+          body: slice,
+        });
+      } catch (e) {
+        if (++retries > maxRetries) return { ok: false };
+        var s = await syncOffset(uploadId);
+        if (s === null) return { ok: false };
+        offset = s;
+        continue;
+      }
+      // 409 is not a failure -- it carries the true offset to resume from.
+      if (!patchResp.ok && patchResp.status !== 409) {
+        if (++retries > maxRetries) return { ok: false };
+        var s2 = await syncOffset(uploadId);
+        if (s2 === null) return { ok: false };
+        offset = s2;
+        continue;
+      }
+      var pj = await patchResp.json().catch(function () { return {}; });
+      if (pj.state === 'aborted') return { ok: false };
+      if (pj.done) { if (onProgress) onProgress(file.size, file.size); return { ok: !!pj.file_id, file_id: pj.file_id }; }
+      if (typeof pj.offset === 'number') offset = pj.offset;
+      if (onProgress) onProgress(offset, file.size);
+      if (offset <= prev) {
+        if (++stalls > maxRetries) return { ok: false };
+      } else {
+        stalls = 0; retries = 0;
+      }
     }
   }
 
@@ -628,6 +733,36 @@
   document.querySelectorAll('#folder-list li[data-folder-id]').forEach(function (li) {
     setupDropZone(li, function () { return li.dataset.folderId; });
   });
+
+  // The "Upload" button form (a no-JS fallback that plain-POSTs the whole
+  // file to /upload) is upgraded here to the same chunked + resumable
+  // path as drag-and-drop, with a live progress readout -- so a large
+  // pick-a-file upload survives a dropped connection too, not just drops.
+  // If JS is off this handler never runs and the native form POST still
+  // works (just without chunking/progress).
+  var uploadForm = document.querySelector('form.upload-bar');
+  if (uploadForm) {
+    uploadForm.addEventListener('submit', async function (e) {
+      var input = uploadForm.querySelector('input[type=file]');
+      if (!input || !input.files || !input.files.length) return;   // nothing picked -- let the form be
+      e.preventDefault();
+      var file = input.files[0];
+      var folderId = main.dataset.folderId || null;
+      var progress = document.getElementById('upload-progress');
+      var progressText = document.getElementById('upload-progress-text');
+      var button = uploadForm.querySelector('button');
+      if (button) button.disabled = true;
+      if (progress) progress.classList.add('active');
+      var ok = await uploadFile(file, folderId, function (sent, total) {
+        var pct = total ? Math.round(sent / total * 100) : 100;
+        if (progressText) progressText.textContent = 'Uploading ' + file.name + '… ' + pct + '%';
+      });
+      if (progress) progress.classList.remove('active');
+      if (button) button.disabled = false;
+      if (ok) location.reload();
+      else alert('Upload failed.');
+    });
+  }
 })();
 </script>
 
@@ -1020,6 +1155,16 @@ var Selection = (function () {
     if (!toolbar || !count) return;
     count.textContent = selected.size;
     toolbar.classList.toggle('active', selected.size > 0);
+    // "Combine into one file" only makes sense for 2+ FILES (folders are
+    // ignored by concat), so grey it out otherwise. render() runs on
+    // every select/deselect/clear, so this re-greys the moment the
+    // selection drops back below two files.
+    var combineBtn = document.getElementById('bulk-combine');
+    if (combineBtn) {
+      var fileCount = idsOfKind('file').length;
+      combineBtn.disabled = fileCount < 2;
+      combineBtn.title = combineBtn.disabled ? 'Select two or more files to combine them' : '';
+    }
     if (selected.size === 0) {
       var status = document.getElementById('zip-status');
       if (status) status.innerHTML = '';
@@ -1041,7 +1186,7 @@ var Selection = (function () {
 
   async function doDelete() {
     if (!selected.size) return;
-    if (!confirm('Delete ' + selected.size + ' selected item(s)? This cannot be undone.')) return;
+    if (!confirm('Move ' + selected.size + ' selected item(s) to Trash?')) return;
     var body = { file_ids: idsOfKind('file'), folder_ids: idsOfKind('folder') };
     var resp;
     try {
@@ -1057,13 +1202,40 @@ var Selection = (function () {
     location.reload();
   }
 
-  // Zip build time is unpredictable (see the plan behind this change),
-  // so this deliberately does NOT poll for completion the way it used
-  // to. It just confirms submission and names where the finished file
-  // will land -- a background timer in Homelab::Drive::App delivers it
-  // into the user's own Archives folder once homelab-worker finishes,
-  // same as any other file they'd browse to. See App.pm's
-  // create_zip_job/_claim_and_deliver_zip_placement.
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  // Poll a job's status endpoint until it reaches a terminal state,
+  // calling render(status) each tick. The queue (drive.append_jobs /
+  // worker.jobs + drive.zip_placements) is what makes this possible --
+  // the submitting tab may not even still be open, but the state lives
+  // server-side, so a re-poll always reflects reality, including a
+  // FAILURE (which used to be invisible).
+  async function pollJob(statusUrl, render) {
+    for (;;) {
+      var s;
+      try {
+        var r = await fetch(statusUrl, { credentials: 'same-origin' });
+        if (!r.ok) { render({ state: 'failed', error: 'status check failed' }); return; }
+        s = await r.json();
+      } catch (e) {
+        render({ state: 'failed', error: 'lost contact with the server' });
+        return;
+      }
+      render(s);
+      if (s.state === 'completed' || s.state === 'failed') return;
+      await new Promise(function (res) { setTimeout(res, 1500); });
+    }
+  }
+
+  // Zip: submit, then POLL /zip-jobs/:id so the user sees the phase
+  // (queued → building N/M files → delivering → done) and, crucially, a
+  // FAILURE if the build or delivery fails -- rather than the old
+  // fire-and-forget "check back in Archives". A background drive timer
+  // still does the actual delivery; this just watches it.
   async function doZip() {
     if (!selected.size) return;
     var status = document.getElementById('zip-status');
@@ -1082,23 +1254,92 @@ var Selection = (function () {
     }
     if (!resp.ok) {
       var err = await resp.json().catch(function () { return {}; });
-      if (status) status.innerHTML = '<span class="zip-error">' + (err.error || 'Could not start zip job.') + '</span>';
+      if (status) status.innerHTML = '<span class="zip-error">' + escapeHtml(err.error || 'Could not start zip job.') + '</span>';
       return;
     }
     var job = await resp.json();
-    if (status) {
-      status.textContent = "Your zip is being built. When ready, it'll appear as "
-        + (job.dest_path || 'Archives/' + job.output_name) + ' — check back there.';
+    if (!status) return;
+    await pollJob('/zip-jobs/' + job.id, function (s) {
+      if (s.state === 'completed') {
+        status.innerHTML = 'Zip ready: <strong>' + escapeHtml(s.dest_path || job.dest_path || ('Archives/' + s.output_name)) + '</strong> — refreshing…';
+        setTimeout(function () { location.reload(); }, 1200);
+      } else if (s.state === 'failed') {
+        status.innerHTML = '<span class="zip-error">Zip failed: ' + escapeHtml(s.error || 'unknown error') + '</span>';
+      } else if (s.state === 'building') {
+        var files = (s.progress_total ? ' (' + s.progress_current + '/' + s.progress_total + ' files)' : '');
+        status.innerHTML = '<span class="spinner"></span> Building zip' + files + '…';
+      } else if (s.state === 'delivering') {
+        status.innerHTML = '<span class="spinner"></span> Finishing up…';
+      } else {
+        status.innerHTML = '<span class="spinner"></span> Queued…';
+      }
+    });
+  }
+
+  // Combine selected FILES into one, concatenated in ALPHABETICAL order
+  // of their filenames (the web ordering rule; homelab-cli lets the user
+  // pick the order instead). Folders are ignored. The order is shown in
+  // the confirm prompt. Runs drive-local (not on the worker -- see
+  // App.pm); folder_id is omitted so the result lands in the source
+  // files' own folder. POLLS /append-jobs/:id for live byte progress +
+  // failure surfacing. See App.pm's create_append_job / get_append_job.
+  async function doCombine() {
+    var files = [];
+    selected.forEach(function (v) { if (v.kind === 'file') files.push(v); });
+    if (files.length < 2) { alert('Select at least two files to combine.'); return; }
+    files.sort(function (a, b) { return a.name.localeCompare(b.name); });
+
+    var order = files.map(function (f, i) { return (i + 1) + '. ' + f.name; }).join('\n');
+    var suggested = files[0].name.replace(/\.(\d+|part\d+|[a-z]{2})$/i, '') || 'combined';
+    var outputName = prompt(
+      'Combine these ' + files.length + ' files, in this order:\n\n' + order +
+      '\n\nName for the combined file:', suggested);
+    if (outputName === null) return;
+    outputName = outputName.trim();
+    if (!outputName) { alert('Please enter a name for the combined file.'); return; }
+
+    var status = document.getElementById('zip-status');
+    if (status) status.innerHTML = '<span class="spinner"></span> Starting…';
+    var resp;
+    try {
+      resp = await fetch('/append-jobs', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_ids: files.map(function (f) { return f.id; }), output_name: outputName }),
+      });
+    } catch (e) {
+      if (status) status.innerHTML = '<span class="zip-error">Could not reach the server.</span>';
+      return;
     }
+    if (!resp.ok) {
+      var err = await resp.json().catch(function () { return {}; });
+      if (status) status.innerHTML = '<span class="zip-error">' + escapeHtml(err.error || 'Could not start combine.') + '</span>';
+      return;
+    }
+    var job = await resp.json();
+    if (!status) return;
+    await pollJob('/append-jobs/' + job.id, function (s) {
+      if (s.state === 'completed') {
+        status.innerHTML = "Combined: <strong>" + escapeHtml(s.output_name || outputName) + "</strong> is ready — refreshing…";
+        setTimeout(function () { location.reload(); }, 1200);
+      } else if (s.state === 'failed') {
+        status.innerHTML = '<span class="zip-error">Combine failed: ' + escapeHtml(s.error || 'unknown error') + '</span>';
+      } else {
+        var pct = (s.total_bytes ? ' ' + Math.round(s.received_bytes / s.total_bytes * 100) + '%' : '');
+        status.innerHTML = '<span class="spinner"></span> Combining' + pct + '…';
+      }
+    });
   }
 
   checkboxes().forEach(function (cb) {
     cb.addEventListener('change', function () { onCheckboxChange(cb); });
   });
   var zipBtn = document.getElementById('bulk-zip');
+  var combineBtn = document.getElementById('bulk-combine');
   var deleteBtn = document.getElementById('bulk-delete');
   var clearBtn = document.getElementById('bulk-clear');
   if (zipBtn) zipBtn.addEventListener('click', doZip);
+  if (combineBtn) combineBtn.addEventListener('click', doCombine);
   if (deleteBtn) deleteBtn.addEventListener('click', doDelete);
   if (clearBtn) clearBtn.addEventListener('click', clear);
 

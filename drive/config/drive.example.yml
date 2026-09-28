@@ -72,6 +72,13 @@ session:
 storage:
   path: /var/lib/homelab/drive-storage
 
+# Trash (soft delete). A web-interface delete moves items here instead of
+# removing them; they're auto-purged after retention_days (a background
+# timer), or immediately via Empty Trash / Delete forever. Optional --
+# 30 is the built-in default; set 0 to disable auto-purge (manual only).
+trash:
+  retention_days: 30
+
 # Thumbnail/slideshow-image generation for uploaded images (see
 # README.md's "Image thumbnails and slideshow" section). All optional --
 # every value below is this package's own built-in default if omitted.

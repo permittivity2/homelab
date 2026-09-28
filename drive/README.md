@@ -476,22 +476,237 @@ suite still passes — the table wrapping and markup changes here don't
 touch anything the existing tests assert on), but a real phone/narrow-
 viewport check is the only way to confirm it actually *feels* right.
 
-## Upload size limit
+## Upload size limit (4GB) and where the body goes
 
-`MOJO_MAX_MESSAGE_SIZE=104857600` (100MB) in `systemd/
-homelab-drive.service` raises Mojolicious's own default 16MB request
-ceiling. This has to stay in sync with `homelab-webproxy`'s
-`client_max_body_size` (also 100MB, see `webproxy/README.md`'s own
-Gotcha on this) — that's a SEPARATE, independent ceiling one layer
-further out, and whichever of the two is lower silently wins. Found
-both defaults were far too low from a real user hitting the *lower* of
-the two (nginx's own 1MB) with an ordinary 1.1MB upload, which failed
-with a slow, confusing timeout rather than an immediate clear error —
-see `tests/e2e/test_cli_features.py`'s
-`test_drive_upload_over_1mb_and_16mb_succeeds` for the permanent
-regression coverage (this can only be caught through the real nginx
-proxy — `t/api.t` dispatches in-process and never touches nginx, so it
-proves the Mojolicious-side fix but not nginx's).
+The stack accepts uploads up to ~4GB out of the box. That takes several
+ceilings raised IN SYNC (whichever is lowest silently wins) across two
+different request paths:
+
+- **Browser** (`drive.<domain>` → homelab-webproxy → this app):
+  homelab-webproxy's per-site `max_body_size: 5g` (`webproxy/
+  README.md`) AND this app's `MOJO_MAX_MESSAGE_SIZE=5368709120` (5GB,
+  headroom over a 4GB file + multipart framing) in
+  `systemd/homelab-drive.service`.
+- **CLI/API** (`homelab-cli drive upload` → homelab-api's
+  `/api/v1/drive/*` gateway → this app): ALSO homelab-api's own
+  `MOJO_MAX_MESSAGE_SIZE` + the `api.<domain>` vhost's `max_body_size`,
+  since a CLI upload streams through homelab-api's `Proxy::forward` on
+  its way here. Easy to miss — the two paths don't share a hop.
+
+**Where the bytes go matters as much as the limit.** Mojo spools any
+body over `MOJO_MAX_MEMORY_SIZE` (256KB) to a temp file, and
+`MOJO_TMPDIR=/var/lib/homelab/drive-storage/.uploads-tmp` points that at
+a dir on the SAME filesystem as `storage.path` — deliberately NOT the
+default `/tmp`, which on this fleet is a RAM-backed **tmpfs**. A 4GB
+upload spooled to a tmpfs would be held entirely in RAM and OOM the box
+(the drive container has only 512MB RAM — confirmed the hard way). On
+the storage filesystem instead, the spool lands on real disk AND
+`$upload->move_to` into storage is a cheap rename, not a 4GB copy.
+homelab-api's gateway hop has the same `MOJO_TMPDIR` treatment.
+
+**Host requirements for real 4GB use:** the storage volume must hold
+4GB files with headroom (drive's own disk was expanded from 8GB to 24GB
+for this), and the api-gateway host needs temp room for the spool of a
+CLI upload. hypnotoad's `inactivity_timeout` is raised to 1200s so a
+slow/large transfer isn't dropped mid-flight.
+
+Regression history: the previous 100MB/1MB defaults were found far too
+low by a real user hitting nginx's own 1MB default with an ordinary
+1.1MB upload — see `tests/e2e/test_cli_features.py`'s
+`test_drive_upload_over_1mb_and_16mb_succeeds`.
+
+## Chunked / resumable uploads
+
+The whole-file `POST /files` path above still exists, but a single 4GB
+request is fragile: one dropped connection wastes the entire transfer.
+So a file larger than 8MB (`CHUNK_UPLOAD_THRESHOLD` in both the CLI and
+the web JS) instead goes up in ordered, offset-addressed chunks that can
+resume from wherever the server last had complete bytes. See
+`migrations/006-upload-sessions.sql` for the full rationale.
+
+**Protocol** (all four dual-mounted: bare path for the browser,
+`/api/v1/...` for homelab-cli):
+
+| Request | Body / header | Response |
+|---|---|---|
+| `POST /uploads` | JSON `{filename, total_size, folder_id?}` | `{upload_id, offset:0, chunk_size}` (or `{done, file_id}` for a 0-byte file) |
+| `GET /uploads/:id` | — | `{offset, total_size, state, file_id?}` |
+| `PATCH /uploads/:id` | `Upload-Offset:` header + raw chunk bytes | `{offset, done, file_id?}`; **409** with the true `{offset}` on mismatch |
+| `DELETE /uploads/:id` | — | aborts, drops the partial |
+
+Design points that matter:
+
+- **The on-disk size of the one `.partials/<uuid>` file per session is
+  the authoritative resume offset**, not the `received_bytes` DB column
+  (that's a mirror, for cheap status reads + the stale sweeper). A
+  resuming or duplicate client that sends the wrong `Upload-Offset` gets
+  a **409 carrying the real offset** and re-aligns to it — the same
+  mechanism handles resume, retries, and accidental double-sends
+  uniformly.
+- **`flock(LOCK_EX)` on the partial** serializes concurrent PATCHes for
+  one session across hypnotoad prefork workers; the size is read under
+  that lock, and the state is re-checked under it too (a finalize/abort
+  on another worker may have won while we waited). Finalize (the chunk
+  that reaches `total_size`) runs **while still holding that lock**, and
+  flips `state='completed'` **together with `result_file_id` in one
+  UPDATE, only after the bytes are renamed into storage** — so no
+  observer ever sees a `completed` session with a null `file_id`, and a
+  duplicated final chunk is serialized behind the finalizer and then
+  takes the "already completed" path instead of double-inserting. mime
+  sniffing + image derivatives run *after* the lock is released, so a
+  slow `Image::Magick` pass can't widen that window or block a chunk.
+  The `sysopen` deliberately has **no `O_CREAT`**: a partial that's
+  vanished (raced away by finalize/abort/sweep) yields a clean "session
+  moved on" response, never a resurrected orphan blob.
+- **Abuse bounds & cleanup:** a per-user cap (`$MAX_OPEN_SESSIONS_PER_USER`,
+  100) on concurrent `open` sessions (429 over it); `folder_id` is
+  normalized to a bounded integer so a malformed one can't 500 the
+  bigint cast; and `_sweep_stale_uploads` additionally does a
+  directory-reconciliation pass, unlinking any `.partials` file with no
+  owning session row older than an hour — a backstop for anything a
+  crash mid-finalize could strand.
+- **`.partials` lives on the storage filesystem** (real disk, not the
+  tmpfs `/tmp`), so a big upload spills to disk instead of OOMing and
+  **finalizing is a same-fs rename** into `storage_path/<file uuid>`,
+  not a byte copy. The insert-row-then-rename order (same as the concat
+  job) means a failed move never orphans a blob.
+- **Why offset/state travel in the JSON body, not response headers**
+  (the tus.io way): homelab-api's gateway relays only the backend's
+  response *body* + content-type, not arbitrary response headers (see
+  `common/lib/Homelab/Common/Proxy.pm`). Request headers (`Upload-Offset`)
+  do forward through. So each chunk PATCH through the gateway is bounded
+  to one chunk — which also sidesteps the gateway's 30s request timeout
+  and the ct02 spool that a single 4GB request would strain.
+- **Resume across invocations**: `homelab-cli drive upload` writes a
+  sidecar (`~/.config/homelab-cli/uploads/<hash>.json`) with the session
+  id the instant it's created, so re-running the same command after an
+  interruption resumes instead of restarting. The sidecar key includes
+  the file's size + mtime, so editing the file starts fresh. The browser
+  retries a dropped chunk within the page session (re-syncing via GET).
+- **Abandoned sessions** (client vanished) are reaped by
+  `_sweep_stale_uploads` (a 10-min timer) once a still-`open` session has
+  been idle > 24h — both the row and its orphaned partial.
+
+## Append / combine files (reassemble split uploads)
+
+Select several files and combine them into one, concatenating their
+bytes end-to-end — the reassemble half of "split a big file, upload the
+pieces." Two entry points, differing only in how the ORDER is decided
+(order is load-bearing for concatenation):
+
+- **Web** (`bulk-toolbar` "Combine into one file" button): the selected
+  files are concatenated in **alphabetical order of their filenames**.
+  The order is shown in the confirm prompt so it can be eyeballed before
+  committing.
+- **`homelab-cli drive append <id1> <id2> ...`**: concatenated in the
+  **exact order the ids are listed** — the user picks the order.
+
+Both POST to `/append-jobs` (browser) / `/api/v1/append-jobs` (CLI),
+handled by `create_append_job`, which honors the received order
+verbatim (it does NOT reuse `_resolve_manifest`, which sorts by id).
+Every requested file must be one the caller owns, or the whole request
+is refused — unlike zip, a concat with a missing piece would be
+silently wrong.
+
+**This runs on-host, NOT on homelab-worker** — unlike zip. A zip builds
+something new that isn't already on drive's disk, so offloading it (and
+paying the network round-trip) makes sense. A concat's source files are
+ALREADY local blobs under `storage_path`; the work is nearly all disk
+I/O and almost no CPU, so shipping gigabytes to a separate host and back
+would be pure waste. Instead `create_append_job` records a
+`drive.append_jobs` row (migration 005) and a recurring timer
+(`_run_append_jobs`) claims it (`FOR UPDATE SKIP LOCKED`, same pattern
+as the zip timer) and does the byte-copy in a **forked subprocess**
+(`Mojo::IOLoop::Subprocess`) — streaming the sources in 1MB chunks into
+one new blob — so a multi-GB combine never blocks a hypnotoad worker's
+event loop and never holds a file in RAM. The child does only file I/O;
+the parent inserts the `drive.files` row, renames the built blob into
+storage (same-fs, cheap), sniffs its MIME, and marks the job done. A job
+whose subprocess dies mid-build (restart) is reclaimed from `processing`
+back to `pending` after 15 minutes. The result lands in the source
+files' own folder (or a caller-specified one) and appears in drive when
+ready — same "check back for it" model as zip, but with no worker, no
+network hop, and no second host to provision. ("Heavy work off the
+request" is the real rule — see CLAUDE.md; *where* it runs is a
+per-workload call, and for concat that's right here.)
+
+## Job status & progress (concat and zip)
+
+Both async "produce a new file" jobs expose status so the UI can show
+progress and — critically — **surface a failure** instead of a file that
+silently never appears:
+
+- **`GET /append-jobs/:id`** (concat) → `{state, received_bytes,
+  total_bytes, file_id, error}`. `state` is `pending | processing |
+  finalizing | completed | failed`. Live byte-% comes from a **heartbeat**
+  step in `_run_append_jobs`: each tick it stats the growing per-run temp
+  and mirrors its size into `received_bytes`, bumping `started_at` on
+  growth. That bump is load-bearing — "stuck" now means *no progress for
+  15 min*, not *started 15 min ago*, so a legitimately long combine is
+  never re-pended and double-run.
+- **`GET /zip-jobs/:id`** (zip) collapses the two-system lifecycle
+  (homelab-worker builds → drive delivers into Archives) into one phase:
+  `queued | building | delivering | completed | failed`, with `N of M`
+  entry progress from the worker (`progress_current/total`, written to a
+  per-attempt progress file the worker's own heartbeat mirrors) and the
+  finished `file_id`. Uses a short-timeout UA so a hung worker can't
+  freeze the poll.
+
+The web UI polls both after submit (progress bar + error surfacing);
+`homelab-cli drive append` prints the job id (poll `append-jobs/:id`).
+
+**Concurrency & correctness hardening** (from adversarial review): concat
+completion is guarded on an `attempt` epoch (migration 008) + a
+`finalizing` claim before any side effect + a per-attempt temp path, so a
+reclaimed-but-still-alive subprocess can't double-run, clobber the re-run's
+bytes, or leave a completed job pointing at a missing/partial blob; concat
+forks are capped fleet-wide (`$MAX_CONCURRENT_APPEND`); the worker sweeps
+orphaned `.work` build dirs / progress files after an ungraceful crash.
+
+**Known deferred limits** (tracked, not yet fixed): the zip-**delivery**
+timer still downloads the artifact with a blocking UA on the event loop
+(pre-existing); large **downloads** through the homelab-api gateway slurp
+the whole body into RAM (so a multi-GB `drive download` via the gateway
+can 502 on the 512MB api host); and `Archive::Zip`'s final write is a
+single tickless phase (a >50GB export's write could be false-reclaimed).
+
+## Trash (soft delete)
+
+A **web-interface** delete is a **soft delete**: the item gets a
+`deleted_at` timestamp (migration 009) and keeps its `folder_id` /
+`parent_folder_id`, so it vanishes from normal listings but can be
+restored to exactly where it was. It is **not** a real folder — Trash is
+a virtual view (`GET /trash`, a sidebar link) over `deleted_at IS NOT
+NULL`. Every normal query (`index`, `api_list`, folder listings,
+breadcrumb, `_owned_folder`, folder-name uniqueness, the zip manifest,
+concat sources, the Archives lookup) filters `deleted_at IS NULL`, so a
+trashed item can't be listed, zipped, combined, or collide on a name.
+
+- **Delete → Trash** (soft) is the default for the browser: `delete_file`,
+  `delete_folder`, and the browser `/bulk/delete` route (via a
+  `soft_delete` route default). A folder delete soft-deletes its whole
+  subtree (folders + files) recursively, so it restores as a unit.
+- **Restore** (`POST /files/:id/restore`, `POST /folders/:id/restore`)
+  clears `deleted_at`; restoring also un-deletes the item's **ancestor
+  folder chain** so it lands somewhere reachable even if its parent was
+  trashed too. Restoring a folder brings back its whole subtree.
+- **Permanent delete** — `POST /files|folders/:id/purge` (per item) and
+  `POST /trash/empty` (everything) — do the real unlink (blob +
+  thumbnail/slideshow) + row delete. A background timer
+  (`_purge_expired_trash`, hourly) auto-purges items older than
+  `trash.retention_days` (config, default 30; `0` disables auto-purge).
+
+**API / homelab-cli deletes stay HARD (immediate) by default**, matching
+the "scripts don't want a Trash accumulating" expectation:
+`DELETE /api/v1/files/:id` and `homelab-cli drive delete` remove
+immediately. Both opt into Trash with `?soft=1` / `homelab-cli drive
+delete --trash`. The CLI also has `drive trash` (list) and `drive restore
+<id> [--folder]`. Restore/purge/empty endpoints are dual-mounted
+(`/api/v1/...`) so the browser Trash view drives them by `fetch`, same as
+bulk delete.
+
+Tested by `t/trash.t` (soft/hard/restore/purge/exclusion/folder-recursion/
+ownership; the time-based retention purge is a timer, not covered there).
 
 ## JSON API (for homelab-cli and third-party scripts)
 
@@ -505,9 +720,11 @@ download link — same handler, no duplicated logic), `DELETE
 parent_folder_id}`), `DELETE /api/v1/folders/:id` are all Bearer-token
 authenticated, not session-cookie authenticated — `_current_email`
 checks an `Authorization: Bearer <jwt>` header first, falling back to
-the session cookie only if that's absent. This is what
-`homelab-cli drive` (`list`/`upload`/`download`/`delete`/`mkdir`/`rmdir`,
-all folder-aware via `--folder`/`--parent`) talks to: a CLI already
+the session cookie only if that's absent. `POST /api/v1/append-jobs` (JSON `{file_ids: [...ordered...],
+output_name?, folder_id?}`) starts a combine (see "Append / combine
+files" above). This is what
+`homelab-cli drive` (`list`/`upload`/`download`/`delete`/`mkdir`/`rmdir`/
+`append`, all folder-aware via `--folder`/`--parent`) talks to: a CLI already
 holds its own homelab-api JWT directly (from `homelab-cli login`), so it
 never goes through the SSO redirect dance at all — see the root
 `CLAUDE.md` on why the API being genuinely usable by third-party
