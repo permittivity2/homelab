@@ -85,6 +85,13 @@ sub startup ($self) {
     # is the fuller account view, so it's its own endpoint.
     $r->get('/api/v1/account/summary' => sub ($c) { $self->_account_summary($c) });
 
+    # Authenticated self-service (bearer JWT). Change-password works with
+    # NO recovery_email on file (unlike the SSO reset-by-email flow);
+    # recovery-email lets a user set/change/clear the address that flow
+    # needs. Both back homelab-accountmanage's Security panel.
+    $r->post('/api/v1/auth/password' => sub ($c) { $self->_change_password($c) });
+    $r->post('/api/v1/account/recovery-email' => sub ($c) { $self->_set_recovery_email($c) });
+
     # --- Service registry (see Homelab::Common::Registry — this is what
     # every OTHER feature's register()/lookup() calls hit) ------------
     $r->post('/api/v1/registry/register' => sub ($c) { $self->_registry_register($c) });
@@ -878,6 +885,60 @@ sub _account_summary ($self, $c) {
         });
 
     return;
+}
+
+# Shared bearer-JWT check for authenticated self-service writes below:
+# verify signature/exp + the session-revocation check (same as
+# _introspect), synchronously (these are quick single-row writes).
+# Renders a 401 and returns undef on any failure; else returns the
+# verified payload ({email, jti, ...}).
+sub _require_bearer ($self, $c) {
+    my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+    unless ($jwt) { $c->render(json => { error => 'Token required' }, status => 401); return undef; }
+    my $payload = verify_jwt($jwt, secret => $self->config->{jwt}{secret});
+    unless ($payload) { $c->render(json => { error => 'invalid or expired token' }, status => 401); return undef; }
+    my $sess = $self->pg->db->query('SELECT revoked FROM api.sessions WHERE jti = ?', $payload->{jti} // '')->hash;
+    unless ($sess && !$sess->{revoked}) { $c->render(json => { error => 'session revoked' }, status => 401); return undef; }
+    return $payload;
+}
+
+# POST /api/v1/auth/password { current_password, new_password }
+# In-place authenticated change: verifies the current password, sets the
+# new one, and revokes the user's OTHER sessions (keeping the caller's
+# own) so a stolen old token can't outlive the change. Works with no
+# recovery_email on file, unlike the SSO reset-by-email flow.
+sub _change_password ($self, $c) {
+    my $payload = $self->_require_bearer($c) or return;
+    my $body = $c->req->json // {};
+    my ($cur, $new) = ($body->{current_password}, $body->{new_password});
+    return $c->render(json => { error => 'current_password and new_password are required' }, status => 400)
+        unless $cur && $new;
+    return $c->render(json => { error => 'new password must be at least 8 characters' }, status => 400)
+        if length($new) < 8;
+
+    my $user = $self->pg->db->query('SELECT id, password_hash FROM api.users WHERE email = ?', $payload->{email})->hash;
+    return $c->render(json => { error => 'account not found' }, status => 404) unless $user;
+    return $c->render(json => { error => 'current password is incorrect' }, status => 403)
+        unless verify_password($cur, $user->{password_hash});
+
+    $self->pg->db->query('UPDATE api.users SET password_hash = ? WHERE id = ?', hash_password($new), $user->{id});
+    $self->pg->db->query(
+        'UPDATE api.sessions SET revoked = TRUE WHERE user_id = ? AND jti <> ? AND revoked = FALSE',
+        $user->{id}, $payload->{jti} // '');
+    return $c->render(json => { ok => \1 });
+}
+
+# POST /api/v1/account/recovery-email { recovery_email }
+# Set / change / clear (empty string clears) the caller's recovery email.
+sub _set_recovery_email ($self, $c) {
+    my $payload = $self->_require_bearer($c) or return;
+    my $body = $c->req->json // {};
+    my $re = $body->{recovery_email};
+    $re = undef if defined $re && $re eq '';
+    return $c->render(json => { error => 'recovery_email is not a valid email address' }, status => 400)
+        if defined $re && $re !~ /^[^@\s]+\@[^@\s]+\.[^@\s]+$/;
+    $self->pg->db->query('UPDATE api.users SET recovery_email = ? WHERE email = ?', $re, $payload->{email});
+    return $c->render(json => { ok => \1, recovery_email => $re });
 }
 
 sub _refresh ($self, $c) {
