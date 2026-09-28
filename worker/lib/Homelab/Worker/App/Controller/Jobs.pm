@@ -40,6 +40,8 @@ sub _public_row ($row) {
         user_email        => $row->{user_email},
         output_name       => $row->{output_name},
         output_size_bytes => defined $row->{output_size_bytes} ? $row->{output_size_bytes} + 0 : undef,
+        progress_current  => defined $row->{progress_current} ? $row->{progress_current} + 0 : undef,
+        progress_total    => defined $row->{progress_total} ? $row->{progress_total} + 0 : undef,
         error_message     => $row->{error_message},
         created_at        => $row->{created_at},
         started_at        => $row->{started_at},
@@ -92,7 +94,8 @@ sub list ($c) {
     # No pagination UI in v1 -- a sane cap so this query can't run away
     # (see README.md).
     my $rows = $c->app->pg->db->query(
-        qq{SELECT id, type, state, user_email, output_name, output_size_bytes, error_message,
+        qq{SELECT id, type, state, user_email, output_name, output_size_bytes,
+                  progress_current, progress_total, error_message,
                   created_at, started_at, completed_at
            FROM worker.jobs $where_sql ORDER BY created_at DESC LIMIT 50},
         @binds,
@@ -108,7 +111,7 @@ sub list ($c) {
 sub _find_visible_job ($c, $email, $roles) {
     my $row = $c->app->pg->db->query(
         q{SELECT id, type, state, user_email, output_name, output_uuid, output_size_bytes,
-                 error_message, created_at, started_at, completed_at
+                 progress_current, progress_total, error_message, created_at, started_at, completed_at
           FROM worker.jobs WHERE id = ?},
         $c->stash('id'),
     )->hash;

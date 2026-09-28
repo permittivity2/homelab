@@ -35,6 +35,14 @@ sub startup ($self) {
     my $storage_path = $config->{storage_path} // die "config: storage_path is required\n";
     make_path($storage_path) unless -d $storage_path;
     $self->storage_path($storage_path);
+    # Per-job build scratch lives HERE, under storage_path, NOT the
+    # default /tmp -- on this fleet /tmp is a RAM-backed tmpfs, so
+    # building a multi-GB zip/concat there would OOM the box, and moving
+    # the finished artifact from tmpfs into storage would be a
+    # cross-filesystem COPY. A .work dir on the storage filesystem keeps
+    # the build on real disk AND makes the final move a cheap same-fs
+    # rename. See the subprocess in _claim_and_run_one.
+    make_path("$storage_path/.work") unless -d "$storage_path/.work";
 
     my $jobs_cfg = $config->{jobs} // {};
     $self->jobs_config({
@@ -51,7 +59,7 @@ sub startup ($self) {
     # workdir and either returns a finished artifact's local path or
     # dies. See README.md.
     $self->job_types({
-        zip => \&Homelab::Worker::JobType::Zip::run,
+        zip    => \&Homelab::Worker::JobType::Zip::run,
     });
 
     mount_health_route($self, check => sub {
@@ -93,6 +101,7 @@ sub startup ($self) {
     # PowerDNS-restart/DKIM-retirement timers -- deliberately NOT Minion
     # (see README.md and CLAUDE.md for why).
     Mojo::IOLoop->recurring(5 => sub {
+        $self->_heartbeat_running_jobs;
         $self->_reclaim_stale_jobs;
         $self->_expire_old_jobs;
         $self->_claim_and_run_job;
@@ -119,6 +128,35 @@ sub _resolve_concurrency ($configured) {
     return $cap > 0 ? $cap : 1;
 }
 
+# Reads each running job's progress file (written by its JobType via the
+# progress callback -- see _claim_and_run_job) and mirrors "N of M" into
+# the row, bumping started_at whenever progress ADVANCED. That bump is
+# what makes _reclaim_stale_jobs's timeout mean "no progress for N
+# minutes" rather than "started more than N minutes ago" -- so a
+# legitimately long job (a multi-GB zip) is no longer reclaimed and
+# double-run while it's actively working. Best-effort throughout: a
+# missing/garbled progress file just means "no fresh progress this tick".
+sub _heartbeat_running_jobs ($self) {
+    my $db        = $self->pg->db;
+    my $work_root = $self->storage_path . '/.work';
+    my $rows = $db->query(q{SELECT id, attempt_count, progress_current FROM worker.jobs WHERE state = 'running'})->hashes;
+    for my $r (@$rows) {
+        my $pf = "$work_root/progress-$r->{id}-$r->{attempt_count}";
+        next unless -e $pf;
+        open(my $fh, '<', $pf) or next;
+        my $line = <$fh>;
+        close($fh);
+        next unless defined $line && $line =~ /^(\d+)\s+(\d+)/;
+        my ($cur, $tot) = ($1 + 0, $2 + 0);
+        next if defined $r->{progress_current} && $cur == $r->{progress_current};
+        $db->query(
+            q{UPDATE worker.jobs SET progress_current = ?, progress_total = ?, started_at = NOW()
+              WHERE id = ? AND state = 'running'},
+            $cur, $tot, $r->{id});
+    }
+    return;
+}
+
 # Resets an orphaned 'running' row (worker crash, package upgrade, host
 # reboot mid-job -- job state lives entirely in Postgres, never in this
 # process's own memory, so recovery is identical regardless of cause)
@@ -127,6 +165,9 @@ sub _resolve_concurrency ($configured) {
 # retrying forever. expires_at is set in the same UPDATE when a row is
 # given up on, so it's swept by _expire_old_jobs on a later tick same as
 # any other terminal job -- it does not need its own cleanup path.
+# "Stale" now means "started_at (== last progress, per the heartbeat
+# above) is older than job_timeout_minutes" -- i.e. no progress for that
+# long, not merely running for that long.
 sub _reclaim_stale_jobs ($self) {
     my $cfg = $self->jobs_config;
     $self->pg->db->query(
@@ -159,6 +200,29 @@ sub _expire_old_jobs ($self) {
         my $path = File::Spec->catfile($self->storage_path, $row->{output_uuid});
         unlink $path if -e $path;
         $db->query('DELETE FROM worker.jobs WHERE id = ?', $row->{id});
+    }
+
+    # Reconcile the .work scratch dir: an UNGRACEFUL crash (SIGKILL, OOM,
+    # host reboot) skips File::Temp's CLEANUP and the terminal
+    # progress-file unlink, orphaning a build dir (possibly multi-GB) and
+    # a progress file with nothing to remove them. Sweep anything not
+    # belonging to a currently-running job and older than an hour (so a
+    # just-started job's fresh files are never touched). Best-effort.
+    my %running = map { $_->{id} => 1 }
+        @{ $db->query(q{SELECT id FROM worker.jobs WHERE state = 'running'})->hashes };
+    my $work_root = $self->storage_path . '/.work';
+    if (opendir(my $dh, $work_root)) {
+        while (defined(my $name = readdir $dh)) {
+            next if $name eq '.' || $name eq '..';
+            my ($id) = $name =~ /^(?:worker-job|progress)-(\d+)/;
+            next unless defined $id;              # not one of ours
+            next if $running{$id};                 # belongs to a live job
+            my $p = "$work_root/$name";
+            next unless (time - (stat $p)[9]) > 3600;
+            if (-d $p) { require File::Path; File::Path::remove_tree($p, { safe => 1 }); }
+            else       { unlink $p; }
+        }
+        closedir($dh);
     }
     return;
 }
@@ -221,11 +285,30 @@ sub _claim_and_run_job ($self) {
     my $storage_path  = $self->storage_path;
     my $retention_hrs = $cfg->{retention_hours};
 
+    my $work_root = "$storage_path/.work";
+    # Deterministic progress file keyed on (job id, ATTEMPT) -- not job id
+    # alone -- so a reclaimed job's re-run doesn't share a progress file
+    # with a still-alive original run (which would garble the "N of M"
+    # display and let one run's terminal-cleanup delete the other's live
+    # file). The child writes "current total" via the callback below;
+    # _heartbeat_running_jobs reads the same (id, attempt) path.
+    my $progress_file = "$work_root/progress-$job_id-$attempt";
+    unlink($progress_file) if -e $progress_file;
     Mojo::IOLoop::Subprocess->new->run(
         sub {
             require File::Temp;
-            my $tmpdir = File::Temp->newdir("worker-job-$job_id-XXXXXX", TMPDIR => 1, CLEANUP => 1);
-            my $built_path = eval { $handler->($input, $tmpdir->dirname) };
+            # DIR (not TMPDIR) -> build on the storage filesystem, not the
+            # RAM tmpfs /tmp -- see the make_path in startup for why.
+            my $tmpdir = File::Temp->newdir("worker-job-$job_id-XXXXXX", DIR => $work_root, CLEANUP => 1);
+            # Progress reporting: a job type calls this with (current,
+            # total); we mirror it into the deterministic progress file
+            # the heartbeat reads. Best-effort -- a failed progress write
+            # must never fail the job itself.
+            my $progress_cb = sub {
+                my ($cur, $tot) = @_;
+                if (open(my $pf, '>', $progress_file)) { print $pf "$cur $tot\n"; close($pf); }
+            };
+            my $built_path = eval { $handler->($input, $tmpdir->dirname, $progress_cb) };
             return { ok => 0, error => "$@" } if $@;
             return { ok => 0, error => "job type produced no output file" }
                 unless defined $built_path && -f $built_path;
@@ -243,6 +326,7 @@ sub _claim_and_run_job ($self) {
         sub {
             my ($subprocess, $err, $result) = @_;
             my $db2 = $self->pg->db;
+            unlink($progress_file) if -e $progress_file;   # job is terminal; drop its progress file
             if ($err || !$result || !$result->{ok}) {
                 my $message = $err ? "subprocess error: $err" : ($result->{error} // 'unknown job failure');
                 $db2->query(
@@ -253,7 +337,8 @@ sub _claim_and_run_job ($self) {
                 return;
             }
             $db2->query(
-                q{UPDATE worker.jobs SET state = 'completed', output_size_bytes = ?, completed_at = NOW(),
+                q{UPDATE worker.jobs SET state = 'completed', output_size_bytes = ?,
+                  progress_current = progress_total, completed_at = NOW(),
                   expires_at = NOW() + make_interval(hours => ?) WHERE id = ? AND attempt_count = ?},
                 $result->{size}, $retention_hrs, $job_id, $attempt,
             );

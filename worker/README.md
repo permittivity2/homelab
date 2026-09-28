@@ -51,6 +51,17 @@ see `App.pm`'s `startup`) is the *only* place the engine needs to know a
 type exists at all; neither the routes nor the claim/run timer ever
 branch on job type.
 
+> **Why no `concat` job type here?** homelab-drive's split-file
+> "combine" feature does NOT use this worker — it runs the concatenation
+> **on the drive host itself**, in a forked subprocess, because a
+> concat's source files are already local blobs on drive's disk and the
+> work is nearly all disk I/O with almost no CPU; shipping gigabytes to
+> this host and back would be pure waste. This worker is for building
+> something that ISN'T already on the requesting host's disk (a zip
+> bundle assembled from many files). "Heavy work off the request loop"
+> is the rule; *which host* runs it is a per-workload call. See
+> `drive/README.md` and `drive/migrations/005-append-jobs.sql`.
+
 ### The `zip` job type (v1's only type)
 
 Generic "fetch N URLs, each with its own auth header, bundle into one
@@ -211,7 +222,14 @@ The actual work executes via `Mojo::IOLoop::Subprocess->new->run($child, $parent
 dispatched to the claimed row's `job_types->{$type}` handler. The child
 never touches `$self->pg` or any other shared object -- only the plain
 `input` data and a private `File::Temp` workdir -- so forking never risks
-corrupting the parent's own Postgres connection. Every completion write
+corrupting the parent's own Postgres connection. That workdir is created
+`DIR => "$storage_path/.work"` (NOT the default `/tmp`): on this fleet
+`/tmp` is a RAM-backed **tmpfs**, so building a multi-GB zip/concat there
+would OOM the box, and moving the finished artifact from tmpfs into
+`storage_path` would be a cross-filesystem copy. Building on the storage
+filesystem keeps it on real disk AND makes the final move into storage a
+cheap same-fs rename. (Corollary: the worker host needs disk headroom for
+the largest artifact it builds.) Every completion write
 (both success and failure) is guarded by `WHERE id = ? AND attempt_count = ?`
 (optimistic concurrency), so a reclaim sweep racing a still-alive child's
 late completion can't corrupt state -- a reclaimed row's `attempt_count`

@@ -15,7 +15,7 @@ use Mojo::UserAgent;
 # the finished archive's local path (inside $workdir) on success, or
 # dies with a message that becomes the job's error_message on failure.
 sub run {
-    my ($input, $workdir) = @_;
+    my ($input, $workdir, $progress_cb) = @_;
 
     my $entries = $input->{entries};
     die "zip job: input.entries is required\n" unless ref $entries eq 'ARRAY' && @$entries;
@@ -23,8 +23,15 @@ sub run {
     my $zip = Archive::Zip->new;
     my $ua  = Mojo::UserAgent->new(connect_timeout => 10, request_timeout => 300);
 
+    # Report progress as "entries completed / total". Called at the START
+    # of each entry (so the worker's no-progress reclaim clock effectively
+    # resets per entry, not per whole job -- a long single-entry fetch
+    # aside) and once more at the end for 100%. $progress_cb is optional
+    # so run() still works when called without it (e.g. unit tests).
+    my $total = scalar @$entries;
     my $n = 0;
     for my $entry (@$entries) {
+        $progress_cb->($n, $total) if $progress_cb;
         $n++;
         my $fetch_url = $entry->{fetch_url} // die "zip job: entry $n is missing fetch_url\n";
         my $zip_path  = $entry->{zip_path}  // die "zip job: entry $n is missing zip_path\n";
@@ -49,6 +56,16 @@ sub run {
 
     my $out_path = File::Spec->catfile($workdir, $safe_name);
     die "zip job: could not write archive\n" unless $zip->writeToFileNamed($out_path) == AZ_OK;
+
+    # Report 100% only AFTER the archive is actually written, so "done"
+    # is honest (not "all entries fetched, but still compressing").
+    # NOTE: writeToFileNamed itself is a single tickless phase -- Archive::
+    # Zip exposes no progress hook -- so a pathologically huge archive
+    # (tens of GB) whose compress/write alone exceeds jobs.job_timeout_minutes
+    # could still be reclaimed as "no progress"; acceptable given the
+    # per-entry ticks cover the fetch phase and such sizes are far beyond
+    # normal drive exports. Revisit with an incremental writer if needed.
+    $progress_cb->($total, $total) if $progress_cb;
 
     return $out_path;
 }

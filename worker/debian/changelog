@@ -1,3 +1,33 @@
+homelab-worker (0.1.12) unstable; urgency=medium
+
+  * Release v0.1.12
+
+ -- Gardner <gardner@homelab>  Sun, 27 Sep 2026 15:17:58 -0500
+
+homelab-worker (0.1.11) unstable; urgency=medium
+
+  * Release v0.1.11
+
+ -- Gardner <gardner@homelab>  Sun, 27 Sep 2026 14:42:04 -0500
+
+homelab-worker (0.1.10) unstable; urgency=medium
+
+  * Release v0.1.10
+
+ -- Gardner <gardner@homelab>  Sun, 27 Sep 2026 12:46:26 -0500
+
+homelab-worker (0.1.9) unstable; urgency=medium
+
+  * Release v0.1.9
+
+ -- Gardner <gardner@homelab>  Sun, 27 Sep 2026 08:47:06 -0500
+
+homelab-worker (0.1.8) unstable; urgency=medium
+
+  * Release v0.1.8
+
+ -- Gardner <gardner@homelab>  Sun, 27 Sep 2026 08:42:58 -0500
+
 homelab-worker (0.1.7) unstable; urgency=medium
 
   * Release v0.1.7
