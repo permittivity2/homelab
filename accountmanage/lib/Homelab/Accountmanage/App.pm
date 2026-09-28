@@ -88,6 +88,14 @@ sub startup ($self) {
     # Security actions (proxy to homelab-api with the user's token).
     $r->post('/security/password')->to('account#change_password');
     $r->post('/security/recovery-email')->to('account#set_recovery_email');
+    # Administration actions (site_admin; each re-checks + proxies to the
+    # owning service with the admin's token).
+    $r->post('/admin/users/:id/active')->to('account#admin_set_active');
+    $r->post('/admin/drive-quota')     ->to('account#admin_drive_quota');
+    $r->post('/admin/block-link')      ->to('account#admin_block_link');
+    $r->post('/admin/dkim')            ->to('account#admin_dkim');
+    $r->post('/admin/spf')             ->to('account#admin_spf');
+    $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
 
     return;
 }
@@ -113,9 +121,18 @@ sub _random_state { return join '', map { sprintf '%02x', int rand 256 } 1 .. 16
 sub _current_auth ($c) {
     my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
     $jwt //= $c->session('token');
-    return (undef, undef) unless $jwt;
+    return (undef, undef, undef) unless $jwt;
     my $result = introspect($jwt, api_base => $c->app->api_base);
-    return $result ? ($result->{email}, $jwt) : (undef, undef);
+    return $result ? ($result->{email}, $jwt, ($result->{roles} // [])) : (undef, undef, undef);
+}
+
+# Admin gate for the Administration pane's actions: ($email, $jwt) if the
+# caller holds site_admin, else (undef, undef). Backends re-check too;
+# this is defense-in-depth + lets the UI fail fast.
+sub _admin_auth ($c) {
+    my ($email, $jwt, $roles) = _current_auth($c);
+    return (undef, undef) unless $email && grep { $_ eq 'site_admin' } @$roles;
+    return ($email, $jwt);
 }
 
 # GET a homelab-api path with the user's token; returns decoded JSON, or
@@ -187,6 +204,16 @@ sub dashboard ($c) {
     my $roles    = $summary->{roles} // [];
     my $is_admin = grep { $_ eq 'site_admin' } @$roles;
 
+    # Admin pane data (only for site_admins): the user list (to
+    # suspend/re-enable + adjust quota) and the managed domains (for
+    # block-link toggle + DKIM/SPF/DMARC). Best-effort -- a panel degrades
+    # to empty if its backend is unavailable.
+    my ($admin_users, $admin_domains) = ([], []);
+    if ($is_admin) {
+        $admin_users   = _api_get($c, $jwt, '/api/v1/admin/users') // [];
+        $admin_domains = _api_get($c, $jwt, '/api/v1/domains') // [];
+    }
+
     return $c->render(
         template     => 'dashboard',
         email        => $email,
@@ -195,6 +222,8 @@ sub dashboard ($c) {
         drive_usage  => $drive_usage,
         roles        => $roles,
         is_admin     => ($is_admin ? 1 : 0),
+        admin_users  => $admin_users,
+        admin_domains => $admin_domains,
         sso_forgot_url => $c->app->sso_base . '/forgot',
     );
 }
@@ -254,6 +283,108 @@ sub set_recovery_email ($c) {
         $c->flash(re_error => (eval { $tx->res->json->{error} } // 'Could not save recovery email.'));
     }
     return $c->redirect_to('/#security');
+}
+
+# --- Administration (site_admin) -----------------------------------------
+
+# Flash the outcome of an admin proxy call, then the caller redirects to
+# the Administration pane.
+sub _admin_flash ($c, $tx, $ok_msg) {
+    if (($tx->res->code // 0) >= 200 && ($tx->res->code // 0) < 300) {
+        $c->flash(admin_ok => $ok_msg);
+    } else {
+        $c->flash(admin_err => (eval { $tx->res->json->{error} } // ('Action failed (HTTP ' . ($tx->res->code // 0) . ').')));
+    }
+}
+
+# Suspend / re-enable a user's login (api.users.active gates every login
+# path). Form posts action=suspend|enable.
+sub admin_set_active ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $id     = $c->stash('id');
+    my $enable = (($c->param('action') // '') eq 'enable') ? \1 : \0;
+    my $tx = $UA->post($c->app->api_base . "/api/v1/admin/users/$id/active"
+        => { Authorization => "Bearer $jwt" } => json => { active => $enable });
+    _admin_flash($c, $tx, ($$enable ? 'User re-enabled.' : 'User suspended (and signed out).'));
+    return $c->redirect_to('/#admin');
+}
+
+# Set a user's drive quota (GB). Empty limit clears the override (back to
+# the 1 TB default).
+sub admin_drive_quota ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $user = $c->param('user_email') // '';
+    my $gb   = $c->param('limit_gb') // '';
+    my %body = (user_email => $user);
+    $body{limit_bytes} = int($gb) * 1024 * 1024 * 1024 if $gb ne '' && $gb =~ /^\d+$/;
+    my $tx = $UA->put($c->app->api_base . '/api/v1/drive/admin/quota'
+        => { Authorization => "Bearer $jwt" } => json => \%body);
+    _admin_flash($c, $tx, ($gb eq '' ? "Drive quota for $user reset to default." : "Drive quota for $user set to ${gb} GB."));
+    return $c->redirect_to('/#admin');
+}
+
+# Toggle the block-link footer per domain. mode: header (link only, no
+# body append) | body | both. enabled on/off is the master switch.
+sub admin_block_link ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $domain  = $c->param('domain') // '';
+    my $enabled = $c->param('enabled') ? \1 : \0;
+    my $mode    = $c->param('mode') // 'both';
+    my $tx = $UA->put($c->app->api_base . "/api/v1/block-link/domains/$domain"
+        => { Authorization => "Bearer $jwt" } => json => { enabled => $enabled, mode => $mode });
+    _admin_flash($c, $tx, "Block-link settings for $domain saved.");
+    return $c->redirect_to('/#admin');
+}
+
+# Force-update DKIM for a domain = rotate a new selector, then activate it.
+sub admin_dkim ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $domain = $c->param('domain') // '';
+    my $auth = { Authorization => "Bearer $jwt" };
+    my $rot = $UA->post($c->app->api_base . "/api/v1/domains/$domain/dkim/rotate" => $auth => json => {});
+    if (($rot->res->code // 0) != 201) {
+        _admin_flash($c, $rot, '');
+        return $c->redirect_to('/#admin');
+    }
+    my $selector = eval { $rot->res->json->{selector} };
+    my $act = $UA->post($c->app->api_base . "/api/v1/domains/$domain/dkim/$selector/activate" => $auth => json => {});
+    _admin_flash($c, $act, "DKIM rotated + activated for $domain (selector $selector).");
+    return $c->redirect_to('/#admin');
+}
+
+# Set SPF (apex TXT). NOTE: this REPLACES the domain's entire apex TXT
+# record set (PowerDNS REPLACE semantics) -- documented in the UI.
+sub admin_spf ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $domain = $c->param('domain') // '';
+    my $value  = $c->param('value') // 'v=spf1 mx ~all';
+    my $tx = $UA->post($c->app->api_base . "/api/v1/domains/$domain/dns/records"
+        => { Authorization => "Bearer $jwt" }
+        => json => { name => $domain, type => 'TXT', content => [$value], ttl => 3600 });
+    _admin_flash($c, $tx, "SPF set for $domain.");
+    return $c->redirect_to('/#admin');
+}
+
+# Set DMARC (_dmarc TXT). Builds the value from a policy + optional rua.
+sub admin_dmarc ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $domain = $c->param('domain') // '';
+    my $policy = $c->param('policy') // 'none';
+    $policy = 'none' unless $policy =~ /^(none|quarantine|reject)$/;
+    my $rua    = $c->param('rua') // '';
+    my $value  = "v=DMARC1; p=$policy";
+    $value .= "; rua=mailto:$rua" if $rua =~ /\S/;
+    my $tx = $UA->post($c->app->api_base . "/api/v1/domains/$domain/dns/records"
+        => { Authorization => "Bearer $jwt" }
+        => json => { name => "_dmarc.$domain", type => 'TXT', content => [$value], ttl => 3600 });
+    _admin_flash($c, $tx, "DMARC set for $domain (p=$policy).");
+    return $c->redirect_to('/#admin');
 }
 
 1;
