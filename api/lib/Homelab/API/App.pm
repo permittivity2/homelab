@@ -104,6 +104,7 @@ sub startup ($self) {
     # lock every admin out at once). This is what homelab-cli's `admin`
     # subcommands talk to. ------------------------------------------
     $r->get('/api/v1/admin/users'                => sub ($c) { $self->_admin_list_users($c) });
+    $r->post('/api/v1/admin/users/:id/active'    => sub ($c) { $self->_admin_set_active($c) });
     $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
     $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
     # Mints a real api.users row for a system-owned mailbox identity
@@ -1493,6 +1494,29 @@ sub _require_site_admin ($self, $c) {
 }
 
 # GET /api/v1/admin/users -- every user, with their granted role names.
+# POST /api/v1/admin/users/:id/active { active: bool } -- suspend or
+# re-enable a user's login. api.users.active gates EVERY login path (web,
+# SSO, IMAP, SMTP), so this one flag pauses/restores all of them. On
+# suspend we also revoke the user's live sessions so they're kicked
+# immediately, not just blocked at next login.
+sub _admin_set_active ($self, $c) {
+    my $admin = $self->_require_site_admin($c) or return;
+    my $id = $c->stash('id');
+    return $c->render(json => { error => 'invalid user id' }, status => 400)
+        unless defined $id && $id =~ /^\d+$/;
+    my $active = $c->req->json->{active} ? 1 : 0;
+    return $c->render(json => { error => 'you cannot suspend your own account' }, status => 400)
+        if !$active && $id == $admin->{id};
+
+    my $row = $self->pg->db->query(
+        'UPDATE api.users SET active = ? WHERE id = ? RETURNING id, email, active',
+        ($active ? 'true' : 'false'), $id)->hash;
+    return $c->render(json => { error => 'user not found' }, status => 404) unless $row;
+    $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE user_id = ? AND revoked = FALSE', $id)
+        unless $active;
+    return $c->render(json => { ok => \1, id => $row->{id}, email => $row->{email}, active => ($row->{active} ? \1 : \0) });
+}
+
 sub _admin_list_users ($self, $c) {
     $self->_require_site_admin($c) or return;
 
