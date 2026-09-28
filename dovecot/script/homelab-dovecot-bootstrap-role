@@ -140,6 +140,19 @@ END
 -- mail_quota_bytes for the userdb per-user quota override.
 GRANT USAGE ON SCHEMA api TO "$ROLE";
 GRANT SELECT (email, password_hash, active, mail_quota_bytes) ON api.users TO "$ROLE";
+-- quota_clone writes each mailbox's usage into api.mail_quota_usage (api
+-- migration 016) through the Postgres dict configured in
+-- 91-homelab-dovecot.conf. This is the one table the dovecot role WRITES
+-- (everything else is read-only) -- INSERT/UPDATE for the upsert, DELETE for
+-- quota_clone_unset, SELECT for its own read-modify-write. Guarded so a
+-- fresh install where api migration 016 hasn't run yet still succeeds.
+DO \$\$
+BEGIN
+   IF to_regclass('api.mail_quota_usage') IS NOT NULL THEN
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON api.mail_quota_usage TO %I', '$ROLE');
+   END IF;
+END
+\$\$;
 SQL
 }
 

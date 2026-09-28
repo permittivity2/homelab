@@ -383,9 +383,12 @@ sub admin_user_usage ($c) {
     my $type = $c->param('type') // 'drive';
     my $user = $c->param('user_email') // '';
     return $c->render(json => { error => 'bad email' }, status => 400) unless $user =~ /\@/;
+    # NB: mail usage is on the API itself (/api/v1/admin/*), NOT under
+    # /api/v1/mail/* -- the gateway forwards that whole prefix to mailbridge,
+    # which has no DB. The clone-mirrored usage lives in the API's own DB.
     my %backend = (
         drive => '/api/v1/drive/admin/usage',
-        mail  => '/api/v1/mail/admin/usage',
+        mail  => '/api/v1/admin/mail-usage',
     );
     my $base = $backend{$type}
         or return $c->render(json => { error => 'bad type' }, status => 400);

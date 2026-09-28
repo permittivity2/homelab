@@ -322,6 +322,11 @@ protocol lmtp {
 # mailbox. maildir keeps one consistent figure on the shared storage.
 mail_plugins {
   quota = yes
+  # quota_clone mirrors each mailbox's usage into api.mail_quota_usage (via
+  # the Postgres dict below) so an admin can read ANY user's mail usage
+  # without an IMAP session -- see the quota_clone/dict_server blocks after
+  # the quota root.
+  quota_clone = yes
 }
 # Default limit for every user, set at the GLOBAL flattened `quota_storage_size`
 # key rather than inside the named root below -- this is load-bearing, not
@@ -345,5 +350,68 @@ quota "User quota" {
 protocol imap {
   mail_plugins {
     imap_quota = yes
+  }
+}
+
+# --- quota_clone: mirror mailbox usage into api.mail_quota_usage ----------
+# So a site_admin can read ANY user's mail usage WITHOUT that user's IMAP
+# token (homelab-api's GET /api/v1/admin/mail-usage reads the table). Only
+# usage NUMBERS leave dovecot -- no doveadm/master credential -- the
+# least-privilege half of the "Option A" decision.
+#
+# Verified empirically on live 2.4.2 (this whole area is another 2.4 syntax
+# minefield, like the quota override above):
+#   - The SQL dict MUST run in the dict-server process and be reached via a
+#     `dict proxy` (2.4: "the SQL driver must be used with proxy"); a direct
+#     inline sql dict in the quota_clone block does not work. The proxy
+#     `name` must match the `dict_server { dict <name> { } }` name.
+#   - `dict_map <key> { sql_table=...; username_field=...; value_field <col>
+#     { } }` is the 2.4 map syntax (value_field is a NAMED sub-block, not
+#     `value_field = <col>`). Keys are exactly quota_clone's own
+#     `priv/quota/storage` (bytes) and `priv/quota/messages`.
+#   - The dict reuses the `sql_driver = pgsql` + `pgsql __DB_HOST__ { }`
+#     connection already declared at the top of this file (writes went to
+#     the schema-qualified api.mail_quota_usage fine).
+#   - CRUCIAL socket permission: the dict-server socket (/run/dovecot/dict)
+#     is reached by the MAIL processes, which run as vmail. Its default
+#     perms are root-only, so every clone write fails with
+#     "net_connect_unix(/run/dovecot/dict) ... Permission denied
+#     (euid=5000(vmail) ... not in group ... dovecot)" -- non-fatal (mail
+#     still delivers) but nothing is ever written. The service dict block
+#     below hands the socket to vmail. Only caught by a REAL delivery, never
+#     by doveconf -n.
+# Populates lazily: quota_clone writes on the NEXT quota CHANGE per user
+# (delivery/append/expunge); `doveadm quota recalc` does NOT trigger it.
+# Existing fleets need a one-time backfill (doveadm quota get -> upsert);
+# fresh installs have no mailboxes to backfill. The dovecot runtime role's
+# INSERT/UPDATE/DELETE grant on api.mail_quota_usage is in
+# script/homelab-dovecot-bootstrap-role; the table itself is api migration 016.
+quota_clone {
+  dict proxy {
+    name = quota
+  }
+}
+dict_server {
+  dict quota {
+    driver = sql
+    dict_map priv/quota/storage {
+      sql_table = api.mail_quota_usage
+      username_field = username
+      value_field bytes {
+      }
+    }
+    dict_map priv/quota/messages {
+      sql_table = api.mail_quota_usage
+      username_field = username
+      value_field messages {
+      }
+    }
+  }
+}
+service dict {
+  unix_listener dict {
+    mode = 0660
+    user = vmail
+    group = vmail
   }
 }

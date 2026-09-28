@@ -106,6 +106,7 @@ sub startup ($self) {
     $r->get('/api/v1/admin/users'                => sub ($c) { $self->_admin_list_users($c) });
     $r->post('/api/v1/admin/users/:id/active'    => sub ($c) { $self->_admin_set_active($c) });
     $r->post('/api/v1/admin/users/:id/mail-quota' => sub ($c) { $self->_admin_set_mail_quota($c) });
+    $r->get('/api/v1/admin/mail-usage'           => sub ($c) { $self->_admin_mail_usage($c) });
     $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
     $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
     # Mints a real api.users row for a system-owned mailbox identity
@@ -1539,6 +1540,34 @@ sub _admin_set_mail_quota ($self, $c) {
         ok => \1, email => $row->{email},
         mail_quota_bytes => ($clear ? undef : $limit + 0),
         ($clear ? (note => 'reset to default') : ()),
+    });
+}
+
+# GET /api/v1/admin/mail-usage?user_email=<addr> -- site_admin reads any
+# user's mail usage + effective limit, for the admin quota form's "currently
+# using X of Y" + below-usage warning. used_bytes comes from
+# api.mail_quota_usage (mirrored by Dovecot's quota_clone plugin -- see
+# migration 016); it is NULL when that user has had no mailbox quota change
+# since quota_clone was enabled (the front-end then shows "usage not yet
+# available"). The limit is the per-user override if set, else the 1 TB
+# fleet default (the dovecot global quota_storage_size). This lives on the
+# API (not mailbridge, which the /api/v1/mail/* gateway route forwards to)
+# because the usage lives in the API's own DB and mailbridge has no DB.
+sub _admin_mail_usage ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    my $user = $c->param('user_email');
+    return $c->render(json => { error => 'user_email is required' }, status => 400)
+        unless defined $user && $user =~ /\@/;
+    my $usage = $self->pg->db->query(
+        'SELECT bytes, messages FROM api.mail_quota_usage WHERE username = ?', $user)->hash;
+    my $u = $self->pg->db->query(
+        'SELECT mail_quota_bytes FROM api.users WHERE email = ?', $user)->hash;
+    my $limit = ($u && defined $u->{mail_quota_bytes}) ? $u->{mail_quota_bytes} + 0 : (1024 ** 4);
+    return $c->render(json => {
+        user_email  => $user,
+        used_bytes  => ($usage ? $usage->{bytes} + 0 : undef),
+        messages    => ($usage ? $usage->{messages} + 0 : undef),
+        limit_bytes => $limit,
     });
 }
 
