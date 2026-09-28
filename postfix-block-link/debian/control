@@ -15,6 +15,7 @@ Depends: perl (>= 5.36),
          libyaml-libyaml-perl,
          libmojo-pg-perl,
          libsendmail-pmilter-perl,
+         libemail-mime-perl,
          adduser,
          sudo
 Recommends: homelab-block-link, homelab-domain-admin, homelab-api, homelab-agent

@@ -48,11 +48,22 @@ If any resolved recipient on the transaction is enabled, `eom` mints one
   header — a brand-new header, not a rewrite of an existing one, so DKIM
   signing that happens later in the milter chain sees a normal added
   header, not a mutated one.
-- **If the domain's mode includes `body`**, and the message is top-level
-  `text/plain` (including messages with *no* `Content-Type` header at
-  all — RFC 2045 defaults that case to `text/plain`), and it isn't
-  PGP/S-MIME signed: a short plain-text footer with the same link,
-  appended via `$ctx->replacebody`.
+- **If the domain's mode includes `body`** and the message isn't
+  PGP/S-MIME signed: a short footer with the same link is appended via
+  `$ctx->replacebody`.
+  - `text/plain` (including messages with *no* `Content-Type` header at
+    all — RFC 2045 defaults that case to `text/plain`): a plain-text
+    footer is appended directly to the body.
+  - `multipart/*` and `text/html` (i.e. essentially all real-world mail —
+    Gmail/Outlook/etc. send `multipart/alternative`): the footer is
+    injected into every `text/plain` and `text/html` **leaf part** via
+    `Email::MIME`, which decode/re-encodes each part's own
+    `Content-Transfer-Encoding` (quoted-printable/base64/7bit) and
+    preserves the message's existing MIME boundary. The HTML footer is
+    inserted just before `</body>` when present, else appended.
+    (Earlier versions only handled top-level `text/plain`, so a
+    multipart message got the header but no footer — the common case,
+    now fixed.)
 
 **Mixed-mode transactions**: if a message has multiple enabled
 recipients across domains with different modes, the body gets included if

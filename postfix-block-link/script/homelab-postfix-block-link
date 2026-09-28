@@ -23,6 +23,7 @@ use Homelab::PostfixBlockLink::Milter qw(
     generate_token build_header_value insert_pending_link
 );
 use Mojo::JSON qw(encode_json);
+use Email::MIME;
 
 my $config = load_config('HOMELAB_POSTFIX_BLOCK_LINK_CONFIG', '/etc/homelab/postfix-block-link/config.yml');
 my $bl_cfg = $config->{block_link} // die "config: block_link.* is required\n";
@@ -126,17 +127,31 @@ $cbs{eom} = sub {
         # milter structurally can't do (one shared body per
         # transaction, not one per recipient).
         my $want_body = grep { $_->{mode} eq 'body' || $_->{mode} eq 'both' } @enabled;
-        # No Content-Type header at all defaults to text/plain per RFC
-        # 2045 -- the simplest, safest case to append to, not one to
-        # exclude by treating "undef" as "unknown, skip it".
-        my $is_plain = !defined($priv->{content_type}) || lc($priv->{content_type}) =~ m{^\s*text/plain};
-        if ($want_body
-            && $is_plain
-            && !is_signed_mime($priv->{content_type})
-        ) {
-            my $footer = "\r\n\r\n--\r\nDon't want mail like this? Manage blocked addresses: "
-                . "$bl_cfg->{public_base_url}/l/$token\r\n";
-            $ctx->replacebody(($priv->{body} // '') . $footer);
+        if ($want_body && !is_signed_mime($priv->{content_type})) {
+            my $ct = $priv->{content_type};
+            # No Content-Type header at all defaults to text/plain per RFC
+            # 2045 -- the simplest, safest case to append to, not one to
+            # exclude by treating "undef" as "unknown, skip it".
+            my $is_plain = !defined($ct) || lc($ct) =~ m{^\s*text/plain};
+            if ($is_plain) {
+                my $footer = "\r\n\r\n--\r\nDon't want mail like this? Manage blocked addresses: "
+                    . "$bl_cfg->{public_base_url}/l/$token\r\n";
+                $ctx->replacebody(($priv->{body} // '') . $footer);
+            }
+            else {
+                # multipart / text/html: inject the footer into every
+                # text/plain and text/html LEAF part via Email::MIME (it
+                # decode/re-encodes each part's own Content-Transfer-
+                # Encoding and PRESERVES the message's existing boundary --
+                # verified on real Gmail multipart/alternative, both 7bit
+                # and quoted-printable). This is the case that covers
+                # essentially all real-world mail (Gmail/Outlook/etc. send
+                # multipart/alternative); the old text/plain-only path
+                # silently skipped it -- header added, footer missing.
+                my $new_body = _inject_mime_footer(
+                    $ct, $priv->{body} // '', $bl_cfg->{public_base_url}, $token);
+                $ctx->replacebody($new_body) if defined $new_body;
+            }
         }
     };
     if ($@) {
@@ -151,6 +166,48 @@ $cbs{close} = sub {
     $ctx->setpriv(undef);
     return SMFIS_CONTINUE;
 };
+
+# Inject the block-link footer into a multipart / text/html message.
+# Returns the new BODY (for replacebody) or undef if nothing was touched
+# (e.g. an attachment-only multipart with no text part). Uses Email::MIME's
+# per-part body()/body_set(), which decode + re-encode each part's own
+# Content-Transfer-Encoding (quoted-printable / base64 / 7bit) and preserve
+# the message's existing MIME boundary. Called only from inside the eom
+# eval, so any parse failure fails open (message delivered unmodified).
+sub _inject_mime_footer {
+    my ($content_type, $body, $base_url, $token) = @_;
+    my $link = "$base_url/l/$token";
+    my $plain_footer = "\n\n--\nDon't want mail like this? Manage blocked addresses: $link\n";
+    my $html_footer = qq{<div style="margin-top:1em;padding-top:0.6em;border-top:1px solid #ccc;font-size:12px;color:#777;font-family:sans-serif">Don't want mail like this? <a href="$link">Manage blocked addresses</a></div>};
+
+    my $msg = Email::MIME->new("Content-Type: $content_type\n\n$body");
+    my $touched = 0;
+    $msg->walk_parts(sub {
+        my ($part) = @_;
+        return if $part->subparts;   # a container, not a leaf
+        my $pct = lc($part->content_type // 'text/plain');
+        if ($pct =~ m{^\s*text/plain}) {
+            $part->body_set($part->body . $plain_footer);
+            $touched = 1;
+        }
+        elsif ($pct =~ m{^\s*text/html}) {
+            my $b = $part->body;
+            # Prefer injecting just before </body>; else append at the end.
+            $b =~ s{</body\s*>}{$html_footer$&}i or $b .= $html_footer;
+            $part->body_set($b);
+            $touched = 1;
+        }
+    });
+    return undef unless $touched;
+
+    # as_string re-emits the reconstructed top Content-Type header + the
+    # (now-modified) body; strip that header block back off so ONLY the
+    # body reaches replacebody -- the real message keeps its own top
+    # headers, including the identical boundary preserved above.
+    my $out = $msg->as_string;
+    $out =~ s/\A.*?\r?\n\r?\n//s;
+    return $out;
+}
 
 my $milter = Sendmail::PMilter->new();
 $milter->setconn($listen) or die "cannot bind to $listen: $!\n";
