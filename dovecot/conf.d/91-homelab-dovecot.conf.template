@@ -280,3 +280,32 @@ service imap-login {
 protocol lmtp {
   auth_username_format = %{user}
 }
+
+# --- Quota (every account has a limit; default 1 TB) --------------------
+# Models prod dovecot (maildir-backed named "User quota" + per-user
+# override), but in Dovecot 2.4 syntax: 2.4 dropped the pre-2.4
+# `plugin { quota = maildir:...; quota_rule = *:storage= }` form for the
+# named `quota "<root>" { }` block below. Backend is MAILDIR (usage stored
+# in a `maildirsize` file inside each maildir on the shared mail storage),
+# deliberately NOT the vendor-default `count` backend: count keeps the
+# running total in Dovecot's index files, and this fleet keeps indexes
+# LOCAL per instance (see 92-homelab-local-index.conf), so count would let
+# each of ct08/09/10 drift to a different total for the same shared
+# mailbox. maildir keeps one consistent figure on the shared storage.
+mail_plugins {
+  quota = yes
+}
+quota "User quota" {
+  driver = maildir
+  # Default limit for every user. A per-user override comes from the
+  # userdb `quota_rule` field (see the sql userdb below); this is the
+  # fallback when a user has no override.
+  storage_size = 1T
+}
+# IMAP GETQUOTA/QUOTAROOT, so a client (Roundcube, or homelab-mailbridge's
+# usage endpoint) can read a user's used/limit over IMAP.
+protocol imap {
+  mail_plugins {
+    imap_quota = yes
+  }
+}
