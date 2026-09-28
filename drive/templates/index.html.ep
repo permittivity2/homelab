@@ -280,6 +280,27 @@
     .lightbox-controls button, .lightbox-btn { font-size: 22px; padding: 8px 10px; }
     .lightbox-nav { width: 42px; height: 42px; font-size: 26px; }
   }
+
+  /* Shared profile button (top-right) -- matches homelab-accountmanage's
+     top bar so the fleet feels like one app. Dropdown links to My Account. */
+  .profile { position: relative; margin-left: auto; }
+  .profile-btn { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; background: none;
+    border: 1px solid transparent; border-radius: 999px; padding: 0.2rem 0.5rem 0.2rem 0.25rem; font: inherit; color: #1a1a1a; }
+  .profile-btn:hover { background: #eef1f6; }
+  .profile-btn .avatar { width: 32px; height: 32px; border-radius: 50%; background: #3562d4; color: #fff;
+    display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.9rem; flex: none; }
+  .profile-btn .who-email { max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
+  .profile-btn .caret { color: #6b7280; font-size: 0.7rem; }
+  .profile .menu { display: none; position: absolute; right: 0; top: calc(100% + 0.4rem); background: #fff;
+    border: 1px solid #e3e5e9; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 220px; overflow: hidden; z-index: 50; }
+  .profile .menu.open { display: block; }
+  .profile .menu-email { padding: 0.7rem 0.9rem; color: #6b7280; font-size: 0.82rem; border-bottom: 1px solid #e3e5e9; word-break: break-all; }
+  .profile .menu form { margin: 0; }
+  .profile .menu-item { display: block; width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+    padding: 0.7rem 0.9rem; font: inherit; color: #1a1a1a; text-decoration: none; }
+  .profile .menu-item:hover { background: #f0f2f5; }
+  .profile .menu-item.danger { color: #d1453b; }
+  @media (max-width: 640px) { .profile-btn .who-email { display: none; } }
 </style>
 </head>
 <body>
@@ -291,9 +312,17 @@
     <span class="switch"></span>
     <span>Human Readable</span>
   </label>
-  <div class="who">
-    <span class="who-email"><%= $email %></span>
-    <form method="post" action="/logout"><button type="submit">Log out</button></form>
+  <div class="profile" id="profile">
+    <button class="profile-btn" id="profile-btn" type="button" aria-haspopup="true" aria-expanded="false">
+      <span class="avatar"><%= uc(substr(($email // '?'), 0, 1)) %></span>
+      <span class="who-email"><%= $email %></span>
+      <span class="caret">▾</span>
+    </button>
+    <div class="menu" id="profile-menu" role="menu">
+      <div class="menu-email"><%= $email %></div>
+      <a class="menu-item" href="<%= $account_manage_url %>">Account Management</a>
+      <form method="post" action="/logout"><button type="submit" class="menu-item danger">Sign out</button></form>
+    </div>
   </div>
 </header>
 
@@ -1344,6 +1373,21 @@ var Selection = (function () {
   if (clearBtn) clearBtn.addEventListener('click', clear);
 
   return { clear: clear };
+})();
+</script>
+<script>
+// Top-right profile dropdown (matches homelab-accountmanage's top bar).
+(function () {
+  var btn = document.getElementById('profile-btn');
+  var menu = document.getElementById('profile-menu');
+  if (!btn || !menu) return;
+  btn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    var open = menu.classList.toggle('open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  document.addEventListener('click', function () { menu.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') menu.classList.remove('open'); });
 })();
 </script>
 </body>

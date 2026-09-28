@@ -31,6 +31,7 @@ has 'sso_redirect_uri';
 has 'image_config';
 has 'public_base_url';
 has 'trash_retention_days';
+has 'account_manage_url';
 
 sub startup ($self) {
     # Installed via EXE_FILES to /usr/bin/homelab-drive, with no
@@ -90,6 +91,9 @@ sub startup ($self) {
     # Trash only).
     $self->trash_retention_days($config->{trash}{retention_days} // 30);
     $self->public_base_url($config->{public_base_url} // die "config: public_base_url is required\n");
+    # Where the top-right profile button's "Account Management" link points
+    # (homelab-accountmanage). Configurable; sensible fleet default.
+    $self->account_manage_url($config->{account_manage_url} // 'https://myaccount.test.mailmasker.org');
 
     my $sso = $config->{sso} // die "config: sso.* is required (see config/drive.example.yml)\n";
     $self->sso_base($sso->{base_url} // die "config: sso.base_url is required\n");
@@ -255,6 +259,12 @@ sub startup ($self) {
     $r->get('/api/v1/folders')          ->to('drive#api_list_folders');
     $r->post('/api/v1/folders')         ->to('drive#api_create_folder');
     $r->delete('/api/v1/folders/:id')   ->to('drive#api_delete_folder');
+
+    # This user's live storage usage (bytes). Reached by
+    # homelab-accountmanage via the api gateway (/api/v1/drive/usage) for
+    # its storage panel. Counts live files only (trashed-but-not-purged
+    # blobs still occupy disk but aren't the user's "usage").
+    $r->get('/api/v1/usage')            ->to('drive#api_usage');
 
     return;
 }
@@ -900,6 +910,7 @@ sub index ($c) {
         template => 'index', email => $email, files => $files, folders => $subfolders,
         current_folder_id => $folder_id, breadcrumb => _breadcrumb($c, $email, $folder_id),
         error => $c->flash('error'),
+        account_manage_url => $c->app->account_manage_url,
     );
 }
 
@@ -1514,6 +1525,18 @@ sub api_list ($c) {
         $email, @folder_bind,
     )->hashes;
     return $c->render(json => $files);
+}
+
+# GET /api/v1/usage -- this user's live drive usage in bytes. Used by
+# homelab-accountmanage's storage panel (via the api gateway's
+# /api/v1/drive/usage). Counts non-trashed files only.
+sub api_usage ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+    my $row = $c->app->pg->db->query(
+        'SELECT COALESCE(SUM(size_bytes), 0) AS used FROM drive.files WHERE user_email = ? AND deleted_at IS NULL',
+        $email)->hash;
+    return $c->render(json => { used_bytes => ($row->{used} // 0) + 0 });
 }
 
 # --- Folders -------------------------------------------------------
