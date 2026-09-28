@@ -14,8 +14,16 @@ letsencrypt_email: YOUR_EMAIL_HERE
 # installed on this host.
 
 sites:
+  # max_body_size raises this vhost's client_max_body_size (default
+  # 100m) AND makes nginx stream large request bodies to the upstream
+  # instead of buffering them to its own temp first, with long timeouts
+  # -- needed for drive's 4GB uploads. Set it on both the drive vhost
+  # (browser uploads) and the api vhost below (homelab-cli uploads go
+  # through homelab-api's /api/v1/drive gateway). See
+  # homelab-webproxy-apply-sites.
   - domain: drive.test.mailmasker.org
     upstream: 127.0.0.1:2501
+    max_body_size: 5g
   - domain: mail.test.mailmasker.org
     upstream: 127.0.0.1:8080
   # homelab-api is deliberately public, not just an internal service --
@@ -26,3 +34,4 @@ sites:
   # proxy's own loopback address.
   - domain: api.test.mailmasker.org
     upstream: 127.0.0.1:3000
+    max_body_size: 5g

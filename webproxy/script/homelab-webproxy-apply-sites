@@ -136,9 +136,31 @@ for my $site (@sites) {
     }
     else {
         print "homelab-webproxy: configuring $domain -> $upstream...\n";
+
+        # Per-site upload ceiling. Default 100m; a site that handles big
+        # uploads (drive/api accept 4GB) sets e.g. `max_body_size: 5g`.
+        # Setting it also marks the site as a large-upload site: nginx
+        # then STREAMS the request body to the upstream (proxy_request_
+        # buffering off) instead of first buffering the whole multi-GB
+        # body to its own temp dir, and gets generous timeouts so a big
+        # or slow transfer isn't cut off mid-flight.
+        my $max_body = $site->{max_body_size} // '100m';
+        die "sites.yml: site '$domain''s 'max_body_size' must look like e.g. 100m or 5g\n"
+            unless $max_body =~ /^\d+[kKmMgG]?$/;
+        my $large_directives = '';
+        if (exists $site->{max_body_size}) {
+            $large_directives =
+                  "        proxy_request_buffering off;\n"
+                . "        proxy_read_timeout 3600s;\n"
+                . "        proxy_send_timeout 3600s;\n"
+                . "        client_body_timeout 3600s;\n";
+        }
+
         my $vhost = $template;
         $vhost =~ s/__DOMAIN__/$domain/g;
         $vhost =~ s/__UPSTREAM__/$upstream/g;
+        $vhost =~ s/__MAX_BODY_SIZE__/$max_body/g;
+        $vhost =~ s/__LARGE_UPLOAD_DIRECTIVES__/$large_directives/g;
 
         open(my $fh, '>', $vhost_path) or die "Cannot write $vhost_path: $!\n";
         print $fh $vhost;

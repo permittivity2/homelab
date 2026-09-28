@@ -82,7 +82,7 @@ for my $domain (qw(drive.test.mailmasker.org mail.test.mailmasker.org)) {
 my $drive_vhost = do { local (@ARGV, $/) = "$available/drive.test.mailmasker.org"; <> };
 like($drive_vhost, qr/server_name drive\.test\.mailmasker\.org;/, 'vhost has the correct server_name');
 like($drive_vhost, qr{proxy_pass http://127\.0\.0\.1:2501;}, 'vhost proxies to the correct upstream');
-unlike($drive_vhost, qr/__DOMAIN__|__UPSTREAM__/, 'no template placeholders left unsubstituted');
+unlike($drive_vhost, qr/__[A-Z_]+__/, 'no template placeholders left unsubstituted');
 like($drive_vhost, qr/listen 443 ssl/, 'drive vhost has the HTTPS line the stub certbot added');
 
 my $mail_vhost_before_retry = do { local (@ARGV, $/) = "$available/mail.test.mailmasker.org"; <> };
