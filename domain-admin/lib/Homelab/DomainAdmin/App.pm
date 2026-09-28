@@ -215,6 +215,11 @@ sub startup ($self) {
     $r->patch('/internal/v1/domains/mail-aliases/:source_pattern' => [source_pattern => qr/[^\/]+/])->to('mail_aliases#update');
     $r->delete('/internal/v1/domains/mail-aliases/:source_pattern' => [source_pattern => qr/[^\/]+/])->to('mail_aliases#delete_entry');
 
+    # Domain catch-all routing ("all mail for a domain -> one mailbox").
+    # Literal "catch-alls" registered here BEFORE the /:domain routes below
+    # for the same greedy-:domain-placeholder reason as mail-aliases above.
+    $r->get('/internal/v1/domains/catch-alls')->to('mail_aliases#list_catchalls');
+
     # Same registration-order requirement as recipient-access/mail-
     # aliases above -- "mail-managed" is a literal path segment right
     # where an unqualified :domain catch-all would otherwise greedily
@@ -225,6 +230,12 @@ sub startup ($self) {
     $r->get('/internal/v1/domains/:domain'    => [domain => qr/[^\/]+/])->to('domains#show');
     $r->patch('/internal/v1/domains/:domain'  => [domain => qr/[^\/]+/])->to('domains#update');
     $r->delete('/internal/v1/domains/:domain' => [domain => qr/[^\/]+/])->to('domains#disable');
+
+    # Per-domain catch-all (the '@domain' mail_alias) -- inbound-forwarding
+    # semantics (ensures mail_enabled=true), see MailAliases::set_catchall.
+    $r->get('/internal/v1/domains/:domain/catch-all'    => [domain => qr/[^\/]+/])->to('mail_aliases#get_catchall');
+    $r->put('/internal/v1/domains/:domain/catch-all'    => [domain => qr/[^\/]+/])->to('mail_aliases#set_catchall');
+    $r->delete('/internal/v1/domains/:domain/catch-all' => [domain => qr/[^\/]+/])->to('mail_aliases#clear_catchall');
 
     $r->get('/internal/v1/domains/:domain/dns/records'    => [domain => qr/[^\/]+/])->to('dns#list_records');
     $r->post('/internal/v1/domains/:domain/dns/records'   => [domain => qr/[^\/]+/])->to('dns#upsert_record');

@@ -357,6 +357,121 @@
         });
       }, 250));
     })();
+
+    // --- Domain catch-all routing (admin) ----------------------------
+    // Domain typeahead (managed domains) -> shows the domain's current
+    // catch-all; a user typeahead picks the destination mailbox; plus a
+    // "view all domains" multi-select to set several to one destination.
+    (function () {
+      var domainInput = document.getElementById('ca-domain');
+      if (!domainInput) return;
+      var destInput = document.getElementById('ca-dest');
+      var current = document.getElementById('ca-current');
+      var status = document.getElementById('ca-status');
+      var bulk = document.getElementById('ca-bulk');
+      var listDiv = document.getElementById('ca-list');
+      var bulkStatus = document.getElementById('ca-bulk-status');
+      var cache = null;
+
+      function load() {
+        return fetch('/admin/domains/catch-alls', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.ok ? r.json() : []; })
+          .then(function (d) { cache = Array.isArray(d) ? d : []; return cache; })
+          .catch(function () { cache = []; return cache; });
+      }
+      function say(el, msg, ok) { el.innerHTML = msg ? '<span style="color:' + (ok ? 'var(--ok)' : 'var(--danger)') + '">' + hlEsc(msg) + '</span>' : ''; }
+      function findDomain(name) { return (cache || []).filter(function (x) { return (x.domain || '').toLowerCase() === name.toLowerCase(); })[0]; }
+      function form(obj) { return Object.keys(obj).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(obj[k]); }).join('&'); }
+      function post(path, body) {
+        return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: form(body) })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }).catch(function () { return { ok: r.ok, status: r.status, body: {} }; }); });
+      }
+
+      function showCurrent(name) {
+        say(status, '');
+        if (!name) { current.innerHTML = ''; return; }
+        (cache ? Promise.resolve(cache) : load()).then(function () {
+          var d = findDomain(name);
+          if (!d) { current.innerHTML = '<span class="muted">New domain — no catch-all yet. Setting one makes it receive &amp; forward all mail.</span>'; }
+          else if (d.destination) { current.innerHTML = 'Currently: <strong>all mail → ' + hlEsc(d.destination) + '</strong>' + (d.mail_enabled ? '' : ' <span style="color:var(--danger)">(inbound mail disabled)</span>'); if (destInput && !destInput.value) destInput.value = d.destination; }
+          else { current.innerHTML = '<span class="muted">No catch-all set for this domain.</span>'; }
+        });
+      }
+
+      // domain typeahead
+      domainInput.parentNode.style.position = 'relative';
+      var dbox = document.createElement('div'); dbox.className = 'ta-results'; domainInput.parentNode.appendChild(dbox);
+      function closeDbox() { dbox.classList.remove('open'); dbox.innerHTML = ''; }
+      domainInput.addEventListener('input', hlDebounce(function () {
+        var q = domainInput.value.trim().toLowerCase(); current.innerHTML = '';
+        if (q.length < 2) { closeDbox(); return; }
+        (cache ? Promise.resolve(cache) : load()).then(function (list) {
+          var m = list.filter(function (x) { return (x.domain || '').toLowerCase().indexOf(q) >= 0; }).slice(0, 12);
+          dbox.innerHTML = '';
+          if (!m.length) { closeDbox(); return; }
+          m.forEach(function (x) {
+            var it = document.createElement('div'); it.className = 'ta-item';
+            it.innerHTML = '<span>' + hlEsc(x.domain) + '</span><span class="st">' + (x.destination ? '→ ' + hlEsc(x.destination) : 'none') + '</span>';
+            it.addEventListener('mousedown', function (e) { e.preventDefault(); domainInput.value = x.domain; closeDbox(); showCurrent(x.domain); });
+            dbox.appendChild(it);
+          });
+          dbox.classList.add('open');
+        });
+      }, 200));
+      domainInput.addEventListener('blur', function () { setTimeout(closeDbox, 150); });
+      domainInput.addEventListener('change', function () { showCurrent(domainInput.value.trim()); });
+
+      document.getElementById('ca-set').addEventListener('click', function () {
+        var domain = domainInput.value.trim(), dest = destInput.value.trim();
+        if (!domain || !dest) { say(status, 'Enter a domain and a destination mailbox.', false); return; }
+        say(status, 'Setting…', true);
+        post('/admin/domains/catch-all/set', { domain: domain, destination: dest }).then(function (r) {
+          if (r.ok) { say(status, 'All mail for ' + domain + ' now → ' + dest, true); cache = null; showCurrent(domain); }
+          else { say(status, (r.body && r.body.error) || 'Failed', false); }
+        });
+      });
+      document.getElementById('ca-clear').addEventListener('click', function () {
+        var domain = domainInput.value.trim();
+        if (!domain) { say(status, 'Enter a domain.', false); return; }
+        if (!confirm('Remove the catch-all for ' + domain + '? Unmatched mail at this domain will no longer be forwarded.')) return;
+        say(status, 'Clearing…', true);
+        post('/admin/domains/catch-all/clear', { domain: domain }).then(function (r) {
+          if (r.ok) { say(status, 'Catch-all cleared for ' + domain, true); cache = null; showCurrent(domain); }
+          else { say(status, (r.body && r.body.error) || 'Failed', false); }
+        });
+      });
+
+      // bulk multi-select
+      var viewAllBtn = document.getElementById('ca-viewall');
+      function renderList() {
+        listDiv.innerHTML = '<p class="muted">Loading…</p>';
+        load().then(function (list) {
+          if (!list.length) { listDiv.innerHTML = '<p class="muted">No managed domains.</p>'; return; }
+          listDiv.innerHTML = list.map(function (x) {
+            return '<label style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0;font-size:0.88rem;"><input type="checkbox" class="ca-cb" value="' + hlEsc(x.domain) + '"><span>' + hlEsc(x.domain) + '</span><span class="muted" style="margin-left:auto;font-size:0.8rem;">' + (x.destination ? '→ ' + hlEsc(x.destination) : 'no catch-all') + '</span></label>';
+          }).join('');
+        });
+      }
+      viewAllBtn.addEventListener('click', function () {
+        if (bulk.style.display === 'none') { bulk.style.display = 'block'; viewAllBtn.textContent = 'Hide all domains'; renderList(); }
+        else { bulk.style.display = 'none'; viewAllBtn.textContent = 'View all domains…'; }
+      });
+      document.getElementById('ca-bulk-set').addEventListener('click', function () {
+        var dest = document.getElementById('ca-bulk-dest').value.trim();
+        var sel = Array.prototype.slice.call(document.querySelectorAll('.ca-cb:checked')).map(function (cb) { return cb.value; });
+        if (!sel.length) { say(bulkStatus, 'Select at least one domain.', false); return; }
+        if (!dest) { say(bulkStatus, 'Enter a destination mailbox.', false); return; }
+        if (!confirm('Set the catch-all for ' + sel.length + ' domain(s) to ' + dest + '?')) return;
+        say(bulkStatus, 'Setting ' + sel.length + '…', true);
+        post('/admin/domains/catch-all/bulk', { domains: sel.join(','), destination: dest }).then(function (r) {
+          if (r.ok && r.body) {
+            var n = (r.body.set || []).length, f = (r.body.failed || []);
+            say(bulkStatus, 'Set ' + n + ' domain(s)' + (f.length ? ', ' + f.length + ' failed: ' + f.map(function (x) { return x.domain; }).join(', ') : ''), f.length ? false : true);
+            cache = null; renderList();
+          } else { say(bulkStatus, (r.body && r.body.error) || 'Failed', false); }
+        });
+      });
+    })();
   </script>
 </body>
 </html>

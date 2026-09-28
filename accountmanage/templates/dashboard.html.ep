@@ -203,6 +203,39 @@
       </div>
 
       <div class="admin-panel" data-apanel="mail">
+        <div class="card" id="catchall-card">
+          <h2>Domain catch-all routing <span class="hint">send all of a domain's mail to one mailbox</span></h2>
+          <div id="ca-status" class="usage-note"></div>
+          <div class="field">
+            <label>Domain</label>
+            <input type="text" id="ca-domain" autocomplete="off" placeholder="type at least 2 characters, e.g. test.forge.name">
+          </div>
+          <div id="ca-current" class="usage-note"></div>
+          <div class="field">
+            <label>Deliver all its mail to (a real mailbox)</label>
+            <input type="email" id="ca-dest" class="user-fill" autocomplete="off" placeholder="user@base-domain">
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="ca-set">Set catch-all</button>
+            <button type="button" class="btn btn-danger" id="ca-clear">Clear</button>
+          </div>
+          <p class="muted" style="font-size:0.8rem;margin:0.7rem 0 0;">Point the domain's MX at this mail server first. Setting a catch-all makes the domain receive mail and forwards every address at it to the chosen mailbox.</p>
+
+          <div style="margin-top:1.1rem;border-top:1px solid var(--border);padding-top:0.9rem;">
+            <button type="button" class="btn btn-secondary" id="ca-viewall">View all domains…</button>
+            <div id="ca-bulk" style="display:none;margin-top:0.8rem;">
+              <p class="muted" style="font-size:0.82rem;margin:0 0 0.5rem;">Select domains, then set them all to one destination.</p>
+              <div id="ca-list" style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:0.4rem 0.6rem;"></div>
+              <div class="field" style="margin-top:0.7rem;">
+                <label>Deliver selected domains' mail to</label>
+                <input type="email" id="ca-bulk-dest" class="user-fill" autocomplete="off" placeholder="user@base-domain">
+              </div>
+              <button type="button" class="btn btn-primary" id="ca-bulk-set">Set catch-all for selected</button>
+              <div id="ca-bulk-status" class="usage-note"></div>
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <h2>Block-link footer <span class="hint">appended "manage blocked addresses" link</span></h2>
           <form method="post" action="/admin/block-link">

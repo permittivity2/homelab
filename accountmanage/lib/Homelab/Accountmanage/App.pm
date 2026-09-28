@@ -101,6 +101,11 @@ sub startup ($self) {
     $r->get('/admin/users/search')     ->to('account#admin_users_search');
     # Live usage-by-user for the quota forms (JSON; site_admin gated).
     $r->get('/admin/usage')            ->to('account#admin_user_usage');
+    # Domain catch-all routing (JSON; site_admin gated).
+    $r->get('/admin/domains/catch-alls')     ->to('account#admin_catchalls');
+    $r->post('/admin/domains/catch-all/set')  ->to('account#admin_set_catchall');
+    $r->post('/admin/domains/catch-all/clear')->to('account#admin_clear_catchall');
+    $r->post('/admin/domains/catch-all/bulk') ->to('account#admin_bulk_catchall');
 
     return;
 }
@@ -396,6 +401,75 @@ sub admin_user_usage ($c) {
     my $r = _api_get($c, $jwt, $path);
     return $c->render(json => ($r // { error => 'unavailable' }), status => ($r ? 200 : 502));
 }
+
+# True iff $addr is a real, active api.users mailbox. Reuses the admin user
+# search (ILIKE-prefix on a full address returns it) and checks for an exact
+# case-insensitive match -- the black-hole guard for catch-all destinations
+# (domain-admin's DB role can't see api.users, so this validation lives here).
+sub _user_exists ($c, $jwt, $addr) {
+    return 0 unless $addr && $addr =~ /\@/ && length($addr) >= 3;
+    my $path = Mojo::URL->new('/api/v1/admin/users')->query(q => $addr, limit => 20)->to_string;
+    my $users = _api_get($c, $jwt, $path) // [];
+    return scalar grep { lc($_->{email} // '') eq lc($addr) } @$users;
+}
+
+# GET /admin/domains/catch-alls -- every managed domain + its current catch-all
+# destination. Feeds the domain search + the "view all domains" bulk picker.
+sub admin_catchalls ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => [], status => 403) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/domains/catch-alls') // []));
+}
+
+# POST /admin/domains/catch-all/set {domain, destination} -- validate the
+# destination is a real mailbox, then upsert the domain's catch-all.
+sub admin_set_catchall ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $domain = _trim($c->param('domain') // '');
+    my $dest   = _trim($c->param('destination') // '');
+    return $c->render(json => { error => 'domain and destination are required' }, status => 400)
+        unless $domain =~ /\./ && $dest =~ /\@/;
+    return $c->render(json => { error => "$dest is not a real, active mailbox" }, status => 400)
+        unless _user_exists($c, $jwt, $dest);
+    my $tx = $UA->put($c->app->api_base . "/api/v1/domains/$domain/catch-all"
+        => { Authorization => "Bearer $jwt" } => json => { destination => $dest });
+    return $c->render(json => (eval { $tx->res->json } // { error => 'set failed' }), status => ($tx->res->code // 502));
+}
+
+# POST /admin/domains/catch-all/clear {domain}
+sub admin_clear_catchall ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $domain = _trim($c->param('domain') // '');
+    return $c->render(json => { error => 'domain is required' }, status => 400) unless $domain =~ /\./;
+    my $tx = $UA->delete($c->app->api_base . "/api/v1/domains/$domain/catch-all"
+        => { Authorization => "Bearer $jwt" });
+    return $c->render(json => (eval { $tx->res->json } // { error => 'clear failed' }), status => ($tx->res->code // 502));
+}
+
+# POST /admin/domains/catch-all/bulk {domains (comma-separated), destination}
+# -- set the SAME destination on several domains at once. Validates the
+# destination once, then applies per-domain, reporting per-domain results.
+sub admin_bulk_catchall ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $dest = _trim($c->param('destination') // '');
+    my @domains = grep { /\./ } map { _trim($_) } split /,/, ($c->param('domains') // '');
+    return $c->render(json => { error => 'select at least one domain' }, status => 400) unless @domains;
+    return $c->render(json => { error => "$dest is not a real, active mailbox" }, status => 400)
+        unless _user_exists($c, $jwt, $dest);
+    my (@set, @failed);
+    for my $d (@domains) {
+        my $tx = $UA->put($c->app->api_base . "/api/v1/domains/$d/catch-all"
+            => { Authorization => "Bearer $jwt" } => json => { destination => $dest });
+        if (($tx->res->code // 0) == 200) { push @set, $d }
+        else { push @failed, { domain => $d, error => (eval { $tx->res->json->{error} } // ('HTTP ' . ($tx->res->code // 0))) } }
+    }
+    return $c->render(json => { destination => $dest, set => \@set, failed => \@failed });
+}
+
+sub _trim ($s) { $s //= ''; $s =~ s/^\s+//; $s =~ s/\s+$//; return $s; }
 
 # Toggle the block-link footer per domain. mode: header (link only, no
 # body append) | body | both. enabled on/off is the master switch.

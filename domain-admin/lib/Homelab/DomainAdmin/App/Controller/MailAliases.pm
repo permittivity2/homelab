@@ -166,6 +166,123 @@ sub mine ($c) {
     return $c->render(json => { send => $send, receive_only => $receive_only });
 }
 
+# ===== Domain catch-all routing ("all mail for a domain -> one mailbox") =====
+# A catch-all IS just a mail_aliases row with source_pattern='@<domain>'
+# (Postfix's virtual_alias_maps resolves it natively via its exact-then-
+# @domain fallback -- no app-side wildcard). These handlers wrap that with
+# the INBOUND-forwarding semantics the send-as create() path above does NOT
+# provide: the backing domainadmin.domains row must be mail_enabled=true (the
+# SOLE Postfix acceptance gate -- there is no virtual_alias_domains in this
+# deployment), whereas create() deliberately sets it false for send-as-only
+# domains. Destination existence (a real, active api.users mailbox) is
+# validated in the accountmanage BFF before it calls these -- this service's
+# DB role has no grant on the api schema, by design.
+
+# GET /internal/v1/domains/catch-alls -- every managed domain + its current
+# catch-all destination (null if none) + whether inbound mail is enabled.
+# Drives the admin "search a domain" + "view all domains" (bulk) UI.
+sub list_catchalls ($c) {
+    $c->authenticated_email or return;
+    my $rows = $c->app->pg->db->query(
+        q{SELECT d.domain_name AS domain, d.mail_enabled, d.active,
+                 a.destination, a.active AS catchall_active
+            FROM domainadmin.domains d
+            LEFT JOIN domainadmin.mail_aliases a
+              ON a.source_pattern = '@' || d.domain_name
+           ORDER BY d.domain_name}
+    )->hashes->to_array;
+    return $c->render(json => $rows);
+}
+
+# GET /internal/v1/domains/:domain/catch-all -- one domain's catch-all.
+sub get_catchall ($c) {
+    $c->authenticated_email or return;
+    my $domain = $c->stash('domain');
+    my $row = $c->app->pg->db->query(
+        q{SELECT d.domain_name AS domain, d.mail_enabled, d.active,
+                 a.destination, a.active AS catchall_active
+            FROM domainadmin.domains d
+            LEFT JOIN domainadmin.mail_aliases a
+              ON a.source_pattern = '@' || d.domain_name
+           WHERE d.domain_name = ?}, $domain,
+    )->hash;
+    return $c->render(json => { %$row, managed => \1 }) if $row;
+    # Unmanaged domain -- report it so the UI can still offer to set (which
+    # creates + mail-enables it). destination null => "no catch-all".
+    return $c->render(json => { domain => $domain, managed => \0, mail_enabled => \0, active => \0, destination => undef });
+}
+
+# PUT /internal/v1/domains/:domain/catch-all {destination}
+# Upserts the '@domain' catch-all AND ensures the domain accepts inbound mail.
+sub set_catchall ($c) {
+    my $email = $c->authenticated_email or return;
+    my $domain = $c->stash('domain');
+    my $body = $c->req->json // {};
+    my $destination = $body->{destination};
+    return $c->render(json => { error => 'destination is required (a real mailbox, e.g. user@base-domain)' }, status => 400)
+        unless $destination && $destination =~ /\@/;
+    my ($dest_domain) = $destination =~ /\@(.+)$/;
+    # A catch-all whose destination is at the SAME domain always loops: the
+    # rewritten target re-matches the '@domain' catch-all and is rewritten
+    # again. Refuse it (unlike an exact alias, which Postfix stops on identity).
+    return $c->render(json => { error => 'destination must not be at the same domain as the catch-all (it would loop)' }, status => 400)
+        if lc($dest_domain // '') eq lc($domain);
+    # Loop guard: refuse a destination that is itself an active alias source.
+    my $dest_is_source = $c->app->pg->db->query(
+        'SELECT 1 FROM domainadmin.mail_aliases WHERE source_pattern = ? AND active = true LIMIT 1', $destination,
+    )->hash;
+    return $c->render(json => { error => 'destination is itself a mail-alias source (it would loop)' }, status => 409)
+        if $dest_is_source;
+
+    my $source_pattern = '@' . $domain;
+    # Ensure the domain is managed + mail-accepting (the inbound gate). New
+    # domains are created dns_managed=false: a catch-all/forward domain's MX
+    # is pointed here externally, so we do NOT auto-create a PowerDNS zone for
+    # a domain we may not host DNS for (unlike the send-as create() path).
+    my $existing = $c->app->pg->db->query('SELECT id FROM domainadmin.domains WHERE domain_name = ?', $domain)->hash;
+    if ($existing) {
+        $c->app->pg->db->query('UPDATE domainadmin.domains SET mail_enabled = true, active = true, updated_at = NOW() WHERE domain_name = ?', $domain);
+    } else {
+        $c->app->pg->db->query(
+            'INSERT INTO domainadmin.domains (domain_name, mail_enabled, dns_managed, active, created_by) VALUES (?, true, false, true, ?)',
+            $domain, $email);
+    }
+    my $row = $c->app->pg->db->query(
+        q{INSERT INTO domainadmin.mail_aliases (source_pattern, destination, active, send_enabled, created_by)
+          VALUES (?, ?, true, false, ?)
+          ON CONFLICT (source_pattern) DO UPDATE
+              SET destination = EXCLUDED.destination, active = true, updated_at = NOW()
+          RETURNING *}, $source_pattern, $destination, $email,
+    )->hash;
+    enqueue(
+        $c->app->pg->db, actor_email => $email, affected_user => $destination,
+        jti => $c->stash('current_jti'), action => 'mail_alias.set_catchall',
+        resource_type => 'mail_alias', resource_id => $source_pattern, source_service => 'homelab-domain-admin',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+        detail => { domain => $domain, destination => $destination },
+    );
+    return $c->render(json => { ok => \1, domain => $domain, destination => $destination, mail_enabled => \1 });
+}
+
+# DELETE /internal/v1/domains/:domain/catch-all -- remove the catch-all
+# (leaves the domain row + mail_enabled as-is; disable mail separately if
+# the whole domain should stop accepting).
+sub clear_catchall ($c) {
+    my $email = $c->authenticated_email or return;
+    my $domain = $c->stash('domain');
+    my $row = $c->app->pg->db->query(
+        'DELETE FROM domainadmin.mail_aliases WHERE source_pattern = ? RETURNING *', '@' . $domain,
+    )->hash;
+    return $c->render(json => { error => 'no catch-all set for this domain' }, status => 404) unless $row;
+    enqueue(
+        $c->app->pg->db, actor_email => $email, affected_user => $row->{destination},
+        jti => $c->stash('current_jti'), action => 'mail_alias.clear_catchall',
+        resource_type => 'mail_alias', resource_id => '@' . $domain, source_service => 'homelab-domain-admin',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+    );
+    return $c->render(json => { ok => \1, domain => $domain });
+}
+
 # Splits a list of {source_pattern => ...} rows into {addresses =>
 # [...], domains => [...]} -- a catch-all row ('@forge.name') becomes a
 # domain entry, anything else (an exact address) becomes an address
