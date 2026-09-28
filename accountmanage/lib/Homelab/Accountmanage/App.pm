@@ -85,6 +85,9 @@ sub startup ($self) {
     # homelab-api with the user's own token).
     $r->post('/sessions/:jti/revoke')->to('account#revoke_session');
     $r->post('/sessions/revoke-others')->to('account#revoke_others');
+    # Security actions (proxy to homelab-api with the user's token).
+    $r->post('/security/password')->to('account#change_password');
+    $r->post('/security/recovery-email')->to('account#set_recovery_email');
 
     return;
 }
@@ -211,6 +214,46 @@ sub revoke_others ($c) {
     return $c->redirect_to('/login') unless $email;
     $UA->delete($c->app->api_base . '/api/v1/auth/sessions?except_current=true' => { Authorization => "Bearer $jwt" });
     return $c->redirect_to('/');
+}
+
+# In-place password change: proxy to homelab-api's authenticated
+# POST /api/v1/auth/password with the user's token. Feedback via flash.
+sub change_password ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $cur     = $c->param('current_password') // '';
+    my $new     = $c->param('new_password') // '';
+    my $confirm = $c->param('confirm_password') // '';
+    if ($cur eq '' || $new eq '') { $c->flash(pw_error => 'Both current and new password are required.'); return $c->redirect_to('/#security'); }
+    if ($new ne $confirm)         { $c->flash(pw_error => 'The new passwords do not match.'); return $c->redirect_to('/#security'); }
+    if (length($new) < 8)         { $c->flash(pw_error => 'New password must be at least 8 characters.'); return $c->redirect_to('/#security'); }
+
+    my $tx = $UA->post($c->app->api_base . '/api/v1/auth/password'
+        => { Authorization => "Bearer $jwt" }
+        => json => { current_password => $cur, new_password => $new });
+    if (($tx->res->code // 0) == 200) {
+        $c->flash(pw_ok => 'Password changed. Your other sessions have been signed out.');
+    } else {
+        $c->flash(pw_error => (eval { $tx->res->json->{error} } // 'Could not change password.'));
+    }
+    return $c->redirect_to('/#security');
+}
+
+# Set / change / clear the recovery email: proxy to homelab-api's
+# POST /api/v1/account/recovery-email.
+sub set_recovery_email ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $re = $c->param('recovery_email') // '';
+    my $tx = $UA->post($c->app->api_base . '/api/v1/account/recovery-email'
+        => { Authorization => "Bearer $jwt" }
+        => json => { recovery_email => $re });
+    if (($tx->res->code // 0) == 200) {
+        $c->flash(re_ok => ($re eq '' ? 'Recovery email cleared.' : 'Recovery email saved.'));
+    } else {
+        $c->flash(re_error => (eval { $tx->res->json->{error} } // 'Could not save recovery email.'));
+    }
+    return $c->redirect_to('/#security');
 }
 
 1;

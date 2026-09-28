@@ -1,6 +1,5 @@
 % layout 'default';
 % title 'My Account';
-<h1 class="page">Account</h1>
 
 <% my $fmt_bytes = sub {
      my $n = shift;
@@ -11,86 +10,145 @@
      return sprintf('%.1f %s', $n, $u[$i]);
 }; %>
 
-<div class="card">
-  <h2>Profile</h2>
-  <dl class="kv">
-    <dt>Email</dt><dd><%= $email %></dd>
-    <dt>Account created</dt><dd><%= $summary->{created_at} // '—' %></dd>
-    <dt>Recovery email</dt><dd><%= $summary->{recovery_email} // '(none set)' %></dd>
-    <dt>Status</dt><dd><%= $summary->{active} ? 'Active' : 'Suspended' %></dd>
-    <dt>Access</dt>
-    <dd>
+<h1 class="page">Account</h1>
+
+<div class="layout">
+  <nav class="sidenav">
+    <button type="button" data-section="profile"><span class="ico">👤</span><span class="label">Profile</span></button>
+    <button type="button" data-section="storage"><span class="ico">💾</span><span class="label">Storage</span></button>
+    <button type="button" data-section="security"><span class="ico">🔑</span><span class="label">Security</span></button>
+    <button type="button" data-section="sessions"><span class="ico">🖥️</span><span class="label">Sessions</span></button>
+% if ($is_admin) {
+    <button type="button" data-section="admin"><span class="ico">🛠️</span><span class="label">Administration</span></button>
+% }
+  </nav>
+
+  <div class="main-pane">
+
+    <section class="section" id="profile">
+      <div class="card">
+        <h2>Profile</h2>
+        <dl class="kv">
+          <dt>Email</dt><dd><%= $email %></dd>
+          <dt>Account created</dt><dd><%= $summary->{created_at} // '—' %></dd>
+          <dt>Recovery email</dt><dd><%= $summary->{recovery_email} // '(none set)' %></dd>
+          <dt>Status</dt><dd><%= $summary->{active} ? 'Active' : 'Suspended' %></dd>
+          <dt>Access</dt>
+          <dd>
 % if (@$roles) {
 %   for my $r (@$roles) {
-      <span class="badge <%= $r eq 'site_admin' ? 'admin' : '' %>"><%= $r %></span>
+            <span class="badge <%= $r eq 'site_admin' ? 'admin' : '' %>"><%= $r %></span>
 %   }
 % } else {
-      <span class="muted">user</span>
+            <span class="muted">user</span>
 % }
-    </dd>
-  </dl>
-</div>
+          </dd>
+        </dl>
+      </div>
+    </section>
 
-<div class="card">
-  <h2>Storage usage</h2>
-  <div class="usage-line">
-    <span>Drive</span>
-    <span class="amt">
+    <section class="section" id="storage">
+      <div class="card">
+        <h2>Storage usage</h2>
 % if (defined $drive_usage && defined $drive_usage->{used_bytes}) {
-      <%= $fmt_bytes->($drive_usage->{used_bytes}) %>
+%   my $used = $drive_usage->{used_bytes};
+%   my $lim  = $drive_usage->{limit_bytes} // 0;
+%   my $pct  = ($lim > 0) ? int($used / $lim * 100) : 0;
+%   $pct = 100 if $pct > 100;
+%   my $cls = $pct >= 100 ? 'full' : ($pct >= 90 ? 'warn' : '');
+        <div class="usage-line"><span>Drive</span><span class="amt"><%= $fmt_bytes->($used) %> of <%= $fmt_bytes->($lim) %> (<%= $pct %>%)</span></div>
+        <div class="quota-bar"><span class="<%= $cls %>" style="width: <%= $pct %>%"></span></div>
 % } else {
-      <span class="muted">unavailable</span>
+        <div class="usage-line"><span>Drive</span><span class="amt muted">unavailable</span></div>
 % }
-    </span>
-  </div>
-  <div class="usage-line"><span>Mail</span><span class="amt soon">coming soon</span></div>
-  <p class="muted" style="font-size:0.82rem;margin:0.6rem 0 0;">No storage limits are set on your account yet.</p>
-</div>
+        <div class="usage-line" style="margin-top:0.9rem;"><span>Mail</span><span class="amt soon">coming soon</span></div>
+        <p class="muted" style="font-size:0.82rem;margin:0.6rem 0 0;">Every account starts with a 1&nbsp;TB drive limit and a 1&nbsp;TB mail limit.</p>
+      </div>
+    </section>
 
-<div class="card">
-  <h2>Security</h2>
-  <p class="muted" style="margin:0 0 0.4rem;">Change your password by email-verified reset. (In-place change with your current password is coming soon.)</p>
-  <div class="btn-row">
-    <a class="btn btn-secondary" href="<%= $sso_forgot_url %>">Reset password by email</a>
-  </div>
-</div>
+    <section class="section" id="security">
+      <div class="card">
+        <h2>Change password</h2>
+% if (my $ok = flash 'pw_ok') {
+        <div class="flash ok"><%= $ok %></div>
+% }
+% if (my $err = flash 'pw_error') {
+        <div class="flash err"><%= $err %></div>
+% }
+        <form method="post" action="/security/password" autocomplete="off">
+          <div class="field"><label>Current password</label><input type="password" name="current_password" required></div>
+          <div class="field"><label>New password (min 8 characters)</label><input type="password" name="new_password" minlength="8" required></div>
+          <div class="field"><label>Confirm new password</label><input type="password" name="confirm_password" minlength="8" required></div>
+          <button type="submit" class="btn btn-primary">Change password</button>
+        </form>
+        <p class="muted" style="font-size:0.82rem;margin:0.9rem 0 0;">Changing your password signs out your other sessions.</p>
+      </div>
 
-<div class="card">
-  <h2>Active sessions <span class="hint">devices &amp; tokens signed in to your account</span></h2>
+      <div class="card">
+        <h2>Recovery email <span class="hint">used for password reset by email</span></h2>
+% if (my $ok = flash 're_ok') {
+        <div class="flash ok"><%= $ok %></div>
+% }
+% if (my $err = flash 're_error') {
+        <div class="flash err"><%= $err %></div>
+% }
+        <form method="post" action="/security/recovery-email">
+          <div class="field">
+            <label>Recovery email address (leave blank to remove)</label>
+            <input type="email" name="recovery_email" value="<%= $summary->{recovery_email} // '' %>" placeholder="you@example.com">
+          </div>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </form>
+% if (!$summary->{recovery_email}) {
+        <p class="muted" style="font-size:0.82rem;margin:0.9rem 0 0;">Reset-by-email needs a recovery address on file — set one here first, then you can use the link below.</p>
+% }
+        <div class="btn-row"><a class="btn btn-secondary" href="<%= $sso_forgot_url %>">Reset password by email</a></div>
+      </div>
+    </section>
+
+    <section class="section" id="sessions">
+      <div class="card">
+        <h2>Active sessions <span class="hint">devices &amp; tokens signed in to your account</span></h2>
 % if (@$sessions) {
-  <table class="sessions">
-    <thead><tr><th>Device</th><th>IP address</th><th>Signed in</th><th></th></tr></thead>
-    <tbody>
+        <table class="sessions">
+          <thead><tr><th>Device</th><th>IP address</th><th>Signed in</th><th></th></tr></thead>
+          <tbody>
 % for my $s (@$sessions) {
-      <tr>
-        <td>
-          <%= $s->{user_agent} // 'unknown' %>
+            <tr>
+              <td>
+                <%= $s->{user_agent} // 'unknown' %>
 % if ($s->{current}) {
-          <span class="this-session">· this session</span>
+                <span class="this-session">· this session</span>
 % }
-        </td>
-        <td><%= $s->{ip_address} // '—' %></td>
-        <td><%= $s->{first_seen_at} // '—' %></td>
-        <td>
+              </td>
+              <td><%= $s->{ip_address} // '—' %></td>
+              <td><%= $s->{first_seen_at} // '—' %></td>
+              <td>
 % unless ($s->{current}) {
-          <form method="post" action="/sessions/<%= $s->{jti} %>/revoke"><button type="submit" class="btn btn-danger">Revoke</button></form>
+                <form method="post" action="/sessions/<%= $s->{jti} %>/revoke"><button type="submit" class="btn btn-danger">Revoke</button></form>
 % }
-        </td>
-      </tr>
+              </td>
+            </tr>
 % }
-    </tbody>
-  </table>
-  <div class="btn-row">
-    <form method="post" action="/sessions/revoke-others"><button type="submit" class="btn btn-secondary">Sign out everywhere else</button></form>
-  </div>
+          </tbody>
+        </table>
+        <div class="btn-row">
+          <form method="post" action="/sessions/revoke-others"><button type="submit" class="btn btn-secondary">Sign out everywhere else</button></form>
+        </div>
 % } else {
-  <p class="muted">No active sessions to show.</p>
+        <p class="muted">No active sessions to show.</p>
 % }
-</div>
+      </div>
+    </section>
 
 % if ($is_admin) {
-<div class="card">
-  <h2>Administration <span class="badge admin">site_admin</span></h2>
-  <p class="muted" style="margin:0;">You have administrator access. Management tools — suspend/re-enable users, storage limits, domain mail routing, and DNS — are coming in a later iteration.</p>
-</div>
+    <section class="section" id="admin">
+      <div class="card">
+        <h2>Administration <span class="badge admin">site_admin</span></h2>
+        <p class="muted" style="margin:0;">You have administrator access. Management tools — suspend/re-enable users, storage limits, domain mail routing, DKIM/SPF/DMARC, and the block-link append toggle — are coming in the next iteration.</p>
+      </div>
+    </section>
 % }
+
+  </div>
+</div>

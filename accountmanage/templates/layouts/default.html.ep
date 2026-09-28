@@ -53,8 +53,46 @@
     .menu-item:hover { background: #f0f2f5; }
     .menu-item.danger { color: var(--danger); }
 
-    main { max-width: 860px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+    main { max-width: 960px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
     h1.page { font-size: 1.4rem; margin: 0.2rem 0 1.25rem; }
+
+    /* Two-pane settings layout: options on the left, selected section on
+       the right. Sections are all present; JS toggles which is visible. */
+    .layout { display: grid; grid-template-columns: 220px 1fr; gap: 1.5rem; align-items: start; }
+    .sidenav { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 0.15rem; }
+    .sidenav button {
+      display: flex; align-items: center; gap: 0.55rem; text-align: left; width: 100%;
+      background: none; border: none; border-radius: 8px; padding: 0.6rem 0.75rem; font: inherit; font-size: 0.92rem;
+      color: var(--text); cursor: pointer;
+    }
+    .sidenav button:hover { background: #eef1f6; }
+    .sidenav button.active { background: #e7edfb; color: var(--accent); font-weight: 600; }
+    .sidenav .ico { width: 1.2rem; text-align: center; }
+    .section { display: none; }
+    .section.active { display: block; }
+
+    /* Forms */
+    .field { margin-bottom: 0.8rem; }
+    .field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
+    .field input { width: 100%; max-width: 360px; padding: 0.5rem 0.6rem; border: 1px solid #d5d8dd; border-radius: 7px; font: inherit; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .flash { padding: 0.55rem 0.8rem; border-radius: 8px; font-size: 0.88rem; margin-bottom: 0.9rem; }
+    .flash.ok  { background: #e6f6ec; color: #1f7a44; border: 1px solid #bfe6cd; }
+    .flash.err { background: #fdecea; color: #b13228; border: 1px solid #f2c3bd; }
+
+    /* Quota bar */
+    .quota-bar { height: 10px; background: #eef1f6; border-radius: 999px; overflow: hidden; margin: 0.35rem 0 0.2rem; }
+    .quota-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+    .quota-bar > span.warn { background: #d99b1c; }
+    .quota-bar > span.full { background: var(--danger); }
+
+    @media (max-width: 720px) {
+      .layout { grid-template-columns: 1fr; gap: 0.75rem; }
+      .sidenav { position: static; flex-direction: row; overflow-x: auto; gap: 0.3rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--border); }
+      .sidenav button { white-space: nowrap; }
+      .sidenav .label { font-size: 0.85rem; }
+    }
 
     .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.1rem 1.2rem; margin-bottom: 1.1rem; }
     .card h2 { font-size: 1rem; margin: 0 0 0.9rem; display: flex; align-items: center; gap: 0.5rem; }
@@ -127,6 +165,27 @@
       });
       document.addEventListener('click', function () { menu.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); });
       document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { menu.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); } });
+    })();
+
+    // Left-nav section switching: nav buttons carry data-section; show the
+    // matching .section and hide the rest. Honors a #hash on load (so a
+    // post-action redirect to /#security lands on the right pane) and
+    // updates the hash as you click.
+    (function () {
+      var navBtns = Array.prototype.slice.call(document.querySelectorAll('.sidenav button[data-section]'));
+      var sections = Array.prototype.slice.call(document.querySelectorAll('.section'));
+      if (!navBtns.length) return;
+      function show(id) {
+        var found = false;
+        sections.forEach(function (s) { var on = s.id === id; s.classList.toggle('active', on); if (on) found = true; });
+        navBtns.forEach(function (b) { b.classList.toggle('active', b.dataset.section === id); });
+        return found;
+      }
+      navBtns.forEach(function (b) {
+        b.addEventListener('click', function () { show(b.dataset.section); if (history.replaceState) history.replaceState(null, '', '#' + b.dataset.section); });
+      });
+      var initial = (location.hash || '').replace(/^#/, '');
+      if (!initial || !show(initial)) show(navBtns[0].dataset.section);
     })();
   </script>
 </body>
