@@ -105,6 +105,7 @@ sub startup ($self) {
     # subcommands talk to. ------------------------------------------
     $r->get('/api/v1/admin/users'                => sub ($c) { $self->_admin_list_users($c) });
     $r->post('/api/v1/admin/users/:id/active'    => sub ($c) { $self->_admin_set_active($c) });
+    $r->post('/api/v1/admin/users/:id/mail-quota' => sub ($c) { $self->_admin_set_mail_quota($c) });
     $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
     $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
     # Mints a real api.users row for a system-owned mailbox identity
@@ -1515,6 +1516,30 @@ sub _admin_set_active ($self, $c) {
     $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE user_id = ? AND revoked = FALSE', $id)
         unless $active;
     return $c->render(json => { ok => \1, id => $row->{id}, email => $row->{email}, active => ($row->{active} ? \1 : \0) });
+}
+
+# POST /api/v1/admin/users/:id/mail-quota { limit_bytes } -- site_admin
+# sets (or clears, when limit_bytes is omitted/empty) a user's mail-quota
+# override. NULL falls back to the fleet default; dovecot's userdb reads
+# this column and emits a quota_rule when it's set.
+sub _admin_set_mail_quota ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    my $id = $c->stash('id');
+    return $c->render(json => { error => 'invalid user id' }, status => 400)
+        unless defined $id && $id =~ /^\d+$/;
+    my $limit = $c->req->json->{limit_bytes};
+    my $clear = (!defined $limit || $limit eq '');
+    return $c->render(json => { error => 'limit_bytes must be a non-negative integer' }, status => 400)
+        unless $clear || "$limit" =~ /^\d+$/;
+    my $row = $self->pg->db->query(
+        'UPDATE api.users SET mail_quota_bytes = ? WHERE id = ? RETURNING email',
+        ($clear ? undef : $limit + 0), $id)->hash;
+    return $c->render(json => { error => 'user not found' }, status => 404) unless $row;
+    return $c->render(json => {
+        ok => \1, email => $row->{email},
+        mail_quota_bytes => ($clear ? undef : $limit + 0),
+        ($clear ? (note => 'reset to default') : ()),
+    });
 }
 
 sub _admin_list_users ($self, $c) {

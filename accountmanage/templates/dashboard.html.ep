@@ -192,6 +192,15 @@
       </div>
 
       <div class="card">
+        <h2>Mail quota <span class="hint">dovecot mailbox limit</span></h2>
+        <form method="post" action="/admin/mail-quota">
+          <div class="field"><label>User email</label><input type="email" name="user_email" required placeholder="user@test.mailmasker.org"></div>
+          <div class="field"><label>Limit in GB (blank = reset to the 1 TB default)</label><input type="number" name="limit_gb" min="0" placeholder="1024"></div>
+          <button type="submit" class="btn btn-primary">Set mail quota</button>
+        </form>
+      </div>
+
+      <div class="card">
         <h2>Block-link footer <span class="hint">appended "manage blocked addresses" link</span></h2>
         <form method="post" action="/admin/block-link">
           <div class="field"><label>Domain</label>
@@ -261,6 +270,7 @@
             <button type="submit" class="btn btn-primary">Set DMARC</button>
           </form>
         </div>
+% }
       </div>
     </section>
 % }

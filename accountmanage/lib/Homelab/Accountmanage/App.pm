@@ -92,6 +92,7 @@ sub startup ($self) {
     # owning service with the admin's token).
     $r->post('/admin/users/:id/active')->to('account#admin_set_active');
     $r->post('/admin/drive-quota')     ->to('account#admin_drive_quota');
+    $r->post('/admin/mail-quota')      ->to('account#admin_mail_quota');
     $r->post('/admin/block-link')      ->to('account#admin_block_link');
     $r->post('/admin/dkim')            ->to('account#admin_dkim');
     $r->post('/admin/spf')             ->to('account#admin_spf');
@@ -322,6 +323,29 @@ sub admin_drive_quota ($c) {
     my $tx = $UA->put($c->app->api_base . '/api/v1/drive/admin/quota'
         => { Authorization => "Bearer $jwt" } => json => \%body);
     _admin_flash($c, $tx, ($gb eq '' ? "Drive quota for $user reset to default." : "Drive quota for $user set to ${gb} GB."));
+    return $c->redirect_to('/#admin');
+}
+
+# Set a user's mail (dovecot) quota (GB). Empty limit clears the override
+# (back to the 1 TB default). Unlike drive-quota, the mail-quota API is keyed
+# by user id (POST /api/v1/admin/users/:id/mail-quota), so resolve the email
+# to an id from the admin user list first.
+sub admin_mail_quota ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $user = $c->param('user_email') // '';
+    my $gb   = $c->param('limit_gb') // '';
+    my $users = _api_get($c, $jwt, '/api/v1/admin/users') // [];
+    my ($u) = grep { ($_->{email} // '') eq $user } @$users;
+    unless ($u) {
+        $c->flash(admin_err => "No such user: $user");
+        return $c->redirect_to('/#admin');
+    }
+    my %body;
+    $body{limit_bytes} = int($gb) * 1024 * 1024 * 1024 if $gb ne '' && $gb =~ /^\d+$/;
+    my $tx = $UA->post($c->app->api_base . "/api/v1/admin/users/$u->{id}/mail-quota"
+        => { Authorization => "Bearer $jwt" } => json => \%body);
+    _admin_flash($c, $tx, ($gb eq '' ? "Mail quota for $user reset to default." : "Mail quota for $user set to ${gb} GB."));
     return $c->redirect_to('/#admin');
 }
 

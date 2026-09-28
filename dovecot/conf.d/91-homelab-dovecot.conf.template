@@ -123,13 +123,41 @@ passdb oauth2 {
 }
 
 # Shared vmail system uid/gid (created by postinst before this file is
-# written), Maildir++ layout keyed by domain/user.
-userdb static {
-  fields {
-    uid = vmail
-    gid = vmail
-    home = /var/mail/vhosts/%{user|domain}/%{user|username}
-  }
+# written), Maildir++ layout keyed by domain/user. This was a `userdb
+# static` block; it's now `userdb sql` so a per-user mail-quota override
+# (api.users.mail_quota_bytes, set via POST /api/v1/admin/users/:id/mail-quota)
+# can ride along as a userdb-provided setting override. uid/gid/home are the
+# SAME values the static block returned: uid/gid stay the literal `vmail`
+# name (Dovecot resolves it to the vmail system uid/gid, same as static did),
+# and home is reconstructed with split_part rather than
+# %{user|domain}/%{user|username} so nothing relies on post-lookup variable
+# expansion of a DB-returned value. Single line like the passdb query above
+# on purpose (2.4's parser + this file's proven style -- no `\` line
+# continuation). Shares the one `pgsql __DB_HOST__ { }` connection block and
+# `sql_driver = pgsql` already declared above for the passdb.
+#
+# The per-user override is the `quota_storage_size` field, and getting it to
+# actually take effect in Dovecot 2.4 needed THREE things, each of which
+# looks fine in `doveadm user` output while silently doing nothing -- all
+# found empirically on a live 2.4.2 (doveadm quota get + a real
+# quota-exceeded delivery), not from docs (which still describe a dead form):
+#   1. NOT the pre-2.4 `quota_rule` grammar (*:storage=/*:bytes=). 2.4
+#      replaced it with the flattened setting `quota_storage_size`; a
+#      `quota_rule` field is carried through the lookup but then ignored.
+#   2. The value MUST carry an explicit unit suffix. `<n>B` = bytes (matching
+#      the official 2.4 SQL example, `quota_limit_bytes || 'B' AS
+#      quota_storage_size`); a unit-LESS integer is silently ignored and the
+#      default stands. Hence `mail_quota_bytes || 'B'`.
+#   3. The `quota "User quota"` root below must NOT hardcode its own
+#      `storage_size` -- see that block's comment. While it did, the named
+#      root's own value shadowed this global-scoped override and the limit
+#      never changed, no matter what this field returned.
+# quota_storage_size is NULL (absent) when mail_quota_bytes is NULL, so the
+# global `quota_storage_size` default (1 TB, set at the quota block below)
+# applies. The column-scoped SELECT grant this query needs (adds
+# mail_quota_bytes) is in script/homelab-dovecot-bootstrap-role.
+userdb sql {
+  query = SELECT 'vmail' AS uid, 'vmail' AS gid, '/var/mail/vhosts/' || split_part('%{user}', '@', 2) || '/' || split_part('%{user}', '@', 1) AS home, CASE WHEN mail_quota_bytes IS NOT NULL THEN mail_quota_bytes || 'B' END AS quota_storage_size FROM api.users WHERE email = '%{user}' AND active = true
 }
 
 mail_driver = maildir
@@ -295,12 +323,22 @@ protocol lmtp {
 mail_plugins {
   quota = yes
 }
+# Default limit for every user, set at the GLOBAL flattened `quota_storage_size`
+# key rather than inside the named root below -- this is load-bearing, not
+# stylistic. In Dovecot 2.4 a per-user override (the userdb `quota_storage_size`
+# field, see the sql userdb above) overrides this global-scoped setting; but if
+# the named `quota "User quota"` root ALSO sets its own `storage_size`, that
+# per-root value shadows the global one and the userdb override is silently
+# ignored -- doveadm quota get keeps showing this default no matter what the
+# userdb returns (verified live; the named root's own value always won). With
+# no `storage_size` inside the root, the root inherits this global default for
+# users without an override, and the userdb field cleanly overrides it for
+# users with one. (Confirmed: a non-override user reads 1 TB here; an override
+# user reads their own limit AND a real oversized delivery is rejected with
+# "Quota exceeded".)
+quota_storage_size = 1T
 quota "User quota" {
   driver = maildir
-  # Default limit for every user. A per-user override comes from the
-  # userdb `quota_rule` field (see the sql userdb below); this is the
-  # fallback when a user has no override.
-  storage_size = 1T
 }
 # IMAP GETQUOTA/QUOTAROOT, so a client (Roundcube, or homelab-mailbridge's
 # usage endpoint) can read a user's used/limit over IMAP.
