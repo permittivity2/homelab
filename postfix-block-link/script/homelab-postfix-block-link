@@ -206,6 +206,13 @@ sub _inject_mime_footer {
     # headers, including the identical boundary preserved above.
     my $out = $msg->as_string;
     $out =~ s/\A.*?\r?\n\r?\n//s;
+    # CRITICAL: Email::MIME->as_string emits bare-LF line endings, but mail
+    # (and everything reading the maildir afterwards -- dovecot's IMAP
+    # BODYSTRUCTURE, Roundcube) requires CRLF. Handing replacebody an all-LF
+    # body silently corrupts the stored message: the MIME structure no
+    # longer parses and clients report "Could not load message from server".
+    # Normalize every line ending to CRLF (idempotent on already-CRLF input).
+    $out =~ s/\r?\n/\r\n/g;
     return $out;
 }
 
