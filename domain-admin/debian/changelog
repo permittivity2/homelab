@@ -1,3 +1,11 @@
+homelab-domain-admin (0.1.27) unstable; urgency=medium
+
+  * DKIM signing HA: keys distributed via Postgres (envelope-encrypted,
+    KeyVault) + per-host materializer so any signer host signs locally;
+    control/data-plane split; adversarial-review hardening (phases 1-2)
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 07:30:34 -0500
+
 homelab-domain-admin (0.1.26) unstable; urgency=medium
 
   * Release v0.1.26

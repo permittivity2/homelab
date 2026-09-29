@@ -357,25 +357,37 @@ case "$1" in
             # section's "Explicitly out of scope"), a real follow-up if
             # ever needed, not something to half-wire now.
             #
-            # Idempotency note: this only skips re-adding an entry that's
-            # ALREADY exactly "inet:$DKIM_MILTER_HOST:8891" -- if
-            # dkim_milter_host is changed via a later reconfigure, the
-            # OLD host's entry is not removed, just left alongside the
-            # new one (pre-existing behavior, harmless under
-            # milter_default_action=accept -- the stale entry just fails
-            # to connect and is skipped).
+            # Rebuild the milter lists so there is EXACTLY ONE OpenDKIM
+            # (:8891) entry -- inet:$DKIM_MILTER_HOST:8891 -- while
+            # preserving any NON-8891 milters (e.g. the block-link milter
+            # at localhost:8892). This is idempotent AND correct when
+            # REPOINTING a host's signer (the DKIM-signing-HA cutover
+            # flips ct06/07 from the remote ct05 milter to localhost): the
+            # previous :8891 entry is REMOVED, not left alongside the new
+            # one. The old append-and-leave behaviour would have made a
+            # repointed host carry two :8891 milters and DKIM-sign every
+            # message twice (two Authentication-Results/DKIM-Signature
+            # headers), which some receivers treat as suspicious.
+            _dkim_milter_rebuild() {
+                # $1 = current comma-separated milter value; echoes the
+                # rebuilt value with all inet:*:8891 entries dropped and
+                # exactly one inet:$DKIM_MILTER_HOST:8891 appended.
+                _out=""
+                _oldifs="$IFS"; IFS=','
+                for _m in $1; do
+                    _m="$(printf '%s' "$_m" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                    [ -z "$_m" ] && continue
+                    case "$_m" in inet:*:8891) continue ;; esac
+                    if [ -z "$_out" ]; then _out="$_m"; else _out="$_out, $_m"; fi
+                done
+                IFS="$_oldifs"
+                if [ -z "$_out" ]; then printf 'inet:%s:8891' "$DKIM_MILTER_HOST"
+                else printf '%s, inet:%s:8891' "$_out" "$DKIM_MILTER_HOST"; fi
+            }
             CURRENT_SMTPD_MILTERS="$(postconf -h smtpd_milters 2>/dev/null || true)"
             CURRENT_NON_SMTPD_MILTERS="$(postconf -h non_smtpd_milters 2>/dev/null || true)"
-            case "$CURRENT_SMTPD_MILTERS" in
-                *inet:$DKIM_MILTER_HOST:8891*) ;;
-                "") postconf -e "smtpd_milters = inet:$DKIM_MILTER_HOST:8891" ;;
-                *)  postconf -e "smtpd_milters = $CURRENT_SMTPD_MILTERS, inet:$DKIM_MILTER_HOST:8891" ;;
-            esac
-            case "$CURRENT_NON_SMTPD_MILTERS" in
-                *inet:$DKIM_MILTER_HOST:8891*) ;;
-                "") postconf -e "non_smtpd_milters = inet:$DKIM_MILTER_HOST:8891" ;;
-                *)  postconf -e "non_smtpd_milters = $CURRENT_NON_SMTPD_MILTERS, inet:$DKIM_MILTER_HOST:8891" ;;
-            esac
+            postconf -e "smtpd_milters = $(_dkim_milter_rebuild "$CURRENT_SMTPD_MILTERS")"
+            postconf -e "non_smtpd_milters = $(_dkim_milter_rebuild "$CURRENT_NON_SMTPD_MILTERS")"
             postconf -e 'milter_default_action = accept' 'milter_protocol = 6'
 
             echo "  DKIM milter wiring complete -- use 'homelab-cli dns dkim rotate/activate <domain>' to actually sign mail"
