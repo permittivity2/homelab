@@ -35,6 +35,7 @@ case "$1" in
         ;;
 
     purge)
+        rm -f /etc/homelab/services/postgresql.yml
         if [ -x /usr/share/debconf/confmodule ] || [ -f /usr/share/debconf/confmodule ]; then
             . /usr/share/debconf/confmodule
             db_purge || true

@@ -25,6 +25,7 @@ case "$1" in
         ;;
 
     purge)
+        rm -f /etc/homelab/services/pgbouncer.yml
         if [ -x /usr/share/debconf/confmodule ] || [ -f /usr/share/debconf/confmodule ]; then
             . /usr/share/debconf/confmodule
             db_purge || true

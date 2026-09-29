@@ -1,3 +1,16 @@
+homelab-domain-admin (0.1.26) unstable; urgency=medium
+
+  * Release v0.1.26
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 04:37:38 -0500
+
+homelab-domain-admin (0.1.26) unstable; urgency=medium
+
+  * postrm: remove /etc/homelab/services/domain-admin.yml on purge so a
+    removed host stops being reported as expected-to-run (fleet drift fix)
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 04:37:38 -0500
+
 homelab-domain-admin (0.1.25) unstable; urgency=medium
 
   * Release v0.1.25

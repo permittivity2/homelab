@@ -7,6 +7,7 @@ case "$1" in
         ;;
 
     purge)
+        rm -f /etc/homelab/services/domain-admin.yml
         rm -rf /etc/homelab/domain-admin
         rm -f /etc/powerdns/pdns.d/95-homelab-domain-admin-api.conf
         rm -f /etc/sudoers.d/homelab-domain-admin

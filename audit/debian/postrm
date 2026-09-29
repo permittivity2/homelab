@@ -7,6 +7,7 @@ case "$1" in
         ;;
 
     purge)
+        rm -f /etc/homelab/services/audit.yml
         rm -rf /etc/homelab/audit
         if [ -f /usr/share/debconf/confmodule ]; then
             . /usr/share/debconf/confmodule

@@ -22,6 +22,7 @@ case "$1" in
         ;;
 
     purge)
+        rm -f /etc/homelab/services/roundcube.yml
         if [ -f /usr/share/debconf/confmodule ]; then
             . /usr/share/debconf/confmodule
             db_purge || true

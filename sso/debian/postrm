@@ -11,6 +11,7 @@ case "$1" in
         ;;
 
     purge)
+        rm -f /etc/homelab/services/sso.yml
         rm -rf /etc/homelab/sso
         if [ -f /usr/share/debconf/confmodule ]; then
             . /usr/share/debconf/confmodule

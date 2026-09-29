@@ -7,6 +7,7 @@ case "$1" in
         ;;
 
     purge)
+        rm -f /etc/homelab/services/invite.yml
         rm -rf /etc/homelab/invite
         if [ -f /usr/share/debconf/confmodule ]; then
             . /usr/share/debconf/confmodule

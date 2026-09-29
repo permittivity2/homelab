@@ -11,6 +11,7 @@ case "$1" in
         ;;
 
     purge)
+        rm -f /etc/homelab/services/api.yml
         rm -rf /etc/homelab/api
         if [ -f /usr/share/debconf/confmodule ]; then
             . /usr/share/debconf/confmodule

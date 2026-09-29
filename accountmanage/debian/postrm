@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        # Remove this host's fleet-agent service manifest so a purged
+        # host stops being reported as "expected to run accountmanage"
+        # (otherwise homelab-agent keeps declaring expected=true forever
+        # and the fleet dashboard shows a permanent phantom outage --
+        # exactly the domain-admin/ct11 drift this cleans up).
+        rm -f /etc/homelab/services/accountmanage.yml
+        ;;
+
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0
