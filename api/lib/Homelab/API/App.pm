@@ -1593,9 +1593,20 @@ sub _admin_dovecot_status ($self, $c) {
     return $c->render(json => {
         active_address => $active,
         hosts          => \@hosts,
-        note           => 'Active/passive: exactly one host serves mail at a time '
-                        . '(shared maildir, local per-host indexes). Enforced by homelab-haproxy '
-                        . 'active_passive mode; keep this in sync with its backends.yml.',
+        # The mail paths that pin to the active host (all fail over together
+        # via homelab-haproxy active_passive; SASL is stateless but pinned
+        # too for one coherent "active host" model).
+        paths => [
+            { name => 'IMAP / IMAPS',          ports => '143, 993',  via => 'HAProxy active/passive' },
+            { name => 'LMTP delivery',         ports => '24',        via => 'HAProxy active/passive' },
+            { name => 'SASL submission auth',  ports => '12345',     via => 'HAProxy active/passive' },
+        ],
+        note           => 'Active/passive: exactly one host (the active one) serves ALL mail '
+                        . '-- IMAP/IMAPS reads, LMTP delivery, and SASL submission auth -- so its '
+                        . 'local maildir index stays authoritative (shared storage, per-host '
+                        . 'indexes). All three paths fail over together to a standby if the active '
+                        . 'host goes down. Enforced by homelab-haproxy active_passive; keep the pool '
+                        . 'here in sync with its backends.yml.',
     });
 }
 

@@ -148,6 +148,13 @@ backends:
       - 10.50.2.52:143
       - 10.50.2.53:143
       - 10.50.2.54:143
+  - name: lmtp
+    frontend_port: 24
+    mode: active_passive
+    send_proxy: false
+    backends:
+      - 10.50.2.52:24
+      - 10.50.2.53:24
   - name: smtp
     frontend_port: 25
     mode: roundrobin
@@ -161,6 +168,9 @@ unlike($cfg5, qr/backend imap_out\s+balance/, 'active_passive gets NO balance li
 like($cfg5, qr/server imap1 10\.50\.2\.52:143 check send-proxy\n/, 'active_passive: first server is active (no backup flag)');
 like($cfg5, qr/server imap2 10\.50\.2\.53:143 check send-proxy backup\n/, 'active_passive: second server is backup');
 like($cfg5, qr/server imap3 10\.50\.2\.54:143 check send-proxy backup\n/, 'active_passive: third server is backup');
+# send_proxy: false -- no PROXY header (Dovecot LMTP/auth are plain listeners).
+like($cfg5, qr/server lmtp1 10\.50\.2\.52:24 check\n/, 'send_proxy false: first server has NO send-proxy');
+like($cfg5, qr/server lmtp2 10\.50\.2\.53:24 check backup\n/, 'send_proxy false: backup server has NO send-proxy either');
 
 # Unknown mode is rejected (fail-closed, config untouched).
 open(my $badfh, '>', $backends_yml) or die $!;

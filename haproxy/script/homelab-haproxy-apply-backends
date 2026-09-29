@@ -113,6 +113,16 @@ for my $backend (@backends) {
         unless $mode eq 'roundrobin' || $mode eq 'active_passive';
     my $active_passive = ($mode eq 'active_passive');
 
+    # send_proxy (optional, default true): whether HAProxy prepends the
+    # PROXY-protocol header to the backend. TRUE for the client-facing
+    # listeners whose Dovecot backends run `haproxy = yes` and REQUIRE the
+    # preamble (imap/imaps) and for SMTP. FALSE for Dovecot's PLAIN
+    # listeners -- LMTP (24) and the SASL auth port (12345) take a bare TCP
+    # connection and would REJECT a PROXY header. Getting this wrong is
+    # silent: the backend just drops the connection.
+    my $send_proxy = (exists $backend->{send_proxy} && !$backend->{send_proxy})
+        ? '' : ' send-proxy';
+
     # No balance line for active_passive (there is only ever one active
     # server, so balancing is moot) or for a single-server backend.
     my $balance_line = (@targets > 1 && !$active_passive) ? "    balance roundrobin\n" : '';
@@ -122,7 +132,7 @@ for my $backend (@backends) {
         my $srv_name = @targets > 1 ? "${name}${i}" : $name;
         # In active_passive, every server after the first is a hot standby.
         my $backup = ($active_passive && $_ > 0) ? ' backup' : '';
-        "    server $srv_name $t check send-proxy$backup\n";
+        "    server $srv_name $t check$send_proxy$backup\n";
     } 0 .. $#targets;
 
     $cfg .= <<BLOCK;

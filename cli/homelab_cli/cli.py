@@ -522,6 +522,14 @@ def cmd_dovecot_status(args):
         for h in data.get("hosts", [])
     ]
     _print_table(["HOST", "ADDRESS", "ROLE", "HEALTH", "LAST_HEARTBEAT"], rows)
+    paths = data.get("paths") or []
+    if paths:
+        print()
+        print("MAIL PATHS (all pinned to the active host, fail over together)")
+        _print_table(
+            ["PATH", "PORTS", "ROUTING"],
+            [[p["name"], p["ports"], p["via"]] for p in paths],
+        )
     return 0
 
 

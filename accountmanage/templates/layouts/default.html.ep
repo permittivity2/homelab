@@ -496,7 +496,16 @@
                 : '<span style="color:var(--danger)">● down</span>';
               return '<tr><td>' + hlEsc(h.name) + '</td><td class="muted">' + hlEsc(h.address) + '</td><td>' + role + '</td><td>' + health + '</td></tr>';
             }).join('');
+            var pathsHtml = '';
+            if (d.paths && d.paths.length) {
+              var prows = d.paths.map(function (p) {
+                return '<tr><td>' + hlEsc(p.name) + '</td><td class="muted">' + hlEsc(p.ports) + '</td><td class="muted">' + hlEsc(p.via) + '</td></tr>';
+              }).join('');
+              pathsHtml = '<p class="muted" style="font-size:0.82rem;margin:1rem 0 0.3rem;">Mail paths (all pinned to the active host, fail over together)</p>'
+                + '<table class="sessions"><thead><tr><th>Path</th><th>Ports</th><th>Routing</th></tr></thead><tbody>' + prows + '</tbody></table>';
+            }
             out.innerHTML = '<table class="sessions"><thead><tr><th>Host</th><th>Address</th><th>Role</th><th>Health</th></tr></thead><tbody>' + rows + '</tbody></table>'
+              + pathsHtml
               + (d.note ? '<p class="muted" style="font-size:0.8rem;margin:0.8rem 0 0;">' + hlEsc(d.note) + '</p>' : '');
           })
           .catch(function () { out.innerHTML = '<p class="muted">Status unavailable.</p>'; });

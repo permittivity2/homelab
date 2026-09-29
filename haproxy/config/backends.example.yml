@@ -36,6 +36,18 @@
 #     mode: active_passive
 #     backends: [10.50.2.52:143, 10.50.2.53:143, 10.50.2.54:143]
 #
+# send_proxy (optional, default true): whether HAProxy prepends the
+# PROXY-protocol header to the backend. Keep true for imap/imaps (Dovecot's
+# imap-login runs `haproxy = yes` and REQUIRES the preamble) and SMTP. Set
+# FALSE for Dovecot's PLAIN listeners -- LMTP (24) and the SASL auth port
+# (12345) -- which take a bare TCP connection and reject a PROXY header.
+# Example (LMTP failover that follows the imap active_passive primary):
+#   - name: lmtp
+#     frontend_port: 24
+#     mode: active_passive
+#     send_proxy: false
+#     backends: [10.50.2.52:24, 10.50.2.53:24, 10.50.2.54:24]
+#
 # Every apply run also writes /etc/homelab/services/haproxy.yml, one
 # entry per frontend below (with `fronts` naming the real backend it
 # routes to, e.g. "smtp@127.0.0.1:25") -- homelab-agent (if installed on
