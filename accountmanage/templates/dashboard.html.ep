@@ -385,6 +385,26 @@
           </div>
 % }
         </div>
+
+        <div class="card">
+          <h2>Send-as grants <span class="hint">let a user send/receive as an address or whole domain</span></h2>
+          <div id="alias-list"><p class="muted">Loading…</p></div>
+          <div class="field" style="margin-top:0.8rem;"><label>Source (user@domain, or @domain for a whole domain)</label><input type="text" id="alias-src" autocomplete="off" placeholder="@example.com or sales@example.com"></div>
+          <div class="field"><label>Destination (a real mailbox)</label><input type="email" id="alias-dest" autocomplete="off" placeholder="user@base-domain"></div>
+          <div class="field"><label><input type="checkbox" id="alias-send" checked> Allow sending as this (not just receiving)</label></div>
+          <button type="button" class="btn btn-primary" id="alias-add-btn">Add grant</button>
+          <div id="alias-status" class="usage-note"></div>
+        </div>
+
+        <div class="card">
+          <h2>Recipient access <span class="hint">site-wide allow / block by recipient</span></h2>
+          <div id="racc-list"><p class="muted">Loading…</p></div>
+          <div class="field" style="margin-top:0.8rem;"><label>Recipient address</label><input type="email" id="racc-recip" autocomplete="off" placeholder="someone@domain"></div>
+          <div class="field"><label>Action</label><select id="racc-action"><option value="block">Block (reject all mail to it)</option><option value="allow">Allow (bypass other restrictions)</option></select></div>
+          <div class="field"><label>Reason (optional)</label><input type="text" id="racc-reason" autocomplete="off"></div>
+          <button type="button" class="btn btn-primary" id="racc-add-btn">Apply</button>
+          <div id="racc-status" class="usage-note"></div>
+        </div>
       </div>
 
       <div class="admin-panel" data-apanel="dovecot">

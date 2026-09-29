@@ -109,6 +109,14 @@ sub startup ($self) {
     $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
     $r->post('/admin/domains/add')     ->to('account#admin_domain_add');
     $r->post('/admin/domains/toggle')  ->to('account#admin_domain_toggle');
+    # Send-as grants (mail aliases) + site-wide recipient access (JSON).
+    $r->get('/admin/mail-aliases')          ->to('account#admin_aliases_list');
+    $r->post('/admin/mail-aliases/add')     ->to('account#admin_alias_add');
+    $r->post('/admin/mail-aliases/set-send')->to('account#admin_alias_set_send');
+    $r->post('/admin/mail-aliases/remove')  ->to('account#admin_alias_remove');
+    $r->get('/admin/recipient-access')       ->to('account#admin_racc_list');
+    $r->post('/admin/recipient-access/set')  ->to('account#admin_racc_set');
+    $r->post('/admin/recipient-access/remove')->to('account#admin_racc_remove');
     # Live user search for the admin typeahead (JSON; site_admin gated).
     $r->get('/admin/users/search')     ->to('account#admin_users_search');
     # Live usage-by-user for the quota forms (JSON; site_admin gated).
@@ -584,6 +592,72 @@ sub admin_bulk_catchall ($c) {
 }
 
 sub _trim ($s) { $s //= ''; $s =~ s/^\s+//; $s =~ s/\s+$//; return $s; }
+
+# ----- Send-as grants (mail aliases), site_admin -----
+sub admin_aliases_list ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => [], status => 403) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/domains/mail-aliases') // []));
+}
+sub admin_alias_add ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $src  = _trim($c->param('source_pattern') // '');
+    my $dest = _trim($c->param('destination') // '');
+    return $c->render(json => { error => 'source_pattern (user@domain or @domain) and destination are required' }, status => 400)
+        unless $src =~ /\@/ && $dest =~ /\@/;
+    my $tx = $UA->post($c->app->api_base . '/api/v1/domains/mail-aliases'
+        => { Authorization => "Bearer $jwt" }
+        => json => { source_pattern => $src, destination => $dest, send_enabled => ($c->param('send_enabled') ? \1 : \0) });
+    return $c->render(json => (eval { $tx->res->json } // { error => 'add failed' }), status => ($tx->res->code // 502));
+}
+sub admin_alias_set_send ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $src = _trim($c->param('source_pattern') // '');
+    return $c->render(json => { error => 'source_pattern required' }, status => 400) unless $src =~ /\@/;
+    my $tx = $UA->patch($c->app->api_base . '/api/v1/domains/mail-aliases/' . Mojo::Util::url_escape($src)
+        => { Authorization => "Bearer $jwt" } => json => { send_enabled => ($c->param('send_enabled') ? \1 : \0) });
+    return $c->render(json => (eval { $tx->res->json } // {}), status => ($tx->res->code // 502));
+}
+sub admin_alias_remove ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $src = _trim($c->param('source_pattern') // '');
+    return $c->render(json => { error => 'source_pattern required' }, status => 400) unless $src =~ /\@/;
+    my $tx = $UA->delete($c->app->api_base . '/api/v1/domains/mail-aliases/' . Mojo::Util::url_escape($src)
+        => { Authorization => "Bearer $jwt" });
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
+}
+
+# ----- Site-wide recipient access (allow/block), site_admin -----
+sub admin_racc_list ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => [], status => 403) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/domains/recipient-access') // []));
+}
+sub admin_racc_set ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $recipient = _trim($c->param('recipient') // '');
+    my $action    = (($c->param('action') // '') eq 'allow') ? 'OK' : 'REJECT';
+    return $c->render(json => { error => 'a valid recipient is required' }, status => 400) unless $recipient =~ /\@/;
+    my %body = (recipient => $recipient, action => $action);
+    my $reason = _trim($c->param('reason') // '');
+    $body{reason} = $reason if length $reason;
+    my $tx = $UA->post($c->app->api_base . '/api/v1/domains/recipient-access'
+        => { Authorization => "Bearer $jwt" } => json => \%body);
+    return $c->render(json => (eval { $tx->res->json } // { error => 'set failed' }), status => ($tx->res->code // 502));
+}
+sub admin_racc_remove ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $recipient = _trim($c->param('recipient') // '');
+    return $c->render(json => { error => 'recipient required' }, status => 400) unless $recipient =~ /\@/;
+    my $tx = $UA->delete($c->app->api_base . '/api/v1/domains/recipient-access/' . Mojo::Util::url_escape($recipient)
+        => { Authorization => "Bearer $jwt" });
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
+}
 
 # Add a managed domain (POST /api/v1/domains). dns_managed=true also creates a
 # PowerDNS zone; leave it off for a domain whose DNS lives elsewhere.

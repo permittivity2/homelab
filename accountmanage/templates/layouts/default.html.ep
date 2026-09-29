@@ -581,6 +581,60 @@
       if ((location.hash || '').indexOf('activity') >= 0) load();
     })();
 
+    // --- Send-as grants + recipient access (admin) -------------------
+    (function () {
+      var aliasList = document.getElementById('alias-list');
+      var raccList = document.getElementById('racc-list');
+      if (!aliasList && !raccList) return;
+      function post(path, body) { var d = Object.keys(body).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(body[k]); }).join('&'); return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: d }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); }); }
+      var loaded = false;
+      function load() { if (loaded) return; loaded = true; reload(); }
+      function reload() { loadAliases(); loadRacc(); }
+      function loadAliases() {
+        if (!aliasList) return;
+        fetch('/admin/mail-aliases', { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.ok ? r.json() : []; }).then(function (rows) {
+          if (!rows.length) { aliasList.innerHTML = '<p class="muted">No send-as grants.</p>'; return; }
+          aliasList.innerHTML = '<table class="sessions"><thead><tr><th>Source</th><th>Destination</th><th>Send</th><th></th></tr></thead><tbody>' + rows.map(function (x) {
+            var send = x.send_enabled ? '<span style="color:var(--ok)">on</span>' : '<span class="muted">off</span>';
+            var toggle = x.send_enabled
+              ? '<button type="button" class="btn btn-secondary al-send" data-s="' + hlEsc(x.source_pattern) + '" data-v="">Disable send</button>'
+              : '<button type="button" class="btn btn-secondary al-send" data-s="' + hlEsc(x.source_pattern) + '" data-v="1">Enable send</button>';
+            return '<tr><td>' + hlEsc(x.source_pattern) + '</td><td class="muted">' + hlEsc(x.destination) + '</td><td>' + send + '</td><td>' + toggle + ' <button type="button" class="btn btn-danger al-rm" data-s="' + hlEsc(x.source_pattern) + '">Remove</button></td></tr>';
+          }).join('') + '</tbody></table>';
+          Array.prototype.forEach.call(aliasList.querySelectorAll('.al-send'), function (b) { b.addEventListener('click', function () { post('/admin/mail-aliases/set-send', { source_pattern: b.dataset.s, send_enabled: b.dataset.v }).then(reload); }); });
+          Array.prototype.forEach.call(aliasList.querySelectorAll('.al-rm'), function (b) { b.addEventListener('click', function () { if (!confirm('Remove grant ' + b.dataset.s + '?')) return; post('/admin/mail-aliases/remove', { source_pattern: b.dataset.s }).then(reload); }); });
+        });
+      }
+      function loadRacc() {
+        if (!raccList) return;
+        fetch('/admin/recipient-access', { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.ok ? r.json() : []; }).then(function (rows) {
+          if (!rows.length) { raccList.innerHTML = '<p class="muted">No recipient overrides.</p>'; return; }
+          raccList.innerHTML = '<table class="sessions"><thead><tr><th>Recipient</th><th>Action</th><th>Reason</th><th></th></tr></thead><tbody>' + rows.map(function (x) {
+            var act = x.action === 'REJECT' ? '<span style="color:var(--danger)">block</span>' : '<span style="color:var(--ok)">allow</span>';
+            return '<tr><td>' + hlEsc(x.recipient) + '</td><td>' + act + '</td><td class="muted">' + hlEsc(x.reason || '') + '</td><td><button type="button" class="btn btn-secondary ra-rm" data-r="' + hlEsc(x.recipient) + '">Remove</button></td></tr>';
+          }).join('') + '</tbody></table>';
+          Array.prototype.forEach.call(raccList.querySelectorAll('.ra-rm'), function (b) { b.addEventListener('click', function () { post('/admin/recipient-access/remove', { recipient: b.dataset.r }).then(reload); }); });
+        });
+      }
+      var aab = document.getElementById('alias-add-btn');
+      if (aab) aab.addEventListener('click', function () {
+        var s = document.getElementById('alias-src').value.trim(), d = document.getElementById('alias-dest').value.trim(), en = document.getElementById('alias-send').checked, st = document.getElementById('alias-status');
+        if (s.indexOf('@') < 0 || d.indexOf('@') < 0) { st.textContent = 'Enter a source and a destination.'; return; }
+        st.textContent = 'Adding…';
+        post('/admin/mail-aliases/add', { source_pattern: s, destination: d, send_enabled: en ? '1' : '' }).then(function (r) { if (r.ok) { document.getElementById('alias-src').value = ''; document.getElementById('alias-dest').value = ''; st.textContent = 'Added.'; reload(); } else { st.textContent = 'Failed: ' + ((r.body && r.body.error) || ''); } });
+      });
+      var rab = document.getElementById('racc-add-btn');
+      if (rab) rab.addEventListener('click', function () {
+        var r = document.getElementById('racc-recip').value.trim(), a = document.getElementById('racc-action').value, rs = document.getElementById('racc-reason').value.trim(), st = document.getElementById('racc-status');
+        if (r.indexOf('@') < 0) { st.textContent = 'Enter a recipient.'; return; }
+        st.textContent = 'Applying…';
+        post('/admin/recipient-access/set', { recipient: r, action: a, reason: rs }).then(function (res) { if (res.ok) { document.getElementById('racc-recip').value = ''; document.getElementById('racc-reason').value = ''; st.textContent = 'Applied.'; reload(); } else { st.textContent = 'Failed: ' + ((res.body && res.body.error) || ''); } });
+      });
+      var nav = document.querySelector('.admin-tabs button[data-atab="mail"]');
+      if (nav) nav.addEventListener('click', load);
+      if ((location.hash || '').indexOf('admin:mail') >= 0) load();
+    })();
+
     // --- Dovecot pool status (admin) ---------------------------------
     // Lazily loads the mailbox-serving pool (active vs standby + health)
     // when the Dovecot tab is first opened (or if it's the initial tab).
