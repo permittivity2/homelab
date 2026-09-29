@@ -95,17 +95,34 @@ for my $backend (@backends) {
     # ceiling rather than silently inheriting the uncapped global.
     my $maxconn = $backend->{maxconn} // 500;
 
-    # roundrobin: HAProxy's own overall default balance algorithm, and
-    # the natural fit for a handful of same-capacity mail-service
-    # instances (no reason yet to weight one over another) -- only
-    # emitted when there's more than one server, since a single-server
-    # backend has nothing to balance and the line would be inert noise.
-    my $balance_line = @targets > 1 ? "    balance roundrobin\n" : '';
+    # mode: how the multiple servers relate.
+    #  - 'roundrobin' (default): all servers active, balanced -- the right
+    #    fit for stateless/idempotent services (SMTP, submission).
+    #  - 'active_passive': the FIRST server is the sole active one; the rest
+    #    are `backup` (HAProxy only uses them when every earlier server is
+    #    down). Required for Dovecot IMAP: the pool shares one maildir but
+    #    keeps LOCAL per-host indexes, so exactly ONE backend may serve a
+    #    given mailbox at a time or the indexes diverge ("Filename keeps
+    #    changing" / "could not load message"). Pinning all IMAP traffic to
+    #    one backend -- the same host Postfix delivers LMTP to -- keeps that
+    #    one index authoritative. This is the 2.4-native stand-in for the
+    #    removed dovecot `director` for a fleet of this size (active/passive,
+    #    not active/active). See homelab-dovecot's README.
+    my $mode = $backend->{mode} // 'roundrobin';
+    die "backends.yml: backend '$name' has unknown mode '$mode' (want 'roundrobin' or 'active_passive')\n"
+        unless $mode eq 'roundrobin' || $mode eq 'active_passive';
+    my $active_passive = ($mode eq 'active_passive');
+
+    # No balance line for active_passive (there is only ever one active
+    # server, so balancing is moot) or for a single-server backend.
+    my $balance_line = (@targets > 1 && !$active_passive) ? "    balance roundrobin\n" : '';
     my $server_lines = join '', map {
         my $i = $_ + 1;
         my $t = $targets[$_];
         my $srv_name = @targets > 1 ? "${name}${i}" : $name;
-        "    server $srv_name $t check send-proxy\n";
+        # In active_passive, every server after the first is a hot standby.
+        my $backup = ($active_passive && $_ > 0) ? ' backup' : '';
+        "    server $srv_name $t check send-proxy$backup\n";
     } 0 .. $#targets;
 
     $cfg .= <<BLOCK;

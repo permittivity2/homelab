@@ -136,4 +136,38 @@ like($cfg4, qr/server imap3 10\.50\.2\.56:143 check send-proxy/, 'third HA serve
 unlike($cfg4, qr/backend smtp_out\s+balance/, 'single-backend entry gets no balance line -- nothing to balance');
 like($cfg4, qr/server smtp 10\.50\.2\.46:25 check send-proxy/, 'single-backend entry keeps its unnumbered server name (backward compat)');
 
+# mode: active_passive -- first server active, rest `backup`, no balance
+# line (the Dovecot IMAP one-authoritative-index requirement).
+open(my $apfh, '>', $backends_yml) or die $!;
+print $apfh <<YAML;
+backends:
+  - name: imap
+    frontend_port: 143
+    mode: active_passive
+    backends:
+      - 10.50.2.52:143
+      - 10.50.2.53:143
+      - 10.50.2.54:143
+  - name: smtp
+    frontend_port: 25
+    mode: roundrobin
+    backend: 10.50.2.46:25
+YAML
+close($apfh);
+my $output5 = `perl script/homelab-haproxy-apply-backends 2>&1`;
+is($? >> 8, 0, 'active_passive mode applies cleanly') or diag($output5);
+my $cfg5 = do { local (@ARGV, $/) = $haproxy_cfg; <> };
+unlike($cfg5, qr/backend imap_out\s+balance/, 'active_passive gets NO balance line');
+like($cfg5, qr/server imap1 10\.50\.2\.52:143 check send-proxy\n/, 'active_passive: first server is active (no backup flag)');
+like($cfg5, qr/server imap2 10\.50\.2\.53:143 check send-proxy backup\n/, 'active_passive: second server is backup');
+like($cfg5, qr/server imap3 10\.50\.2\.54:143 check send-proxy backup\n/, 'active_passive: third server is backup');
+
+# Unknown mode is rejected (fail-closed, config untouched).
+open(my $badfh, '>', $backends_yml) or die $!;
+print $badfh "backends:\n  - name: imap\n    frontend_port: 143\n    mode: bogus\n    backend: 10.50.2.52:143\n";
+close($badfh);
+my $output6 = `perl script/homelab-haproxy-apply-backends 2>&1`;
+isnt($? >> 8, 0, 'unknown mode is rejected');
+like($output6, qr/unknown mode/, 'unknown mode error is clear');
+
 done_testing;

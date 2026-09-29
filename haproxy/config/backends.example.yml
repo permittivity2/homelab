@@ -22,6 +22,20 @@
 # settings to 600, comfortably above this 500, so HAProxy's ceiling is
 # the one that actually binds first.
 #
+# mode (optional, default 'roundrobin'): how a multi-server 'backends:'
+# group relates. 'roundrobin' = all servers active, balanced (stateless
+# services like SMTP/submission). 'active_passive' = the FIRST server is
+# the only active one and the rest are `backup` (HAProxy uses them only
+# when every earlier server is down). Use active_passive for Dovecot
+# IMAP/IMAPS: the pool shares one maildir but keeps LOCAL per-host
+# indexes, so exactly one backend may serve a mailbox at a time or the
+# indexes diverge -- pin all IMAP traffic to one backend (the same host
+# Postfix delivers LMTP to). Example:
+#   - name: imap
+#     frontend_port: 143
+#     mode: active_passive
+#     backends: [10.50.2.52:143, 10.50.2.53:143, 10.50.2.54:143]
+#
 # Every apply run also writes /etc/homelab/services/haproxy.yml, one
 # entry per frontend below (with `fronts` naming the real backend it
 # routes to, e.g. "smtp@127.0.0.1:25") -- homelab-agent (if installed on
