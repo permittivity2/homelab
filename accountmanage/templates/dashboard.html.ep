@@ -19,6 +19,8 @@
     <button type="button" data-section="security"><span class="ico">🔑</span><span class="label">Security</span></button>
     <button type="button" data-section="sessions"><span class="ico">🖥️</span><span class="label">Sessions</span></button>
     <button type="button" data-section="mailself"><span class="ico">📨</span><span class="label">Mail</span></button>
+    <button type="button" data-section="invites"><span class="ico">✉️</span><span class="label">Invites</span></button>
+    <button type="button" data-section="activity"><span class="ico">📜</span><span class="label">Activity</span></button>
 % if ($is_admin) {
     <button type="button" data-section="admin"><span class="ico">🛠️</span><span class="label">Administration</span></button>
 % }
@@ -167,6 +169,28 @@
         <div class="field" style="margin-top:0.8rem;"><label>Block mail to one of your addresses</label><input type="email" id="ms-block-input" autocomplete="off" placeholder="you@your-domain"></div>
         <button type="button" class="btn btn-danger" id="ms-block-btn">Block address</button>
         <div id="ms-block-status" class="usage-note"></div>
+      </div>
+    </section>
+
+    <section class="section" id="invites">
+      <div class="card">
+        <h2>Send an invite <span class="hint">invite someone to create an account</span></h2>
+        <div class="field"><label>Recipient email</label><input type="email" id="inv-email" autocomplete="off" placeholder="friend@example.com"></div>
+        <div class="field"><label>Message (optional)</label><input type="text" id="inv-msg" placeholder="Come join…"></div>
+        <button type="button" class="btn btn-primary" id="inv-send-btn">Send invite</button>
+        <div id="inv-send-status" class="usage-note"></div>
+        <p class="muted" id="inv-quota" style="font-size:0.8rem;margin:0.6rem 0 0;"></p>
+      </div>
+      <div class="card">
+        <h2>Your invites</h2>
+        <div id="inv-list"><p class="muted">Loading…</p></div>
+      </div>
+    </section>
+
+    <section class="section" id="activity">
+      <div class="card">
+        <h2>Account activity <span class="hint">recent actions on your account</span></h2>
+        <div id="act-list"><p class="muted">Loading…</p></div>
       </div>
     </section>
 

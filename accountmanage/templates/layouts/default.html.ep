@@ -536,6 +536,51 @@
       if ((location.hash || '').indexOf('mailself') >= 0) load();
     })();
 
+    // --- Invites (self-service) --------------------------------------
+    (function () {
+      var sec = document.getElementById('invites'); if (!sec) return;
+      var loaded = false;
+      function post(path, body) { var d = Object.keys(body).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(body[k]); }).join('&'); return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: d }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); }); }
+      function reload() { loaded = false; load(); }
+      function load() { if (loaded) return; loaded = true; fetch('/invites', { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.ok ? r.json() : {}; }).then(render).catch(function () {}); }
+      function render(d) {
+        var q = d.quota || {}, qel = document.getElementById('inv-quota');
+        if (qel && (q.max_pending != null || q.max_per_day != null)) qel.textContent = 'Quota: up to ' + (q.max_pending != null ? q.max_pending : '—') + ' pending, ' + (q.max_per_day != null ? q.max_per_day : '—') + ' per day.';
+        var invs = d.invites || [], el = document.getElementById('inv-list');
+        if (!invs.length) { el.innerHTML = '<p class="muted">You haven\'t sent any invites.</p>'; return; }
+        el.innerHTML = '<table class="sessions"><thead><tr><th>Recipient</th><th>Status</th><th>Sent</th><th></th></tr></thead><tbody>' + invs.map(function (x) {
+          var act = (x.status === 'pending') ? '<button type="button" class="btn btn-danger inv-revoke" data-id="' + x.id + '">Revoke</button>' : '<span class="muted" style="font-size:0.8rem;">—</span>';
+          return '<tr><td>' + hlEsc(x.recipient_email) + '</td><td>' + hlEsc(x.status || '') + (x.accepted_user_email ? ' → ' + hlEsc(x.accepted_user_email) : '') + '</td><td class="muted">' + hlEsc((x.created_at || '').slice(0, 10)) + '</td><td>' + act + '</td></tr>';
+        }).join('') + '</tbody></table>';
+        Array.prototype.forEach.call(el.querySelectorAll('.inv-revoke'), function (b) { b.addEventListener('click', function () { if (!confirm('Revoke this invite?')) return; post('/invites/revoke', { invite_id: b.dataset.id }).then(reload); }); });
+      }
+      var sb = document.getElementById('inv-send-btn');
+      if (sb) sb.addEventListener('click', function () {
+        var e = document.getElementById('inv-email'), m = document.getElementById('inv-msg'), st = document.getElementById('inv-send-status');
+        var v = (e.value || '').trim(); if (v.indexOf('@') < 0) { st.textContent = 'Enter a valid email.'; return; }
+        st.textContent = 'Sending…';
+        post('/invites/send', { recipient_email: v, message: (m.value || '').trim() }).then(function (r) { if (r.ok) { e.value = ''; m.value = ''; st.textContent = 'Invite sent.'; reload(); } else { st.textContent = 'Failed: ' + ((r.body && r.body.error) || ''); } });
+      });
+      var nav = document.querySelector('.sidenav button[data-section="invites"]'); if (nav) nav.addEventListener('click', load);
+      if ((location.hash || '').indexOf('invites') >= 0) load();
+    })();
+
+    // --- Account activity (self-scoped audit) ------------------------
+    (function () {
+      var out = document.getElementById('act-list'); if (!out) return; var loaded = false;
+      function load() {
+        if (loaded) return; loaded = true; out.innerHTML = '<p class="muted">Loading…</p>';
+        fetch('/activity', { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.ok ? r.json() : []; }).then(function (rows) {
+          if (!rows.length) { out.innerHTML = '<p class="muted">No recent activity.</p>'; return; }
+          out.innerHTML = '<table class="sessions"><thead><tr><th>Action</th><th>When</th><th>IP</th></tr></thead><tbody>' + rows.slice(0, 50).map(function (x) {
+            return '<tr><td>' + hlEsc(x.action || '') + '</td><td class="muted">' + hlEsc(x.occurred_at || '') + '</td><td class="muted">' + hlEsc(x.ip_address || '-') + '</td></tr>';
+          }).join('') + '</tbody></table>';
+        }).catch(function () { out.innerHTML = '<p class="muted">Unavailable.</p>'; });
+      }
+      var nav = document.querySelector('.sidenav button[data-section="activity"]'); if (nav) nav.addEventListener('click', load);
+      if ((location.hash || '').indexOf('activity') >= 0) load();
+    })();
+
     // --- Dovecot pool status (admin) ---------------------------------
     // Lazily loads the mailbox-serving pool (active vs standby + health)
     // when the Dovecot tab is first opened (or if it's the initial tab).

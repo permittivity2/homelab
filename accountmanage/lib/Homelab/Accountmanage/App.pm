@@ -93,6 +93,11 @@ sub startup ($self) {
     $r->post('/mail/block-link')->to('account#mail_set_block_link');
     $r->post('/mail/block')     ->to('account#mail_block');
     $r->post('/mail/unblock')   ->to('account#mail_unblock');
+    # Invites (self-service) + account activity (self-scoped audit).
+    $r->get('/invites')        ->to('account#invites_list');
+    $r->post('/invites/send')  ->to('account#invites_send');
+    $r->post('/invites/revoke')->to('account#invites_revoke');
+    $r->get('/activity')       ->to('account#activity_list');
     # Administration actions (site_admin; each re-checks + proxies to the
     # owning service with the admin's token).
     $r->post('/admin/users/:id/active')->to('account#admin_set_active');
@@ -418,6 +423,50 @@ sub _user_exists ($c, $jwt, $addr) {
     my $path = Mojo::URL->new('/api/v1/admin/users')->query(q => $addr, limit => 20)->to_string;
     my $users = _api_get($c, $jwt, $path) // [];
     return scalar grep { lc($_->{email} // '') eq lc($addr) } @$users;
+}
+
+# ===== Invites + account activity (self-service) =====
+
+# GET /invites -- your invites + your effective invite quota.
+sub invites_list ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    return $c->render(json => {
+        invites => (_api_get($c, $jwt, '/api/v1/invites') // []),
+        quota   => (_api_get($c, $jwt, '/api/v1/invites/quota') // {}),
+    });
+}
+
+# POST /invites/send {recipient_email, message?}
+sub invites_send ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    my $recipient = _trim($c->param('recipient_email') // '');
+    return $c->render(json => { error => 'a recipient email is required' }, status => 400) unless $recipient =~ /\@/;
+    my %body = (recipient_email => $recipient, channel => 'web');
+    my $msg = _trim($c->param('message') // '');
+    $body{message} = $msg if length $msg;
+    my $tx = $UA->post($c->app->api_base . '/api/v1/invites'
+        => { Authorization => "Bearer $jwt" } => json => \%body);
+    return $c->render(json => (eval { $tx->res->json } // { error => 'send failed' }), status => ($tx->res->code // 502));
+}
+
+# POST /invites/revoke {invite_id}
+sub invites_revoke ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    my $id = _trim($c->param('invite_id') // '');
+    return $c->render(json => { error => 'invite_id required' }, status => 400) unless $id =~ /^\d+$/;
+    my $tx = $UA->delete($c->app->api_base . "/api/v1/invites/$id"
+        => { Authorization => "Bearer $jwt" });
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
+}
+
+# GET /activity -- your own recent account activity (self-scoped audit trail).
+sub activity_list ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/audit/log') // []));
 }
 
 # ===== Self-service Mail settings (any logged-in user, own account only) =====
