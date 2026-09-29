@@ -165,6 +165,7 @@
         <button type="button" data-atab="users">👥 Users</button>
         <button type="button" data-atab="quotas">📊 Quotas</button>
         <button type="button" data-atab="mail">✉️ Mail domains</button>
+        <button type="button" data-atab="dovecot">📬 Dovecot</button>
       </div>
 
       <div class="admin-panel" data-apanel="users">
@@ -307,6 +308,13 @@
             </form>
           </div>
 % }
+        </div>
+      </div>
+
+      <div class="admin-panel" data-apanel="dovecot">
+        <div class="card">
+          <h2>Mailbox server pool <span class="hint">active / passive</span></h2>
+          <div id="dovecot-status"><p class="muted">Loading…</p></div>
         </div>
       </div>
     </section>

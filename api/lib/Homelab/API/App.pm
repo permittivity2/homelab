@@ -107,6 +107,7 @@ sub startup ($self) {
     $r->post('/api/v1/admin/users/:id/active'    => sub ($c) { $self->_admin_set_active($c) });
     $r->post('/api/v1/admin/users/:id/mail-quota' => sub ($c) { $self->_admin_set_mail_quota($c) });
     $r->get('/api/v1/admin/mail-usage'           => sub ($c) { $self->_admin_mail_usage($c) });
+    $r->get('/api/v1/admin/dovecot/status'       => sub ($c) { $self->_admin_dovecot_status($c) });
     $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
     $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
     # Mints a real api.users row for a system-owned mailbox identity
@@ -1553,6 +1554,51 @@ sub _admin_set_mail_quota ($self, $c) {
 # fleet default (the dovecot global quota_storage_size). This lives on the
 # API (not mailbridge, which the /api/v1/mail/* gateway route forwards to)
 # because the usage lives in the API's own DB and mailbridge has no DB.
+# GET /api/v1/admin/dovecot/status -- the dovecot mailbox-serving pool:
+# each host's active/standby role + live health (from api.hosts heartbeats).
+# This is the first item of the new "dovecot" admin section; the pool +
+# which host is active are defined in config (`dovecot:`), kept in sync with
+# homelab-haproxy's active_passive backend (the actual enforcer). A code
+# default matches the current deployment so the endpoint works before the
+# config block is added. See homelab-dovecot's active/passive design.
+sub _admin_dovecot_status ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    my $cfg = $self->config->{dovecot} // {
+        active_address => '10.50.2.52',
+        hosts => [
+            { name => 'ct08', address => '10.50.2.52' },
+            { name => 'ct09', address => '10.50.2.53' },
+            { name => 'ct10', address => '10.50.2.54' },
+        ],
+    };
+    my $active = $cfg->{active_address} // '';
+    # heartbeat health, keyed by address (healthy = seen in the last 3 min).
+    my %hb;
+    for my $r (@{ $self->pg->db->query(
+        q{SELECT address, hostname, last_heartbeat,
+                 (last_heartbeat > NOW() - INTERVAL '3 minutes') AS healthy
+          FROM api.hosts})->hashes->to_array }) {
+        $hb{ $r->{address} } = $r;
+    }
+    my @hosts = map {
+        my $h = $hb{ $_->{address} };
+        {
+            name           => $_->{name},
+            address        => $_->{address},
+            role           => ($_->{address} eq $active ? 'active' : 'standby'),
+            healthy        => ($h && $h->{healthy} ? \1 : \0),
+            last_heartbeat => ($h ? $h->{last_heartbeat} : undef),
+        };
+    } @{ $cfg->{hosts} // [] };
+    return $c->render(json => {
+        active_address => $active,
+        hosts          => \@hosts,
+        note           => 'Active/passive: exactly one host serves mail at a time '
+                        . '(shared maildir, local per-host indexes). Enforced by homelab-haproxy '
+                        . 'active_passive mode; keep this in sync with its backends.yml.',
+    });
+}
+
 sub _admin_mail_usage ($self, $c) {
     $self->_require_site_admin($c) or return;
     my $user = $c->param('user_email');

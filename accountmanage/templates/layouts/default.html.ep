@@ -472,6 +472,39 @@
         });
       });
     })();
+
+    // --- Dovecot pool status (admin) ---------------------------------
+    // Lazily loads the mailbox-serving pool (active vs standby + health)
+    // when the Dovecot tab is first opened (or if it's the initial tab).
+    (function () {
+      var out = document.getElementById('dovecot-status');
+      if (!out) return;
+      var loaded = false;
+      function load() {
+        if (loaded) return; loaded = true;
+        out.innerHTML = '<p class="muted">Loading…</p>';
+        fetch('/admin/dovecot/status', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d || !d.hosts) { out.innerHTML = '<p class="muted">Status unavailable.</p>'; return; }
+            var rows = d.hosts.map(function (h) {
+              var role = h.role === 'active'
+                ? '<span class="badge admin">ACTIVE</span>'
+                : '<span class="badge">standby</span>';
+              var health = h.healthy
+                ? '<span style="color:var(--ok)">● healthy</span>'
+                : '<span style="color:var(--danger)">● down</span>';
+              return '<tr><td>' + hlEsc(h.name) + '</td><td class="muted">' + hlEsc(h.address) + '</td><td>' + role + '</td><td>' + health + '</td></tr>';
+            }).join('');
+            out.innerHTML = '<table class="sessions"><thead><tr><th>Host</th><th>Address</th><th>Role</th><th>Health</th></tr></thead><tbody>' + rows + '</tbody></table>'
+              + (d.note ? '<p class="muted" style="font-size:0.8rem;margin:0.8rem 0 0;">' + hlEsc(d.note) + '</p>' : '');
+          })
+          .catch(function () { out.innerHTML = '<p class="muted">Status unavailable.</p>'; });
+      }
+      var tab = document.querySelector('.admin-tabs button[data-atab="dovecot"]');
+      if (tab) tab.addEventListener('click', load);
+      if ((location.hash || '').indexOf('dovecot') >= 0) load();
+    })();
   </script>
 </body>
 </html>

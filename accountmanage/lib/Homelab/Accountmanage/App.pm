@@ -101,6 +101,8 @@ sub startup ($self) {
     $r->get('/admin/users/search')     ->to('account#admin_users_search');
     # Live usage-by-user for the quota forms (JSON; site_admin gated).
     $r->get('/admin/usage')            ->to('account#admin_user_usage');
+    # Dovecot pool status (JSON; site_admin gated).
+    $r->get('/admin/dovecot/status')         ->to('account#admin_dovecot_status');
     # Domain catch-all routing (JSON; site_admin gated).
     $r->get('/admin/domains/catch-alls')     ->to('account#admin_catchalls');
     $r->post('/admin/domains/catch-all/set')  ->to('account#admin_set_catchall');
@@ -411,6 +413,14 @@ sub _user_exists ($c, $jwt, $addr) {
     my $path = Mojo::URL->new('/api/v1/admin/users')->query(q => $addr, limit => 20)->to_string;
     my $users = _api_get($c, $jwt, $path) // [];
     return scalar grep { lc($_->{email} // '') eq lc($addr) } @$users;
+}
+
+# GET /admin/dovecot/status -- the dovecot mailbox-serving pool (active/passive
+# roles + live health). First item of the Dovecot admin sub-tab.
+sub admin_dovecot_status ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => {}, status => 403) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/admin/dovecot/status') // { error => 'unavailable' }));
 }
 
 # GET /admin/domains/catch-alls -- every managed domain + its current catch-all

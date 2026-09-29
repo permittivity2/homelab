@@ -496,6 +496,35 @@ def cmd_fleet_status(args):
     return 0
 
 
+def cmd_dovecot_status(args):
+    """The dovecot mailbox-serving pool: which host is active vs standby,
+    plus each host's live health. Active/passive -- exactly one host serves
+    mail at a time (shared maildir + local per-host indexes), enforced by
+    homelab-haproxy's active_passive backend. First item of the 'dovecot'
+    admin section; more to come."""
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        data = _client(args).dovecot_status(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Dovecot status failed: {e.message}")
+        return 1
+    if _emit(args, data):
+        return 0
+    if data.get("note"):
+        print(data["note"])
+        print()
+    rows = [
+        [h["name"], h["address"], h["role"].upper(),
+         "healthy" if h.get("healthy") else "DOWN",
+         h.get("last_heartbeat") or "-"]
+        for h in data.get("hosts", [])
+    ]
+    _print_table(["HOST", "ADDRESS", "ROLE", "HEALTH", "LAST_HEARTBEAT"], rows)
+    return 0
+
+
 def cmd_fleet_drift(args):
     """Just the actionable rows from `admin fleet status`: expected=true/
     actual=false is a real outage, expected=false/actual=true is an
@@ -2496,6 +2525,14 @@ def build_parser():
     p.set_defaults(func=cmd_fleet_status)
     p = fleet_sub.add_parser("drift", help="Just the mismatches: real outages and undeclared surprises")
     p.set_defaults(func=cmd_fleet_drift)
+
+    dovecot = admin_sub.add_parser(
+        "dovecot",
+        help="Dovecot mail-server pool administration (active/passive mailbox serving)",
+    )
+    dovecot_sub = dovecot.add_subparsers(dest="admin_dovecot_command", required=True)
+    p = dovecot_sub.add_parser("status", help="The mailbox-serving pool: active vs standby hosts + live health")
+    p.set_defaults(func=cmd_dovecot_status)
 
     return parser
 
