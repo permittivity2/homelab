@@ -221,6 +221,39 @@
           </div>
           <div id="user-mgmt-results"><p class="muted">Type at least 3 characters to find a user.</p></div>
         </div>
+
+        <div class="card">
+          <h2>Service account <span class="hint">bypass-invite account</span></h2>
+          <form id="svc-acct-form">
+            <div class="field"><label>Email for the new account</label><input type="email" name="email" required autocomplete="off" placeholder="robot@test.mailmasker.org"></div>
+            <div class="field"><label>Password <span class="muted">(blank = server generates one)</span></label><input type="text" name="password" autocomplete="off" placeholder="leave blank to auto-generate"></div>
+            <button type="submit" class="btn btn-primary">Create service account</button>
+          </form>
+          <div id="svc-acct-result"></div>
+          <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">Service accounts skip the invite flow. If the password is auto-generated it is shown once here — copy it now.</p>
+        </div>
+
+        <div class="card">
+          <h2>Invite quota <span class="hint">override per user</span></h2>
+          <form id="invite-quota-form">
+            <div class="field"><label>User email</label><input class="user-fill" type="email" name="user_email" required autocomplete="off" placeholder="type at least 3 characters…"></div>
+            <div id="invite-quota-current" class="muted" style="font-size:0.85rem;margin:-0.3rem 0 0.6rem;"></div>
+            <div class="field"><label>Max pending invites</label><input type="number" name="max_pending" min="0" required placeholder="e.g. 5"></div>
+            <div class="field"><label>Max invites per day</label><input type="number" name="max_per_day" min="0" required placeholder="e.g. 3"></div>
+            <button type="submit" class="btn btn-primary">Set invite quota</button>
+          </form>
+          <div id="invite-quota-result"></div>
+        </div>
+
+        <div class="card">
+          <h2>A user's sessions <span class="hint">view / revoke logins</span></h2>
+          <div class="field">
+            <label>User email</label>
+            <input class="user-fill" type="email" id="usess-email" autocomplete="off" placeholder="type at least 3 characters…">
+          </div>
+          <button type="button" id="usess-load" class="btn">Load sessions</button>
+          <div id="usess-result" style="margin-top:0.8rem;"></div>
+        </div>
       </div>
 
       <div class="admin-panel" data-apanel="quotas">

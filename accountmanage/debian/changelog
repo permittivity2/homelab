@@ -1,3 +1,14 @@
+homelab-accountmanage (0.1.16) unstable; urgency=medium
+
+  * Release v0.1.16
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 04:03:43 -0500
+
+homelab-accountmanage (0.1.16) unstable; urgency=medium
+
+  * Admin Users tab: service accounts, per-user invite quota override, and view/revoke another user's sessions (A5/A8/A9)
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 04:03:41 -0500
 homelab-accountmanage (0.1.15) unstable; urgency=medium
 
   * Release v0.1.15

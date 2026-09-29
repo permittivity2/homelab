@@ -121,6 +121,12 @@ sub startup ($self) {
     $r->get('/admin/users/search')     ->to('account#admin_users_search');
     # Live usage-by-user for the quota forms (JSON; site_admin gated).
     $r->get('/admin/usage')            ->to('account#admin_user_usage');
+    # Service accounts, per-user invite quota, a user's sessions (site_admin).
+    $r->post('/admin/users/create-service-account')->to('account#admin_create_service_account');
+    $r->get('/admin/invite-quota')     ->to('account#admin_invite_quota_get');
+    $r->post('/admin/invite-quota')    ->to('account#admin_invite_quota_set');
+    $r->get('/admin/user-sessions')    ->to('account#admin_user_sessions');
+    $r->post('/admin/user-sessions/revoke')->to('account#admin_user_session_revoke');
     # Dovecot pool status (JSON; site_admin gated).
     $r->get('/admin/dovecot/status')         ->to('account#admin_dovecot_status');
     # Roles & permissions (RBAC; JSON; site_admin gated).
@@ -532,6 +538,55 @@ sub mail_unblock ($c) {
     return $c->render(json => { error => 'a valid address is required' }, status => 400) unless $recipient =~ /\@/;
     my $tx = $UA->delete($c->app->api_base . '/api/v1/domains/recipient-access/mine/' . Mojo::Util::url_escape($recipient)
         => { Authorization => "Bearer $jwt" });
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
+}
+
+# ----- Service accounts / invite quota / a user's sessions, site_admin -----
+sub admin_create_service_account ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $addr = _trim($c->param('email') // '');
+    return $c->render(json => { error => 'a valid email is required' }, status => 400) unless $addr =~ /\@/;
+    my %body = (email => $addr);
+    my $pw = _trim($c->param('password') // '');
+    $body{password} = $pw if length $pw;
+    my $tx = $UA->post($c->app->api_base . '/api/v1/admin/users/service-account'
+        => { Authorization => "Bearer $jwt" } => json => \%body);
+    return $c->render(json => (eval { $tx->res->json } // { error => 'create failed' }), status => ($tx->res->code // 502));
+}
+sub admin_invite_quota_get ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => {}, status => 403) unless $email;
+    my $user = _trim($c->param('user_email') // '');
+    return $c->render(json => { error => 'user_email required' }, status => 400) unless $user =~ /\@/;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/invites/quota/' . Mojo::Util::url_escape($user)) // {}));
+}
+sub admin_invite_quota_set ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $user = _trim($c->param('user_email') // '');
+    my ($mp, $md) = (_trim($c->param('max_pending') // ''), _trim($c->param('max_per_day') // ''));
+    return $c->render(json => { error => 'user_email + two non-negative integers required' }, status => 400)
+        unless $user =~ /\@/ && $mp =~ /^\d+$/ && $md =~ /^\d+$/;
+    my $tx = $UA->put($c->app->api_base . '/api/v1/invites/quota/' . Mojo::Util::url_escape($user)
+        => { Authorization => "Bearer $jwt" } => json => { max_pending => $mp + 0, max_per_day => $md + 0 });
+    return $c->render(json => (eval { $tx->res->json } // { error => 'set failed' }), status => ($tx->res->code // 502));
+}
+sub admin_user_sessions ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => [], status => 403) unless $email;
+    my $user = _trim($c->param('user_email') // '');
+    return $c->render(json => { error => 'user_email required' }, status => 400) unless $user =~ /\@/;
+    return $c->render(json => (_api_get($c, $jwt, Mojo::URL->new('/api/v1/auth/sessions')->query(user => $user)->to_string) // []));
+}
+sub admin_user_session_revoke ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $user = _trim($c->param('user_email') // '');
+    my $jti  = _trim($c->param('jti') // '');
+    return $c->render(json => { error => 'user_email and jti required' }, status => 400) unless $user =~ /\@/ && length $jti;
+    my $url = Mojo::URL->new($c->app->api_base . '/api/v1/auth/sessions/' . Mojo::Util::url_escape($jti))->query(user => $user);
+    my $tx = $UA->delete($url => { Authorization => "Bearer $jwt" });
     return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
 }
 

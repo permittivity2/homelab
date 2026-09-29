@@ -717,6 +717,90 @@
       if (tab) tab.addEventListener('click', load);
       if ((location.hash || '').indexOf('dovecot') >= 0) load();
     })();
+
+    // --- Service accounts / invite quota / a user's sessions (admin) --
+    (function () {
+      function post(path, body) { var d = Object.keys(body).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(body[k]); }).join('&'); return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: d }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); }); }
+      function say(el, msg, ok) { el.innerHTML = msg ? '<p style="margin:0.6rem 0 0;color:' + (ok ? 'var(--ok)' : 'var(--danger)') + '">' + hlEsc(msg) + '</p>' : ''; }
+
+      // A5 -- create a service account
+      var svc = document.getElementById('svc-acct-form');
+      if (svc) svc.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var email = svc.email.value.trim(), pw = svc.password.value.trim(), out = document.getElementById('svc-acct-result');
+        if (email.indexOf('@') < 0) { say(out, 'Enter a valid email.', false); return; }
+        say(out, 'Creating…', true);
+        post('/admin/users/create-service-account', pw ? { email: email, password: pw } : { email: email }).then(function (r) {
+          if (!r.ok) { say(out, 'Failed: ' + ((r.body && r.body.error) || 'error'), false); return; }
+          svc.reset();
+          out.innerHTML = '<p style="margin:0.6rem 0 0;color:var(--ok)">Created <strong>' + hlEsc(r.body.email) + '</strong>.</p>'
+            + '<p style="margin:0.3rem 0 0;">Password (shown once — copy it now):</p>'
+            + '<code style="display:block;padding:0.5rem;background:var(--code-bg,rgba(127,127,127,0.12));border-radius:6px;word-break:break-all;user-select:all;">' + hlEsc(r.body.password) + '</code>';
+        });
+      });
+
+      // A9 -- per-user invite quota (show current on email entry, then set)
+      var iq = document.getElementById('invite-quota-form');
+      if (iq) {
+        var cur = document.getElementById('invite-quota-current');
+        function loadCurrent() {
+          var em = iq.user_email.value.trim();
+          if (em.indexOf('@') < 0) { cur.textContent = ''; return; }
+          fetch('/admin/invite-quota?user_email=' + encodeURIComponent(em), { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+              if (!d || d.max_pending == null) { cur.textContent = 'No override — using the default quota.'; return; }
+              cur.innerHTML = 'Current: <strong>' + hlEsc(d.max_pending) + '</strong> pending, <strong>' + hlEsc(d.max_per_day) + '</strong>/day.';
+              if (!iq.max_pending.value) iq.max_pending.value = d.max_pending;
+              if (!iq.max_per_day.value) iq.max_per_day.value = d.max_per_day;
+            }).catch(function () { cur.textContent = ''; });
+        }
+        iq.user_email.addEventListener('change', loadCurrent);
+        iq.user_email.addEventListener('blur', loadCurrent);
+        iq.addEventListener('submit', function (e) {
+          e.preventDefault();
+          var out = document.getElementById('invite-quota-result');
+          var em = iq.user_email.value.trim(), mp = iq.max_pending.value, md = iq.max_per_day.value;
+          if (em.indexOf('@') < 0) { say(out, 'Enter a valid user email.', false); return; }
+          say(out, 'Saving…', true);
+          post('/admin/invite-quota', { user_email: em, max_pending: mp, max_per_day: md }).then(function (r) {
+            say(out, r.ok ? 'Invite quota updated.' : ('Failed: ' + ((r.body && r.body.error) || 'error')), r.ok);
+          });
+        });
+      }
+
+      // A8 -- view/revoke a user's sessions
+      var usessBtn = document.getElementById('usess-load');
+      if (usessBtn) {
+        var emIn = document.getElementById('usess-email'), out = document.getElementById('usess-result');
+        function render(email) {
+          fetch('/admin/user-sessions?user_email=' + encodeURIComponent(email), { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; }).then(function (list) {
+              if (!Array.isArray(list)) { out.innerHTML = '<p class="muted">Could not load sessions.</p>'; return; }
+              if (!list.length) { out.innerHTML = '<p class="muted">No active sessions for ' + hlEsc(email) + '.</p>'; return; }
+              out.innerHTML = '<table class="sessions"><thead><tr><th>Started</th><th>IP</th><th>User agent</th><th></th></tr></thead><tbody>' + list.map(function (s) {
+                var jti = s.jti || s.id || '';
+                var started = String(s.first_seen_at || '').slice(0, 19).replace('T', ' ');
+                return '<tr' + (s.current ? ' style="opacity:0.6"' : '') + '><td class="muted">' + hlEsc(started || '-') + (s.current ? ' <span class="muted">(this admin session)</span>' : '') + '</td>'
+                  + '<td class="muted">' + hlEsc(s.ip_address || '-') + '</td>'
+                  + '<td class="muted" style="max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + hlEsc(s.user_agent || '') + '">' + hlEsc(s.user_agent || '-') + '</td>'
+                  + '<td><button type="button" class="btn btn-danger usess-rm" data-jti="' + hlEsc(jti) + '">Revoke</button></td></tr>';
+              }).join('') + '</tbody></table>';
+              Array.prototype.forEach.call(out.querySelectorAll('.usess-rm'), function (b) {
+                b.addEventListener('click', function () {
+                  if (!confirm('Revoke this session for ' + email + '?')) return;
+                  post('/admin/user-sessions/revoke', { user_email: email, jti: b.dataset.jti }).then(function () { render(email); });
+                });
+              });
+            }).catch(function () { out.innerHTML = '<p class="muted">Could not load sessions.</p>'; });
+        }
+        usessBtn.addEventListener('click', function () {
+          var em = emIn.value.trim();
+          if (em.indexOf('@') < 0) { out.innerHTML = '<p style="color:var(--danger)">Enter a valid user email.</p>'; return; }
+          out.innerHTML = '<p class="muted">Loading…</p>';
+          render(em);
+        });
+      }
+    })();
   </script>
 </body>
 </html>
