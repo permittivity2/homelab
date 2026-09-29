@@ -20,6 +20,13 @@ case "$1" in
                 || echo "  WARNING: homelab-webproxy-apply-sites reported a problem — see output above."
         fi
 
+        # Pull-model refresh timer: re-run apply-sites so any 'discover:'
+        # site (e.g. the roundcube pool) tracks the live fleet. No-op unless
+        # a site uses discover: + top-level api_base is set.
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable --now homelab-webproxy-pull.timer >/dev/null 2>&1 \
+            || echo "  WARNING: could not enable homelab-webproxy-pull.timer -- 'discover:' upstreams won't auto-refresh."
+
         echo ""
         echo "homelab-webproxy configured."
         echo ""

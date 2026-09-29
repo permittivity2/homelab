@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically refresh webproxy discover: upstreams (pull model)
+
+[Timer]
+OnBootSec=75
+OnUnitActiveSec=120
+RandomizedDelaySec=15
+Persistent=false
+
+[Install]
+WantedBy=timers.target

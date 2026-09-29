@@ -1320,14 +1320,20 @@ sub _agent_feature_backends ($self, $c) {
     $self->_require_system_agent($c) or return;
     my $feature = $c->stash('feature');
 
+    # Match on package_name OR service_name: a single-service package like
+    # homelab-domain-admin is addressed by its package name, but a package
+    # that ships MULTIPLE services (homelab-roundcube -> roundcube-nginx +
+    # roundcube-php-fpm) must be addressed by the specific service_name so
+    # a consumer discovers exactly the tier it fronts (e.g. roundcube-nginx
+    # on :8080, not php-fpm too).
     my $rows = $self->pg->db->query(
         q{SELECT h.hostname, h.address, s.service_name, s.expected, s.actual,
                  EXTRACT(EPOCH FROM (NOW() - h.last_heartbeat))::int AS heartbeat_age
           FROM api.host_service_status s
           JOIN api.hosts h ON h.hostname = s.hostname
-          WHERE s.package_name = ? AND s.expected
+          WHERE (s.package_name = ? OR s.service_name = ?) AND s.expected
           ORDER BY h.hostname},
-        $feature,
+        $feature, $feature,
     )->hashes->to_array;
 
     # Invert the port->service map to service->port. Fine for a

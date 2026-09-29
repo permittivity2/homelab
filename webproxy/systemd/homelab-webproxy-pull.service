@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh webproxy discover: upstreams from homelab-api, reload nginx on change
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/homelab-webproxy-apply-sites

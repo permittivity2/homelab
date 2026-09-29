@@ -31,6 +31,7 @@ unless (-f $SITES_CONFIG) {
 my $config = LoadFile($SITES_CONFIG);
 my $email  = $config->{letsencrypt_email};
 my @sites  = @{ $config->{sites} // [] };
+my $pool_changed = 0;    # set when a 'discover:'/upstream pool confd changes
 
 die "sites.yml: letsencrypt_email is required\n" unless $email && $email !~ /YOUR_EMAIL_HERE/;
 
@@ -52,13 +53,37 @@ for my $site (@sites) {
     # then targets that block's name instead of a literal host:port --
     # nginx doesn't support multiple proxy_pass targets any other way.
     my @upstream_targets;
-    if (my $list = $site->{upstreams}) {
+    if (my $feature = $site->{discover}) {
+        # PULL model (same as homelab-haproxy's 'discover:'): derive the
+        # upstream list live from homelab-api's fleet view, so a new
+        # instance of the fronted service is picked into the pool
+        # automatically. Run on a timer (homelab-webproxy-pull.timer) to
+        # stay current. $feature is a service_name (e.g. roundcube-nginx)
+        # or package_name.
+        require Homelab::Common::Registry;
+        my $api_base = $config->{api_base}
+            // die "sites.yml: site '$domain' uses 'discover' but top-level 'api_base' is unset\n";
+        my $live = eval { Homelab::Common::Registry::lookup_backends($feature, api_base => $api_base) };
+        if ($@) {
+            warn "homelab-webproxy: discover '$feature' failed ($@); falling back to any static 'upstreams'\n";
+        } else {
+            @upstream_targets = sort map { "$_->{address}:$_->{port}" }
+                                grep { $_->{address} && $_->{port} } @$live;
+        }
+        # Never emit an empty upstream (nginx -t fails): fall back to a
+        # static 'upstreams' list, else skip this site this run.
+        @upstream_targets = @{ $site->{upstreams} } if !@upstream_targets && ref($site->{upstreams}) eq 'ARRAY';
+        if (!@upstream_targets) {
+            warn "homelab-webproxy: site '$domain' discovered no upstreams and has no static fallback -- skipping\n";
+            next;
+        }
+    } elsif (my $list = $site->{upstreams}) {
         die "sites.yml: site '$domain''s 'upstreams' must be a list\n" unless ref($list) eq 'ARRAY';
         @upstream_targets = @$list;
     } elsif (my $single = $site->{upstream}) {
         @upstream_targets = ($single);
     } else {
-        die "sites.yml: site '$domain' needs either 'upstream' (one target) or 'upstreams' (a list)\n";
+        die "sites.yml: site '$domain' needs 'upstream', 'upstreams', or 'discover'\n";
     }
 
     my $upstream;
@@ -67,12 +92,11 @@ for my $site (@sites) {
         $pool_name = "pool_$pool_name";
         $upstream = $pool_name;
         my $pool_conf = "$CONFD_DIR/$domain-upstream.conf";
-        open(my $pfh, '>', $pool_conf) or die "Cannot write $pool_conf: $!\n";
-        print $pfh "# Managed by homelab-webproxy's homelab-webproxy-apply-sites for\n";
-        print $pfh "# $domain -- do not hand-edit; edit /etc/homelab/webproxy/sites.yml\n";
-        print $pfh "# and re-run homelab-webproxy-apply-sites instead. Regenerated\n";
-        print $pfh "# wholesale on every run, not merged.\n";
-        print $pfh "upstream $pool_name {\n";
+        my $pool_content = "# Managed by homelab-webproxy's homelab-webproxy-apply-sites for\n"
+            . "# $domain -- do not hand-edit; edit /etc/homelab/webproxy/sites.yml\n"
+            . "# and re-run homelab-webproxy-apply-sites instead. Regenerated\n"
+            . "# wholesale on every run, not merged.\n"
+            . "upstream $pool_name {\n";
         # 'sticky_cookie: <NAME>' (optional) -- session affinity keyed on
         # the app's own session cookie, via nginx's stock (no Plus, no
         # third-party module needed -- confirmed live 2026-09-25 with a
@@ -105,11 +129,21 @@ for my $site (@sites) {
         if (my $cookie = $site->{sticky_cookie}) {
             die "sites.yml: site '$domain''s 'sticky_cookie' must be a plain cookie name (letters, digits, _, -)\n"
                 unless $cookie =~ /^[A-Za-z0-9_-]+$/;
-            print $pfh "    hash \$cookie_$cookie consistent;\n";
+            $pool_content .= "    hash \$cookie_$cookie consistent;\n";
         }
-        print $pfh "    server $_;\n" for @upstream_targets;
-        print $pfh "}\n";
-        close($pfh);
+        $pool_content .= "    server $_;\n" for @upstream_targets;
+        $pool_content .= "}\n";
+        # Write only if changed, and flag a reload -- a 'discover:' pool's
+        # membership can change on an EXISTING (already-HTTPS) site that the
+        # vhost step below skips, so the reload can't live only in that step.
+        my $existing_pool = '';
+        if (open(my $rf, '<', $pool_conf)) { local $/; $existing_pool = <$rf>; close($rf); }
+        if ($existing_pool ne $pool_content) {
+            open(my $pfh, '>', $pool_conf) or die "Cannot write $pool_conf: $!\n";
+            print $pfh $pool_content;
+            close($pfh);
+            $pool_changed = 1;
+        }
     } else {
         $upstream = $upstream_targets[0];
     }
@@ -189,6 +223,19 @@ for my $site (@sites) {
 }
 
 print "homelab-webproxy: $applied new site(s) configured.\n";
+
+# An upstream pool confd changed for a site whose vhost step was skipped
+# (already-HTTPS existing site -- the common case for a 'discover:' pool on
+# the pull timer). Reload nginx once so the new member set takes effect.
+if ($pool_changed) {
+    if (system('nginx', '-t') == 0) {
+        system('systemctl', 'reload', 'nginx') == 0
+            or warn "homelab-webproxy: nginx reload failed after an upstream change\n";
+        print "homelab-webproxy: upstream pool changed -- reloaded nginx.\n";
+    } else {
+        warn "homelab-webproxy: nginx config test failed after an upstream change -- NOT reloading\n";
+    }
+}
 
 # Writes /etc/homelab/services/webproxy.yml, one entry per site,
 # unconditionally on every run (not just newly-applied ones) --

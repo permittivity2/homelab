@@ -1,3 +1,18 @@
+homelab-webproxy (0.1.9) unstable; urgency=medium
+
+  * Release v0.1.9
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 11:18:00 -0500
+
+homelab-webproxy (0.1.9) unstable; urgency=medium
+
+  * Pull model: a site may use discover: <feature> to derive its upstream
+    pool live from homelab-api (fleet view); homelab-webproxy-pull.timer
+    re-runs apply-sites every ~2min and reloads nginx only when a pool
+    changes. Lets the roundcube pool track the fleet with no manual edit.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 11:17:58 -0500
+
 homelab-webproxy (0.1.8) unstable; urgency=medium
 
   * Release v0.1.8
