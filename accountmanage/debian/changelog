@@ -1,3 +1,27 @@
+homelab-accountmanage (0.1.21) unstable; urgency=medium
+
+  * Release v0.1.21
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 05:11:33 -0500
+
+homelab-accountmanage (0.1.21) unstable; urgency=medium
+
+  * Topology: use cy.nodes().roots() (collection) for the layered layout instead of raw #id selectors (node ids contain / . @ :)
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 05:11:33 -0500
+
+homelab-accountmanage (0.1.20) unstable; urgency=medium
+
+  * Release v0.1.20
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 05:09:46 -0500
+
+homelab-accountmanage (0.1.20) unstable; urgency=medium
+
+  * Admin: new Topology tab -- interactive fleet graph (Cytoscape.js, vendored/self-hosted) of hosts+services and their connections, from /api/v1/admin/agent/topology; health colouring, click-for-details, hover tooltips; scaffolded for Prometheus metrics + remote actions
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 05:09:46 -0500
+
 homelab-accountmanage (0.1.19) unstable; urgency=medium
 
   * Release v0.1.19

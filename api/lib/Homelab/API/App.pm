@@ -154,6 +154,7 @@ sub startup ($self) {
     $r->get('/api/v1/admin/agent/hosts' => sub ($c) { $self->_agent_list_hosts($c) });
     $r->get('/api/v1/admin/agent/status' => sub ($c) { $self->_agent_list_status($c) });
     $r->get('/api/v1/admin/agent/status/mismatches' => sub ($c) { $self->_agent_list_mismatches($c) });
+    $r->get('/api/v1/admin/agent/topology' => sub ($c) { $self->_agent_topology($c) });
 
     # --- Gateway: the ONLY address a client (homelab-cli, or any
     # third-party script) should ever need -- see ../../CLAUDE.md's "one
@@ -1271,6 +1272,174 @@ sub _agent_list_mismatches ($self, $c) {
         q{SELECT hostname, service_name, package_name, kind, expected, actual, description, fronts, checked_at
           FROM api.host_service_status WHERE expected != actual ORDER BY service_name, hostname},
     )->hashes->to_array);
+}
+
+# How stale a host's last heartbeat may be before we stop trusting its
+# "actual" states. Agents heartbeat on a short recurring timer; 5 min is
+# generous headroom over that (matches the web dashboard's own colouring).
+use constant HEARTBEAT_STALE_AFTER => 300;
+
+# Maps a fronted tcp port -> the service it belongs to, so a `fronts`
+# target like "10.50.2.58:8080" or "imaps@10.50.2.52:993" resolves to a
+# concrete (host, service) node. Ports come straight from each package's
+# manifest `check.tcp_port`. Kept here (not in the DB) deliberately: it's
+# the one small static table this graph needs, version-controlled next to
+# the edge seed, and trivially correct to audit against the manifests.
+sub _fleet_port_service {
+    return {
+        3000 => 'api', 2501 => 'drive', 2502 => 'sso', 2503 => 'accountmanage',
+        2510 => 'mailbridge', 2511 => 'domain-admin', 2512 => 'worker',
+        2513 => 'audit', 2514 => 'invite', 2515 => 'block-link',
+        8080 => 'roundcube-nginx',
+        993 => 'dovecot', 143 => 'dovecot', 24 => 'dovecot', 12345 => 'dovecot',
+        25 => 'postfix', 587 => 'postfix',
+        53 => 'pdns', 6432 => 'pgbouncer', 5432 => 'postgresql',
+    };
+}
+
+# The declarative seed for service-dependency edges that NO manifest
+# `fronts` currently captures -- the backend calls between already-known
+# services (gateway fan-out, the BFF, app->mail-VIP paths). Each entry is
+# [from_service, to_service, kind]; it is resolved by SERVICE NAME against
+# the assembled node set (live + fronts-materialized) and fans out over
+# pools. An edge whose endpoints don't both resolve to a real node is
+# simply dropped -- so as the DB tier / other services gain agents (or as
+# these edges migrate into real manifest `fronts`), this seed quietly
+# shrinks with no rewrite. `kind` drives rendering only.
+#   proxy = reverse-proxy hop; http = HTTP/gateway; mail = IMAP/SMTP/LMTP/
+#   SASL; dns = PowerDNS; db = Postgres/pooler.
+sub _fleet_static_edges {
+    return [
+        # homelab-api gateway forwards /api/v1/* to each feature service
+        [qw(api drive http)], [qw(api sso http)], [qw(api invite http)],
+        [qw(api block-link http)], [qw(api audit http)], [qw(api worker http)],
+        [qw(api mailbridge http)], [qw(api domain-admin http)],
+        # accountmanage (myaccount BFF) -> the gateway + SSO
+        [qw(accountmanage api http)], [qw(accountmanage sso http)],
+        # Roundcube: nginx -> php-fpm; php-fpm -> IMAP VIP + SSO
+        [qw(roundcube-nginx roundcube-php-fpm http)],
+        [qw(roundcube-php-fpm haproxy-imaps_in mail)],
+        [qw(roundcube-php-fpm sso http)],
+        # mailbridge speaks IMAP + submission through the VIPs
+        [qw(mailbridge haproxy-imaps_in mail)],
+        [qw(mailbridge haproxy-submission_in mail)],
+        # postfix: LMTP delivery + SASL auth through the VIPs; local milter
+        [qw(postfix haproxy-lmtp_in mail)],
+        [qw(postfix haproxy-auth_in mail)],
+        [qw(postfix postfix-block-link mail)],
+        # domain-admin drives PowerDNS
+        [qw(domain-admin pdns dns)],
+    ];
+}
+
+# GET /api/v1/admin/agent/topology -- the whole fleet as a graph, for the
+# CLI's ASCII map and the web topology view. Node id = "<host>/<service>".
+# Nodes come from LIVE host_service_status (health from the agent), plus
+# any node MATERIALIZED from a `fronts` target that has no agent of its
+# own (e.g. accountmanage on an un-enrolled host) so every edge lands on a
+# real node. Edges = live manifest `fronts` (resolved IP:port -> node) +
+# the static backend seed. Everything is derived from live data + two
+# small static tables; nothing is a hand-maintained host list.
+sub _agent_topology ($self, $c) {
+    $self->_require_site_admin($c) or return;
+
+    my $hosts = $self->pg->db->query(
+        q{SELECT hostname, address, agent_version, last_heartbeat,
+                 EXTRACT(EPOCH FROM (NOW() - last_heartbeat))::int AS heartbeat_age
+          FROM api.hosts ORDER BY hostname},
+    )->hashes->to_array;
+    my %stale     = map { $_->{hostname} => (($_->{heartbeat_age} // 1e9) > HEARTBEAT_STALE_AFTER) } @$hosts;
+    my %addr_host = map { $_->{address} => $_->{hostname} } grep { $_->{address} } @$hosts;
+
+    my $rows = $self->pg->db->query(
+        q{SELECT hostname, service_name, package_name, kind, expected, actual, description, fronts
+          FROM api.host_service_status ORDER BY hostname, service_name},
+    )->hashes->to_array;
+
+    my $port_service = _fleet_port_service();
+
+    # node id -> node record; live nodes first.
+    my (%node, %svc_nodes);   # %svc_nodes: service_name -> [node ids]
+    my $node_id = sub ($host, $svc) { "$host/$svc" };
+    for my $r (@$rows) {
+        my $id = $node_id->($r->{hostname}, $r->{service_name});
+        $node{$id} = {
+            id => $id, host => $r->{hostname}, service => $r->{service_name},
+            kind => $r->{kind}, package => $r->{package_name},
+            address => (grep { $_->{hostname} eq $r->{hostname} } @$hosts)[0]{address},
+            expected => ($r->{expected} ? \1 : \0), actual => ($r->{actual} ? \1 : \0),
+            healthy  => (($r->{actual} && !$stale{ $r->{hostname} }) ? \1 : \0),
+            monitored => \1, description => $r->{description},
+        };
+        push @{ $svc_nodes{ $r->{service_name} } }, $id;
+    }
+
+    # Resolve a `fronts` token ("[proto@]ip:port") -> a node id, creating
+    # an unmonitored node if that (host,service) isn't already live.
+    my $resolve_target = sub ($token) {
+        my $t = $token; $t =~ s/^[^@]*\@//;          # strip optional "proto@"
+        my ($ip, $port) = $t =~ /^(.*):(\d+)$/ ? ($1, $2) : ($t, undef);
+        my $host = $addr_host{$ip} // $ip;           # fall back to raw IP as the host label
+        my $svc  = ($port && $port_service->{$port}) ? $port_service->{$port} : ($port ? "port-$port" : 'service');
+        my $id   = $node_id->($host, $svc);
+        unless ($node{$id}) {
+            $node{$id} = {
+                id => $id, host => $host, service => $svc, kind => undef, package => undef,
+                address => $ip, expected => \1, actual => \0, healthy => undef,   # unmonitored
+                monitored => \0, description => 'discovered as a proxy/front target (no agent on this host)',
+            };
+            push @{ $svc_nodes{$svc} }, $id;
+        }
+        return $id;
+    };
+
+    my (@edges, %edge_seen);
+    my $add_edge = sub ($from, $to, $kind) {
+        return unless $node{$from} && $node{$to} && $from ne $to;
+        my $k = "$from|$to";
+        return if $edge_seen{$k}++;
+        push @edges, { from => $from, to => $to, kind => $kind };
+    };
+
+    # 1) Live fronts -> edges (the real ingress/proxy layer).
+    for my $r (@$rows) {
+        next unless $r->{fronts} && @{ $r->{fronts} };
+        my $from = $node_id->($r->{hostname}, $r->{service_name});
+        my $ekind = $r->{service_name} =~ /^webproxy/ ? 'proxy'
+                  : $r->{service_name} =~ /^haproxy/  ? 'mail'
+                  : $r->{service_name} =~ /^dnsdist/  ? 'dns' : 'http';
+        $add_edge->($from, $resolve_target->($_), $ekind) for @{ $r->{fronts} };
+    }
+    # 2) Static backend seed -> edges, fanned out over the node set by name.
+    for my $e (@{ _fleet_static_edges() }) {
+        my ($fs, $ts, $kind) = @$e;
+        for my $f (@{ $svc_nodes{$fs} // [] }) {
+            $add_edge->($f, $_, $kind) for @{ $svc_nodes{$ts} // [] };
+        }
+    }
+
+    # Group nodes back under their host for the "hosts" view.
+    my %host_out;
+    for my $h (@$hosts) {
+        $host_out{ $h->{hostname} } = {
+            hostname => $h->{hostname}, address => $h->{address},
+            agent_version => $h->{agent_version}, last_heartbeat => $h->{last_heartbeat},
+            stale => ($stale{ $h->{hostname} } ? \1 : \0), monitored => \1, services => [],
+        };
+    }
+    for my $n (values %node) {
+        $host_out{ $n->{host} } //= { hostname => $n->{host}, address => $n->{address},
+            agent_version => undef, last_heartbeat => undef, stale => \0, monitored => \0, services => [] };
+        push @{ $host_out{ $n->{host} }{services} }, $n;
+    }
+    $_->{services} = [ sort { $a->{service} cmp $b->{service} } @{ $_->{services} } ] for values %host_out;
+
+    return $c->render(json => {
+        heartbeat_stale_after_sec => HEARTBEAT_STALE_AFTER,
+        hosts => [ map { $host_out{$_} } sort keys %host_out ],
+        nodes => [ map { $node{$_} } sort keys %node ],
+        edges => \@edges,
+    });
 }
 
 # Verifies a bearer JWT (signature+expiry+not-revoked -- the same three

@@ -31,6 +31,12 @@ sub startup ($self) {
     # every other homelab-* Mojolicious app.
     my $home = $ENV{HOMELAB_ACCOUNTMANAGE_HOME} // '/usr/share/homelab-accountmanage';
     $self->renderer->paths([("$home/templates"), @{ $self->renderer->paths }]);
+    # Vendored front-end assets (e.g. Cytoscape.js for the admin Topology
+    # tab) are served locally from $home/public -- never a CDN, so the app
+    # stays self-contained on bare CT hosts. Static dispatch runs before
+    # the router; these are non-secret libraries so unauthenticated access
+    # to /vendor/* is fine.
+    $self->static->paths([("$home/public"), @{ $self->static->paths }]);
 
     my $config = load_config('HOMELAB_ACCOUNTMANAGE_CONFIG', '/etc/homelab/accountmanage/config.yml');
     $self->config($config);
@@ -118,6 +124,7 @@ sub startup ($self) {
     # Fleet status dashboard (read-only), site_admin.
     $r->get('/admin/fleet/hosts')      ->to('account#admin_fleet_hosts');
     $r->get('/admin/fleet/mismatches') ->to('account#admin_fleet_mismatches');
+    $r->get('/admin/topology')         ->to('account#admin_topology');
     $r->post('/admin/spf')             ->to('account#admin_spf');
     $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
     $r->post('/admin/domains/add')     ->to('account#admin_domain_add');
@@ -939,6 +946,11 @@ sub admin_fleet_mismatches ($c) {
     my ($email, $jwt) = _admin_auth($c);
     return $c->render(json => [], status => 403) unless $email;
     return $c->render(json => (_api_get($c, $jwt, '/api/v1/admin/agent/status/mismatches') // []));
+}
+sub admin_topology ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/admin/agent/topology') // { nodes => [], edges => [], hosts => [] }));
 }
 
 sub admin_dns_record_delete ($c) {

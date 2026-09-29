@@ -1,3 +1,27 @@
+homelab-api (0.1.49) unstable; urgency=medium
+
+  * Release v0.1.49
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 05:01:55 -0500
+
+homelab-api (0.1.49) unstable; urgency=medium
+
+  * topology endpoint: resolve live manifest fronts (IP:port) to concrete host/service nodes, materialize unmonitored front targets, small static backend seed (gateway/BFF/mail-VIP) filtered to resolvable nodes -- node id = host/service
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 05:01:55 -0500
+
+homelab-api (0.1.48) unstable; urgency=medium
+
+  * Release v0.1.48
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 04:56:03 -0500
+
+homelab-api (0.1.48) unstable; urgency=medium
+
+  * GET /api/v1/admin/agent/topology (site_admin): fleet as a graph (nodes = live host+service instances + declared ingress; edges = declarative seed merged with live manifest fronts) for the CLI map + web topology view
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 04:56:02 -0500
+
 homelab-api (0.1.47) unstable; urgency=medium
 
   * Release v0.1.47

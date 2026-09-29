@@ -23,7 +23,11 @@ title = "homelab"
 useDefault = true
 
 [allowlist]
-description = "Throwaway test-fleet credentials in the e2e regression suite are not real secrets"
+description = "Throwaway test-fleet credentials in the e2e suite, and vendored third-party front-end libraries, are not real secrets"
 paths = [
     '''tests/e2e/.*\.py''',
+    # Vendored, self-hosted front-end libs (minified) -- e.g. Cytoscape.js
+    # for the admin Topology tab. Well-known MIT source, no secrets; their
+    # high-entropy minified blobs otherwise trip the generic-api-key rule.
+    '''.*/public/vendor/.*''',
 ]

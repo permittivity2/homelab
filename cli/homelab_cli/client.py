@@ -197,6 +197,9 @@ class Client:
     def fleet_mismatches(self, token):
         return self._request("GET", "/api/v1/admin/agent/status/mismatches", headers=self._auth(token))
 
+    def fleet_topology(self, token):
+        return self._request("GET", "/api/v1/admin/agent/topology", headers=self._auth(token))
+
     def dovecot_status(self, token):
         return self._request("GET", "/api/v1/admin/dovecot/status", headers=self._auth(token))
 

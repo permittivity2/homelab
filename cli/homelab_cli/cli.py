@@ -559,6 +559,106 @@ def cmd_fleet_drift(args):
     return 0
 
 
+def _topo_glyph(healthy):
+    """● up / ✗ down / ○ unmonitored (healthy is True/False/None)."""
+    if healthy is None:
+        return "○"
+    return "●" if healthy else "✗"
+
+
+def cmd_fleet_topology(args):
+    """The fleet as a map: every host and the homelab services on it, then
+    a connection tree showing what talks to what (ingress -> app -> mail/db),
+    built from live agent data + declared manifest `fronts`. This is the
+    'what connects to where' companion to `admin fleet status`."""
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        topo = _client(args).fleet_topology(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Fleet topology failed: {e.message}")
+        return 1
+    if _emit(args, topo):
+        return 0
+
+    nodes = {n["id"]: n for n in topo.get("nodes", [])}
+    edges = topo.get("edges", [])
+    hosts = topo.get("hosts", [])
+    if not nodes:
+        print("(no topology yet -- has homelab-agent been enrolled+installed anywhere?)")
+        return 0
+
+    # --- Per-host inventory --------------------------------------------
+    print("FLEET  (● up  ✗ down/stale  ○ unmonitored)")
+    print()
+    for h in hosts:
+        tag = "  [stale heartbeat]" if h.get("stale") else ""
+        if not h.get("monitored"):
+            tag = "  [no agent]"
+        addr = h.get("address") or "?"
+        print(f"{h['hostname']}  ({addr}){tag}")
+        for s in h.get("services", []):
+            desc = _truncate(s.get("description"), 60) or ""
+            kind = f" [{s['kind']}]" if s.get("kind") else ""
+            print(f"    {_topo_glyph(s.get('healthy'))} {s['service']}{kind}  {desc}")
+        print()
+
+    # --- Connection tree -----------------------------------------------
+    adj = {}
+    indeg = {nid: 0 for nid in nodes}
+    for e in edges:
+        adj.setdefault(e["from"], []).append((e["to"], e.get("kind", "")))
+        if e["to"] in indeg:
+            indeg[e["to"]] += 1
+    for k in adj:
+        adj[k].sort(key=lambda t: t[0])
+
+    # Roots = nodes nothing points at (the ingress/entry layer). Nodes with
+    # neither in nor out edges are listed separately as "standalone".
+    roots = sorted(nid for nid in nodes if indeg.get(nid, 0) == 0 and nid in adj)
+    standalone = sorted(nid for nid in nodes if indeg.get(nid, 0) == 0 and nid not in adj)
+
+    def label(nid, kind=""):
+        n = nodes.get(nid)
+        if not n:
+            return nid
+        via = f"  ({kind})" if kind else ""
+        return f"{_topo_glyph(n.get('healthy'))} {n['service']} @{n['host']}{via}"
+
+    expanded = set()
+
+    def _walk_child(nid, this_prefix, child_prefix, kind):
+        # Guard against cycles / repeated subtrees: expand each node's
+        # children only once; a later hit shows a "↑" back-reference.
+        children = adj.get(nid, [])
+        seen_before = nid in expanded and children
+        print(this_prefix + label(nid, kind) + (" ↑" if seen_before else ""))
+        if seen_before or not children:
+            return
+        expanded.add(nid)
+        for i, (child, ckind) in enumerate(children):
+            last = i == len(children) - 1
+            _walk_child(child, child_prefix + ("└─ " if last else "├─ "),
+                        child_prefix + ("   " if last else "│  "), ckind)
+
+    print("CONNECTIONS  (X connects to Y; pools fan out to each member)")
+    print()
+    for r in roots:
+        expanded.add(r)
+        print(label(r))
+        kids = adj.get(r, [])
+        for i, (child, ckind) in enumerate(kids):
+            last = i == len(kids) - 1
+            _walk_child(child, ("└─ " if last else "├─ "), ("   " if last else "│  "), ckind)
+        print()
+    if standalone:
+        print("STANDALONE  (no declared connections)")
+        for s in standalone:
+            print(f"  {label(s)}")
+    return 0
+
+
 # --- dns: homelab-api's /api/v1/domains/* gateway -> homelab-domain-admin
 # (see ../../domain-admin/README.md). site_admin role required
 # server-side (role-gating itself lands once homelab-api's introspect
@@ -2533,6 +2633,8 @@ def build_parser():
     p.set_defaults(func=cmd_fleet_status)
     p = fleet_sub.add_parser("drift", help="Just the mismatches: real outages and undeclared surprises")
     p.set_defaults(func=cmd_fleet_drift)
+    p = fleet_sub.add_parser("topology", aliases=["map"], help="Fleet map: hosts + services + a connection tree (what talks to what)")
+    p.set_defaults(func=cmd_fleet_topology)
 
     dovecot = admin_sub.add_parser(
         "dovecot",

@@ -211,6 +211,7 @@
         <button type="button" data-atab="dovecot">📬 Dovecot</button>
         <button type="button" data-atab="roles">🔑 Roles</button>
         <button type="button" data-atab="fleet">🛰️ Fleet</button>
+        <button type="button" data-atab="topology">🗺️ Topology</button>
       </div>
 
       <div class="admin-panel" data-apanel="users">
@@ -524,6 +525,33 @@
         <div class="card">
           <h2>Hosts <span class="hint">agent version + last heartbeat</span></h2>
           <div id="fleet-hosts"><p class="muted">Loading…</p></div>
+        </div>
+      </div>
+
+      <div class="admin-panel" data-apanel="topology">
+        <div class="card topo-card">
+          <div class="topo-head">
+            <h2>Fleet topology <span class="hint">live map — who connects to what</span></h2>
+            <div class="topo-controls">
+              <label class="topo-legend"><span class="lg lg-up"></span>up</label>
+              <label class="topo-legend"><span class="lg lg-down"></span>down</label>
+              <label class="topo-legend"><span class="lg lg-unmon"></span>unmonitored</label>
+              <select id="topo-layout" title="Graph layout">
+                <option value="breadthfirst">Layered</option>
+                <option value="cose">Organic</option>
+                <option value="grid">Grid</option>
+              </select>
+              <button type="button" class="btn btn-secondary" id="topo-fit">Fit</button>
+              <button type="button" class="btn btn-secondary" id="topo-reload">Reload</button>
+            </div>
+          </div>
+          <div class="topo-body">
+            <div id="cy" aria-label="Fleet topology graph"></div>
+            <aside id="topo-detail" class="topo-detail">
+              <p class="muted">Click a node for details.<br>Drag to pan, scroll to zoom.</p>
+            </aside>
+          </div>
+          <p class="muted" style="font-size:0.8rem;margin:0.6rem 0 0;">Nodes are host/service instances (live agent data + declared ingress); edges are proxy/gateway/mail/DNS connections. Health from the fleet agents. Metrics-on-hover and remote actions (reboot, service control) are planned once Prometheus lands.</p>
         </div>
       </div>
     </section>

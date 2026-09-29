@@ -21,3 +21,5 @@ override_dh_install:
 		debian/homelab-accountmanage/usr/share/homelab-accountmanage/services/accountmanage.yml
 	find templates -type f -exec install -D -m 644 {} \
 		debian/homelab-accountmanage/usr/share/homelab-accountmanage/{} \;
+	find public -type f -exec install -D -m 644 {} \
+		debian/homelab-accountmanage/usr/share/homelab-accountmanage/{} \;
