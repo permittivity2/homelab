@@ -635,6 +635,47 @@
       if ((location.hash || '').indexOf('admin:mail') >= 0) load();
     })();
 
+    // --- Roles & permissions (admin) ---------------------------------
+    (function () {
+      var rolesList = document.getElementById('roles-list');
+      if (!rolesList) return;
+      function post(path, body) { var d = Object.keys(body).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(body[k]); }).join('&'); return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: d }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); }); }
+      var loaded = false;
+      function load() { if (loaded) return; loaded = true; reload(); }
+      function reload() {
+        fetch('/admin/roles', { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.ok ? r.json() : {}; }).then(function (d) {
+          var perms = d.permissions || [], roles = d.roles || [];
+          rolesList.innerHTML = '<table class="sessions"><thead><tr><th>Role</th><th>Permissions</th><th></th></tr></thead><tbody>' + roles.map(function (x) {
+            var granted = x.permissions || [];
+            var tags = granted.map(function (p) { return '<span class="badge">' + hlEsc(p) + ' <a href="#" class="rp-rm" data-role="' + hlEsc(x.name) + '" data-perm="' + hlEsc(p) + '" style="color:var(--danger);text-decoration:none;">×</a></span>'; }).join(' ') || '<span class="muted">none</span>';
+            var avail = perms.filter(function (pp) { return granted.indexOf(pp.name) < 0; });
+            var addSel = avail.length ? ' <select class="rp-add" data-role="' + hlEsc(x.name) + '"><option value="">+ permission…</option>' + avail.map(function (pp) { return '<option value="' + hlEsc(pp.name) + '">' + hlEsc(pp.name) + '</option>'; }).join('') + '</select>' : '';
+            var rm = x.protected ? '<span class="muted" style="font-size:0.8rem;">built-in</span>' : '<button type="button" class="btn btn-danger role-rm" data-role="' + hlEsc(x.name) + '">Delete</button>';
+            return '<tr><td>' + hlEsc(x.name) + '</td><td>' + tags + addSel + '</td><td>' + rm + '</td></tr>';
+          }).join('') + '</tbody></table>';
+          Array.prototype.forEach.call(rolesList.querySelectorAll('.role-rm'), function (b) { b.addEventListener('click', function () { if (!confirm('Delete role ' + b.dataset.role + '?')) return; post('/admin/roles/remove', { name: b.dataset.role }).then(reload); }); });
+          Array.prototype.forEach.call(rolesList.querySelectorAll('.rp-rm'), function (a) { a.addEventListener('click', function (e) { e.preventDefault(); post('/admin/roles/revoke-perm', { role: a.dataset.role, permission: a.dataset.perm }).then(reload); }); });
+          Array.prototype.forEach.call(rolesList.querySelectorAll('.rp-add'), function (s) { s.addEventListener('change', function () { if (!s.value) return; post('/admin/roles/grant-perm', { role: s.dataset.role, permission: s.value }).then(reload); }); });
+        });
+      }
+      document.getElementById('role-add-btn').addEventListener('click', function () {
+        var n = document.getElementById('role-name').value.trim(), d = document.getElementById('role-desc').value.trim(), st = document.getElementById('role-status');
+        if (!n) { st.textContent = 'Enter a role name.'; return; }
+        st.textContent = 'Creating…';
+        post('/admin/roles/add', { name: n, description: d }).then(function (r) { if (r.ok) { document.getElementById('role-name').value = ''; document.getElementById('role-desc').value = ''; st.textContent = 'Created.'; reload(); } else { st.textContent = 'Failed: ' + ((r.body && r.body.error) || ''); } });
+      });
+      function userRole(grant) {
+        var e = document.getElementById('urole-email').value.trim(), role = document.getElementById('urole-role').value.trim(), st = document.getElementById('urole-status');
+        if (e.indexOf('@') < 0 || !role) { st.textContent = 'Enter a user email and a role.'; return; }
+        st.textContent = grant ? 'Granting…' : 'Revoking…';
+        post(grant ? '/admin/users/grant-role' : '/admin/users/revoke-role', { user_email: e, role: role }).then(function (r) { st.textContent = r.ok ? (grant ? 'Granted.' : 'Revoked.') : ('Failed: ' + ((r.body && r.body.error) || '')); });
+      }
+      document.getElementById('urole-grant').addEventListener('click', function () { userRole(true); });
+      document.getElementById('urole-revoke').addEventListener('click', function () { userRole(false); });
+      var nav = document.querySelector('.admin-tabs button[data-atab="roles"]'); if (nav) nav.addEventListener('click', load);
+      if ((location.hash || '').indexOf('admin:roles') >= 0) load();
+    })();
+
     // --- Dovecot pool status (admin) ---------------------------------
     // Lazily loads the mailbox-serving pool (active vs standby + health)
     // when the Dovecot tab is first opened (or if it's the initial tab).

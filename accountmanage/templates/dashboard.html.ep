@@ -209,6 +209,7 @@
         <button type="button" data-atab="quotas">📊 Quotas</button>
         <button type="button" data-atab="mail">✉️ Mail domains</button>
         <button type="button" data-atab="dovecot">📬 Dovecot</button>
+        <button type="button" data-atab="roles">🔑 Roles</button>
       </div>
 
       <div class="admin-panel" data-apanel="users">
@@ -411,6 +412,24 @@
         <div class="card">
           <h2>Mailbox server pool <span class="hint">active / passive</span></h2>
           <div id="dovecot-status"><p class="muted">Loading…</p></div>
+        </div>
+      </div>
+
+      <div class="admin-panel" data-apanel="roles">
+        <div class="card">
+          <h2>Roles &amp; permissions</h2>
+          <div id="roles-list"><p class="muted">Loading…</p></div>
+          <div class="field" style="margin-top:0.9rem;"><label>Create a role</label><input type="text" id="role-name" autocomplete="off" placeholder="e.g. auditor"></div>
+          <div class="field"><label>Description (optional)</label><input type="text" id="role-desc" autocomplete="off"></div>
+          <button type="button" class="btn btn-primary" id="role-add-btn">Create role</button>
+          <div id="role-status" class="usage-note"></div>
+        </div>
+        <div class="card">
+          <h2>Assign a role to a user</h2>
+          <div class="field"><label>User email</label><input class="user-fill" type="email" id="urole-email" autocomplete="off" placeholder="user@domain"></div>
+          <div class="field"><label>Role name</label><input type="text" id="urole-role" autocomplete="off" placeholder="e.g. site_admin"></div>
+          <div class="btn-row"><button type="button" class="btn btn-primary" id="urole-grant">Grant role</button><button type="button" class="btn btn-danger" id="urole-revoke">Revoke role</button></div>
+          <div id="urole-status" class="usage-note"></div>
         </div>
       </div>
     </section>

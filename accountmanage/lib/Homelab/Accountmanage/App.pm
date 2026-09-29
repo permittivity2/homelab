@@ -123,6 +123,14 @@ sub startup ($self) {
     $r->get('/admin/usage')            ->to('account#admin_user_usage');
     # Dovecot pool status (JSON; site_admin gated).
     $r->get('/admin/dovecot/status')         ->to('account#admin_dovecot_status');
+    # Roles & permissions (RBAC; JSON; site_admin gated).
+    $r->get('/admin/roles')             ->to('account#admin_roles_list');
+    $r->post('/admin/roles/add')        ->to('account#admin_role_add');
+    $r->post('/admin/roles/remove')     ->to('account#admin_role_remove');
+    $r->post('/admin/roles/grant-perm') ->to('account#admin_role_grant_perm');
+    $r->post('/admin/roles/revoke-perm')->to('account#admin_role_revoke_perm');
+    $r->post('/admin/users/grant-role') ->to('account#admin_user_grant_role');
+    $r->post('/admin/users/revoke-role')->to('account#admin_user_revoke_role');
     # Domain catch-all routing (JSON; site_admin gated).
     $r->get('/admin/domains/catch-alls')     ->to('account#admin_catchalls');
     $r->post('/admin/domains/catch-all/set')  ->to('account#admin_set_catchall');
@@ -526,6 +534,79 @@ sub mail_unblock ($c) {
         => { Authorization => "Bearer $jwt" });
     return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
 }
+
+# ----- Roles & permissions (RBAC), site_admin -----
+sub admin_roles_list ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => {}, status => 403) unless $email;
+    return $c->render(json => {
+        roles       => (_api_get($c, $jwt, '/api/v1/admin/roles') // []),
+        permissions => (_api_get($c, $jwt, '/api/v1/admin/permissions') // []),
+    });
+}
+sub admin_role_add ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $name = _trim($c->param('name') // '');
+    return $c->render(json => { error => 'a role name is required' }, status => 400) unless length $name;
+    my %body = (name => $name);
+    my $desc = _trim($c->param('description') // '');
+    $body{description} = $desc if length $desc;
+    my $tx = $UA->post($c->app->api_base . '/api/v1/admin/roles'
+        => { Authorization => "Bearer $jwt" } => json => \%body);
+    return $c->render(json => (eval { $tx->res->json } // { error => 'add failed' }), status => ($tx->res->code // 502));
+}
+sub admin_role_remove ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $name = _trim($c->param('name') // '');
+    return $c->render(json => { error => 'role name required' }, status => 400) unless length $name;
+    my $tx = $UA->delete($c->app->api_base . '/api/v1/admin/roles/' . Mojo::Util::url_escape($name)
+        => { Authorization => "Bearer $jwt" });
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
+}
+sub _role_perm_tx ($c, $method) {
+    my ($email, $jwt) = _admin_auth($c);
+    return (undef) unless $email;
+    my $role = _trim($c->param('role') // '');
+    my $perm = _trim($c->param('permission') // '');
+    return ('bad') unless length $role && length $perm;
+    my $url = $c->app->api_base . '/api/v1/admin/roles/' . Mojo::Util::url_escape($role)
+            . '/permissions/' . Mojo::Util::url_escape($perm);
+    return ($UA->$method($url => { Authorization => "Bearer $jwt" }));
+}
+sub admin_role_grant_perm ($c) {
+    my $tx = _role_perm_tx($c, 'post');
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless defined $tx;
+    return $c->render(json => { error => 'role and permission required' }, status => 400) if $tx eq 'bad';
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
+}
+sub admin_role_revoke_perm ($c) {
+    my $tx = _role_perm_tx($c, 'delete');
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless defined $tx;
+    return $c->render(json => { error => 'role and permission required' }, status => 400) if $tx eq 'bad';
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
+}
+# Grant/revoke a role to a user (the api is keyed by user id, so resolve email).
+sub _user_role_change ($c, $grant) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $user = _trim($c->param('user_email') // '');
+    my $role = _trim($c->param('role') // '');
+    return $c->render(json => { error => 'user_email and role are required' }, status => 400)
+        unless $user =~ /\@/ && length $role;
+    my $users = _api_get($c, $jwt, Mojo::URL->new('/api/v1/admin/users')->query(q => $user, limit => 20)->to_string) // [];
+    my ($u) = grep { lc($_->{email} // '') eq lc($user) } @$users;
+    return $c->render(json => { error => "no such user: $user" }, status => 404) unless $u;
+    my $tx = $grant
+        ? $UA->post($c->app->api_base . "/api/v1/admin/users/$u->{id}/roles"
+            => { Authorization => "Bearer $jwt" } => json => { role => $role })
+        : $UA->delete($c->app->api_base . "/api/v1/admin/users/$u->{id}/roles/" . Mojo::Util::url_escape($role)
+            => { Authorization => "Bearer $jwt" });
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
+}
+sub admin_user_grant_role  ($c) { _user_role_change($c, 1) }
+sub admin_user_revoke_role ($c) { _user_role_change($c, 0) }
 
 # GET /admin/dovecot/status -- the dovecot mailbox-serving pool (active/passive
 # roles + live health). First item of the Dovecot admin sub-tab.
