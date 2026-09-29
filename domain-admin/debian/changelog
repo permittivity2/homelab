@@ -1,3 +1,24 @@
+homelab-domain-admin (0.1.28) unstable; urgency=medium
+
+  * Release v0.1.28
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 07:37:47 -0500
+
+homelab-domain-admin (0.1.28) unstable; urgency=medium
+
+  * DKIM materializer: write KeyTable/SigningTable in place (their parent
+    /etc/opendkim is not group-writable, so temp-file+rename could not
+    create its temp there); keys keep atomic writes (their dir is 2770).
+    Fixes "cannot write KeyTable.tmp: Permission denied" on signer hosts.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 07:37:47 -0500
+
+homelab-domain-admin (0.1.27) unstable; urgency=medium
+
+  * Release v0.1.27
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 07:30:34 -0500
+
 homelab-domain-admin (0.1.27) unstable; urgency=medium
 
   * DKIM signing HA: keys distributed via Postgres (envelope-encrypted,

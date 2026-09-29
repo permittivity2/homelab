@@ -1,5 +1,11 @@
 homelab-postfix (0.1.20) unstable; urgency=medium
 
+  * Release v0.1.20
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 07:30:36 -0500
+
+homelab-postfix (0.1.20) unstable; urgency=medium
+
   * DKIM milter wiring: converge smtpd_milters/non_smtpd_milters to exactly
     one inet:HOST:8891 entry (idempotent + correct when repointing a host
     signer localhost<->remote), preserving non-8891 milters. Enables the

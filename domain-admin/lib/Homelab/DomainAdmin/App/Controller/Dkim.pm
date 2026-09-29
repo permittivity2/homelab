@@ -51,6 +51,26 @@ sub _slurp ($path) {
 #  * Perms/ownership are RE-ASSERTED even when the content is unchanged,
 #    so a file left with the wrong mode by an older code path (or an
 #    interrupted write) is corrected rather than silently persisting.
+# In-place content-compare write for the KeyTable/SigningTable. Unlike
+# the per-domain key dir (/etc/opendkim/keys, mode 2770 so the homelab
+# service user -- a member of group opendkim -- can create files there),
+# the tables live directly in /etc/opendkim, whose PARENT dir is NOT
+# group-writable (only the table FILES are, at 0660 group opendkim). So a
+# temp-file+rename can't create its temp there; we truncate-and-write the
+# existing file in place instead (same inode, perms/owner preserved).
+# That's not atomic, but it's what these tables need and can have: they
+# are tiny, written in a single print, and opendkim only re-reads them on
+# the SIGHUP reload we trigger AFTER the write returns -- never mid-write.
+# Returns 1 if the content changed, 0 otherwise.
+sub _write_table_if_changed ($path, $content) {
+    my $existing = _slurp($path);
+    return 0 if defined $existing && $existing eq $content;
+    open(my $fh, '>', $path) or die "cannot write $path: $!\n";
+    print $fh $content;
+    close($fh) or die "cannot finish writing $path: $!\n";
+    return 1;
+}
+
 sub _atomic_write ($path, $content, $mode, $group = undef) {
     my $set_perms = sub ($p) {
         chmod $mode, $p;
@@ -158,8 +178,8 @@ sub _rebuild_opendkim_tables ($app) {
     }
 
     my $changed = 0;
-    $changed += _atomic_write($KEYTABLE, $keytable, 0644);
-    $changed += _atomic_write($SIGNINGTABLE, $signingtable, 0644);
+    $changed += _write_table_if_changed($KEYTABLE, $keytable);
+    $changed += _write_table_if_changed($SIGNINGTABLE, $signingtable);
     return $changed ? 1 : 0;
 }
 
