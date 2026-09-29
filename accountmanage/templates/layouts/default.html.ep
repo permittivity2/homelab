@@ -847,6 +847,62 @@
         post('/admin/dkim/rotate', { domain: sel.value }).then(function (r) { say(r.ok ? ('New pending selector ' + ((r.body && r.body.selector) || '') + ' created.') : ('Failed: ' + ((r.body && r.body.error) || 'error')), r.ok); load(); });
       });
     })();
+
+    // --- Raw DNS records (admin) -------------------------------------
+    (function () {
+      var dsel = document.getElementById('dns-domain');
+      if (!dsel) return;
+      var list = document.getElementById('dns-list'), st = document.getElementById('dns-status');
+      function post(path, body) { var d = Object.keys(body).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(body[k]); }).join('&'); return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: d }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); }); }
+      function say(m, ok) { st.innerHTML = m ? '<span style="color:' + (ok ? 'var(--ok)' : 'var(--danger)') + '">' + hlEsc(m) + '</span>' : ''; }
+      function load() {
+        var domain = dsel.value;
+        list.innerHTML = '<p class="muted">Loading…</p>';
+        fetch('/admin/dns/records?domain=' + encodeURIComponent(domain), { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); }).then(function (res) {
+            var rows = res.body;
+            if (!res.ok || !Array.isArray(rows)) { list.innerHTML = '<p class="muted">' + hlEsc((rows && rows.error) || 'Could not load records.') + '</p>'; return; }
+            rows.sort(function (a, b) { return (a.name + a.type).localeCompare(b.name + b.type); });
+            list.innerHTML = '<div style="overflow-x:auto"><table class="sessions"><thead><tr><th>Name</th><th>Type</th><th>TTL</th><th>Value(s)</th><th></th></tr></thead><tbody>' + rows.map(function (x) {
+              var vals = (x.content || []).map(function (v) { return hlEsc(v); }).join('<br>');
+              return '<tr><td style="word-break:break-all">' + hlEsc(x.name) + '</td><td>' + hlEsc(x.type) + '</td><td class="muted">' + hlEsc(x.ttl) + '</td>'
+                + '<td class="muted" style="word-break:break-all">' + vals + '</td>'
+                + '<td><button type="button" class="btn btn-secondary dns-edit" data-n="' + hlEsc(x.name) + '" data-t="' + hlEsc(x.type) + '" data-c="' + hlEsc((x.content || []).join('\n')) + '" data-ttl="' + hlEsc(x.ttl) + '">Edit</button> '
+                + '<button type="button" class="btn btn-danger dns-del" data-n="' + hlEsc(x.name) + '" data-t="' + hlEsc(x.type) + '">Delete</button></td></tr>';
+            }).join('') + '</tbody></table></div>';
+            Array.prototype.forEach.call(list.querySelectorAll('.dns-del'), function (b) {
+              b.addEventListener('click', function () {
+                if (!confirm('Delete the entire ' + b.dataset.t + ' record set for ' + b.dataset.n + '?')) return;
+                say('Deleting…', true);
+                post('/admin/dns/records/delete', { domain: dsel.value, name: b.dataset.n, type: b.dataset.t }).then(function (r) { say(r.ok ? 'Deleted.' : ('Failed: ' + ((r.body && r.body.error) || 'error')), r.ok); load(); });
+              });
+            });
+            Array.prototype.forEach.call(list.querySelectorAll('.dns-edit'), function (b) {
+              b.addEventListener('click', function () {
+                document.getElementById('dns-name').value = b.dataset.n;
+                document.getElementById('dns-type').value = b.dataset.t;
+                document.getElementById('dns-content').value = b.dataset.c;
+                document.getElementById('dns-ttl').value = b.dataset.ttl;
+                say('Loaded ' + b.dataset.n + ' ' + b.dataset.t + ' into the form below — edit and Save to replace it.', true);
+                document.getElementById('dns-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+              });
+            });
+          }).catch(function () { list.innerHTML = '<p class="muted">Could not load records.</p>'; });
+      }
+      document.getElementById('dns-load-btn').addEventListener('click', load);
+      dsel.addEventListener('change', function () { list.innerHTML = '<p class="muted">Pick a zone and load its records.</p>'; });
+      document.getElementById('dns-set-btn').addEventListener('click', function () {
+        var name = document.getElementById('dns-name').value.trim(), type = document.getElementById('dns-type').value,
+            content = document.getElementById('dns-content').value.trim(), ttl = document.getElementById('dns-ttl').value;
+        if (!name || !content) { say('Enter a name and at least one value.', false); return; }
+        if (!confirm('Save (replace) the ' + type + ' record set for ' + name + ' in ' + dsel.value + '?')) return;
+        say('Saving…', true);
+        post('/admin/dns/records', { domain: dsel.value, name: name, type: type, content: content, ttl: ttl }).then(function (r) {
+          if (r.ok) { say('Saved.' + (r.body && r.body.restart_pending ? ' (new name — a DNS reload is queued)' : ''), true); load(); }
+          else { say('Failed: ' + ((r.body && r.body.error) || 'error'), false); }
+        });
+      });
+    })();
   </script>
 </body>
 </html>

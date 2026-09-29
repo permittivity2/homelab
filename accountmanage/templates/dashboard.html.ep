@@ -459,6 +459,35 @@
           <p class="muted">No managed domains yet.</p>
 % }
         </div>
+
+        <div class="card">
+          <h2>DNS records <span class="hint">raw zone editing — advanced</span></h2>
+% my @dns_domains = grep { $_->{dns_managed} } @$admin_domains;
+% if (@dns_domains) {
+          <div class="field"><label>Zone</label>
+            <select id="dns-domain">
+% for my $d (@dns_domains) {
+              <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
+% }
+            </select>
+          </div>
+          <button type="button" class="btn" id="dns-load-btn">Load records</button>
+          <div id="dns-list" style="margin-top:0.8rem;"><p class="muted">Pick a zone and load its records.</p></div>
+          <hr style="border:none;border-top:1px solid var(--border,rgba(127,127,127,0.25));margin:1rem 0;">
+          <h3 style="margin:0 0 0.6rem;font-size:1rem;">Add / replace a record set</h3>
+          <div class="field"><label>Name <span class="muted">(FQDN with trailing dot, e.g. <code>sub.example.com.</code>)</span></label><input type="text" id="dns-name" autocomplete="off" placeholder="example.com."></div>
+          <div class="field"><label>Type</label>
+            <select id="dns-type"><option>A</option><option>AAAA</option><option>CNAME</option><option>MX</option><option>TXT</option><option>SRV</option><option>NS</option><option>CAA</option></select>
+          </div>
+          <div class="field"><label>Value(s) <span class="muted">— one per line (this <strong>replaces</strong> the whole set for this name+type)</span></label><textarea id="dns-content" rows="3" autocomplete="off" placeholder="10 mail.example.com.&#10;20 mail2.example.com."></textarea></div>
+          <div class="field"><label>TTL (seconds)</label><input type="number" id="dns-ttl" min="60" value="3600"></div>
+          <button type="button" class="btn btn-primary" id="dns-set-btn">Save record set</button>
+          <div id="dns-status" class="usage-note"></div>
+          <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">MX / SRV values include their priority in the value itself (e.g. <code>10 mail.example.com.</code>). Editing NS / MX / apex records can break mail and delegation — double-check before saving.</p>
+% } else {
+          <p class="muted">No DNS-managed zones. (Domains marked "external" are not editable here.)</p>
+% }
+        </div>
       </div>
 
       <div class="admin-panel" data-apanel="dovecot">

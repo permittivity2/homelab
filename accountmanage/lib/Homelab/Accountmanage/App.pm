@@ -111,6 +111,10 @@ sub startup ($self) {
     $r->post('/admin/dkim/activate')   ->to('account#admin_dkim_activate');
     $r->post('/admin/dkim/retire')     ->to('account#admin_dkim_retire');
     $r->post('/admin/dkim/cancel')     ->to('account#admin_dkim_cancel');
+    # Raw DNS record CRUD (list / upsert / delete), site_admin.
+    $r->get('/admin/dns/records')      ->to('account#admin_dns_records');
+    $r->post('/admin/dns/records')     ->to('account#admin_dns_record_set');
+    $r->post('/admin/dns/records/delete')->to('account#admin_dns_record_delete');
     $r->post('/admin/spf')             ->to('account#admin_spf');
     $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
     $r->post('/admin/domains/add')     ->to('account#admin_domain_add');
@@ -895,6 +899,43 @@ sub admin_dkim_retire ($c) {
 }
 sub admin_dkim_cancel ($c) {
     _dkim_action($c, sub ($domain, $sel) { length $sel ? ('DELETE', "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dkim/" . Mojo::Util::url_escape($sel)) : () });
+}
+
+# --- Raw DNS record CRUD (JSON, site_admin) ------------------------------
+sub admin_dns_records ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => [], status => 403) unless $email;
+    my $domain = _dkim_dom($c) or return $c->render(json => { error => 'a valid domain is required' }, status => 400);
+    my $tx = $UA->get($c->app->api_base . "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dns/records"
+        => { Authorization => "Bearer $jwt" });
+    return $c->render(json => (eval { $tx->res->json } // []), status => ($tx->res->code // 502));
+}
+sub admin_dns_record_set ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $domain = _dkim_dom($c) or return $c->render(json => { error => 'a valid domain is required' }, status => 400);
+    my $name = _trim($c->param('name') // '');
+    my $type = uc(_trim($c->param('type') // ''));
+    # content: one value per line (REPLACE semantics -- the full set for name+type).
+    my @content = grep { length } map { _trim($_) } split /\r?\n/, ($c->param('content') // '');
+    my $ttl = _trim($c->param('ttl') // '');
+    $ttl = ($ttl =~ /^\d+$/) ? $ttl + 0 : 3600;
+    return $c->render(json => { error => 'name, type, and at least one value are required' }, status => 400)
+        unless length $name && length $type && @content;
+    my $tx = $UA->post($c->app->api_base . "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dns/records"
+        => { Authorization => "Bearer $jwt" } => json => { name => $name, type => $type, content => \@content, ttl => $ttl });
+    return $c->render(json => (eval { $tx->res->json } // { error => 'write failed' }), status => ($tx->res->code // 502));
+}
+sub admin_dns_record_delete ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $domain = _dkim_dom($c) or return $c->render(json => { error => 'a valid domain is required' }, status => 400);
+    my $name = _trim($c->param('name') // '');
+    my $type = uc(_trim($c->param('type') // ''));
+    return $c->render(json => { error => 'name and type are required' }, status => 400) unless length $name && length $type;
+    my $tx = $UA->delete($c->app->api_base . "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dns/records"
+        => { Authorization => "Bearer $jwt" } => json => { name => $name, type => $type });
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
 }
 
 # Set SPF (apex TXT). NOTE: this REPLACES the domain's entire apex TXT
