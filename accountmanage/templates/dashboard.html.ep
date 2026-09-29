@@ -247,6 +247,39 @@
       </div>
 
       <div class="admin-panel" data-apanel="mail">
+        <div class="card">
+          <h2>Domains <span class="hint">receiving domains + mail on/off</span></h2>
+% if (@$admin_domains) {
+          <table class="sessions">
+            <thead><tr><th>Domain</th><th>Mail</th><th>DNS</th><th>Active</th><th></th></tr></thead>
+            <tbody>
+% for my $d (@$admin_domains) {
+              <tr>
+                <td><%= $d->{domain_name} %></td>
+                <td><%= $d->{mail_enabled} ? 'enabled' : 'disabled' %></td>
+                <td class="muted"><%= $d->{dns_managed} ? 'managed' : 'external' %></td>
+                <td class="muted"><%= $d->{active} ? 'yes' : 'no' %></td>
+                <td>
+% if ($d->{mail_enabled}) {
+                  <form method="post" action="/admin/domains/toggle" onsubmit="return confirm('Stop accepting mail for <%= $d->{domain_name} %>?')"><input type="hidden" name="domain" value="<%= $d->{domain_name} %>"><input type="hidden" name="action" value="disable"><button type="submit" class="btn btn-danger">Disable mail</button></form>
+% } else {
+                  <form method="post" action="/admin/domains/toggle"><input type="hidden" name="domain" value="<%= $d->{domain_name} %>"><input type="hidden" name="action" value="enable"><button type="submit" class="btn btn-secondary">Enable mail</button></form>
+% }
+                </td>
+              </tr>
+% }
+            </tbody>
+          </table>
+% } else {
+          <p class="muted">No managed domains yet.</p>
+% }
+          <form method="post" action="/admin/domains/add" style="margin-top:0.9rem;">
+            <div class="field"><label>Add a domain</label><input type="text" name="domain_name" placeholder="example.com"></div>
+            <div class="field"><label><input type="checkbox" name="mail_enabled" value="1" checked> Accept mail</label> &nbsp;&nbsp; <label><input type="checkbox" name="dns_managed" value="1"> Manage DNS (create a PowerDNS zone)</label></div>
+            <button type="submit" class="btn btn-primary">Add domain</button>
+          </form>
+        </div>
+
         <div class="card" id="catchall-card">
           <h2>Domain catch-all routing <span class="hint">send all of a domain's mail to one mailbox</span></h2>
           <div id="ca-status" class="usage-note"></div>

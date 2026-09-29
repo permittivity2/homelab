@@ -107,6 +107,8 @@ sub startup ($self) {
     $r->post('/admin/dkim')            ->to('account#admin_dkim');
     $r->post('/admin/spf')             ->to('account#admin_spf');
     $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
+    $r->post('/admin/domains/add')     ->to('account#admin_domain_add');
+    $r->post('/admin/domains/toggle')  ->to('account#admin_domain_toggle');
     # Live user search for the admin typeahead (JSON; site_admin gated).
     $r->get('/admin/users/search')     ->to('account#admin_users_search');
     # Live usage-by-user for the quota forms (JSON; site_admin gated).
@@ -582,6 +584,37 @@ sub admin_bulk_catchall ($c) {
 }
 
 sub _trim ($s) { $s //= ''; $s =~ s/^\s+//; $s =~ s/\s+$//; return $s; }
+
+# Add a managed domain (POST /api/v1/domains). dns_managed=true also creates a
+# PowerDNS zone; leave it off for a domain whose DNS lives elsewhere.
+sub admin_domain_add ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $domain = _trim($c->param('domain_name') // '');
+    unless ($domain =~ /\./) { $c->flash(admin_err => 'Enter a valid domain name.'); return $c->redirect_to('/#admin:mail'); }
+    my $tx = $UA->post($c->app->api_base . '/api/v1/domains'
+        => { Authorization => "Bearer $jwt" }
+        => json => {
+            domain_name  => $domain,
+            mail_enabled => ($c->param('mail_enabled') ? \1 : \0),
+            dns_managed  => ($c->param('dns_managed')  ? \1 : \0),
+        });
+    _admin_flash($c, $tx, "Domain $domain added.");
+    return $c->redirect_to('/#admin:mail');
+}
+
+# Enable/disable a domain's mail acceptance (PATCH /api/v1/domains/:domain).
+sub admin_domain_toggle ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $domain = _trim($c->param('domain') // '');
+    return $c->redirect_to('/#admin:mail') unless $domain =~ /\./;
+    my $enable = (($c->param('action') // '') eq 'enable') ? \1 : \0;
+    my $tx = $UA->patch($c->app->api_base . "/api/v1/domains/$domain"
+        => { Authorization => "Bearer $jwt" } => json => { mail_enabled => $enable });
+    _admin_flash($c, $tx, ($$enable ? "Mail enabled for $domain." : "Mail disabled for $domain."));
+    return $c->redirect_to('/#admin:mail');
+}
 
 # Toggle the block-link footer per domain. mode: header (link only, no
 # body append) | body | both. enabled on/off is the master switch.
