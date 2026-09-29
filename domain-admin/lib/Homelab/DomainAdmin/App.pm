@@ -268,6 +268,25 @@ sub startup ($self) {
     # on for this one timer).
     Mojo::IOLoop->recurring(60 => sub { $self->_maybe_retire_dkim_selector });
 
+    # DKIM data-plane reconcile: every signer host makes its LOCAL
+    # /etc/opendkim match the DB (materializing keys from the envelope-
+    # encrypted DB copy, rebuilding KeyTable/SigningTable, reloading
+    # opendkim iff something changed). This is what lets any host in the
+    # postfix pool sign independently and lets a rebooted/new signer
+    # self-heal to current state -- see Controller::Dkim's HA notes.
+    # Idempotent + per-host-local, so running it on every host (and both
+    # hypnotoad workers) is safe. One prompt run shortly after boot, then
+    # every 60s as the steady-state safety net (control-plane ops also
+    # call it inline on the active host for instant convergence).
+    Mojo::IOLoop->timer(5 => sub { $self->_materialize_dkim });
+    Mojo::IOLoop->recurring(60 => sub { $self->_materialize_dkim });
+
+    return;
+}
+
+sub _materialize_dkim ($self) {
+    eval { Homelab::DomainAdmin::App::Controller::Dkim::_materialize_dkim($self) };
+    $self->log->warn("periodic DKIM materialize failed: $@") if $@;
     return;
 }
 
@@ -280,7 +299,25 @@ sub _maybe_retire_dkim_selector ($self) {
           WHERE s.state = 'retiring' AND s.next_action_at <= NOW() FOR UPDATE OF s SKIP LOCKED LIMIT 1},
     )->hash;
     return unless $row;
-    $tx->commit;    # release the row lock before doing slower I/O below
+
+    # CLAIM the row while STILL holding the FOR UPDATE lock. The previous
+    # code committed (released the lock) before doing the slow _do_retire
+    # I/O, so a second timer -- on another host or worker, since this is a
+    # per-process Mojo timer, NOT gated by the HAProxy active/passive
+    # election -- could re-select the same still-due 'retiring' row and
+    # run _do_retire twice (double PowerDNS delete etc.). A lease-style
+    # claim (push next_action_at out) that runs inside the lock means
+    # exactly one process wins; if _do_retire then fails, the row is still
+    # 'retiring' with next_action_at a few minutes out, so it retries on
+    # its own instead of being lost.
+    my $claimed = $db->query(
+        q{UPDATE domainadmin.dkim_selectors
+          SET next_action_at = NOW() + INTERVAL '5 minutes'
+          WHERE id = ? AND state = 'retiring' AND next_action_at <= NOW() RETURNING id},
+        $row->{id},
+    )->hash;
+    $tx->commit;    # release the lock now that the claim is persisted
+    return unless $claimed;
 
     $self->log->info("auto-retiring DKIM selector $row->{selector} ($row->{domain_name})");
     my $c = $self->build_controller;
