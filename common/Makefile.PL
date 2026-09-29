@@ -28,6 +28,8 @@ WriteMakefile(
     EXE_FILES    => [
         'script/homelab-bootstrap-app-role',
         'script/homelab-bootstrap-pgbouncer-entry',
+        'script/homelab-bootstrap-haproxy-backend',
+        'script/homelab-bootstrap-pdns-api-client',
         'script/homelab-audit-grant-queue-insert',
     ],
     DIR          => [],

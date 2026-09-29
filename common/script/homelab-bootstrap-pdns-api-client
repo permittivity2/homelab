@@ -1,0 +1,118 @@
+#!/usr/bin/perl
+# Adds one client IP to PowerDNS's API allowlist (homelab-dns's
+# `webserver-allow-from`, stored in the debconf key
+# homelab-dns/api_allow_from) on the PowerDNS host, so a new
+# homelab-domain-admin signer can reach the pdns HTTP API to publish
+# DKIM/DNS records. The debconf value is the source of truth;
+# dpkg-reconfigure homelab-dns regenerates the pdns.d drop-in from it and
+# restarts pdns.
+#
+# Same local / SSH / manual-print tiering as the other homelab-bootstrap-*
+# helpers, and NEVER a stored/network admin credential. Idempotent: if the
+# IP is already allow-listed it makes no change and does NOT restart pdns.
+#
+# NOTE: this is the APPLICATION-layer allowlist only. The PowerDNS host's
+# own firewall must also permit the API port from this host -- on the
+# homelab fleet that port is opened plane-wide, so no per-signer firewall
+# change is needed here; the app allowlist below is the real per-signer
+# gate (plus the API key).
+#
+# Usage: homelab-bootstrap-pdns-api-client --ip IP --pdns-host HOST
+
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+
+my ($IP, $PDNS_HOST);
+GetOptions('ip=s' => \$IP, 'pdns-host=s' => \$PDNS_HOST) or die usage();
+die usage() unless $IP && $PDNS_HOST;
+
+my @SSH_OPTS = ('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new');
+
+sub usage { "Usage: $0 --ip IP --pdns-host HOST\n" }
+sub log_msg  { print STDERR "[bootstrap-pdns-api-client] @_\n" }
+sub warn_msg { print STDERR "[bootstrap-pdns-api-client] WARNING: @_\n" }
+sub die_msg  { print STDERR "[bootstrap-pdns-api-client] ERROR: @_\n"; exit 1 }
+
+sub is_local_host {
+    my ($host) = @_;
+    return 1 if $host eq 'localhost' || $host eq '127.0.0.1' || $host eq '::1';
+    chomp(my $hostname = `hostname`);
+    return 1 if $host eq $hostname;
+    chomp(my $fqdn = `hostname -f 2>/dev/null`);
+    return 1 if $fqdn && $host eq $fqdn;
+    my @ips = split /\s+/, (`hostname -I 2>/dev/null` // '');
+    return 1 if grep { $_ eq $host } @ips;
+    return 0;
+}
+sub ssh_trust_works { system('ssh', @SSH_OPTS, $PDNS_HOST, 'true') == 0 }
+
+# debconf-communicate GET returns "0 <value>"; strip the status prefix.
+sub debconf_get {
+    my ($key) = @_;
+    my $out = `echo GET $key | debconf-communicate homelab-dns 2>/dev/null`;
+    chomp $out;
+    $out =~ s/^\d+\s//;
+    return $out;
+}
+
+sub run_local {
+    log_msg("adding $IP to PowerDNS api_allow_from locally");
+    my $cur = debconf_get('homelab-dns/api_allow_from');
+    (my $norm = $cur) =~ s/\s+/,/g;    # template says space-sep; live is comma-sep
+    if (",$norm," =~ /,\Q$IP\E,/) { log_msg("$IP already allow-listed -- nothing to do"); return 1; }
+
+    # Safety: never trigger a reconfigure that would auto-regenerate a
+    # blank api-key and silently break every existing signer.
+    my $key = debconf_get('homelab-dns/api_key');
+    die_msg("homelab-dns/api_key is blank on $PDNS_HOST -- refusing to reconfigure (would rotate the API key out from under existing signers). Set it first.") unless length $key;
+
+    my $newval = length($norm) ? "$norm,$IP" : $IP;
+    system("echo 'SET homelab-dns/api_allow_from $newval' | debconf-communicate homelab-dns >/dev/null") == 0
+        or die_msg("could not SET homelab-dns/api_allow_from");
+    log_msg("api_allow_from -> $newval; running dpkg-reconfigure homelab-dns (rewrites the drop-in + restarts pdns)");
+    my $rc = system('sh', '-c', 'DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive homelab-dns');
+    warn_msg('dpkg-reconfigure homelab-dns returned non-zero -- verify pdns is active and the allow-from applied') if $rc != 0;
+    system('sh', '-c', 'systemctl is-active --quiet pdns') == 0
+        or warn_msg('pdns is NOT active after reconfigure -- check "systemctl status pdns" and "pdns_server --config=check"');
+    return 1;
+}
+
+sub run_remote {
+    log_msg("adding $IP to PowerDNS api_allow_from on $PDNS_HOST via SSH");
+    return system('ssh', @SSH_OPTS, $PDNS_HOST,
+        "homelab-bootstrap-pdns-api-client --ip '$IP' --pdns-host localhost") == 0;
+}
+
+sub run_manual {
+    warn_msg("cannot update the PowerDNS allowlist automatically (not local, and no SSH trust to $PDNS_HOST)");
+    print STDERR <<MSG;
+
+  On the PowerDNS host ($PDNS_HOST), add this signer's IP to the API
+  allowlist (idempotent -- skips if already present) and reload PowerDNS:
+
+    CUR=\$(echo GET homelab-dns/api_allow_from | sudo debconf-communicate homelab-dns | sed 's/^[0-9]* //')
+    case ",\$CUR," in *",$IP,"*) echo "already present" ;; *)
+      echo "SET homelab-dns/api_allow_from \$CUR,$IP" | sudo debconf-communicate homelab-dns
+      sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive homelab-dns ;;
+    esac
+
+  (dpkg-reconfigure rewrites /etc/powerdns/pdns.d/92-homelab-dns-api.conf
+  from the debconf value and restarts pdns.)
+
+MSG
+    while (1) {
+        print STDERR "Press Enter once that's been done (or 's' to skip): ";
+        my $reply = <STDIN>;
+        unless (defined $reply) { warn_msg('no input available; skipping'); return 0; }
+        chomp $reply;
+        return 0 if lc($reply) eq 's';
+        return 1;
+    }
+}
+
+my $ok = is_local_host($PDNS_HOST) ? run_local()
+       : ssh_trust_works()         ? run_remote()
+       :                             run_manual();
+die_msg('PowerDNS allowlist registration failed or was skipped') unless $ok;
+log_msg('done');

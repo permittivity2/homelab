@@ -58,3 +58,49 @@ Description: This host's own address to advertise in the service registry:
  (e.g. its data-plane IP) for any distributed deployment, or every
  gateway forward will try to reach homelab-api's own loopback instead
  of this service.
+
+Template: homelab-domain-admin/haproxy_vip
+Type: string
+Default: 10.50.2.44
+Description: HAProxy VIP that fronts the domain-admin/signer pool:
+ Written into config.yml's registry.host -- what homelab-api's gateway
+ connects to when forwarding /api/v1/domains/* requests. This is the
+ "always behind HAProxy" convention: even a single signer registers the
+ VIP (not its own address), so scaling to 2/3 signers is purely additive
+ (one more HAProxy backend server) with no client/gateway change. The
+ real per-host backend address (what HAProxy forwards TO) comes from
+ advertise_host, which is registered as a backend server on the HAProxy
+ host at install.
+
+Template: homelab-domain-admin/key_encryption_key
+Type: password
+Description: DKIM key-encryption-key (KEK), base64 (blank = auto-generate):
+ A 32-byte AES-256-GCM key that wraps each DKIM private key before it is
+ stored in the shared homelab DB, so the DB can distribute keys across the
+ signer pool without a dump/backup leaking them (see
+ Homelab::DomainAdmin::KeyVault). It must be the SAME value on EVERY signer
+ host. Leave blank on the FIRST signer and this package generates one and
+ prints it -- copy that exact value into this answer on the other signers.
+ Keep it OUT of the database and back it up separately; losing it means
+ every DKIM key must be regenerated.
+
+Template: homelab-domain-admin/runtime_role
+Type: string
+Description: Existing runtime DB role (blank = bootstrap a fresh one):
+ For an ADDITIONAL signer whose Postgres role already exists in the shared
+ homelab DB (this host can't bootstrap it -- no DB admin access): preseed
+ the pool's existing runtime role + password + migrate role/password here,
+ and the postinst reuses them instead of bootstrapping. Leave all four
+ blank on the FIRST signer, where homelab-bootstrap-app-role creates them.
+
+Template: homelab-domain-admin/runtime_password
+Type: password
+Description: Existing runtime DB role password (for an additional signer):
+
+Template: homelab-domain-admin/migrate_role
+Type: string
+Description: Existing migrate DB role (for an additional signer):
+
+Template: homelab-domain-admin/migrate_password
+Type: password
+Description: Existing migrate DB role password (for an additional signer):

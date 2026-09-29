@@ -1,3 +1,20 @@
+homelab-common (0.1.24) unstable; urgency=medium
+
+  * Release v0.1.24
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:44:19 -0500
+
+homelab-common (0.1.24) unstable; urgency=medium
+
+  * New bootstrap helpers for the always-behind-HAProxy signer model:
+    homelab-bootstrap-haproxy-backend (register a backend server into the
+    HAProxy host's backends.yml + regenerate) and
+    homelab-bootstrap-pdns-api-client (add a client IP to PowerDNS
+    webserver-allow-from). Same local/SSH/manual-print tiering as the
+    existing bootstrap-app-role/pgbouncer-entry helpers.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:44:18 -0500
+
 homelab-common (0.1.23) unstable; urgency=medium
 
   * Release v0.1.23

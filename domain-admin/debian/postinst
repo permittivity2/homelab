@@ -39,9 +39,15 @@ case "$1" in
             db_get homelab-domain-admin/pdns_api_host || true;  PDNS_API_HOST="${RET:-127.0.0.1}"
             db_get homelab-domain-admin/pdns_api_port || true;  PDNS_API_PORT="${RET:-8081}"
             db_get homelab-domain-admin/pdns_api_key || true;   PDNS_API_KEY_ANSWER="$RET"
+            db_get homelab-domain-admin/haproxy_vip || true;    HAPROXY_VIP="${RET:-10.50.2.44}"
+            db_get homelab-domain-admin/key_encryption_key || true; KEK_ANSWER="$RET"
 
             echo "  bootstrapping Postgres roles for 'homelab_domain_admin' on $DB_HOST..."
-            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_domain_admin --schema domainadmin --db-host "$DB_HOST")"
+            # || true: a failed/skipped bootstrap (e.g. an ADDITIONAL signer
+            # with no DB-admin access, whose role already exists) must NOT
+            # abort the postinst under set -e -- it falls through to the
+            # preseeded-pool-credentials reuse path below.
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_domain_admin --schema domainadmin --db-host "$DB_HOST" || true)"
 
             RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
             RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
@@ -50,16 +56,39 @@ case "$1" in
             MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
 
             if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
-                echo "ERROR: homelab-bootstrap-app-role did not report success — see output above."
-                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-domain-admin' once fixed."
+                # bootstrap couldn't create/return the role -- the common
+                # case for an ADDITIONAL signer whose role already exists in
+                # the shared DB, on a fleet with no DB-admin access from
+                # here. Reuse the pool credentials supplied via debconf (the
+                # runtime/migrate role+password are identical on every
+                # signer). The pgbouncer userlist entry already exists from
+                # the first signer, so no scram/registration is needed.
+                echo "  bootstrap returned no credentials; using preseeded pool credentials (additional-signer path)..."
+                db_get homelab-domain-admin/runtime_role || true;     RUNTIME_ROLE="${RUNTIME_ROLE:-$RET}"
+                db_get homelab-domain-admin/runtime_password || true; RUNTIME_PASSWORD="${RUNTIME_PASSWORD:-$RET}"
+                db_get homelab-domain-admin/migrate_role || true;     MIGRATE_ROLE="${MIGRATE_ROLE:-$RET}"
+                db_get homelab-domain-admin/migrate_password || true; MIGRATE_PASSWORD="${MIGRATE_PASSWORD:-$RET}"
+                RUNTIME_SCRAM_SECRET=""
+            fi
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$RUNTIME_PASSWORD" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: no usable DB credentials — bootstrap did not succeed and no pool"
+                echo "       credentials were preseeded (homelab-domain-admin/runtime_role etc.)."
+                echo "       Not writing $CONFIG_FILE; preseed the pool creds or fix DB access, then"
+                echo "       re-run 'dpkg-reconfigure homelab-domain-admin'."
                 db_stop
                 exit 0
             fi
 
-            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
-            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
-                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
-                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
+            # Register in pgbouncer only when WE bootstrapped the role (have
+            # its scram); an additional signer reuses the entry the first
+            # one already added.
+            if [ -n "$RUNTIME_SCRAM_SECRET" ]; then
+                echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+                homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                    --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                    || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
+            fi
 
             # Explicit answer wins (matches a pre-existing REMOTE
             # PowerDNS's already-configured key, see this template's own
@@ -67,6 +96,25 @@ case "$1" in
             # a fresh random key gets written into PowerDNS's own config
             # too, further down, only when pdns_server is found locally.
             PDNS_API_KEY="${PDNS_API_KEY_ANSWER:-$(openssl rand -base64 32)}"
+
+            # DKIM key-encryption-key: explicit answer wins; blank auto-
+            # generates one and prints it LOUDLY so it can be reused on the
+            # other signers -- it MUST be identical fleet-wide or their
+            # DB-distributed keys won't decrypt (see KeyVault + README).
+            KEK="${KEK_ANSWER:-$(openssl rand -base64 32)}"
+            if [ -z "$KEK_ANSWER" ]; then
+                echo ""
+                echo "  ============================================================"
+                echo "  Generated a NEW DKIM key-encryption-key (KEK) for this pool."
+                echo "  Set this EXACT value as homelab-domain-admin/key_encryption_key"
+                echo "  on every OTHER signer host (or their keys won't decrypt):"
+                echo ""
+                echo "      $KEK"
+                echo ""
+                echo "  Keep it OUT of the database and back it up separately."
+                echo "  ============================================================"
+                echo ""
+            fi
 
             # Two related distributed-deployment bugs, both found via a
             # real remote gateway-forward attempt (not assumed): the
@@ -79,9 +127,12 @@ case "$1" in
             # LMTP/auth listeners, etc) -- matches what homelab-sso and
             # homelab-drive's own example configs already did correctly.
             # Separately, config.yml's registry.host (what homelab-api
-            # actually dials when forwarding to this service) was ALSO
-            # always 127.0.0.1 with no way to override it -- see
-            # ADVERTISE_HOST above.
+            # actually dials when forwarding to this service) is set to the
+            # HAProxy VIP, not this host's own address -- the "always behind
+            # HAProxy" convention, so the gateway dials the VIP and this
+            # host is just one backend server behind it (see haproxy_vip +
+            # the self-registration below). ADVERTISE_HOST is the real
+            # backend-server address HAProxy forwards to.
             sed \
                 -e "s#https://api\.test\.mailmasker\.org#$API_BASE#g" \
                 -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
@@ -94,7 +145,8 @@ case "$1" in
                 -e "s#YOUR_PDNS_API_KEY_HERE#$PDNS_API_KEY#g" \
                 -e "s#\"http://127\.0\.0\.1:2511\"#\"http://0.0.0.0:$LISTEN_PORT\"#g" \
                 -e "s#  port: 2511#  port: $LISTEN_PORT#g" \
-                -e "s#  host: 127\.0\.0\.1#  host: $ADVERTISE_HOST#g" \
+                -e "s#  host: 127\.0\.0\.1#  host: $HAPROXY_VIP#g" \
+                -e "s#YOUR_BASE64_KEK_HERE#$KEK#g" \
                 "$SHARE_DIR/config/domain-admin.example.yml" > "$CONFIG_FILE"
             chown root:homelab "$CONFIG_FILE"
             chmod 640 "$CONFIG_FILE"
@@ -103,6 +155,82 @@ case "$1" in
             echo "  $CONFIG_FILE already exists -- leaving it untouched"
             echo "  (dpkg-reconfigure homelab-domain-admin to redo the prompts)"
         fi
+
+        # === Always-behind-HAProxy HA wiring (runs on EVERY configure,
+        # idempotently, NOT just first install -- a host's firewall and its
+        # HAProxy/PowerDNS registration should be ensured on upgrade/
+        # reconfigure too, and it must work for an additional signer whose
+        # config was written by the reuse path above). All values are read
+        # from the config just written/present, so this is independent of
+        # how the config was produced. ===
+        HA_LISTEN_PORT="$(sed -n 's#^  listen: .*://[^:]*:\([0-9][0-9]*\).*#\1#p' "$CONFIG_FILE" | head -1)"
+        HA_LISTEN_PORT="${HA_LISTEN_PORT:-2511}"
+        HA_VIP="$(sed -n '/^registry:/,/^[^ ]/{s/^  host: //p}' "$CONFIG_FILE" | head -1)"
+        HA_PDNS_URL="$(sed -n 's#^  api_base_url: ##p' "$CONFIG_FILE" | head -1)"
+        HA_PDNS_HOST="$(printf '%s' "$HA_PDNS_URL" | sed -n 's#^https\?://\([^:/]*\).*#\1#p')"
+        HA_PDNS_PORT="$(printf '%s' "$HA_PDNS_URL" | sed -n 's#^https\?://[^:/]*:\([0-9][0-9]*\).*#\1#p')"
+        HA_PDNS_PORT="${HA_PDNS_PORT:-8081}"
+        # This host's own data-plane (10.50.0.0/22) address -- the backend
+        # server address HAProxy forwards to.
+        HA_SELF_IP="$(ip -o -4 addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -E '^10\.50\.' | head -1)"
+
+        # --- Firewall drop-in: open exactly the signer's ports ($LISTEN_PORT
+        # inbound from the plane; $PDNS_PORT egress to a REMOTE PowerDNS).
+        # ADDS rules into the base 'inet filter' chains -- requires the host's
+        # /etc/nftables.conf to declare that table and include
+        # /etc/nftables.d/* (see README). Idempotent: reload rebuilds from
+        # all files, so re-running never duplicates rules.
+        NFT_DROPIN=/etc/nftables.d/50-homelab-domain-admin.conf
+        if grep -qE 'include "/etc/nftables\.d/\*"' /etc/nftables.conf 2>/dev/null \
+           && nft list table inet filter >/dev/null 2>&1; then
+            {
+                echo '#!/usr/sbin/nft -f'
+                echo '# Managed by homelab-domain-admin -- do not edit by hand.'
+                echo "add rule inet filter input tcp dport $HA_LISTEN_PORT ip saddr 10.50.0.0/22 accept comment \"homelab-domain-admin: admin API / signer inbound\""
+                case "$HA_PDNS_HOST" in
+                    ''|127.0.0.1|localhost|::1) : ;;
+                    *) echo "add rule inet filter output tcp dport $HA_PDNS_PORT ip daddr $HA_PDNS_HOST accept comment \"homelab-domain-admin: PowerDNS API egress\"" ;;
+                esac
+            } > "$NFT_DROPIN"
+            chmod 0644 "$NFT_DROPIN"
+            if nft -c -f /etc/nftables.conf >/dev/null 2>&1; then
+                if systemctl is-active --quiet nftables 2>/dev/null || systemctl is-enabled --quiet nftables 2>/dev/null; then
+                    systemctl reload nftables 2>/dev/null \
+                        || echo "  WARNING: 'systemctl reload nftables' failed -- apply $NFT_DROPIN by hand."
+                fi
+                echo "  applied firewall drop-in $NFT_DROPIN"
+            else
+                echo "  WARNING: nft check failed after writing $NFT_DROPIN -- removing it, firewall left unchanged."
+                rm -f "$NFT_DROPIN"
+            fi
+        else
+            echo "  NOTE: /etc/nftables.conf has no /etc/nftables.d/* include or no 'inet filter' table --"
+            echo "        skipping the firewall drop-in; open $HA_LISTEN_PORT (from 10.50.0.0/22) +"
+            echo "        egress to ${HA_PDNS_HOST:-PowerDNS}:$HA_PDNS_PORT by hand."
+        fi
+
+        # --- Self-register as an HAProxy backend server (always behind the
+        # VIP). </dev/null makes the manual tier non-blocking during apt.
+        if [ -n "$HA_VIP" ] && [ -n "$HA_SELF_IP" ]; then
+            echo "  registering $HA_SELF_IP:$HA_LISTEN_PORT in HAProxy backend 'domain-admin' on $HA_VIP..."
+            homelab-bootstrap-haproxy-backend --name domain-admin --frontend-port "$HA_LISTEN_PORT" \
+                --server "$HA_SELF_IP:$HA_LISTEN_PORT" --haproxy-host "$HA_VIP" \
+                --send-proxy false --maxconn 200 </dev/null \
+                || echo "  NOTE: finish the HAProxy backend registration shown above (once)."
+        fi
+
+        # --- Register this host's IP in PowerDNS api_allow_from (remote pdns
+        # only; a local pdns is reached via loopback).
+        case "$HA_PDNS_HOST" in
+            ''|127.0.0.1|localhost|::1) : ;;
+            *)
+                if [ -n "$HA_SELF_IP" ]; then
+                    echo "  registering $HA_SELF_IP in PowerDNS api_allow_from on $HA_PDNS_HOST..."
+                    homelab-bootstrap-pdns-api-client --ip "$HA_SELF_IP" --pdns-host "$HA_PDNS_HOST" </dev/null \
+                        || echo "  NOTE: finish the PowerDNS allowlist step shown above (once)."
+                fi
+                ;;
+        esac
 
         # RUNTIME_ROLE is only set above on a fresh install -- on an
         # upgrade, derive it from the config already on disk.

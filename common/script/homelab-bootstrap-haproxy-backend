@@ -1,0 +1,151 @@
+#!/usr/bin/perl
+# Registers one backend SERVER (this host) into homelab-haproxy's
+# backends.yml on the HAProxy host, then regenerates haproxy.cfg -- so a
+# service is fronted by the HAProxy VIP from its very first install, and
+# adding a 2nd/3rd instance is purely additive (one more server line),
+# never a re-architecture. This is the "always behind HAProxy even for a
+# single instance" convention (see homelab-domain-admin's DKIM signing
+# HA).
+#
+# Never uses a stored/network admin credential -- always root/OS-level
+# auth, local or over SSH, exactly like homelab-bootstrap-pgbouncer-entry:
+#   1. Local (--haproxy-host is this host): edit backends.yml + regenerate.
+#   2. Remote + SSH trust works: the same, over ssh.
+#   3. Neither (the common case on a fleet with no inter-host SSH):
+#      print the exact backends.yml entry + regen command to run by hand.
+#
+# Idempotent: if this server is already in the named backend it is a
+# no-op; if the backend doesn't exist yet it is created.
+#
+# Usage: homelab-bootstrap-haproxy-backend --name NAME --frontend-port N \
+#            --server HOST:PORT --haproxy-host HOST \
+#            [--send-proxy true|false] [--mode roundrobin|active_passive] \
+#            [--maxconn N] [--backends-file PATH]
+
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+
+my ($NAME, $FRONTEND_PORT, $SERVER, $HAPROXY_HOST);
+my $SEND_PROXY = 'true';
+my $MODE       = 'roundrobin';
+my $MAXCONN    = 200;
+my $BACKENDS   = '/etc/homelab/haproxy/backends.yml';
+
+GetOptions(
+    'name=s'          => \$NAME,
+    'frontend-port=s' => \$FRONTEND_PORT,
+    'server=s'        => \$SERVER,
+    'haproxy-host=s'  => \$HAPROXY_HOST,
+    'send-proxy=s'    => \$SEND_PROXY,
+    'mode=s'          => \$MODE,
+    'maxconn=s'       => \$MAXCONN,
+    'backends-file=s' => \$BACKENDS,
+) or die usage();
+die usage() unless $NAME && $FRONTEND_PORT && $SERVER && $HAPROXY_HOST;
+
+my @SSH_OPTS = ('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new');
+
+sub usage { "Usage: $0 --name NAME --frontend-port N --server HOST:PORT --haproxy-host HOST [--send-proxy true|false] [--mode roundrobin|active_passive] [--maxconn N]\n" }
+sub log_msg  { print STDERR "[bootstrap-haproxy-backend] @_\n" }
+sub warn_msg { print STDERR "[bootstrap-haproxy-backend] WARNING: @_\n" }
+sub die_msg  { print STDERR "[bootstrap-haproxy-backend] ERROR: @_\n"; exit 1 }
+
+sub is_local_host {
+    my ($host) = @_;
+    return 1 if $host eq 'localhost' || $host eq '127.0.0.1' || $host eq '::1';
+    chomp(my $hostname = `hostname`);
+    return 1 if $host eq $hostname;
+    chomp(my $fqdn = `hostname -f 2>/dev/null`);
+    return 1 if $fqdn && $host eq $fqdn;
+    # Also local if $host is one of THIS host's own IPs (the VIP may be an
+    # address bound on the HAProxy host itself).
+    my @ips = split /\s+/, (`hostname -I 2>/dev/null` // '');
+    return 1 if grep { $_ eq $host } @ips;
+    return 0;
+}
+
+sub ssh_trust_works { system('ssh', @SSH_OPTS, $HAPROXY_HOST, 'true') == 0 }
+
+# The YAML entry a human (or run_local) adds. Kept in one place so the
+# printed manual instructions match exactly what run_local writes.
+sub yaml_entry {
+    my @lines = ("  - name: $NAME", "    frontend_port: $FRONTEND_PORT");
+    push @lines, "    send_proxy: false"        if $SEND_PROXY eq 'false';
+    push @lines, "    mode: $MODE"              if $MODE ne 'roundrobin';
+    push @lines, "    backends: [$SERVER]";
+    push @lines, "    maxconn: $MAXCONN";
+    return join("\n", @lines) . "\n";
+}
+
+sub run_local {
+    log_msg("registering server $SERVER in backend '$NAME' locally ($BACKENDS)");
+    eval { require YAML::XS; 1 } or die_msg("YAML::XS not available to edit $BACKENDS");
+    my $cfg = (-f $BACKENDS) ? YAML::XS::LoadFile($BACKENDS) : { backends => [] };
+    $cfg->{backends} ||= [];
+    my ($be) = grep { ($_->{name} // '') eq $NAME } @{ $cfg->{backends} };
+    my $changed = 0;
+    if ($be) {
+        my @servers = @{ $be->{backends} // [] };
+        unless (grep { $_ eq $SERVER } @servers) {
+            push @{ $be->{backends} }, $SERVER;
+            $changed = 1;
+        }
+    } else {
+        my %new = (name => $NAME, frontend_port => ($FRONTEND_PORT + 0), backends => [$SERVER], maxconn => ($MAXCONN + 0));
+        $new{send_proxy} = 0        if $SEND_PROXY eq 'false';
+        $new{mode}       = $MODE    if $MODE ne 'roundrobin';
+        push @{ $cfg->{backends} }, \%new;
+        $changed = 1;
+    }
+    unless ($changed) { log_msg("server $SERVER already in backend '$NAME' -- nothing to do"); return 1; }
+    YAML::XS::DumpFile($BACKENDS, $cfg);
+    my $gen = 'homelab-haproxy-apply-backends';
+    system($gen) == 0 or do { warn_msg("$gen failed -- run it by hand on $HAPROXY_HOST"); return 0 };
+    return 1;
+}
+
+sub run_remote {
+    log_msg("registering server $SERVER in backend '$NAME' on $HAPROXY_HOST via SSH");
+    # Do the same edit remotely by shipping a tiny perl one-liner + the
+    # values; simplest robust form is to run this very logic remotely
+    # through a heredoc. Keep it dependency-light: use the remote's own
+    # homelab-bootstrap-haproxy-backend if present, else fall back to a
+    # remote perl+YAML edit. Here we just re-invoke the installed helper
+    # remotely in local mode (--haproxy-host localhost).
+    my @cmd = ('ssh', @SSH_OPTS, $HAPROXY_HOST,
+        "homelab-bootstrap-haproxy-backend --name '$NAME' --frontend-port '$FRONTEND_PORT'"
+        . " --server '$SERVER' --haproxy-host localhost --send-proxy '$SEND_PROXY'"
+        . " --mode '$MODE' --maxconn '$MAXCONN'");
+    return system(@cmd) == 0;
+}
+
+sub run_manual {
+    warn_msg("cannot register in HAProxy automatically (not local, and no SSH trust to $HAPROXY_HOST)");
+    my $entry = yaml_entry();
+    $entry =~ s/^/  /mg;
+    print STDERR <<MSG;
+
+  On the HAProxy host ($HAPROXY_HOST): ensure this backend/server exists in
+  $BACKENDS (add the server to the 'backends:' list of an existing '$NAME'
+  entry, or add the whole entry if it's missing), then regenerate:
+
+$entry
+    sudo homelab-haproxy-apply-backends
+
+MSG
+    while (1) {
+        print STDERR "Press Enter once that's been done (or 's' to skip): ";
+        my $reply = <STDIN>;
+        unless (defined $reply) { warn_msg('no input available; skipping'); return 0; }
+        chomp $reply;
+        return 0 if lc($reply) eq 's';
+        return 1;
+    }
+}
+
+my $ok = is_local_host($HAPROXY_HOST) ? run_local()
+       : ssh_trust_works()            ? run_remote()
+       :                                run_manual();
+die_msg('HAProxy backend registration failed or was skipped') unless $ok;
+log_msg('done');

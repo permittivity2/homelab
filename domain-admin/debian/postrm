@@ -4,9 +4,18 @@ set -e
 case "$1" in
     remove)
         systemctl stop homelab-domain-admin 2>/dev/null || true
+        # Drop this host's firewall rules (the drop-in adds nothing the
+        # base config keeps). Reload re-applies from remaining files.
+        if [ -f /etc/nftables.d/50-homelab-domain-admin.conf ]; then
+            rm -f /etc/nftables.d/50-homelab-domain-admin.conf
+            if systemctl is-active --quiet nftables 2>/dev/null; then
+                systemctl reload nftables 2>/dev/null || true
+            fi
+        fi
         ;;
 
     purge)
+        rm -f /etc/nftables.d/50-homelab-domain-admin.conf
         rm -f /etc/homelab/services/domain-admin.yml
         rm -rf /etc/homelab/domain-admin
         rm -f /etc/powerdns/pdns.d/95-homelab-domain-admin-api.conf

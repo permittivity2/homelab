@@ -1,3 +1,58 @@
+homelab-domain-admin (0.1.32) unstable; urgency=medium
+
+  * Release v0.1.32
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:52:36 -0500
+
+homelab-domain-admin (0.1.32) unstable; urgency=medium
+
+  * Release v0.1.31
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:49:20 -0500
+
+homelab-domain-admin (0.1.31) unstable; urgency=medium
+
+  * Install-time HA automation (always-behind-HAProxy signer). debconf:
+    key_encryption_key (auto-generate + print if blank; fixes the never-
+    substituted KEK placeholder), haproxy_vip (registry.host = VIP), and
+    runtime/migrate role+password (reuse pool creds when an additional
+    signer cannot bootstrap its already-existing DB role). postinst now
+    ships an nftables.d firewall drop-in and self-registers this host as an
+    HAProxy backend + into PowerDNS api_allow_from on EVERY configure
+    (idempotent, decoupled from first-install), reading targets from the
+    written config. postrm removes the drop-in.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:49:20 -0500
+
+homelab-domain-admin (0.1.30) unstable; urgency=medium
+
+  * Release v0.1.29
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:44:41 -0500
+
+homelab-domain-admin (0.1.29) unstable; urgency=medium
+
+  * Release v0.1.29
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:44:35 -0500
+
+homelab-domain-admin (0.1.29) unstable; urgency=medium
+
+  * Release v0.1.29
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:44:20 -0500
+
+homelab-domain-admin (0.1.29) unstable; urgency=medium
+
+  * Install-time HA automation: debconf key_encryption_key (auto-generate +
+    print if blank; fixes the never-substituted KEK placeholder) and
+    haproxy_vip (registry.host = VIP, always-behind-HAProxy). postinst ships
+    an nftables.d firewall drop-in and self-registers this host as an HAProxy
+    backend + into PowerDNS api_allow_from (local/manual tiers). postrm
+    removes the drop-in.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:44:18 -0500
+
 homelab-domain-admin (0.1.28) unstable; urgency=medium
 
   * Release v0.1.28
