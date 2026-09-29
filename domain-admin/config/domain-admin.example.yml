@@ -3,9 +3,12 @@
 # DNS zone/record CRUD + (in a later phase) DKIM key rotation and
 # per-recipient mail allow/block -- see README.md. Internal-only: never
 # fronted by homelab-webproxy, reached only through homelab-api's
-# /api/v1/domains/* gateway route. Must run on the SAME host as
-# homelab-postfix/OpenDKIM (see README.md's "Deployment topology"
-# section) -- DKIM private key material never crosses a network.
+# /api/v1/domains/* gateway route. Must run on a host that is also a
+# homelab-postfix/OpenDKIM signer (see README.md's "Deployment topology"
+# section). DKIM signing is HA across the signer pool: keys are
+# distributed via the shared DB as KEK-encrypted ciphertext (see the
+# dkim.key_encryption_key note below) and never cross the network in the
+# clear.
 
 homelab_api:
   base_url: https://api.test.mailmasker.org
@@ -35,9 +38,20 @@ powerdns:
   api_base_url: http://127.0.0.1:8081
   api_key: YOUR_PDNS_API_KEY_HERE
 
-# DKIM rotation defaults -- read starting in a later phase.
+# DKIM rotation + key-distribution settings.
 dkim:
   retirement_days: 7
+  # 32-byte key-encryption-key (KEK), base64. Generate ONCE with:
+  #   openssl rand -base64 32
+  # Set the SAME value on EVERY signer host (ct05/06/07). It wraps each
+  # DKIM private key (AES-256-GCM) before it is stored in Postgres so the
+  # DB can distribute keys to the whole pool without a dump/backup leaking
+  # them; the raw key is only ever decrypted in memory on a signer host.
+  # Keep this OUT of the database and back it up separately -- losing it
+  # means every DKIM key must be re-generated. See Homelab::DomainAdmin::
+  # KeyVault. Leave blank on non-signer installs (DKIM ops will error
+  # clearly; all other domain-admin functions still work).
+  key_encryption_key: YOUR_BASE64_KEK_HERE
 
 # What this instance announces itself as in homelab-api's service
 # registry -- host/port only, deliberately no public_base_url: nothing

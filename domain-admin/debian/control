@@ -13,6 +13,7 @@ Depends: perl (>= 5.36),
          libmojolicious-perl,
          libyaml-libyaml-perl,
          libmojo-pg-perl,
+         libcryptx-perl,
          adduser,
          openssl,
          sudo
@@ -27,7 +28,9 @@ Description: DNS + mail-domain administration for the homelab-* ecosystem
  of valid mail domains in sync via a shared `domainadmin` schema in the
  one shared `homelab` database (split runtime/migrate roles, see
  CLAUDE.md). A later release adds DKIM key generation/rotation
- (deliberately never storing private key material in Postgres -- see
- README.md) and per-recipient mail allow/block. Must be installed on
+ (private keys are stored envelope-encrypted under a per-pool
+ key-encryption-key so the shared DB can distribute them for HA signing
+ without a dump leaking them -- see README.md) and per-recipient mail
+ allow/block. Must be installed on
  the SAME host as homelab-postfix/OpenDKIM -- see README.md's
  "Deployment topology" section.
