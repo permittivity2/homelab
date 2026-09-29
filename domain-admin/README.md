@@ -15,14 +15,39 @@ below). All three share the same `site_admin`-gated auth model.
 
 ## Deployment topology
 
-**Must be installed on the same host as `homelab-postfix`/OpenDKIM.**
-DKIM private key material is read from local disk only and must never
-cross a network — this service cannot run remotely from the OpenDKIM
-install it manages. It reaches
+**Must be installed on a host that is also a `homelab-postfix`/OpenDKIM
+signer.** OpenDKIM reads its private keys from local disk only, so a
+signer host must have the key material on its own disk. It reaches
 PowerDNS over the network via PowerDNS's own HTTP API (public zone data
 only) and `homelab-api` for auth (bearer tokens only) — both fine to
-call remotely. On `test-static-internet-ip` (currently single-host)
-this is automatic.
+call remotely.
+
+### Signing HA (multiple signers)
+
+DKIM signing runs on every host in the postfix pool (ct05/06/07), so no
+single host is a signing SPOF and any host can reboot/die while the rest
+keep signing. Keys are distributed via the shared `homelab` DB, NOT copied
+host-to-host: `dkim_selectors.private_key_encrypted` holds each private key
+wrapped with AES-256-GCM under a per-pool key-encryption-key
+(`dkim.key_encryption_key`, the SAME on every signer, in each host's config,
+never in the DB — see `Homelab::DomainAdmin::KeyVault`). The raw key is
+decrypted only in memory on a signer and written to that host's own local
+disk — it never crosses the network in the clear (which is what the old
+"keys must never cross a network" rule was really protecting).
+
+The rotate/activate/retire endpoints are the CONTROL PLANE: they mutate only
+the DB state machine + PowerDNS TXT records, so any instance can serve them.
+`_materialize_dkim` is the DATA PLANE: a per-host timer (+ inline after a
+control-plane op) that reconciles each host's local `/etc/opendkim` (key
+files + KeyTable/SigningTable) to the DB and reloads opendkim — so a
+rebooted/new signer self-heals to current state. Provisioning a new signer
+requires (all needed because rotate can round-robin to any host): the same
+KEK; `homelab-postfix` debconf `run_local_opendkim=true` +
+`dkim_milter_host=localhost`; nft INPUT 2511 + OUTPUT 8081→pdns; the pdns
+host's `homelab-dns/api_allow_from` (webserver-allow-from) widened to include
+it (restart pdns); an HAProxy `domain-admin` backend server line; and
+`registry.host` pointed at the HAProxy VIP so all instances collapse to one
+service-registry row (see the fleet memory `homelab-dkim-signing-ha`).
 
 ## Talking to PowerDNS
 

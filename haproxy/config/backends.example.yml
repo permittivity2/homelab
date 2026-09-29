@@ -76,3 +76,15 @@ backends:
     frontend_port: 993
     backend: 127.0.0.1:993
     maxconn: 500
+  # An internal HTTP admin API fronted for HA (homelab-domain-admin runs on
+  # every signer host in the postfix pool). All-active round-robin (default
+  # mode) since it has no per-host affinity; send_proxy:false because it's a
+  # plain Mojolicious HTTP service that does not speak PROXY protocol. The
+  # gateway (homelab-api) reaches it via this VIP:2511 (each instance
+  # registers this VIP as its service-registry host, so they collapse to one
+  # row). See domain-admin/README.md "Signing HA".
+  - name: domain-admin
+    frontend_port: 2511
+    send_proxy: false
+    backends: [10.50.2.49:2511, 10.50.2.50:2511, 10.50.2.51:2511]
+    maxconn: 200
