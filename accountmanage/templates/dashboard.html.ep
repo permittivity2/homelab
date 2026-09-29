@@ -210,6 +210,7 @@
         <button type="button" data-atab="mail">✉️ Mail domains</button>
         <button type="button" data-atab="dovecot">📬 Dovecot</button>
         <button type="button" data-atab="roles">🔑 Roles</button>
+        <button type="button" data-atab="fleet">🛰️ Fleet</button>
       </div>
 
       <div class="admin-panel" data-apanel="users">
@@ -512,6 +513,17 @@
           <div class="field"><label>Role name</label><input type="text" id="urole-role" autocomplete="off" placeholder="e.g. site_admin"></div>
           <div class="btn-row"><button type="button" class="btn btn-primary" id="urole-grant">Grant role</button><button type="button" class="btn btn-danger" id="urole-revoke">Revoke role</button></div>
           <div id="urole-status" class="usage-note"></div>
+        </div>
+      </div>
+
+      <div class="admin-panel" data-apanel="fleet">
+        <div class="card">
+          <h2>Service drift <span class="hint">declared vs. observed across the fleet</span></h2>
+          <div id="fleet-drift"><p class="muted">Loading…</p></div>
+        </div>
+        <div class="card">
+          <h2>Hosts <span class="hint">agent version + last heartbeat</span></h2>
+          <div id="fleet-hosts"><p class="muted">Loading…</p></div>
         </div>
       </div>
     </section>

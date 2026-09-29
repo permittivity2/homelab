@@ -903,6 +903,48 @@
         });
       });
     })();
+
+    // --- Fleet status dashboard (admin) ------------------------------
+    (function () {
+      var drift = document.getElementById('fleet-drift'), hosts = document.getElementById('fleet-hosts');
+      if (!drift || !hosts) return;
+      function truthy(v) { return v === true || v === 1 || v === 't' || v === '1'; }
+      function heartbeatAge(s) {
+        if (!s) return { txt: 'never', cls: 'var(--danger)' };
+        var d = new Date(String(s).replace(' ', 'T'));
+        if (isNaN(d.getTime())) return { txt: hlEsc(String(s).slice(0, 19)), cls: 'var(--muted)' };
+        var mins = Math.round((Date.now() - d.getTime()) / 60000);
+        var txt = mins < 1 ? 'just now' : mins < 60 ? (mins + ' min ago') : mins < 1440 ? (Math.round(mins / 60) + ' h ago') : (Math.round(mins / 1440) + ' d ago');
+        return { txt: txt, cls: mins <= 5 ? 'var(--ok)' : mins <= 30 ? '#c90' : 'var(--danger)' };
+      }
+      var loaded = false;
+      function load() {
+        if (loaded) return; loaded = true;
+        fetch('/admin/fleet/mismatches', { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.ok ? r.json() : null; }).then(function (rows) {
+          if (!Array.isArray(rows)) { drift.innerHTML = '<p class="muted">Status unavailable.</p>'; return; }
+          if (!rows.length) { drift.innerHTML = '<p style="color:var(--ok)">✓ No drift — every declared service matches what each host reports.</p>'; return; }
+          drift.innerHTML = '<div style="overflow-x:auto"><table class="sessions"><thead><tr><th>Host</th><th>Service</th><th>Expected</th><th>Actual</th><th>Detail</th></tr></thead><tbody>' + rows.map(function (x) {
+            var exp = truthy(x.expected), act = truthy(x.actual);
+            var kind = exp && !act ? '<span style="color:var(--danger)">● missing</span>' : (!exp && act ? '<span style="color:#c90">● undeclared</span>' : '');
+            return '<tr><td>' + hlEsc(x.hostname) + '</td><td>' + hlEsc(x.service_name) + ' ' + kind + '</td>'
+              + '<td class="muted">' + (exp ? 'yes' : 'no') + '</td><td class="muted">' + (act ? 'yes' : 'no') + '</td>'
+              + '<td class="muted">' + hlEsc(x.description || x.package_name || '') + (x.fronts ? ' <span class="muted">(' + hlEsc(x.fronts) + ')</span>' : '') + '</td></tr>';
+          }).join('') + '</tbody></table></div>';
+        }).catch(function () { drift.innerHTML = '<p class="muted">Status unavailable.</p>'; });
+        fetch('/admin/fleet/hosts', { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.ok ? r.json() : null; }).then(function (rows) {
+          if (!Array.isArray(rows) || !rows.length) { hosts.innerHTML = '<p class="muted">No hosts have enrolled + heartbeated yet.</p>'; return; }
+          hosts.innerHTML = '<div style="overflow-x:auto"><table class="sessions"><thead><tr><th>Host</th><th>Address</th><th>Agent</th><th>Last heartbeat</th></tr></thead><tbody>' + rows.map(function (h) {
+            var age = heartbeatAge(h.last_heartbeat);
+            return '<tr><td>' + hlEsc(h.hostname) + '</td><td class="muted">' + hlEsc(h.address || '') + (h.agent_port ? ':' + hlEsc(h.agent_port) : '') + '</td>'
+              + '<td class="muted">' + hlEsc(h.agent_version || '-') + '</td>'
+              + '<td style="color:' + age.cls + '">● ' + age.txt + '</td></tr>';
+          }).join('') + '</tbody></table></div>';
+        }).catch(function () { hosts.innerHTML = '<p class="muted">Status unavailable.</p>'; });
+      }
+      var tab = document.querySelector('.admin-tabs button[data-atab="fleet"]');
+      if (tab) tab.addEventListener('click', load);
+      if ((location.hash || '').indexOf('admin:fleet') >= 0) load();
+    })();
   </script>
 </body>
 </html>

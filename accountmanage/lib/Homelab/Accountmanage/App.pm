@@ -115,6 +115,9 @@ sub startup ($self) {
     $r->get('/admin/dns/records')      ->to('account#admin_dns_records');
     $r->post('/admin/dns/records')     ->to('account#admin_dns_record_set');
     $r->post('/admin/dns/records/delete')->to('account#admin_dns_record_delete');
+    # Fleet status dashboard (read-only), site_admin.
+    $r->get('/admin/fleet/hosts')      ->to('account#admin_fleet_hosts');
+    $r->get('/admin/fleet/mismatches') ->to('account#admin_fleet_mismatches');
     $r->post('/admin/spf')             ->to('account#admin_spf');
     $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
     $r->post('/admin/domains/add')     ->to('account#admin_domain_add');
@@ -926,6 +929,18 @@ sub admin_dns_record_set ($c) {
         => { Authorization => "Bearer $jwt" } => json => { name => $name, type => $type, content => \@content, ttl => $ttl });
     return $c->render(json => (eval { $tx->res->json } // { error => 'write failed' }), status => ($tx->res->code // 502));
 }
+# --- Fleet status dashboard (JSON, site_admin) ---------------------------
+sub admin_fleet_hosts ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => [], status => 403) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/admin/agent/hosts') // []));
+}
+sub admin_fleet_mismatches ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => [], status => 403) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/admin/agent/status/mismatches') // []));
+}
+
 sub admin_dns_record_delete ($c) {
     my ($email, $jwt) = _admin_auth($c);
     return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
