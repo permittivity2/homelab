@@ -100,12 +100,44 @@ case "$1" in
             chmod 640 "$API_MARKER"
             chgrp pdns "$API_MARKER" 2>/dev/null || true
             echo "  wrote $API_MARKER (API bound to $API_BIND:8081, allow-from: $API_ALLOW_FROM)"
+
+            # Firewall drop-in: open the PowerDNS API port to the data plane
+            # (10.50.0.0/22). The real per-client gate is the app-level
+            # webserver-allow-from above (+ the API key), so ADDING a signer
+            # only needs its IP appended to api_allow_from -- never a
+            # firewall edit here. add-rule into the base 'inet filter' input
+            # chain (requires /etc/nftables.conf to declare it + include
+            # /etc/nftables.d/*); idempotent (reload rebuilds from all files).
+            NFT_DROPIN=/etc/nftables.d/50-homelab-dns.conf
+            if grep -qE 'include "/etc/nftables\.d/\*"' /etc/nftables.conf 2>/dev/null \
+               && nft list table inet filter >/dev/null 2>&1; then
+                {
+                    echo '#!/usr/sbin/nft -f'
+                    echo '# Managed by homelab-dns -- do not edit by hand.'
+                    echo 'add rule inet filter input tcp dport 8081 ip saddr 10.50.0.0/22 accept comment "homelab-dns: PowerDNS HTTP API"'
+                } > "$NFT_DROPIN"
+                chmod 0644 "$NFT_DROPIN"
+                if nft -c -f /etc/nftables.conf >/dev/null 2>&1; then
+                    if systemctl is-active --quiet nftables 2>/dev/null || systemctl is-enabled --quiet nftables 2>/dev/null; then
+                        systemctl reload nftables 2>/dev/null \
+                            || echo "  WARNING: 'systemctl reload nftables' failed -- apply $NFT_DROPIN by hand."
+                    fi
+                    echo "  applied firewall drop-in $NFT_DROPIN (API port open to the plane; allow-from gates per client)"
+                else
+                    echo "  WARNING: nft check failed after writing $NFT_DROPIN -- removing it, firewall unchanged."
+                    rm -f "$NFT_DROPIN"
+                fi
+            fi
         elif [ -f "$API_MARKER" ]; then
             # Answer flipped back to false on a reconfigure -- remove the
             # stale drop-in rather than leaving an API silently exposed
             # that the debconf answers no longer admit to.
             rm -f "$API_MARKER"
             echo "  removed $API_MARKER (homelab-dns/enable_api is now false)"
+            if [ -f /etc/nftables.d/50-homelab-dns.conf ]; then
+                rm -f /etc/nftables.d/50-homelab-dns.conf
+                systemctl reload nftables 2>/dev/null || true
+            fi
         fi
 
         # Apply PowerDNS's own official schema, but ONLY if it isn't

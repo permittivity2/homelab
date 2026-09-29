@@ -9,6 +9,12 @@ case "$1" in
         # pdns.conf, never touch the powerdns database (schema or zones).
         rm -f "$MARKER"
 
+        # Drop our firewall rule too (reload rebuilds from remaining files).
+        if [ -f /etc/nftables.d/50-homelab-dns.conf ]; then
+            rm -f /etc/nftables.d/50-homelab-dns.conf
+            systemctl reload nftables 2>/dev/null || true
+        fi
+
         # pdns.service has no reload path (see postinst) -- a restart is
         # the only way to drop our config back out.
         if command -v pdns_server >/dev/null 2>&1 && pdns_server --config=check >/dev/null 2>&1; then
@@ -17,6 +23,7 @@ case "$1" in
         ;;
 
     purge)
+        rm -f /etc/nftables.d/50-homelab-dns.conf
         rm -f /etc/homelab/services/pdns.yml
         if [ -f /usr/share/debconf/confmodule ]; then
             . /usr/share/debconf/confmodule

@@ -1,3 +1,19 @@
+homelab-dns (0.1.5) unstable; urgency=medium
+
+  * Release v0.1.5
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:34:30 -0500
+
+homelab-dns (0.1.5) unstable; urgency=medium
+
+  * When the PowerDNS API is enabled, ship an /etc/nftables.d/ firewall
+    drop-in opening the API port to the data plane (10.50.0.0/22) -- the
+    app-level webserver-allow-from + API key stay the per-client gate, so
+    adding a DKIM signer needs only its IP in api_allow_from, no per-signer
+    firewall edit. postrm removes the drop-in.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:34:30 -0500
+
 homelab-dns (0.1.4) unstable; urgency=medium
 
   * Release v0.1.4
