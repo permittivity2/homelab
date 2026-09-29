@@ -439,6 +439,26 @@
           <button type="button" class="btn btn-primary" id="racc-add-btn">Apply</button>
           <div id="racc-status" class="usage-note"></div>
         </div>
+
+        <div class="card">
+          <h2>DKIM selectors <span class="hint">key rotation lifecycle per domain</span></h2>
+% if (@$admin_domains) {
+          <div class="field"><label>Domain</label>
+            <select id="dkim-domain">
+% for my $d (@$admin_domains) {
+              <option value="<%= $d->{domain_name} %>"><%= $d->{domain_name} %></option>
+% }
+            </select>
+          </div>
+          <button type="button" class="btn" id="dkim-load-btn">Load selectors</button>
+          <button type="button" class="btn btn-secondary" id="dkim-rotate-btn">Rotate (new pending key)</button>
+          <div id="dkim-list" style="margin-top:0.8rem;"><p class="muted">Pick a domain and load its selectors.</p></div>
+          <div id="dkim-detail-status" class="usage-note"></div>
+          <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">Lifecycle: rotate creates a <em>pending</em> selector (its TXT record is published but it isn't signing yet). Activate it to start signing — the previously active key drops to <em>retiring</em> for an overlap window so in-flight mail still verifies. Retire finalizes a retiring key; Cancel deletes a pending one.</p>
+% } else {
+          <p class="muted">No managed domains yet.</p>
+% }
+        </div>
       </div>
 
       <div class="admin-panel" data-apanel="dovecot">

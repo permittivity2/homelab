@@ -1,3 +1,15 @@
+homelab-accountmanage (0.1.17) unstable; urgency=medium
+
+  * Release v0.1.17
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 04:09:26 -0500
+
+homelab-accountmanage (0.1.17) unstable; urgency=medium
+
+  * Admin Mail domains: DKIM selector lifecycle detail — list selectors per domain with rotate/activate/retire/cancel (A6)
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 04:09:26 -0500
+
 homelab-accountmanage (0.1.16) unstable; urgency=medium
 
   * Release v0.1.16

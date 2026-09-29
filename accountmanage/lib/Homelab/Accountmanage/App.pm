@@ -105,6 +105,12 @@ sub startup ($self) {
     $r->post('/admin/mail-quota')      ->to('account#admin_mail_quota');
     $r->post('/admin/block-link')      ->to('account#admin_block_link');
     $r->post('/admin/dkim')            ->to('account#admin_dkim');
+    # DKIM selector lifecycle detail (list + rotate/activate/retire/cancel), site_admin.
+    $r->get('/admin/dkim/selectors')   ->to('account#admin_dkim_selectors');
+    $r->post('/admin/dkim/rotate')     ->to('account#admin_dkim_rotate');
+    $r->post('/admin/dkim/activate')   ->to('account#admin_dkim_activate');
+    $r->post('/admin/dkim/retire')     ->to('account#admin_dkim_retire');
+    $r->post('/admin/dkim/cancel')     ->to('account#admin_dkim_cancel');
     $r->post('/admin/spf')             ->to('account#admin_spf');
     $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
     $r->post('/admin/domains/add')     ->to('account#admin_domain_add');
@@ -855,6 +861,40 @@ sub admin_dkim ($c) {
     my $act = $UA->post($c->app->api_base . "/api/v1/domains/$domain/dkim/$selector/activate" => $auth => json => {});
     _admin_flash($c, $act, "DKIM rotated + activated for $domain (selector $selector).");
     return $c->redirect_to('/#admin:mail');
+}
+
+# --- DKIM selector lifecycle detail (JSON, site_admin) -------------------
+sub _dkim_dom ($c) {
+    my $d = _trim($c->param('domain') // '');
+    return $d =~ /^[A-Za-z0-9.\-]+$/ ? $d : undef;
+}
+sub admin_dkim_selectors ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => [], status => 403) unless $email;
+    my $domain = _dkim_dom($c) or return $c->render(json => { error => 'a valid domain is required' }, status => 400);
+    return $c->render(json => (_api_get($c, $jwt, "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dkim/selectors") // []));
+}
+sub _dkim_action ($c, $build) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $domain = _dkim_dom($c) or return $c->render(json => { error => 'a valid domain is required' }, status => 400);
+    my ($method, $path) = $build->($domain, _trim($c->param('selector') // ''));
+    return $c->render(json => { error => 'a selector is required' }, status => 400) unless defined $path;
+    my $tx = $UA->build_tx(uc($method) => $c->app->api_base . $path => { Authorization => "Bearer $jwt" } => json => {});
+    $tx = $UA->start($tx);
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
+}
+sub admin_dkim_rotate ($c) {
+    _dkim_action($c, sub ($domain, $sel) { ('POST', "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dkim/rotate") });
+}
+sub admin_dkim_activate ($c) {
+    _dkim_action($c, sub ($domain, $sel) { length $sel ? ('POST', "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dkim/" . Mojo::Util::url_escape($sel) . "/activate") : () });
+}
+sub admin_dkim_retire ($c) {
+    _dkim_action($c, sub ($domain, $sel) { length $sel ? ('POST', "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dkim/" . Mojo::Util::url_escape($sel) . "/retire") : () });
+}
+sub admin_dkim_cancel ($c) {
+    _dkim_action($c, sub ($domain, $sel) { length $sel ? ('DELETE', "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dkim/" . Mojo::Util::url_escape($sel)) : () });
 }
 
 # Set SPF (apex TXT). NOTE: this REPLACES the domain's entire apex TXT

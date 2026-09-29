@@ -801,6 +801,52 @@
         });
       }
     })();
+
+    // --- DKIM selector detail (admin) --------------------------------
+    (function () {
+      var sel = document.getElementById('dkim-domain');
+      if (!sel) return;
+      var list = document.getElementById('dkim-list'), st = document.getElementById('dkim-detail-status');
+      function post(path, body) { var d = Object.keys(body).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(body[k]); }).join('&'); return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: d }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); }); }
+      function say(m, ok) { st.innerHTML = m ? '<span style="color:' + (ok ? 'var(--ok)' : 'var(--danger)') + '">' + hlEsc(m) + '</span>' : ''; }
+      var STATE = { active: '<span class="badge admin">ACTIVE</span>', pending: '<span class="badge">pending</span>', retiring: '<span class="badge" style="color:var(--danger)">retiring</span>', retired: '<span class="muted">retired</span>' };
+      function load() {
+        var domain = sel.value;
+        list.innerHTML = '<p class="muted">Loading…</p>';
+        fetch('/admin/dkim/selectors?domain=' + encodeURIComponent(domain), { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.ok ? r.json() : null; }).then(function (rows) {
+            if (!Array.isArray(rows)) { list.innerHTML = '<p class="muted">Could not load selectors.</p>'; return; }
+            if (!rows.length) { list.innerHTML = '<p class="muted">No selectors yet — rotate to create one.</p>'; return; }
+            list.innerHTML = '<table class="sessions"><thead><tr><th>Selector</th><th>State</th><th>Bits</th><th>Created</th><th>Activated</th><th></th></tr></thead><tbody>' + rows.map(function (x) {
+              var s = x.state || '', acts = [];
+              if (s === 'pending') { acts.push('<button type="button" class="btn btn-primary dk-act" data-a="activate" data-s="' + hlEsc(x.selector) + '">Activate</button>'); acts.push('<button type="button" class="btn btn-danger dk-act" data-a="cancel" data-s="' + hlEsc(x.selector) + '">Cancel</button>'); }
+              else if (s === 'retiring') { acts.push('<button type="button" class="btn btn-danger dk-act" data-a="retire" data-s="' + hlEsc(x.selector) + '">Retire now</button>'); }
+              return '<tr><td>' + hlEsc(x.selector) + '</td><td>' + (STATE[s] || hlEsc(s)) + '</td><td class="muted">' + hlEsc(x.key_bits || '') + '</td>'
+                + '<td class="muted">' + hlEsc(String(x.created_at || '').slice(0, 10)) + '</td>'
+                + '<td class="muted">' + hlEsc(String(x.activated_at || '').slice(0, 10) || '-') + '</td>'
+                + '<td>' + (acts.join(' ') || '<span class="muted">—</span>') + '</td></tr>';
+            }).join('') + '</tbody></table>';
+            Array.prototype.forEach.call(list.querySelectorAll('.dk-act'), function (b) {
+              b.addEventListener('click', function () {
+                var a = b.dataset.a, msg = { activate: 'Activate selector ' + b.dataset.s + ' and start signing with it?', retire: 'Retire selector ' + b.dataset.s + ' now (ends the overlap window early)?', cancel: 'Cancel (delete) pending selector ' + b.dataset.s + '?' }[a];
+                if (!confirm(msg)) return;
+                say('Working…', true);
+                post('/admin/dkim/' + a, { domain: sel.value, selector: b.dataset.s }).then(function (r) {
+                  say(r.ok ? (a.charAt(0).toUpperCase() + a.slice(1) + ' done.') : ('Failed: ' + ((r.body && r.body.error) || 'error')), r.ok);
+                  load();
+                });
+              });
+            });
+          }).catch(function () { list.innerHTML = '<p class="muted">Could not load selectors.</p>'; });
+      }
+      document.getElementById('dkim-load-btn').addEventListener('click', load);
+      sel.addEventListener('change', load);
+      document.getElementById('dkim-rotate-btn').addEventListener('click', function () {
+        if (!confirm('Rotate a new pending DKIM key for ' + sel.value + '? (It will not sign anything until you activate it.)')) return;
+        say('Rotating…', true);
+        post('/admin/dkim/rotate', { domain: sel.value }).then(function (r) { say(r.ok ? ('New pending selector ' + ((r.body && r.body.selector) || '') + ' created.') : ('Failed: ' + ((r.body && r.body.error) || 'error')), r.ok); load(); });
+      });
+    })();
   </script>
 </body>
 </html>
