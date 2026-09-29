@@ -88,6 +88,11 @@ sub startup ($self) {
     # Security actions (proxy to homelab-api with the user's token).
     $r->post('/security/password')->to('account#change_password');
     $r->post('/security/recovery-email')->to('account#set_recovery_email');
+    # Self-service Mail settings (any logged-in user; own account only).
+    $r->get('/mail/self')       ->to('account#mail_self');
+    $r->post('/mail/block-link')->to('account#mail_set_block_link');
+    $r->post('/mail/block')     ->to('account#mail_block');
+    $r->post('/mail/unblock')   ->to('account#mail_unblock');
     # Administration actions (site_admin; each re-checks + proxies to the
     # owning service with the admin's token).
     $r->post('/admin/users/:id/active')->to('account#admin_set_active');
@@ -413,6 +418,54 @@ sub _user_exists ($c, $jwt, $addr) {
     my $path = Mojo::URL->new('/api/v1/admin/users')->query(q => $addr, limit => 20)->to_string;
     my $users = _api_get($c, $jwt, $path) // [];
     return scalar grep { lc($_->{email} // '') eq lc($addr) } @$users;
+}
+
+# ===== Self-service Mail settings (any logged-in user, own account only) =====
+
+# GET /mail/self -- aggregates the three self-service mail reads in one call:
+# send-as grants, click-to-block setting, and self-blocked recipients. All use
+# the caller's OWN token against the /mine endpoints (never site_admin).
+sub mail_self ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    return $c->render(json => {
+        send_as    => (_api_get($c, $jwt, '/api/v1/domains/mail-aliases/mine') // {}),
+        block_link => (_api_get($c, $jwt, '/api/v1/block-link/account') // {}),
+        blocked    => (_api_get($c, $jwt, '/api/v1/domains/recipient-access/mine') // []),
+    });
+}
+
+# POST /mail/block-link {enabled} -- toggle the caller's own click-to-block link.
+sub mail_set_block_link ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    my $enabled = $c->param('enabled') ? \1 : \0;
+    my $tx = $UA->put($c->app->api_base . '/api/v1/block-link/account'
+        => { Authorization => "Bearer $jwt" } => json => { enabled => $enabled });
+    return $c->render(json => (eval { $tx->res->json } // {}), status => ($tx->res->code // 502));
+}
+
+# POST /mail/block {recipient} -- reject all future mail to one of the caller's
+# own addresses (the api enforces that it must be theirs).
+sub mail_block ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    my $recipient = _trim($c->param('recipient') // '');
+    return $c->render(json => { error => 'a valid address is required' }, status => 400) unless $recipient =~ /\@/;
+    my $tx = $UA->post($c->app->api_base . '/api/v1/domains/recipient-access/mine'
+        => { Authorization => "Bearer $jwt" } => json => { recipient => $recipient, action => 'REJECT' });
+    return $c->render(json => (eval { $tx->res->json } // { error => 'block failed' }), status => ($tx->res->code // 502));
+}
+
+# POST /mail/unblock {recipient} -- undo a self-block.
+sub mail_unblock ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    my $recipient = _trim($c->param('recipient') // '');
+    return $c->render(json => { error => 'a valid address is required' }, status => 400) unless $recipient =~ /\@/;
+    my $tx = $UA->delete($c->app->api_base . '/api/v1/domains/recipient-access/mine/' . Mojo::Util::url_escape($recipient)
+        => { Authorization => "Bearer $jwt" });
+    return $c->render(json => (eval { $tx->res->json } // { ok => \1 }), status => ($tx->res->code // 502));
 }
 
 # GET /admin/dovecot/status -- the dovecot mailbox-serving pool (active/passive

@@ -18,6 +18,7 @@
     <button type="button" data-section="storage"><span class="ico">💾</span><span class="label">Storage</span></button>
     <button type="button" data-section="security"><span class="ico">🔑</span><span class="label">Security</span></button>
     <button type="button" data-section="sessions"><span class="ico">🖥️</span><span class="label">Sessions</span></button>
+    <button type="button" data-section="mailself"><span class="ico">📨</span><span class="label">Mail</span></button>
 % if ($is_admin) {
     <button type="button" data-section="admin"><span class="ico">🛠️</span><span class="label">Administration</span></button>
 % }
@@ -148,6 +149,24 @@
 % } else {
         <p class="muted">No active sessions to show.</p>
 % }
+      </div>
+    </section>
+
+    <section class="section" id="mailself">
+      <div class="card">
+        <h2>Send-as addresses <span class="hint">what you're allowed to send mail as</span></h2>
+        <div id="ms-sendas"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Click-to-block links <span class="hint">a "block this sender" link added to your inbound mail</span></h2>
+        <div id="ms-blocklink"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Blocked addresses <span class="hint">reject all mail to one of your own addresses</span></h2>
+        <div id="ms-blocked"><p class="muted">Loading…</p></div>
+        <div class="field" style="margin-top:0.8rem;"><label>Block mail to one of your addresses</label><input type="email" id="ms-block-input" autocomplete="off" placeholder="you@your-domain"></div>
+        <button type="button" class="btn btn-danger" id="ms-block-btn">Block address</button>
+        <div id="ms-block-status" class="usage-note"></div>
       </div>
     </section>
 

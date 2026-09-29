@@ -473,6 +473,69 @@
       });
     })();
 
+    // --- Self-service Mail settings ----------------------------------
+    // Lazy-loads send-as, click-to-block, and blocked-addresses when the
+    // Mail section is opened; actions post to the /mail/* BFF endpoints.
+    (function () {
+      var sec = document.getElementById('mailself');
+      if (!sec) return;
+      var loaded = false;
+      function post(path, body) {
+        var data = Object.keys(body).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(body[k]); }).join('&');
+        return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: data })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); });
+      }
+      function reload() { loaded = false; load(); }
+      function list(arr) { return (arr && arr.length) ? '<ul style="margin:0.3rem 0 0;padding-left:1.2rem;">' + arr.map(function (x) { return '<li>' + hlEsc(x) + '</li>'; }).join('') + '</ul>' : '<span class="muted">none</span>'; }
+      function load() {
+        if (loaded) return; loaded = true;
+        fetch('/mail/self', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.ok ? r.json() : {}; }).then(render).catch(function () {});
+      }
+      function render(d) {
+        var send = (d.send_as && d.send_as.send) || { addresses: [], domains: [] };
+        var recv = (d.send_as && d.send_as.receive_only) || { addresses: [], domains: [] };
+        document.getElementById('ms-sendas').innerHTML =
+          '<p style="margin:0 0 0.2rem;">You can <strong>send as</strong>:</p>' + list([].concat(send.addresses || [], (send.domains || []).map(function (x) { return x + ' (whole domain)'; })))
+          + '<p style="margin:0.8rem 0 0.2rem;">Receive-only (cannot send as):</p>' + list([].concat(recv.addresses || [], recv.domains || []));
+
+        var b = d.block_link || {};
+        document.getElementById('ms-blocklink').innerHTML =
+          '<label style="display:flex;align-items:center;gap:0.5rem;"><input type="checkbox" id="ms-bl-toggle"' + (b.enabled ? ' checked' : '') + '> Add a "block this sender" link to my inbound mail</label>'
+          + '<p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">Your home domain\'s default is ' + (b.domain_default ? 'ON' : 'OFF') + (b.mode ? ' (mode: ' + hlEsc(b.mode) + ')' : '') + '.</p>'
+          + '<div id="ms-bl-status" class="usage-note"></div>';
+        document.getElementById('ms-bl-toggle').addEventListener('change', function () {
+          var st = document.getElementById('ms-bl-status'); st.textContent = 'Saving…';
+          post('/mail/block-link', { enabled: this.checked ? '1' : '' }).then(function (r) { st.textContent = r.ok ? 'Saved.' : ('Failed: ' + ((r.body && r.body.error) || '')); });
+        });
+
+        var blocked = d.blocked || [];
+        var bel = document.getElementById('ms-blocked');
+        if (!blocked.length) { bel.innerHTML = '<p class="muted">You haven\'t blocked any addresses.</p>'; }
+        else {
+          bel.innerHTML = '<table class="sessions"><tbody>' + blocked.map(function (x) {
+            var r = (typeof x === 'string') ? x : (x.recipient || x.address || '');
+            return '<tr><td>' + hlEsc(r) + '</td><td><button type="button" class="btn btn-secondary ms-unblock" data-r="' + hlEsc(r) + '">Unblock</button></td></tr>';
+          }).join('') + '</tbody></table>';
+          Array.prototype.forEach.call(bel.querySelectorAll('.ms-unblock'), function (btn) {
+            btn.addEventListener('click', function () { post('/mail/unblock', { recipient: btn.dataset.r }).then(reload); });
+          });
+        }
+      }
+      var blockBtn = document.getElementById('ms-block-btn');
+      if (blockBtn) blockBtn.addEventListener('click', function () {
+        var inp = document.getElementById('ms-block-input'), st = document.getElementById('ms-block-status');
+        var v = (inp.value || '').trim();
+        if (v.indexOf('@') < 0) { st.textContent = 'Enter a valid address.'; return; }
+        if (!confirm('Reject ALL future mail to ' + v + '?')) return;
+        st.textContent = 'Blocking…';
+        post('/mail/block', { recipient: v }).then(function (r) { if (r.ok) { inp.value = ''; st.textContent = 'Blocked.'; reload(); } else { st.textContent = 'Failed: ' + ((r.body && r.body.error) || ''); } });
+      });
+      var nav = document.querySelector('.sidenav button[data-section="mailself"]');
+      if (nav) nav.addEventListener('click', load);
+      if ((location.hash || '').indexOf('mailself') >= 0) load();
+    })();
+
     // --- Dovecot pool status (admin) ---------------------------------
     // Lazily loads the mailbox-serving pool (active vs standby + health)
     // when the Dovecot tab is first opened (or if it's the initial tab).
