@@ -109,3 +109,12 @@ Description: CIDR(s) trusted to send a PROXY protocol header (comma-separated), 
  protocol -- a query WITHOUT a header at all is accepted normally
  either way; this setting only changes whether a header, when present,
  is honored (trusted sender) or gets the query refused (untrusted).
+
+Template: homelab-dns/api_base
+Type: string
+Default: http://10.50.2.46:3000
+Description: homelab-api base URL (for the signer-allowlist pull):
+ The homelab-dns-pull timer queries homelab-api here for the live DKIM
+ signer set and keeps webserver-allow-from in sync automatically, so a new
+ signer needs no manual allowlist edit. Leave blank to disable the pull
+ (allowlist then stays whatever api_allow_from is set to by hand).

@@ -220,6 +220,14 @@ case "$1" in
             echo ""
             echo "  API_KEY=$API_KEY"
         fi
+
+        # Pull-model timer: keep webserver-allow-from in sync with the live
+        # DKIM-signer set from homelab-api (no-op unless enable_api=true and
+        # homelab-dns/api_base is set). Harmless otherwise.
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable --now homelab-dns-pull.timer >/dev/null 2>&1 \
+            || echo "  WARNING: could not enable homelab-dns-pull.timer -- the API allowlist won't auto-track signers."
+
         echo ""
         ;;
 

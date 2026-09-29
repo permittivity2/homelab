@@ -5,7 +5,7 @@ use Mojo::UserAgent;
 use YAML::XS qw(LoadFile);
 use Exporter 'import';
 
-our @EXPORT_OK = qw(register register_recurring lookup system_agent_token);
+our @EXPORT_OK = qw(register register_recurring lookup lookup_backends system_agent_token);
 
 # The registry table itself lives inside homelab-api's own schema —
 # every other feature reaches it over HTTP (these two endpoints), never
@@ -149,6 +149,24 @@ sub lookup {
     my $data = $tx->result->json;
     $CACHE{$feature_name} = { data => $data, expires => time + $CACHE_TTL };
     return $data;
+}
+
+# Unlike lookup() (which returns the single gateway-routing pick for a
+# feature), this returns the FULL list of live backend instances for a
+# feature -- each { hostname, address, port, healthy, stale } -- derived
+# by homelab-api from the fleet-agent tables. For a consumer that must
+# enumerate every instance and self-configure from it (ct00's HAProxy
+# generator, ct18's PowerDNS allow-from refresh), not route to one. Not
+# cached: callers run on a timer where fresh-each-tick is the point.
+# $feature is the package_name, e.g. 'homelab-domain-admin'.
+sub lookup_backends {
+    my ($feature_name, %opts) = @_;
+    my $api_base = $opts{api_base} // die "lookup_backends(): api_base required\n";
+    my $token = _system_agent_token(credential_file => $opts{credential_file});
+    my $tx = $UA->get("$api_base/api/v1/agent/feature-backends/$feature_name",
+        { Authorization => "Bearer $token" });
+    die "Backend lookup for '$feature_name' failed: " . _tx_error($tx) . "\n" if $tx->error;
+    return $tx->result->json;    # arrayref of instance hashes
 }
 
 sub _tx_error {

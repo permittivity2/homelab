@@ -9,6 +9,11 @@ case "$1" in
         # pdns.conf, never touch the powerdns database (schema or zones).
         rm -f "$MARKER"
 
+        if [ -d /run/systemd/system ]; then
+            systemctl disable --now homelab-dns-pull.timer >/dev/null 2>&1 || true
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+
         # Drop our firewall rule too (reload rebuilds from remaining files).
         if [ -f /etc/nftables.d/50-homelab-dns.conf ]; then
             rm -f /etc/nftables.d/50-homelab-dns.conf

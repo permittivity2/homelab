@@ -22,6 +22,14 @@ case "$1" in
 
         systemctl enable haproxy >/dev/null 2>&1 || true
 
+        # Pull-model refresh timer: periodically re-run apply-backends so
+        # any 'discover:' backend (e.g. the DKIM-signer pool) tracks the
+        # live fleet without an install-time cross-host push. Harmless when
+        # no backend uses discover: (apply-backends is a no-op if unchanged).
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable --now homelab-haproxy-pull.timer >/dev/null 2>&1 \
+            || echo "  WARNING: could not enable homelab-haproxy-pull.timer -- 'discover:' backends won't auto-refresh."
+
         echo ""
         echo "homelab-haproxy configured."
         echo ""

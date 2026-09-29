@@ -1,3 +1,19 @@
+homelab-haproxy (0.1.9) unstable; urgency=medium
+
+  * Release v0.1.9
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:50:32 -0500
+
+homelab-haproxy (0.1.9) unstable; urgency=medium
+
+  * Pull model: backends.yml entries may use discover: <feature> to derive
+    their server list live from homelab-api (fleet-agent view) instead of a
+    static list; a homelab-haproxy-pull.timer re-runs apply-backends every
+    ~2min (no-op fast path avoids reloads when unchanged). Lets the DKIM
+    signer pool track the fleet with no cross-host push.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:50:32 -0500
+
 homelab-haproxy (0.1.8) unstable; urgency=medium
 
   * Release v0.1.8

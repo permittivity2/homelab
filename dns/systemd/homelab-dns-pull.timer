@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically refresh PowerDNS API allowlist (pull model)
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=120
+RandomizedDelaySec=20
+Persistent=false
+
+[Install]
+WantedBy=timers.target

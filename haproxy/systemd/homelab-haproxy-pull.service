@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh HAProxy discover: backends from homelab-api, regenerate haproxy.cfg
+After=network-online.target haproxy.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# homelab-haproxy-apply-backends re-reads backends.yml, re-pulls any
+# discover: features from homelab-api, and reloads haproxy only if the
+# generated config actually changed (no-op fast path).
+ExecStart=/usr/bin/homelab-haproxy-apply-backends

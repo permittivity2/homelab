@@ -47,7 +47,7 @@ case "$1" in
             # with no DB-admin access, whose role already exists) must NOT
             # abort the postinst under set -e -- it falls through to the
             # preseeded-pool-credentials reuse path below.
-            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_domain_admin --schema domainadmin --db-host "$DB_HOST" || true)"
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_domain_admin --schema domainadmin --db-host "$DB_HOST" </dev/null || true)"
 
             RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
             RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
@@ -209,28 +209,16 @@ case "$1" in
             echo "        egress to ${HA_PDNS_HOST:-PowerDNS}:$HA_PDNS_PORT by hand."
         fi
 
-        # --- Self-register as an HAProxy backend server (always behind the
-        # VIP). </dev/null makes the manual tier non-blocking during apt.
-        if [ -n "$HA_VIP" ] && [ -n "$HA_SELF_IP" ]; then
-            echo "  registering $HA_SELF_IP:$HA_LISTEN_PORT in HAProxy backend 'domain-admin' on $HA_VIP..."
-            homelab-bootstrap-haproxy-backend --name domain-admin --frontend-port "$HA_LISTEN_PORT" \
-                --server "$HA_SELF_IP:$HA_LISTEN_PORT" --haproxy-host "$HA_VIP" \
-                --send-proxy false --maxconn 200 </dev/null \
-                || echo "  NOTE: finish the HAProxy backend registration shown above (once)."
-        fi
-
-        # --- Register this host's IP in PowerDNS api_allow_from (remote pdns
-        # only; a local pdns is reached via loopback).
-        case "$HA_PDNS_HOST" in
-            ''|127.0.0.1|localhost|::1) : ;;
-            *)
-                if [ -n "$HA_SELF_IP" ]; then
-                    echo "  registering $HA_SELF_IP in PowerDNS api_allow_from on $HA_PDNS_HOST..."
-                    homelab-bootstrap-pdns-api-client --ip "$HA_SELF_IP" --pdns-host "$HA_PDNS_HOST" </dev/null \
-                        || echo "  NOTE: finish the PowerDNS allowlist step shown above (once)."
-                fi
-                ;;
-        esac
+        # --- HAProxy backend + PowerDNS allowlist registration is now PULL,
+        # not push: once this host's homelab-agent heartbeats, homelab-api's
+        # fleet view lists it, and ct00's homelab-haproxy-pull.timer +
+        # ct18's homelab-dns-pull.timer pick it into the HAProxy 'domain-admin'
+        # backend and the PowerDNS webserver-allow-from automatically (within
+        # a couple of minutes) -- no install-time cross-host push, no SSH.
+        # (The homelab-bootstrap-haproxy-backend / -pdns-api-client helpers
+        # remain in homelab-common for an operator to run by hand if a pull
+        # consumer isn't deployed.)
+        echo "  HAProxy backend + PowerDNS allowlist are pull-managed (ct00/ct18 timers) -- nothing to push."
 
         # RUNTIME_ROLE is only set above on a fresh install -- on an
         # upgrade, derive it from the config already on disk.
@@ -240,7 +228,7 @@ case "$1" in
         if [ -n "$RUNTIME_ROLE" ]; then
             echo "  granting '$RUNTIME_ROLE' INSERT access on audit.queue (for the domain/DNS/DKIM/recipient-access audit trail)..."
             DB_HOST_FOR_GRANT="${DB_HOST:-$(sed -n '/^database_migrate:/,/^database:/{s/^[[:space:]]*host: //p}' "$CONFIG_FILE" | head -1)}"
-            homelab-audit-grant-queue-insert --role "$RUNTIME_ROLE" --db-host "${DB_HOST_FOR_GRANT:-localhost}" \
+            homelab-audit-grant-queue-insert --role "$RUNTIME_ROLE" --db-host "${DB_HOST_FOR_GRANT:-localhost}" </dev/null \
                 || echo "  WARNING: could not grant audit.queue access -- if homelab-audit isn't installed/migrated yet, install it and re-run this grant by hand (see homelab-audit/README.md); audited actions will fail closed until this grant exists."
         fi
 

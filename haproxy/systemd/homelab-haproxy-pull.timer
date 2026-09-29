@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically refresh HAProxy discover: backends (pull model)
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=120
+RandomizedDelaySec=15
+Persistent=false
+
+[Install]
+WantedBy=timers.target

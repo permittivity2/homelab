@@ -8,7 +8,7 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-dns
 Architecture: all
-Depends: ${misc:Depends}, pdns-server, pdns-backend-pgsql, postgresql-client, adduser
+Depends: ${misc:Depends}, pdns-server, pdns-backend-pgsql, postgresql-client, adduser, homelab-common (>= 0.1.25), libmojolicious-perl, libyaml-libyaml-perl
 Recommends: homelab-agent
 Description: PowerDNS authoritative DNS provisioning for the homelab-* ecosystem
  Wires PowerDNS's PostgreSQL (gpgsql) backend via the native pdns.d

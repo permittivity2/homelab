@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh PowerDNS API allowlist from the live signer set (pull model)
+After=network-online.target pdns.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/homelab-dns-pull-allow-from

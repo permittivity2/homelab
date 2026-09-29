@@ -76,13 +76,36 @@ for my $backend (@backends) {
     # one target, so this is purely additive: no existing backends.yml
     # needs to change.
     my @targets;
-    if (my $list = $backend->{backends}) {
+    if (my $feature = $backend->{discover}) {
+        # PULL model: derive the server list live from homelab-api's
+        # fleet-agent view (api.hosts JOIN api.host_service_status), so a
+        # new instance the fleet-agent has reported is picked into the
+        # rotation automatically -- no install-time cross-host push. Run
+        # on a timer (homelab-haproxy-pull.timer) to stay current.
+        require Homelab::Common::Registry;
+        my $api_base = $config->{api_base}
+            // die "backends.yml: backend '$name' uses 'discover' but top-level 'api_base' is unset\n";
+        my $live = eval { Homelab::Common::Registry::lookup_backends($feature, api_base => $api_base) };
+        if ($@) {
+            warn "homelab-haproxy: discover '$feature' failed ($@); falling back to any static 'backends'\n";
+        } else {
+            @targets = sort map { "$_->{address}:$_->{port}" }
+                       grep { $_->{address} && $_->{port} } @$live;
+        }
+        # Never emit a zero-server frontend (haproxy -c fails / blackholes):
+        # fall back to a static 'backends' list, else skip this frontend.
+        @targets = @{ $backend->{backends} } if !@targets && ref($backend->{backends}) eq 'ARRAY';
+        if (!@targets) {
+            warn "homelab-haproxy: backend '$name' discovered no servers and has no static fallback -- skipping\n";
+            next;
+        }
+    } elsif (my $list = $backend->{backends}) {
         die "backends.yml: backend '$name''s 'backends' must be a list\n" unless ref($list) eq 'ARRAY';
         @targets = @$list;
     } elsif (my $single = $backend->{backend}) {
         @targets = ($single);
     } else {
-        die "backends.yml: backend '$name' needs either 'backend' (one target) or 'backends' (a list)\n";
+        die "backends.yml: backend '$name' needs 'backend', 'backends', or 'discover'\n";
     }
     # Deliberate per-frontend ceiling, not just an implicit inherit from
     # the global 4096 -- found missing entirely during a 2026-09-13
@@ -144,6 +167,17 @@ frontend ${name}_in
 backend ${name}_out
 ${balance_line}${server_lines}
 BLOCK
+}
+
+# No-op fast path: if the freshly-generated config is byte-identical to
+# what's already live, skip the write/validate/reload entirely. The pull
+# timer (homelab-haproxy-pull.timer) re-runs this every couple of minutes
+# to pick up discovered backend changes; only touch haproxy when the
+# result actually differs, so a steady state never reloads.
+{
+    my $current = '';
+    if (open(my $cf, '<', $HAPROXY_CONFIG)) { local $/; $current = <$cf>; close($cf); }
+    if ($current eq $cfg) { exit 0; }
 }
 
 my $tmp = "$HAPROXY_CONFIG.new";

@@ -1,0 +1,38 @@
+#!/usr/bin/perl
+# Refresh PowerDNS's API allowlist (webserver-allow-from, stored in the
+# homelab-dns/api_allow_from debconf key) from the live DKIM-signer set
+# that homelab-api derives from the fleet-agent tables -- so a new signer
+# is allowed automatically and a decommissioned one is pruned, with no
+# per-signer manual step. Timer-driven; only dpkg-reconfigures (which
+# restarts pdns) when the set actually changes.
+use strict;
+use warnings;
+use Homelab::Common::Registry qw(lookup_backends);
+
+sub dc_get { my $o = `echo GET $_[0] | debconf-communicate homelab-dns 2>/dev/null`; chomp $o; $o =~ s/^\d+\s//; return $o }
+
+# Only act where the API is actually enabled + an api_base is configured.
+exit 0 unless dc_get('homelab-dns/enable_api') eq 'true';
+my $api_base = dc_get('homelab-dns/api_base');
+exit 0 unless $api_base && $api_base =~ m{^https?://};
+
+my $live = eval { lookup_backends('homelab-domain-admin', api_base => $api_base) };
+if ($@) { warn "[dns-pull-allow-from] lookup failed: $@"; exit 0 }
+
+my @signers = sort keys %{ { map { $_->{address} => 1 } grep { $_->{address} } @$live } };
+# Never blank the allowlist on an empty/failed pull -- that would lock out
+# every signer. If we got zero, leave the current value alone.
+exit 0 unless @signers;
+
+my $cur = dc_get('homelab-dns/api_allow_from');
+(my $cur_norm = $cur) =~ s/\s+/,/g;
+my $desired = join(',', @signers);
+
+# self-pruning: the allowlist IS the current signer set (comma-sorted).
+if (join(',', sort split /,/, $cur_norm) eq $desired) { exit 0 }
+
+print "[dns-pull-allow-from] api_allow_from: '$cur_norm' -> '$desired'; reconfiguring homelab-dns\n";
+system("echo 'SET homelab-dns/api_allow_from $desired' | debconf-communicate homelab-dns >/dev/null") == 0
+    or die "[dns-pull-allow-from] SET failed\n";
+my $rc = system('sh', '-c', 'DEBIAN_FRONTEND=noninteractive dpkg-reconfigure -f noninteractive homelab-dns');
+warn "[dns-pull-allow-from] dpkg-reconfigure returned non-zero -- verify pdns\n" if $rc != 0;

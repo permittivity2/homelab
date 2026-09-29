@@ -9,3 +9,7 @@ override_dh_install:
 	dh_install
 	install -D -m 644 config/backends.example.yml \
 		debian/homelab-haproxy/usr/share/homelab-haproxy/config/backends.example.yml
+	install -D -m 644 systemd/homelab-haproxy-pull.service \
+		debian/homelab-haproxy/lib/systemd/system/homelab-haproxy-pull.service
+	install -D -m 644 systemd/homelab-haproxy-pull.timer \
+		debian/homelab-haproxy/lib/systemd/system/homelab-haproxy-pull.timer

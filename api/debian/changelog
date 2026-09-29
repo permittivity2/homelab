@@ -1,3 +1,18 @@
+homelab-api (0.1.50) unstable; urgency=medium
+
+  * Release v0.1.50
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:46:47 -0500
+
+homelab-api (0.1.50) unstable; urgency=medium
+
+  * New system_agent-gated GET /api/v1/agent/feature-backends/:feature --
+    the live backend instances for a feature, derived from the fleet-agent
+    tables (self-pruning), so ct00/ct18 can PULL the DKIM-signer set and
+    self-configure HAProxy/PowerDNS instead of each signer pushing to them.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:46:46 -0500
+
 homelab-api (0.1.49) unstable; urgency=medium
 
   * Release v0.1.49

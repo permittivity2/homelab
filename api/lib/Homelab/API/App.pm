@@ -151,6 +151,12 @@ sub startup ($self) {
     $r->post('/api/v1/admin/agent/enroll' => sub ($c) { $self->_agent_enroll($c) });
     $r->post('/api/v1/agent/enroll/redeem' => sub ($c) { $self->_agent_enroll_redeem($c) });
     $r->post('/api/v1/agent/heartbeat' => sub ($c) { $self->_agent_heartbeat($c) });
+    # system_agent-gated (NOT site_admin): lets an internal consumer that
+    # holds only a system_agent credential -- ct00's HAProxy generator,
+    # ct18's PowerDNS allow-from refresh -- pull the live backend set for a
+    # feature and self-configure, so a new signer needs no cross-host push.
+    $r->get('/api/v1/agent/feature-backends/:feature' => [feature => qr/[A-Za-z0-9._-]+/]
+        => sub ($c) { $self->_agent_feature_backends($c) });
     $r->get('/api/v1/admin/agent/hosts' => sub ($c) { $self->_agent_list_hosts($c) });
     $r->get('/api/v1/admin/agent/status' => sub ($c) { $self->_agent_list_status($c) });
     $r->get('/api/v1/admin/agent/status/mismatches' => sub ($c) { $self->_agent_list_mismatches($c) });
@@ -1295,6 +1301,53 @@ sub _fleet_port_service {
         25 => 'postfix', 587 => 'postfix',
         53 => 'pdns', 6432 => 'pgbouncer', 5432 => 'postgresql',
     };
+}
+
+# GET /api/v1/agent/feature-backends/:feature -- the live backend
+# instances for a feature, derived from the fleet-agent tables (api.hosts
+# JOIN api.host_service_status), NOT service_registry. The fleet tables
+# are the right source: they carry every instance's OWN address (not the
+# shared VIP that service_registry holds), and self-prune each heartbeat
+# (delete-then-insert), so a decommissioned instance disappears rather
+# than lingering forever. :feature is the package_name (e.g.
+# 'homelab-domain-admin'), which host_service_status stores directly.
+# system_agent-gated so ct00/ct18's own agent credential can pull it.
+# Returns ALL expected instances (healthy or not) -- the consumer decides
+# (HAProxy relies on its own per-server health check; a DNS allowlist
+# should be generous). Port comes from the static _fleet_port_service map
+# since host_service_status has no port column.
+sub _agent_feature_backends ($self, $c) {
+    $self->_require_system_agent($c) or return;
+    my $feature = $c->stash('feature');
+
+    my $rows = $self->pg->db->query(
+        q{SELECT h.hostname, h.address, s.service_name, s.expected, s.actual,
+                 EXTRACT(EPOCH FROM (NOW() - h.last_heartbeat))::int AS heartbeat_age
+          FROM api.host_service_status s
+          JOIN api.hosts h ON h.hostname = s.hostname
+          WHERE s.package_name = ? AND s.expected
+          ORDER BY h.hostname},
+        $feature,
+    )->hashes->to_array;
+
+    # Invert the port->service map to service->port. Fine for a
+    # single-port feature like domain-admin (2511); a caller wanting a
+    # specific port among a multi-port service can pass ?port=.
+    my %svc_port = reverse %{ _fleet_port_service() };
+    my $override_port = $c->param('port');
+
+    my @out = map {
+        my $port = $override_port || $svc_port{ $_->{service_name} // '' };
+        +{
+            hostname => $_->{hostname},
+            address  => $_->{address},
+            port     => defined $port ? ($port + 0) : undef,
+            healthy  => ($_->{expected} && $_->{actual}) ? \1 : \0,
+            stale    => (($_->{heartbeat_age} // 999999) > 300) ? \1 : \0,
+        }
+    } @$rows;
+
+    return $c->render(json => \@out);
 }
 
 # The declarative seed for service-dependency edges that NO manifest
