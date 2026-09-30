@@ -529,10 +529,11 @@
       </div>
 
       <div class="admin-panel" data-apanel="topology">
-        <div class="card topo-card">
+        <div class="card topo-card" id="topo-card">
           <div class="topo-head">
             <h2>Fleet topology <span class="hint">live map — who connects to what</span></h2>
             <div class="topo-controls">
+              <span class="topo-desktop-note" title="This interactive map is built for a large screen">🖥️ desktop&nbsp;/&nbsp;laptop</span>
               <label class="topo-legend"><span class="lg lg-up"></span>up</label>
               <label class="topo-legend"><span class="lg lg-down"></span>down</label>
               <label class="topo-legend"><span class="lg lg-unmon"></span>unmonitored</label>
@@ -543,13 +544,19 @@
               </select>
               <button type="button" class="btn btn-secondary" id="topo-fit">Fit</button>
               <button type="button" class="btn btn-secondary" id="topo-reload">Reload</button>
+              <button type="button" class="btn btn-primary" id="topo-full" title="Expand the map to the whole screen (Esc to exit)">⛶ Fullscreen</button>
             </div>
           </div>
           <div class="topo-body">
             <div id="cy" aria-label="Fleet topology graph"></div>
             <aside id="topo-detail" class="topo-detail">
-              <p class="muted">Click a node for details.<br>Drag to pan, scroll to zoom.</p>
+              <p class="muted">Click a node for details.<br>Drag to pan, scroll to zoom.<br><br>Tip: <strong>Fullscreen</strong> gives the map the whole screen.</p>
             </aside>
+          </div>
+          <div class="topo-mobile-only">
+            <p class="big">🖥️</p>
+            <strong>The fleet topology is built for a desktop or laptop.</strong>
+            <p style="margin:0.5rem 0 0;">This interactive map needs a large screen to be readable. Open <em>myaccount</em> on a computer to explore it.</p>
           </div>
           <p class="muted" style="font-size:0.8rem;margin:0.6rem 0 0;">Nodes are host/service instances (live agent data + declared ingress); edges are proxy/gateway/mail/DNS connections. Health from the fleet agents. Metrics-on-hover and remote actions (reboot, service control) are planned once Prometheus lands.</p>
         </div>

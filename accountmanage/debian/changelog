@@ -1,3 +1,19 @@
+homelab-accountmanage (0.1.22) unstable; urgency=medium
+
+  * Release v0.1.22
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 19:10:11 -0500
+
+homelab-accountmanage (0.1.22) unstable; urgency=medium
+
+  * Topology tab: much bigger, more readable on desktop -- viewport-height
+    inline canvas (was a fixed 580px) + a Fullscreen toggle (Esc to exit)
+    that gives the map the whole screen. Marked desktop/laptop-only: a
+    "desktop/laptop" note by the controls, and on small screens the graph is
+    replaced by a clear "open on a computer" message instead of a cramped map.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 19:10:11 -0500
+
 homelab-accountmanage (0.1.21) unstable; urgency=medium
 
   * Release v0.1.21
