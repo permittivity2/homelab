@@ -107,6 +107,9 @@ for my $backend (@backends) {
     } else {
         die "backends.yml: backend '$name' needs 'backend', 'backends', or 'discover'\n";
     }
+    # Stash the RESOLVED targets (incl. discovered ones) so the fleet
+    # manifest below reports the real backend servers, not a placeholder.
+    $backend->{_targets} = [@targets];
     # Deliberate per-frontend ceiling, not just an implicit inherit from
     # the global 4096 -- found missing entirely during a 2026-09-13
     # stress-testing pass: with no frontend-level maxconn, HAProxy let
@@ -169,34 +172,45 @@ ${balance_line}${server_lines}
 BLOCK
 }
 
-# No-op fast path: if the freshly-generated config is byte-identical to
-# what's already live, skip the write/validate/reload entirely. The pull
-# timer (homelab-haproxy-pull.timer) re-runs this every couple of minutes
-# to pick up discovered backend changes; only touch haproxy when the
-# result actually differs, so a steady state never reloads.
+# No-op fast path for the HAPROXY config only: if the freshly-generated
+# config is byte-identical to what's already live, skip the
+# write/validate/reload. The pull timer (homelab-haproxy-pull.timer)
+# re-runs this every couple of minutes to pick up discovered backend
+# changes; only touch haproxy when the result actually differs, so a
+# steady state never reloads.
+#
+# NOTE: this must NOT short-circuit the whole script — the fleet manifest
+# below (which the topology/services view reads) is regenerated from the
+# resolved $backend->{_targets} on every run, independent of whether
+# haproxy.cfg itself changed. An early exit here once left a stale
+# manifest ('fronts: [domain-admin@]') after a backend was converted to
+# 'discover:'.
+my $reloaded = 0;
 {
     my $current = '';
     if (open(my $cf, '<', $HAPROXY_CONFIG)) { local $/; $current = <$cf>; close($cf); }
-    if ($current eq $cfg) { exit 0; }
+    if ($current ne $cfg) {
+        my $tmp = "$HAPROXY_CONFIG.new";
+        open(my $fh, '>', $tmp) or die "Cannot write $tmp: $!\n";
+        print $fh $cfg;
+        close($fh);
+
+        my $check_rc = system('haproxy', '-c', '-f', $tmp);
+        if ($check_rc != 0) {
+            unlink($tmp);
+            die "haproxy config validation failed for the new config — NOT applying; the previous $HAPROXY_CONFIG is untouched.\n";
+        }
+
+        rename($tmp, $HAPROXY_CONFIG) or die "Cannot install $HAPROXY_CONFIG: $!\n";
+
+        system('systemctl', 'reload', 'haproxy') == 0
+            or die "haproxy config validated and installed but reload failed — check 'systemctl status haproxy'\n";
+        $reloaded = 1;
+    }
 }
 
-my $tmp = "$HAPROXY_CONFIG.new";
-open(my $fh, '>', $tmp) or die "Cannot write $tmp: $!\n";
-print $fh $cfg;
-close($fh);
-
-my $check_rc = system('haproxy', '-c', '-f', $tmp);
-if ($check_rc != 0) {
-    unlink($tmp);
-    die "haproxy config validation failed for the new config — NOT applying; the previous $HAPROXY_CONFIG is untouched.\n";
-}
-
-rename($tmp, $HAPROXY_CONFIG) or die "Cannot install $HAPROXY_CONFIG: $!\n";
-
-system('systemctl', 'reload', 'haproxy') == 0
-    or die "haproxy config validated and installed but reload failed — check 'systemctl status haproxy'\n";
-
-print 'homelab-haproxy: applied ' . scalar(@backends) . " backend(s), reloaded.\n";
+print 'homelab-haproxy: applied ' . scalar(@backends) . ' backend(s)'
+    . ($reloaded ? ', reloaded' : ' (config unchanged, no reload)') . ".\n";
 
 # Fleet-topology visibility (`homelab-cli fleet status`, via
 # homelab-agent -- see ../../agent/README.md) -- replaces the old
@@ -214,7 +228,10 @@ my $manifest_file = "$manifest_dir/haproxy.yml";
 if (-d $manifest_dir) {
     my @manifest = map {
         my $b = $_;
-        my @t = $b->{backends} ? @{ $b->{backends} } : ($b->{backend});
+        # Use the resolved targets from the config loop above (handles
+        # discover: + fallbacks) so 'fronts' carries real ip:port servers,
+        # never a "$name@" placeholder for a discover backend.
+        my @t = @{ $b->{_targets} // ($b->{backends} ? $b->{backends} : [grep { defined } $b->{backend}]) };
         {
             name        => "haproxy-$b->{name}_in",
             package     => 'homelab-haproxy',

@@ -1,3 +1,30 @@
+homelab-haproxy (0.1.11) unstable; urgency=medium
+
+  * Release v0.1.11
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 19:58:07 -0500
+
+homelab-haproxy (0.1.11) unstable; urgency=medium
+
+  * Fleet manifest: regenerate it on EVERY run, independent of whether
+    haproxy.cfg changed. The 0.1.10 no-op fast path exited before the
+    manifest write, so a discover: backend whose resolved server set was
+    already live left a stale 'fronts: [<name>@]' placeholder in the
+    manifest -- which materialized as a hostless node in the
+    topology/services view. Only the config install+reload is now gated on
+    an actual change; the manifest always reflects the resolved targets.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 20:15:00 -0500
+
+homelab-haproxy (0.1.10) unstable; urgency=medium
+
+  * Fleet manifest: report the RESOLVED backend servers (incl. discover:ed
+    ones) in each frontend's fronts, not a "<name>@" placeholder -- a
+    discover: backend previously emitted a malformed front-target that
+    materialized as a hostless node in the topology/services view.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 19:52:00 -0500
+
 homelab-haproxy (0.1.9) unstable; urgency=medium
 
   * Release v0.1.9
