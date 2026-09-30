@@ -147,6 +147,22 @@
     .topo-detail .st-pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
     .st-pill.up { background: #e6f6ec; color: #1f7a44; } .st-pill.down { background: #fdecea; color: #b13228; } .st-pill.unmon { background: #eef1f6; color: #6b7280; }
     #topo-tooltip { position: fixed; z-index: 300; pointer-events: none; background: #1a1a1a; color: #fff; padding: 0.4rem 0.55rem; border-radius: 6px; font-size: 0.78rem; max-width: 300px; box-shadow: 0 4px 14px rgba(0,0,0,0.25); display: none; line-height: 1.35; }
+
+    /* Services (admin) -- a service -> hosts accordion over the fleet data */
+    .svc-toolbar { display: flex; gap: 0.6rem; align-items: center; margin: 0.2rem 0 0.9rem; flex-wrap: wrap; }
+    .svc-toolbar input { flex: 1; min-width: 180px; font: inherit; font-size: 0.9rem; padding: 0.45rem 0.6rem; border-radius: 7px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
+    .svc-item { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem; overflow: hidden; }
+    .svc-row { width: 100%; display: flex; align-items: center; gap: 0.7rem; padding: 0.65rem 0.85rem; background: var(--card); border: none; cursor: pointer; font: inherit; color: var(--text); text-align: left; }
+    .svc-row:hover { background: var(--hover, rgba(127,127,127,0.06)); }
+    .svc-row .svc-caret { color: var(--muted); transition: transform .12s; flex: none; }
+    .svc-row[aria-expanded="true"] .svc-caret { transform: rotate(90deg); }
+    .svc-name { font-weight: 600; }
+    .svc-badge { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.03em; color: #fff; padding: 0.05rem 0.4rem; border-radius: 999px; flex: none; }
+    .svc-meta { margin-left: auto; color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+    .svc-meta .dn { color: var(--danger); font-weight: 600; }
+    .svc-detail { border-top: 1px solid var(--border); padding: 0.4rem 0.85rem 0.7rem; background: var(--bg, transparent); }
+    .svc-detail table { width: 100%; }
+    .svc-hdot.up { color: var(--ok); } .svc-hdot.down { color: var(--danger); } .svc-hdot.unmon { color: var(--muted); }
     @media (max-width: 900px) {
       /* Desktop/laptop-only feature: hide the interactive graph + its
          controls on small screens and show the guidance message instead. */
@@ -982,6 +998,84 @@
       var tab = document.querySelector('.admin-tabs button[data-atab="fleet"]');
       if (tab) tab.addEventListener('click', load);
       if ((location.hash || '').indexOf('admin:fleet') >= 0) load();
+    })();
+
+    // --- Services (admin): service -> hosts, over the fleet data ------
+    (function () {
+      var out = document.getElementById('svc-list');
+      if (!out) return;
+      var CAT_FILL = { ingress: '#3562d4', app: '#48566b', mail: '#7c3aed', dns: '#0d9488', db: '#b45309', unmon: '#9aa3af' };
+      function catOf(n) {
+        if (n.monitored === false) return 'unmon';
+        var k = (n.kind || '') + ' ' + (n.service || '');
+        if (/proxy|vhost|frontend|haproxy|webproxy|dnsdist|nginx/.test(k)) return 'ingress';
+        if (/imap|smtp|milter|dovecot|postfix|mailbridge|lmtp/.test(k)) return 'mail';
+        if (/dns|pdns/.test(k)) return 'dns';
+        if (/pgbouncer|postgres|db/.test(k)) return 'db';
+        return 'app';
+      }
+      function hdot(h) { return '<span class="svc-hdot ' + h + '">' + (h === 'unmon' ? '○' : '●') + '</span>'; }
+      var loaded = false, raw = null;
+      var filterEl = document.getElementById('svc-filter');
+
+      function render(filter) {
+        if (!raw) return;
+        filter = (filter || '').trim().toLowerCase();
+        var byService = {};
+        (raw.nodes || []).forEach(function (n) { var s = n.service || '(unknown)'; (byService[s] = byService[s] || []).push(n); });
+        var services = Object.keys(byService).sort();
+        var html = services.map(function (s) {
+          var inst = byService[s].slice().sort(function (a, b) { return (a.host || '').localeCompare(b.host || ''); });
+          if (filter && s.toLowerCase().indexOf(filter) < 0
+              && !inst.some(function (x) { return ((x.host || '') + ' ' + (x.address || '')).toLowerCase().indexOf(filter) >= 0; })) return '';
+          var up = inst.filter(function (x) { return x.healthy === true; }).length;
+          var down = inst.filter(function (x) { return x.healthy === false; }).length;
+          var unmon = inst.filter(function (x) { return x.healthy == null; }).length;
+          var meta = inst.length + ' host' + (inst.length !== 1 ? 's' : '') + ' · ' + up + ' up'
+            + (down ? ' · <span class="dn">' + down + ' down</span>' : '') + (unmon ? ' · ' + unmon + ' unmon' : '');
+          var cat = catOf(inst[0]), pkg = inst[0].package || '';
+          var rows = inst.map(function (x) {
+            var h = x.healthy === true ? 'up' : x.healthy === false ? 'down' : 'unmon';
+            return '<tr><td>' + hdot(h) + ' ' + hlEsc(x.host || '?') + '</td>'
+              + '<td class="muted">' + hlEsc(x.address || '—') + '</td>'
+              + '<td class="muted">' + hlEsc(x.package || '') + '</td>'
+              + '<td class="muted" style="max-width:26ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + hlEsc(x.description || '') + '">' + hlEsc(x.description || '') + '</td></tr>';
+          }).join('');
+          return '<div class="svc-item"><button type="button" class="svc-row" aria-expanded="false">'
+            + '<span class="svc-caret">▸</span>'
+            + '<span class="svc-badge" style="background:' + (CAT_FILL[cat] || '#48566b') + '">' + hlEsc(cat) + '</span>'
+            + '<span class="svc-name">' + hlEsc(s) + '</span>'
+            + (pkg ? '<span class="muted" style="font-size:0.78rem">' + hlEsc(pkg) + '</span>' : '')
+            + '<span class="svc-meta">' + meta + '</span></button>'
+            + '<div class="svc-detail" hidden><div style="overflow-x:auto"><table class="sessions"><thead><tr><th>Host</th><th>Address</th><th>Package</th><th>Detail</th></tr></thead><tbody>' + rows + '</tbody></table></div></div></div>';
+        }).join('');
+        out.innerHTML = html || '<p class="muted">No services match “' + hlEsc(filter) + '”.</p>';
+        Array.prototype.forEach.call(out.querySelectorAll('.svc-row'), function (b) {
+          b.addEventListener('click', function () {
+            var det = b.nextElementSibling, open = b.getAttribute('aria-expanded') === 'true';
+            b.setAttribute('aria-expanded', open ? 'false' : 'true');
+            if (open) det.setAttribute('hidden', ''); else det.removeAttribute('hidden');
+            b.querySelector('.svc-caret').textContent = open ? '▸' : '▾';
+          });
+        });
+      }
+      function load(force) {
+        if (loaded && !force) return;
+        loaded = true;
+        out.innerHTML = '<p class="muted">Loading…</p>';
+        fetch('/admin/topology', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d || !d.nodes || !d.nodes.length) { out.innerHTML = '<p class="muted">No service data yet.</p>'; return; }
+            raw = d; render(filterEl.value);
+          })
+          .catch(function () { out.innerHTML = '<p class="muted">Could not load services.</p>'; });
+      }
+      filterEl.addEventListener('input', hlDebounce(function () { render(filterEl.value); }, 150));
+      document.getElementById('svc-reload').addEventListener('click', function () { load(true); });
+      var svcTab = document.querySelector('.admin-tabs button[data-atab="services"]');
+      if (svcTab) svcTab.addEventListener('click', function () { load(false); });
+      if ((location.hash || '').indexOf('admin:services') >= 0) load(false);
     })();
 
     // --- Fleet topology graph (admin, Cytoscape.js) ------------------

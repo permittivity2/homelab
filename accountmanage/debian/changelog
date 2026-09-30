@@ -1,3 +1,18 @@
+homelab-accountmanage (0.1.23) unstable; urgency=medium
+
+  * Release v0.1.23
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 19:35:07 -0500
+
+homelab-accountmanage (0.1.23) unstable; urgency=medium
+
+  * New admin Services tab: a service -> hosts accordion over the fleet data
+    (reuses /admin/topology). Lists every service (dovecot, postfix, webproxy,
+    haproxy, postgresql, pdns, api, ...); click one to see the hosts it runs
+    on, their addresses, package + health. Filter box.
+
+ -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 19:35:07 -0500
+
 homelab-accountmanage (0.1.22) unstable; urgency=medium
 
   * Release v0.1.22

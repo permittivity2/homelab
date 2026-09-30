@@ -211,6 +211,7 @@
         <button type="button" data-atab="dovecot">📬 Dovecot</button>
         <button type="button" data-atab="roles">🔑 Roles</button>
         <button type="button" data-atab="fleet">🛰️ Fleet</button>
+        <button type="button" data-atab="services">🧩 Services</button>
         <button type="button" data-atab="topology">🗺️ Topology</button>
       </div>
 
@@ -525,6 +526,18 @@
         <div class="card">
           <h2>Hosts <span class="hint">agent version + last heartbeat</span></h2>
           <div id="fleet-hosts"><p class="muted">Loading…</p></div>
+        </div>
+      </div>
+
+      <div class="admin-panel" data-apanel="services">
+        <div class="card">
+          <h2>Services <span class="hint">every homelab service and where it runs</span></h2>
+          <div class="svc-toolbar">
+            <input type="text" id="svc-filter" placeholder="filter services or hosts…" autocomplete="off">
+            <button type="button" class="btn btn-secondary" id="svc-reload">Reload</button>
+          </div>
+          <div id="svc-list"><p class="muted">Loading…</p></div>
+          <p class="muted" style="font-size:0.8rem;margin:0.8rem 0 0;">Click a service to see the hosts it runs on, their addresses and health (live from the fleet agents). ● up · ● down/stale · ○ unmonitored.</p>
         </div>
       </div>
 
