@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+NFT_DROPIN=/etc/nftables.d/10-homelab-metrics.nft
+
+case "$1" in
+    purge)
+        # Remove our fleet manifest so homelab-agent stops advertising a
+        # service this host no longer runs (a stray manifest reads as a
+        # phantom outage -- see the fleet-agent manifest-drift fix).
+        rm -f /etc/homelab/services/node-exporter.yml
+        rm -rf /etc/homelab/node-exporter
+
+        # Remove the firewall drop-in + the live rule (delete by our
+        # comment, no ruleset flush so bad-ips' runtime set is untouched).
+        if [ -f "$NFT_DROPIN" ]; then
+            rm -f "$NFT_DROPIN"
+            if command -v nft >/dev/null 2>&1 && nft list chain inet filter input >/dev/null 2>&1; then
+                for hh in $(nft -a list chain inet filter input 2>/dev/null \
+                        | awk '/homelab-metrics-allow/ {print $NF}'); do
+                    nft delete rule inet filter input handle "$hh" 2>/dev/null || true
+                done
+            fi
+        fi
+        ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+exit 0

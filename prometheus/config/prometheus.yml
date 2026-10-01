@@ -1,0 +1,25 @@
+# homelab-prometheus scrape config (points to by the prometheus.service
+# systemd drop-in shipped with this package). Targets come from file_sd
+# files under targets/, regenerated from the live fleet by
+# homelab-prometheus-pull.timer -- do not hand-edit the target files.
+#
+# Adding a new exporter tier is two edits: a jobs: entry in pull.yml
+# (feature + port) and a matching scrape job here pointing at its
+# targets/<job>.json.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    fleet: homelab
+
+scrape_configs:
+  # Prometheus scraping itself.
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Host metrics (node_exporter :9100) on every fleet host.
+  - job_name: node
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/node.json']
+        refresh_interval: 30s

@@ -1,0 +1,28 @@
+Source: homelab-prometheus
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-prometheus
+Architecture: all
+Depends: perl (>= 5.36),
+         prometheus,
+         homelab-common,
+         libyaml-libyaml-perl,
+         libmojolicious-perl
+Recommends: homelab-agent, homelab-grafana
+Description: Prometheus monitoring host for the homelab-* ecosystem
+ Turns a host into the fleet's Prometheus monitoring server. Depends on
+ the Ubuntu-archive prometheus package and points it (via a
+ prometheus.service drop-in) at a config whose scrape targets are file_sd
+ files regenerated from the LIVE fleet -- homelab-prometheus-pull reads
+ homelab-api's feature-backends view (the same pull model as
+ homelab-haproxy/homelab-webproxy) on a timer, so Prometheus always
+ scrapes exactly the hosts currently advertising each exporter. Ships an
+ nftables drop-in opening just the egress this host needs (homelab-api +
+ the fleet exporter ports) and advertises itself into the fleet topology.
+ Pair with homelab-node-exporter fleet-wide (host metrics) and
+ homelab-grafana (dashboards) on the same host.

@@ -1,0 +1,24 @@
+homelab-prometheus (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 18:56:48 -0500
+
+homelab-prometheus (0.1.0) unstable; urgency=medium
+
+  * Initial release: makes a host the fleet's Prometheus monitoring
+    server. Depends on the Ubuntu-archive prometheus (2.53.x); a
+    prometheus.service drop-in points it at /etc/prometheus/homelab/
+    prometheus.yml (30d retention, :9090) whose scrape targets are
+    file_sd files under targets/. homelab-prometheus-pull regenerates
+    those from homelab-api's feature-backends view on a 2-min timer
+    (pull model, reusing the local homelab-agent's system_agent
+    credential), so scrape targets track the live fleet with no
+    hand-edited lists. Ships services/prometheus.yml (topology
+    visibility, kind: metrics-store) and an nftables egress drop-in
+    opening only homelab-api + the fleet exporter ports from this host
+    (applied live without flushing the ruleset, bad-ips-safe). Phase 1
+    scrapes node_exporter (:9100) fleet-wide; further tiers are additive
+    (a pull.yml jobs: entry + a scrape job).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 14:00:00 -0500

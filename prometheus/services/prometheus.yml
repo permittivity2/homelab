@@ -1,0 +1,7 @@
+name: prometheus
+package: homelab-prometheus
+kind: metrics-store
+check:
+  systemd_unit: prometheus
+  tcp_port: 9090
+description: "Prometheus TSDB: scrapes fleet exporters (file_sd from homelab-api), serves :9090 on the monitoring host"

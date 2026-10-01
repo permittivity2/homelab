@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Prometheus file_sd targets from the live homelab fleet
+After=network-online.target homelab-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Regenerates /etc/prometheus/homelab/targets/*.json from homelab-api's
+# feature-backends view. Needs the local homelab-agent's system_agent
+# credential, so it runs as root (credential file is homelab:homelab 0600).
+ExecStart=/usr/bin/homelab-prometheus-pull

@@ -1,0 +1,102 @@
+#!/bin/sh
+set -e
+
+SHARE_DIR=/usr/share/homelab-prometheus
+HL_CONFIG_DIR=/etc/homelab/prometheus
+HL_CONFIG="$HL_CONFIG_DIR/config"
+PROM_DIR=/etc/prometheus/homelab
+TARGETS_DIR="$PROM_DIR/targets"
+PULL_CONFIG="$PROM_DIR/pull.yml"
+DROPIN_DIR=/etc/systemd/system/prometheus.service.d
+NFT_DROPIN=/etc/nftables.d/10-homelab-prometheus-egress.nft
+
+case "$1" in
+    configure)
+        echo "homelab-prometheus post-installation setup..."
+
+        # --- deployment parameters (overridable via $HL_CONFIG) ----------
+        mkdir -p "$HL_CONFIG_DIR"
+        if [ ! -f "$HL_CONFIG" ]; then
+            cat > "$HL_CONFIG" <<'EOF'
+# homelab-prometheus deployment parameters. Change + reinstall (or
+# dpkg-reconfigure) to apply.
+API_HOST="10.50.2.46"
+API_PORT="3000"
+FLEET_CIDR="10.50.2.0/24"
+EOF
+            echo "  wrote $HL_CONFIG"
+        fi
+        API_HOST="10.50.2.46"; API_PORT="3000"; FLEET_CIDR="10.50.2.0/24"
+        # shellcheck disable=SC1090
+        . "$HL_CONFIG" 2>/dev/null || true
+        API_BASE="http://$API_HOST:$API_PORT"
+
+        # --- config tree (readable by the 'prometheus' service user) -----
+        mkdir -p "$PROM_DIR" "$TARGETS_DIR"
+        install -m 644 "$SHARE_DIR/config/prometheus.yml" "$PROM_DIR/prometheus.yml"
+        if [ ! -f "$PULL_CONFIG" ]; then
+            sed "s#__API_BASE__#$API_BASE#g" "$SHARE_DIR/config/pull.yml.example" > "$PULL_CONFIG"
+            echo "  wrote $PULL_CONFIG"
+        fi
+        chmod 755 "$PROM_DIR" "$TARGETS_DIR"
+        chmod 644 "$PROM_DIR/prometheus.yml" "$PULL_CONFIG"
+
+        # --- point prometheus.service at our config ----------------------
+        mkdir -p "$DROPIN_DIR"
+        install -m 644 "$SHARE_DIR/systemd/prometheus-homelab.conf" "$DROPIN_DIR/homelab.conf"
+
+        # --- egress firewall: api + fleet exporter ports -----------------
+        if [ -d /etc/nftables.d ]; then
+            sed -e "s#__API_HOST__#$API_HOST#g" \
+                -e "s#__API_PORT__#$API_PORT#g" \
+                -e "s#__FLEET_CIDR__#$FLEET_CIDR#g" \
+                "$SHARE_DIR/nftables/10-homelab-prometheus-egress.nft.template" > "$NFT_DROPIN"
+            if nft list chain inet filter output >/dev/null 2>&1; then
+                for hh in $(nft -a list chain inet filter output 2>/dev/null \
+                        | awk '/homelab-prometheus-egress/ {print $NF}'); do
+                    nft delete rule inet filter output handle "$hh" 2>/dev/null || true
+                done
+                nft -f "$NFT_DROPIN" 2>/dev/null \
+                    || echo "  WARNING: could not apply $NFT_DROPIN live -- effective on next nftables reload/boot."
+            fi
+            echo "  egress firewall: opened $API_HOST:$API_PORT + fleet exporter ports"
+        fi
+
+        # --- fleet manifest (topology/services visibility) ---------------
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/prometheus.yml" "/etc/homelab/services/prometheus.yml"
+
+        # --- start/refresh prometheus with our config --------------------
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable prometheus >/dev/null 2>&1 || true
+        systemctl restart prometheus \
+            || echo "  WARNING: prometheus failed to (re)start -- check 'journalctl -xeu prometheus'."
+
+        # --- first target pull (best-effort: needs an enrolled agent) ----
+        if [ -f /etc/homelab/agent/credential.yml ]; then
+            HOMELAB_PROMETHEUS_PULL_CONFIG="$PULL_CONFIG" homelab-prometheus-pull \
+                || echo "  NOTE: initial target pull failed (agent not enrolled yet?) -- the timer will retry."
+        else
+            echo "  NOTE: no homelab-agent credential yet -- enroll this host's agent so"
+            echo "        homelab-prometheus-pull can discover scrape targets. The timer will retry."
+        fi
+
+        # --- pull timer (keeps targets in sync with the fleet) -----------
+        systemctl enable --now homelab-prometheus-pull.timer >/dev/null 2>&1 \
+            || echo "  WARNING: could not enable homelab-prometheus-pull.timer -- scrape targets won't auto-refresh."
+
+        echo "homelab-prometheus configured (Prometheus on :9090)."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

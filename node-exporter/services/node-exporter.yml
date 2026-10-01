@@ -1,0 +1,7 @@
+name: node-exporter
+package: homelab-node-exporter
+kind: metrics-exporter
+check:
+  systemd_unit: prometheus-node-exporter
+  tcp_port: 9100
+description: "Prometheus node_exporter: host CPU/load/mem/disk/tmpfs/network metrics on :9100 (scraped by homelab-prometheus)"

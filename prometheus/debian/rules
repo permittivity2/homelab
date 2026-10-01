@@ -1,0 +1,29 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+# postinst handles prometheus.service itself (drop-in + restart); the
+# pull timer is enabled there too. --no-enable --no-start so debhelper
+# doesn't race the postinst's own sequencing.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/prometheus.yml \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/config/prometheus.yml
+	install -D -m 644 config/pull.yml.example \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/config/pull.yml.example
+	install -D -m 644 systemd/prometheus-homelab.conf \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/systemd/prometheus-homelab.conf
+	install -D -m 644 nftables/10-homelab-prometheus-egress.nft.template \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/nftables/10-homelab-prometheus-egress.nft.template
+	install -D -m 644 services/prometheus.yml \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/services/prometheus.yml
+	install -D -m 644 systemd/homelab-prometheus-pull.service \
+		debian/homelab-prometheus/lib/systemd/system/homelab-prometheus-pull.service
+	install -D -m 644 systemd/homelab-prometheus-pull.timer \
+		debian/homelab-prometheus/lib/systemd/system/homelab-prometheus-pull.timer

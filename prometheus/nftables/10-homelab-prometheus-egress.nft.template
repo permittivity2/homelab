@@ -1,0 +1,11 @@
+# Managed by homelab-prometheus -- do NOT edit by hand (regenerated on
+# every package configure from /etc/homelab/prometheus/config).
+#
+# The monitoring host's base 'inet filter output' chain has a drop policy;
+# this opens exactly the egress Prometheus (and the local homelab-agent)
+# need: the homelab-api port (agent heartbeat/enroll + the pull step's
+# feature-backends calls) and the fleet exporter ports (scraping). Applied
+# live without flushing the ruleset (bad-ips' runtime set survives); the
+# postinst deletes any prior rule with this comment before re-applying.
+add rule inet filter output ip daddr __API_HOST__ tcp dport __API_PORT__ accept comment "homelab-prometheus-egress"
+add rule inet filter output ip daddr __FLEET_CIDR__ tcp dport { 8081, 8083, 8404, 9100, 9127, 9154, 9187, 9900 } accept comment "homelab-prometheus-egress"

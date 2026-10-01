@@ -1,0 +1,17 @@
+# Managed by homelab-node-exporter -- do NOT edit by hand (regenerated on
+# every package configure from /etc/homelab/node-exporter/config).
+#
+# Opens this host's Prometheus exporter ports to the monitoring host(s)
+# ONLY, by appending an accept to the base 'inet filter' input chain
+# (which has a `policy drop`). It must live in that chain -- an accept in
+# a separate table cannot override another base chain's drop.
+#
+# This file is loaded two ways, both safe:
+#   * at boot, via /etc/nftables.conf's `include "/etc/nftables.d/*"`,
+#     inside the same atomic `flush ruleset` load (applied exactly once);
+#   * live on package configure, via `nft -f` of just this file, which
+#     only runs the `add rule` below and does NOT flush the ruleset -- so
+#     the bad-ips dynamic set (runtime state, not on disk) is never lost.
+# The postinst deletes any prior rule carrying this comment before
+# re-applying, so a live re-apply never stacks duplicates.
+add rule inet filter input ip saddr { __MONITORING_HOSTS__ } tcp dport { 8081, 8083, 8404, 9100, 9127, 9154, 9187, 9900 } accept comment "homelab-metrics-allow"

@@ -1,0 +1,73 @@
+#!/bin/sh
+set -e
+
+SHARE_DIR=/usr/share/homelab-node-exporter
+CONFIG_DIR=/etc/homelab/node-exporter
+CONFIG_FILE="$CONFIG_DIR/config"
+NFT_DROPIN=/etc/nftables.d/10-homelab-metrics.nft
+
+case "$1" in
+    configure)
+        echo "homelab-node-exporter post-installation setup..."
+
+        # --- fleet service manifest (topology/services visibility) -------
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/node-exporter.yml" "/etc/homelab/services/node-exporter.yml"
+
+        # --- the exporter itself (Ubuntu package ships + enables it) -----
+        systemctl enable prometheus-node-exporter >/dev/null 2>&1 || true
+        if systemctl is-active --quiet prometheus-node-exporter; then
+            systemctl restart prometheus-node-exporter || true
+        else
+            systemctl start prometheus-node-exporter \
+                || echo "  WARNING: prometheus-node-exporter failed to start -- check 'systemctl status prometheus-node-exporter'."
+        fi
+
+        # --- firewall: open exporter ports to the monitoring host(s) -----
+        mkdir -p "$CONFIG_DIR"
+        if [ ! -f "$CONFIG_FILE" ]; then
+            cp "$SHARE_DIR/config/node-exporter.example" "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE (monitoring host allowlist)"
+        fi
+        # shellcheck disable=SC1090
+        MONITORING_HOSTS=""
+        . "$CONFIG_FILE" 2>/dev/null || true
+        MON_SET="$(printf '%s' "$MONITORING_HOSTS" | tr ', ' '\n\n' | grep -E '.' | paste -sd, -)"
+
+        if [ -n "$MON_SET" ] && [ -d /etc/nftables.d ]; then
+            sed "s#__MONITORING_HOSTS__#$MON_SET#g" \
+                "$SHARE_DIR/nftables/10-homelab-metrics.nft.template" > "$NFT_DROPIN"
+
+            # Apply live WITHOUT flushing the ruleset (bad-ips' runtime set
+            # must survive): drop any prior rule carrying our comment, then
+            # load just this drop-in (a bare `add rule`, no `flush`).
+            if nft list chain inet filter input >/dev/null 2>&1; then
+                for hh in $(nft -a list chain inet filter input 2>/dev/null \
+                        | awk '/homelab-metrics-allow/ {print $NF}'); do
+                    nft delete rule inet filter input handle "$hh" 2>/dev/null || true
+                done
+                nft -f "$NFT_DROPIN" 2>/dev/null \
+                    || echo "  WARNING: could not apply $NFT_DROPIN live -- it will take effect on the next nftables reload/boot."
+            else
+                echo "  NOTE: 'inet filter input' chain not found -- wrote $NFT_DROPIN for next boot but did not apply live."
+            fi
+            echo "  metrics firewall: exporter ports opened to { $MON_SET }"
+        else
+            echo "  NOTE: no MONITORING_HOSTS set (or /etc/nftables.d missing) -- skipped firewall drop-in."
+        fi
+
+        echo "homelab-node-exporter configured (node_exporter on :9100)."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+NFT_DROPIN=/etc/nftables.d/10-homelab-prometheus-egress.nft
+DROPIN=/etc/systemd/system/prometheus.service.d/homelab.conf
+
+case "$1" in
+    remove|purge)
+        if [ -d /run/systemd/system ]; then
+            systemctl disable --now homelab-prometheus-pull.timer >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+case "$1" in
+    purge)
+        rm -f /etc/homelab/services/prometheus.yml
+        rm -f "$DROPIN"
+        rm -rf /etc/prometheus/homelab /etc/homelab/prometheus
+        systemctl daemon-reload >/dev/null 2>&1 || true
+
+        # Remove the egress drop-in + live rules (delete by comment, no
+        # ruleset flush so bad-ips' runtime set is untouched).
+        if [ -f "$NFT_DROPIN" ]; then
+            rm -f "$NFT_DROPIN"
+            if command -v nft >/dev/null 2>&1 && nft list chain inet filter output >/dev/null 2>&1; then
+                for hh in $(nft -a list chain inet filter output 2>/dev/null \
+                        | awk '/homelab-prometheus-egress/ {print $NF}'); do
+                    nft delete rule inet filter output handle "$hh" 2>/dev/null || true
+                done
+            fi
+        fi
+        ;;
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+esac
+exit 0

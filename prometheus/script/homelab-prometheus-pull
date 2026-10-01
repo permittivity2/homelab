@@ -1,0 +1,64 @@
+#!/usr/bin/perl
+# Regenerate Prometheus file_sd target files from the live fleet, using
+# homelab-api's feature-backends view (the same pull model as
+# homelab-haproxy-apply-backends / homelab-webproxy-apply-sites). Run by
+# homelab-prometheus-pull.timer every couple of minutes so Prometheus
+# always scrapes exactly the hosts currently advertising each exporter --
+# a host that drops off the fleet stops being scraped, one that joins
+# starts, with no hand-edited target list.
+#
+# Auth: Homelab::Common::Registry::lookup_backends reads the local
+# homelab-agent's auto-refreshing system_agent credential
+# (/etc/homelab/agent/credential.yml) -- so this host must run an enrolled
+# homelab-agent. No credential of its own.
+use strict;
+use warnings;
+use Homelab::Common::Registry ();
+use Mojo::JSON qw(encode_json);
+use Mojo::File qw(path);
+use YAML::XS qw(LoadFile);
+
+my $CONFIG = $ENV{HOMELAB_PROMETHEUS_PULL_CONFIG} // '/etc/prometheus/homelab/pull.yml';
+my $cfg = LoadFile($CONFIG);
+
+my $api_base    = $cfg->{api_base}    or die "pull.yml: 'api_base' is required\n";
+my $targets_dir = $cfg->{targets_dir} // '/etc/prometheus/homelab/targets';
+my $jobs        = $cfg->{jobs}        or die "pull.yml: 'jobs' is required\n";
+
+path($targets_dir)->make_path unless -d $targets_dir;
+
+my $changed = 0;
+for my $job (sort keys %$jobs) {
+    my $spec = $jobs->{$job};
+    my $feature = $spec->{feature} // $job;
+    my $port    = $spec->{port} or die "pull.yml: job '$job' needs a 'port'\n";
+
+    my $instances = eval { Homelab::Common::Registry::lookup_backends($feature, api_base => $api_base) };
+    if (!$instances) {
+        warn "  WARNING: lookup for job '$job' (feature '$feature') failed: $@  -- leaving its target file untouched.\n";
+        next;
+    }
+
+    # One file_sd entry per host. Prometheus derives `instance` from the
+    # target address; we add a friendly `host` label (the fleet hostname)
+    # for dashboards. Deliberately no `job` label -- that is set by the
+    # scrape_config's job_name and would collide here.
+    my @sd = map {
+        +{ targets => ["$_->{address}:$port"], labels => { host => "$_->{hostname}" } }
+    } sort { $a->{hostname} cmp $b->{hostname} }
+      grep { $_->{address} } @$instances;
+
+    my $json = encode_json(\@sd);
+    my $file = path($targets_dir, "$job.json");
+    my $current = -e $file ? $file->slurp : '';
+    next if $current eq $json;    # no-op: don't rewrite an unchanged file
+
+    my $tmp = path($targets_dir, "$job.json.tmp");
+    $tmp->spew($json);
+    $tmp->chmod(0644);
+    rename($tmp, $file) or die "rename ${\$tmp} -> $file: $!\n";
+    $changed++;
+    print "  wrote $file (" . scalar(@sd) . " target(s))\n";
+}
+
+print "homelab-prometheus-pull: " . ($changed ? "$changed target file(s) updated." : "no changes.") . "\n";

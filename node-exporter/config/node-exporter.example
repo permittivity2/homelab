@@ -1,0 +1,10 @@
+# homelab-node-exporter configuration.
+#
+# Space- and/or comma-separated IP address(es) or CIDR(s) of the
+# monitoring host(s) allowed to scrape THIS host's Prometheus exporter
+# ports (node_exporter :9100 and any other homelab exporter on this
+# host). Used on package configure to generate
+# /etc/nftables.d/10-homelab-metrics.nft. Defaults to the fleet
+# monitoring host (ct19). Edit + `dpkg-reconfigure homelab-node-exporter`
+# (or reinstall) to change.
+MONITORING_HOSTS="10.50.2.63"

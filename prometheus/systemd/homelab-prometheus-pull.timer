@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically refresh Prometheus file_sd targets from the fleet (pull model)
+
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=120
+RandomizedDelaySec=15
+Persistent=false
+
+[Install]
+WantedBy=timers.target

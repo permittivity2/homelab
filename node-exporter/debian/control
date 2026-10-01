@@ -1,0 +1,20 @@
+Source: homelab-node-exporter
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-node-exporter
+Architecture: all
+Depends: prometheus-node-exporter
+Recommends: homelab-agent
+Description: Fleet host-metrics exporter (Prometheus node_exporter) for homelab-*
+ Thin wrapper that deploys the Ubuntu-archive prometheus-node-exporter to
+ every homelab-* fleet host and advertises it into the fleet topology via
+ an /etc/homelab/services/node-exporter.yml manifest (kind:
+ metrics-exporter, port 9100). node_exporter exposes host CPU, load,
+ memory, disk, filesystem/tmpfs and network metrics that the monitoring
+ host's Prometheus scrapes. No configuration and no secrets -- install it
+ on every host; homelab-prometheus discovers and scrapes each host's :9100.

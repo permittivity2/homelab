@@ -1,0 +1,15 @@
+# homelab-prometheus-pull configuration: how to turn the live fleet
+# (homelab-api feature-backends) into Prometheus file_sd target files.
+#
+# api_base is this deployment's homelab-api (the SAME base the local
+# homelab-agent heartbeats to). Each jobs: entry maps a Prometheus
+# scrape job -> the fleet service_name that advertises it + the port the
+# exporter listens on (feature-backends does not carry the port for
+# metrics kinds, so it is stated here).
+api_base: __API_BASE__
+targets_dir: /etc/prometheus/homelab/targets
+
+jobs:
+  node:
+    feature: node-exporter
+    port: 9100
