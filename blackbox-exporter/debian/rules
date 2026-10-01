@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/blackbox.yml \
+		debian/homelab-blackbox-exporter/usr/share/homelab-blackbox-exporter/config/blackbox.yml
+	install -D -m 644 config/blackbox-http.json \
+		debian/homelab-blackbox-exporter/usr/share/homelab-blackbox-exporter/config/blackbox-http.json
+	install -D -m 644 services/blackbox-exporter.yml \
+		debian/homelab-blackbox-exporter/usr/share/homelab-blackbox-exporter/services/blackbox-exporter.yml

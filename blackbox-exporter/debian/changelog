@@ -1,0 +1,22 @@
+homelab-blackbox-exporter (0.2.0) unstable; urgency=medium
+
+  * Release v0.2.0
+
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:32:38 -0500
+
+homelab-blackbox-exporter (0.2.0) unstable; urgency=medium
+
+  * http_public: accept 404 as reachable-over-TLS. Several public vhosts
+    (api, login, invite, blockemail) serve only on sub-paths and 404 on
+    `/` by design; a down upstream returns 502/503 (not accepted), so real
+    outages still fail. Keeps full availability + cert-expiry coverage.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 17:30:00 -0500
+
+homelab-blackbox-exporter (0.1.0) unstable; urgency=medium
+
+  * Initial release: wraps the Ubuntu-archive prometheus-blackbox-exporter
+    on the monitoring host with the http_public module + public-vhost
+    probe list; advertises itself (kind: metrics-exporter, :9115).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 17:00:00 -0500

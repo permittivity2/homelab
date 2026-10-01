@@ -1,0 +1,7 @@
+name: blackbox-exporter
+package: homelab-blackbox-exporter
+kind: metrics-exporter
+check:
+  systemd_unit: prometheus-blackbox-exporter
+  tcp_port: 9115
+description: "Prometheus blackbox_exporter: external HTTPS/cert-expiry probes of the public vhosts (monitoring host)"

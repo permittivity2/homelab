@@ -1,0 +1,42 @@
+# Managed by homelab-blackbox-exporter. Blackbox prober modules for the
+# fleet's external/public probes.
+modules:
+  # Public HTTPS vhosts. Accepts redirects + auth-gated responses as "up"
+  # (a 302 to login or a 401 still means the endpoint is serving). Requires
+  # TLS (fail_if_not_ssl) so probe_ssl_earliest_cert_expiry is always
+  # emitted -> drives cert-expiry alerting.
+  http_public:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      # Goal = "vhost reachable over TLS" + cert expiry, not deep app
+      # health. Several apps serve only on sub-paths and return 404 on `/`
+      # by design (api, login, invite, blockemail) -- a 404 still proves
+      # nginx + TLS + the vhost are up. A genuinely-down upstream returns
+      # 502/503 (nginx bad-gateway), which is NOT accepted and fails the
+      # probe. Per-path /health probes are a possible future refinement.
+      valid_status_codes: [200, 301, 302, 303, 307, 308, 401, 403, 404]
+      follow_redirects: false
+      fail_if_not_ssl: true
+      preferred_ip_protocol: ip4
+      tls_config:
+        insecure_skip_verify: false
+
+  # Raw TCP reachability (e.g. the HAProxy mail edge ports). Only useful
+  # once the monitoring host has egress to those ports (not opened by
+  # default -- see the package's nftables drop-in).
+  tcp_connect:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      preferred_ip_protocol: ip4
+
+  # TLS-on-connect banner (IMAPS/POP3S/SMTPS) -- cert expiry for raw-TLS
+  # mail ports.
+  tcp_tls:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      preferred_ip_protocol: ip4
+      tls: true

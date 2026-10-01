@@ -1,0 +1,14 @@
+[
+  {
+    "labels": { "probe": "http_public" },
+    "targets": [
+      "https://myaccount.test.mailmasker.org",
+      "https://login.test.mailmasker.org",
+      "https://drive.test.mailmasker.org",
+      "https://mail.test.mailmasker.org",
+      "https://invite.test.mailmasker.org",
+      "https://api.test.mailmasker.org",
+      "https://blockemail.test.mailmasker.org"
+    ]
+  }
+]

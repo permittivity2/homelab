@@ -1,0 +1,47 @@
+#!/bin/sh
+set -e
+
+SHARE_DIR=/usr/share/homelab-blackbox-exporter
+CONF_DIR=/etc/prometheus/homelab
+TARGETS_DIR="$CONF_DIR/targets"
+DEFAULT_FILE=/etc/default/prometheus-blackbox-exporter
+
+case "$1" in
+    configure)
+        echo "homelab-blackbox-exporter post-installation setup..."
+
+        mkdir -p "$CONF_DIR" "$TARGETS_DIR"
+        install -m 644 "$SHARE_DIR/config/blackbox.yml" "$CONF_DIR/blackbox.yml"
+        # Probe target list (file_sd read by homelab-prometheus' blackbox
+        # scrape job). Always refreshed -- it is declarative, not user state.
+        install -m 644 "$SHARE_DIR/config/blackbox-http.json" "$TARGETS_DIR/blackbox-http.json"
+
+        # Point the exporter at our module config.
+        printf 'ARGS="--config.file=%s/blackbox.yml"\n' "$CONF_DIR" > "$DEFAULT_FILE"
+
+        # Fleet manifest (topology/services visibility + pull discovery of
+        # the exporter's OWN /metrics, not the probes).
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/blackbox-exporter.yml" "/etc/homelab/services/blackbox-exporter.yml"
+
+        systemctl enable prometheus-blackbox-exporter >/dev/null 2>&1 || true
+        systemctl restart prometheus-blackbox-exporter \
+            || echo "  WARNING: prometheus-blackbox-exporter restart failed -- check 'journalctl -u prometheus-blackbox-exporter'."
+
+        echo "homelab-blackbox-exporter configured (blackbox_exporter on :9115; probing public HTTPS vhosts)."
+        echo "  NOTE: HTTPS (443) egress from this host is already open; raw mail-port probes"
+        echo "        (tcp/tcp_tls modules) need extra egress rules, not added here."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

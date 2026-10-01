@@ -1,0 +1,21 @@
+Source: homelab-blackbox-exporter
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-blackbox-exporter
+Architecture: all
+Depends: prometheus-blackbox-exporter
+Recommends: homelab-agent, homelab-prometheus
+Description: External (blackbox) probe wiring for the homelab-* ecosystem
+ Wraps the Ubuntu-archive prometheus-blackbox-exporter on the fleet
+ monitoring host. Ships the prober modules (http_public: public HTTPS
+ vhosts, accepting redirects/auth-gated responses and always over TLS so
+ cert expiry is measured; plus tcp/tcp_tls for raw mail ports) and the
+ file_sd list of public vhosts to probe. homelab-prometheus' blackbox-http
+ scrape job turns these into probe_success + probe_ssl_earliest_cert_expiry
+ series -- the only "is it up from outside" + cert-expiry signal in the
+ fleet. Advertises itself into the topology (kind: metrics-exporter, :9115).

@@ -1,35 +1,15 @@
-homelab-prometheus (0.2.0) unstable; urgency=medium
+homelab-prometheus (0.3.0) unstable; urgency=medium
 
-  * Release v0.2.0
+  * Release v0.3.0
 
- -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:15:03 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:31:10 -0500
 
-homelab-prometheus (0.2.0) unstable; urgency=medium
+homelab-prometheus (0.3.0) unstable; urgency=medium
 
-  * Add P2 scrape jobs (postgres, pgbouncer, postfix, haproxy, dnsdist,
-    pdns, dovecot) to the shipped prometheus.yml + pull.yml, all
-    discovered via feature-backends the same way as node. A job whose
-    exporter isn't deployed yet just yields an empty target file (no
-    scrape error). pull.yml is now regenerated on every configure (its
-    only variable is api_base) so added tiers reach existing installs.
+  * Add the blackbox-http scrape job (external HTTPS availability + TLS
+    cert expiry via homelab-blackbox-exporter's http_public module). Target
+    list ships with homelab-blackbox-exporter; standard relabel dance sends
+    each URL to the blackbox exporter and keeps it as the instance label.
 
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 15:30:00 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 17:15:00 -0500
 
-homelab-prometheus (0.1.0) unstable; urgency=medium
-
-  * Initial release: makes a host the fleet's Prometheus monitoring
-    server. Depends on the Ubuntu-archive prometheus (2.53.x); a
-    prometheus.service drop-in points it at /etc/prometheus/homelab/
-    prometheus.yml (30d retention, :9090) whose scrape targets are
-    file_sd files under targets/. homelab-prometheus-pull regenerates
-    those from homelab-api's feature-backends view on a 2-min timer
-    (pull model, reusing the local homelab-agent's system_agent
-    credential), so scrape targets track the live fleet with no
-    hand-edited lists. Ships services/prometheus.yml (topology
-    visibility, kind: metrics-store) and an nftables egress drop-in
-    opening only homelab-api + the fleet exporter ports from this host
-    (applied live without flushing the ruleset, bad-ips-safe). Phase 1
-    scrapes node_exporter (:9100) fleet-wide; further tiers are additive
-    (a pull.yml jobs: entry + a scrape job).
-
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 14:00:00 -0500

@@ -66,3 +66,24 @@ scrape_configs:
     file_sd_configs:
       - files: ['/etc/prometheus/homelab/targets/dovecot.json']
         refresh_interval: 30s
+
+  # External/public HTTPS probes via blackbox_exporter: availability
+  # (probe_success) + TLS cert expiry (probe_ssl_earliest_cert_expiry) of
+  # the public vhosts. The target list is shipped by
+  # homelab-blackbox-exporter (blackbox-http.json); the relabel dance sends
+  # each URL to the blackbox exporter as ?target= and keeps the URL as the
+  # instance label.
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_public]
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/blackbox-http.json']
+        refresh_interval: 60s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: localhost:9115
