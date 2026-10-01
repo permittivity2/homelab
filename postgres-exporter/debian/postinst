@@ -1,0 +1,59 @@
+#!/bin/sh
+set -e
+
+SHARE_DIR=/usr/share/homelab-postgres-exporter
+DEFAULT_FILE=/etc/default/prometheus-postgres-exporter
+
+case "$1" in
+    configure)
+        echo "homelab-postgres-exporter post-installation setup..."
+
+        # Must run on the PostgreSQL host (local sudo -u postgres). Never a
+        # stored/network admin credential -- same posture as
+        # homelab-database's bootstrap-app-role.sh.
+        if ! sudo -u postgres psql -tAc 'SELECT 1' >/dev/null 2>&1; then
+            echo "  ERROR: no local 'sudo -u postgres psql' access -- homelab-postgres-exporter"
+            echo "         belongs on the PostgreSQL host. Not configured. (apt continues.)"
+            exit 0
+        fi
+
+        PASS="$(openssl rand -hex 16)"
+        sudo -u postgres psql -q -c "DO \$\$ BEGIN \
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='homelab_exporter') THEN \
+                CREATE ROLE homelab_exporter LOGIN PASSWORD '$PASS'; \
+            ELSE ALTER ROLE homelab_exporter LOGIN PASSWORD '$PASS'; END IF; END \$\$;"
+        sudo -u postgres psql -q -c "GRANT pg_monitor TO homelab_exporter;"
+
+        DBPORT="$(sudo -u postgres psql -tAc 'SHOW port;' 2>/dev/null | tr -d '[:space:]')"
+        [ -n "$DBPORT" ] || DBPORT=5432
+
+        # DSN carries the role password -> keep the file root:prometheus 0640
+        # (the exporter runs as the 'prometheus' user).
+        printf "DATA_SOURCE_NAME='postgresql://homelab_exporter:%s@localhost:%s/postgres?sslmode=disable'\nARGS=\"\"\n" \
+            "$PASS" "$DBPORT" > "$DEFAULT_FILE"
+        chown root:prometheus "$DEFAULT_FILE" 2>/dev/null || true
+        chmod 640 "$DEFAULT_FILE"
+
+        # Fleet manifest (topology/services + pull discovery).
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/postgres-exporter.yml" "/etc/homelab/services/postgres-exporter.yml"
+
+        systemctl enable prometheus-postgres-exporter >/dev/null 2>&1 || true
+        systemctl restart prometheus-postgres-exporter \
+            || echo "  WARNING: prometheus-postgres-exporter restart failed -- check 'journalctl -u prometheus-postgres-exporter'."
+
+        echo "homelab-postgres-exporter configured (postgres_exporter on :9187)."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

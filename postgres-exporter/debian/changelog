@@ -1,0 +1,16 @@
+homelab-postgres-exporter (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:19:18 -0500
+
+homelab-postgres-exporter (0.1.0) unstable; urgency=medium
+
+  * Initial release: wraps the Ubuntu-archive prometheus-postgres-exporter
+    for the fleet DB host. Bootstraps a read-only 'homelab_exporter'
+    Postgres role (pg_monitor) via local sudo -u postgres, writes the
+    exporter DATA_SOURCE_NAME (root:prometheus 0640), and advertises the
+    exporter (kind: metrics-exporter, :9187) so homelab-prometheus
+    discovers + scrapes it. Install on the PostgreSQL host.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 15:45:00 -0500

@@ -34,10 +34,10 @@ EOF
         # --- config tree (readable by the 'prometheus' service user) -----
         mkdir -p "$PROM_DIR" "$TARGETS_DIR"
         install -m 644 "$SHARE_DIR/config/prometheus.yml" "$PROM_DIR/prometheus.yml"
-        if [ ! -f "$PULL_CONFIG" ]; then
-            sed "s#__API_BASE__#$API_BASE#g" "$SHARE_DIR/config/pull.yml.example" > "$PULL_CONFIG"
-            echo "  wrote $PULL_CONFIG"
-        fi
+        # pull.yml is regenerated every configure (its only variable is
+        # api_base, derived from $HL_CONFIG) so added scrape-job tiers flow
+        # to existing installs -- it is declarative config, not hand-edited.
+        sed "s#__API_BASE__#$API_BASE#g" "$SHARE_DIR/config/pull.yml.example" > "$PULL_CONFIG"
         chmod 755 "$PROM_DIR" "$TARGETS_DIR"
         chmod 644 "$PROM_DIR/prometheus.yml" "$PULL_CONFIG"
 

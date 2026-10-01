@@ -5,7 +5,8 @@
 # homelab-agent heartbeats to). Each jobs: entry maps a Prometheus
 # scrape job -> the fleet service_name that advertises it + the port the
 # exporter listens on (feature-backends does not carry the port for
-# metrics kinds, so it is stated here).
+# metrics kinds, so it is stated here). A job whose feature has no live
+# backends yet just produces an empty target file -- harmless.
 api_base: __API_BASE__
 targets_dir: /etc/prometheus/homelab/targets
 
@@ -13,3 +14,24 @@ jobs:
   node:
     feature: node-exporter
     port: 9100
+  postgres:
+    feature: postgres-exporter
+    port: 9187
+  pgbouncer:
+    feature: pgbouncer-exporter
+    port: 9127
+  postfix:
+    feature: postfix-exporter
+    port: 9154
+  haproxy:
+    feature: haproxy-metrics
+    port: 8404
+  dnsdist:
+    feature: dnsdist-metrics
+    port: 8083
+  pdns:
+    feature: pdns-metrics
+    port: 8081
+  dovecot:
+    feature: dovecot-metrics
+    port: 9900

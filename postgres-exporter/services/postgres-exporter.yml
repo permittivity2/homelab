@@ -1,0 +1,7 @@
+name: postgres-exporter
+package: homelab-postgres-exporter
+kind: metrics-exporter
+check:
+  systemd_unit: prometheus-postgres-exporter
+  tcp_port: 9187
+description: "Prometheus postgres_exporter: PostgreSQL cluster/db stats on :9187 (DB host)"

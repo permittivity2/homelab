@@ -1,11 +1,12 @@
-# homelab-prometheus scrape config (points to by the prometheus.service
+# homelab-prometheus scrape config (pointed to by the prometheus.service
 # systemd drop-in shipped with this package). Targets come from file_sd
 # files under targets/, regenerated from the live fleet by
 # homelab-prometheus-pull.timer -- do not hand-edit the target files.
 #
 # Adding a new exporter tier is two edits: a jobs: entry in pull.yml
 # (feature + port) and a matching scrape job here pointing at its
-# targets/<job>.json.
+# targets/<job>.json. A target file that doesn't exist yet (exporter not
+# deployed) is created empty by the first pull, so no scrape errors.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -22,4 +23,46 @@ scrape_configs:
   - job_name: node
     file_sd_configs:
       - files: ['/etc/prometheus/homelab/targets/node.json']
+        refresh_interval: 30s
+
+  # PostgreSQL (postgres_exporter :9187) -- the DB host.
+  - job_name: postgres
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/postgres.json']
+        refresh_interval: 30s
+
+  # PgBouncer (pgbouncer_exporter :9127) -- the DB host.
+  - job_name: pgbouncer
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/pgbouncer.json']
+        refresh_interval: 30s
+
+  # Postfix (postfix_exporter :9154) -- the mail-sending pool.
+  - job_name: postfix
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/postfix.json']
+        refresh_interval: 30s
+
+  # HAProxy native Prometheus exporter (:8404) -- the edge.
+  - job_name: haproxy
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/haproxy.json']
+        refresh_interval: 30s
+
+  # dnsdist native Prometheus endpoint (:8083) -- the edge DNS front.
+  - job_name: dnsdist
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/dnsdist.json']
+        refresh_interval: 30s
+
+  # PowerDNS native Prometheus endpoint (webserver :8081/metrics).
+  - job_name: pdns
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/pdns.json']
+        refresh_interval: 30s
+
+  # Dovecot openmetrics (stats http listener :9900) -- the mailstore pool.
+  - job_name: dovecot
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/dovecot.json']
         refresh_interval: 30s

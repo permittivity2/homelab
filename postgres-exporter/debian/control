@@ -1,0 +1,21 @@
+Source: homelab-postgres-exporter
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-postgres-exporter
+Architecture: all
+Depends: prometheus-postgres-exporter, sudo, openssl
+Recommends: homelab-agent, homelab-node-exporter
+Description: PostgreSQL metrics exporter wiring for the homelab-* ecosystem
+ Wraps the Ubuntu-archive prometheus-postgres-exporter for the fleet DB
+ host. On configure it bootstraps a read-only 'homelab_exporter' Postgres
+ role (pg_monitor) using LOCAL sudo -u postgres -- never a stored network
+ admin credential, same posture as homelab-database's bootstrap-app-role --
+ writes the exporter's DATA_SOURCE_NAME, and advertises the exporter into
+ the fleet topology (kind: metrics-exporter, :9187) so homelab-prometheus
+ discovers and scrapes it. Install on the PostgreSQL host. The scrape
+ firewall opening is handled fleet-wide by homelab-node-exporter.

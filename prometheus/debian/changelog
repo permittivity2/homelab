@@ -1,8 +1,19 @@
-homelab-prometheus (0.1.0) unstable; urgency=medium
+homelab-prometheus (0.2.0) unstable; urgency=medium
 
-  * Release v0.1.0
+  * Release v0.2.0
 
- -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 18:56:48 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:15:03 -0500
+
+homelab-prometheus (0.2.0) unstable; urgency=medium
+
+  * Add P2 scrape jobs (postgres, pgbouncer, postfix, haproxy, dnsdist,
+    pdns, dovecot) to the shipped prometheus.yml + pull.yml, all
+    discovered via feature-backends the same way as node. A job whose
+    exporter isn't deployed yet just yields an empty target file (no
+    scrape error). pull.yml is now regenerated on every configure (its
+    only variable is api_base) so added tiers reach existing installs.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 15:30:00 -0500
 
 homelab-prometheus (0.1.0) unstable; urgency=medium
 
