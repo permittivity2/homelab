@@ -19,6 +19,7 @@ use Homelab::Common::AuthClient qw(introspect);
 
 has 'api_base';
 has 'prometheus_base';
+has 'grafana_base';
 has 'sso_base';
 has 'sso_internal_base';
 has 'sso_client_id';
@@ -61,6 +62,10 @@ sub startup ($self) {
     # Optional: the fleet Prometheus (monitoring host) the metrics.view-gated
     # Metrics tab queries. If unset, that tab is simply never offered.
     $self->prometheus_base($config->{prometheus}{base_url} // '');
+    # Optional: the fleet Grafana, reverse-proxied under /grafana so its full
+    # dashboards are viewable INSIDE myaccount (same origin). metrics.view
+    # gated like the summary; empty disables the embed.
+    $self->grafana_base($config->{grafana}{base_url} // '');
 
     my $sso = $config->{sso} // die "config: sso.* is required (see config/accountmanage.example.yml)\n";
     $self->sso_base($sso->{base_url} // die "config: sso.base_url is required\n");
@@ -120,6 +125,11 @@ sub startup ($self) {
     # and returns a curated fleet-health summary (no arbitrary PromQL from
     # the browser).
     $r->get('/admin/metrics/summary')->to('account#admin_metrics_summary');
+    # Reverse-proxy the fleet Grafana under /grafana so its full dashboards
+    # render INSIDE myaccount (same origin, works off-network), gated by
+    # metrics.view. `any` catches every method + sub-path (assets, API).
+    $r->any('/grafana')->to('account#grafana_proxy');
+    $r->any('/grafana/*gpath')->to('account#grafana_proxy');
     # DKIM selector lifecycle detail (list + rotate/activate/retire/cancel), site_admin.
     $r->get('/admin/dkim/selectors')   ->to('account#admin_dkim_selectors');
     $r->post('/admin/dkim/rotate')     ->to('account#admin_dkim_rotate');
@@ -297,6 +307,49 @@ sub admin_metrics_summary ($c) {
     return $c->render(json => \%out);
 }
 
+# Session-cached metrics.view gate for the Grafana reverse proxy. Grafana
+# loads dozens of assets per page; an introspect per asset would hammer the
+# api, so after the first full capability check (or the priming at dashboard
+# load) the verdict + the user's email live in the session. Returns the
+# email to assert as Grafana's auth-proxy user, or undef if not allowed.
+sub _grafana_gate ($c) {
+    return $c->session('metrics_user')
+        if $c->session('metrics_ok') && $c->session('metrics_user');
+    my ($email, $jwt) = _metrics_auth($c);
+    return undef unless $email;
+    $c->session(metrics_ok => 1, metrics_user => $email);
+    return $email;
+}
+
+# ANY /grafana[/...] -- reverse-proxy the fleet Grafana (served from the
+# /grafana sub-path, auth_proxy) so its FULL dashboards render inside
+# myaccount, off-network, gated by metrics.view. This host is the only one
+# Grafana trusts to assert the user (GF_AUTH_PROXY_WHITELIST + the fleet
+# firewall), so the injected X-WEBAUTH-USER is the actual access decision.
+sub grafana_proxy ($c) {
+    my $user = _grafana_gate($c);
+    return $c->render(text => "You don't have access to the metrics dashboards.", status => 403)
+        unless $user;
+    my $gbase = $c->app->grafana_base;
+    return $c->render(text => 'Grafana embedding is not configured.', status => 503)
+        unless $gbase;
+
+    # Keep the /grafana prefix -- Grafana serve_from_sub_path serves there.
+    my $up = Mojo::URL->new($gbase);
+    $up->path($c->req->url->path->to_string);
+    $up->query($c->req->url->query);
+
+    my $headers = $c->req->headers->clone;
+    $headers->remove('Host');            # the UA sets it from the upstream URL
+    $headers->remove('Content-Length');  # let the UA recompute
+    $headers->header('X-WEBAUTH-USER' => $user);
+
+    my $tx = $UA->build_tx($c->req->method, $up, $headers->to_hash, $c->req->body);
+    $c->proxy->start_p($tx)->catch(sub ($err) {
+        $c->render(text => "Dashboard proxy error: $err", status => 502) unless $c->res->code;
+    });
+}
+
 # GET a homelab-api path with the user's token; returns decoded JSON, or
 # undef on any non-2xx / transport error (callers render "unavailable").
 sub _api_get ($c, $jwt, $path) {
@@ -383,13 +436,17 @@ sub dashboard ($c) {
     # caller holds metrics.view (site_admin always does -- skip the extra
     # round-trip for them; other roles are checked via introspect).
     my $has_metrics = 0;
-    if ($c->app->prometheus_base) {
+    if ($c->app->prometheus_base || $c->app->grafana_base) {
         if ($is_admin) { $has_metrics = 1; }
         else {
             my $mr = introspect($jwt, api_base => $c->app->api_base, capability => 'metrics.view');
             $has_metrics = ($mr && $mr->{has_capability}) ? 1 : 0;
         }
     }
+    # Prime the Grafana-proxy gate so it needn't introspect per embedded
+    # asset (and clear it when access is absent).
+    if ($has_metrics) { $c->session(metrics_ok => 1, metrics_user => $email); }
+    else              { delete $c->session->{metrics_ok}; delete $c->session->{metrics_user}; }
 
     return $c->render(
         template     => 'dashboard',

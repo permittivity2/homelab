@@ -15,3 +15,7 @@ override_dh_install:
 		debian/homelab-grafana/etc/grafana/dashboards/homelab/fleet-host-health.json
 	install -D -m 644 services/grafana.yml \
 		debian/homelab-grafana/usr/share/homelab-grafana/services/grafana.yml
+	install -D -m 644 config/grafana.conf \
+		debian/homelab-grafana/usr/share/homelab-grafana/config/grafana.conf
+	install -D -m 644 systemd/grafana-server-homelab.conf.template \
+		debian/homelab-grafana/usr/share/homelab-grafana/systemd/grafana-server-homelab.conf.template

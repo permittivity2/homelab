@@ -33,6 +33,14 @@ public_base_url: https://myaccount.test.mailmasker.org
 # in its METRICS_CONSUMERS.
 prometheus:
   base_url: http://10.50.2.63:9090
+# Optional: the fleet Grafana, reverse-proxied under /grafana so its full
+# dashboards render INSIDE myaccount (same origin, so they work off-network
+# and embed in the Metrics tab). metrics.view gated like the summary.
+# Grafana must be configured for this sub-path + auth_proxy (homelab-grafana
+# 0.2.0+ does this) and trust this host in GF_AUTH_PROXY_WHITELIST; the
+# postinst opens egress to it.
+grafana:
+  base_url: http://10.50.2.63:3000
 
 # homelab-sso: the only place a user types a password.
 sso:

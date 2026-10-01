@@ -38,12 +38,18 @@ case "$1" in
         # Applied live via an incremental add rule (idempotent by comment)
         # that never flushes the ruleset -- bad-ips' runtime set survives.
         NFT_METRICS=/etc/nftables.d/10-homelab-accountmanage-metrics.nft
-        PROM_URL="$(grep -A3 '^prometheus:' "$CONFIG_FILE" 2>/dev/null | sed -n 's/.*base_url:[[:space:]]*//p' | sed 's/#.*//; s/[[:space:]]//g' | head -1)"
-        PROM_HP="$(printf '%s' "$PROM_URL" | sed 's#^https\{0,1\}://##')"
-        PROM_HOST="${PROM_HP%%:*}"; PROM_PORT="${PROM_HP##*:}"
-        if [ -n "$PROM_HOST" ] && [ -n "$PROM_PORT" ] && [ "$PROM_HOST" != "$PROM_PORT" ] && [ -d /etc/nftables.d ]; then
+        : > "$NFT_METRICS.tmp"
+        for section in prometheus grafana; do
+            URL="$(grep -A3 "^$section:" "$CONFIG_FILE" 2>/dev/null | sed -n 's/.*base_url:[[:space:]]*//p' | sed 's/#.*//; s/[[:space:]]//g' | head -1)"
+            HP="$(printf '%s' "$URL" | sed 's#^https\{0,1\}://##; s#/.*##')"
+            HOST="${HP%%:*}"; PORT="${HP##*:}"
+            [ -n "$HOST" ] && [ -n "$PORT" ] && [ "$HOST" != "$PORT" ] || continue
             printf 'add rule inet filter output ip daddr %s tcp dport %s accept comment "homelab-accountmanage-metrics"\n' \
-                "$PROM_HOST" "$PROM_PORT" > "$NFT_METRICS"
+                "$HOST" "$PORT" >> "$NFT_METRICS.tmp"
+        done
+        if [ -s "$NFT_METRICS.tmp" ] && [ -d /etc/nftables.d ]; then
+            sort -u "$NFT_METRICS.tmp" > "$NFT_METRICS"; rm -f "$NFT_METRICS.tmp"
+            # Apply live (delete-by-comment, no ruleset flush -- bad-ips-safe).
             if nft list chain inet filter output >/dev/null 2>&1; then
                 for hh in $(nft -a list chain inet filter output 2>/dev/null \
                         | awk '/homelab-accountmanage-metrics/ {print $NF}'); do
@@ -52,9 +58,9 @@ case "$1" in
                 nft -f "$NFT_METRICS" 2>/dev/null \
                     || echo "  WARNING: could not apply $NFT_METRICS live -- effective on next nftables reload/boot."
             fi
-            echo "  metrics egress: opened $PROM_HOST:$PROM_PORT (Prometheus)"
+            echo "  metrics egress opened (Prometheus + Grafana):"; sed 's/^/    /' "$NFT_METRICS"
         else
-            rm -f "$NFT_METRICS" 2>/dev/null || true
+            rm -f "$NFT_METRICS" "$NFT_METRICS.tmp" 2>/dev/null || true
         fi
 
         systemctl daemon-reload 2>/dev/null || true

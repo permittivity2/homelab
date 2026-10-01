@@ -18,6 +18,18 @@
   <p class="muted" style="font-size:0.8rem;margin-top:0.6rem;">
     Fleet Prometheus · updated <span id="metrics-updated">—</span> ·
     <a href="#" id="metrics-refresh">refresh</a>.
-    Deep-dive dashboards live in Grafana on the monitoring host.
   </p>
+
+% if (app->grafana_base) {
+  <div class="metrics-grafana">
+    <div class="metrics-grafana-head">
+      <strong>Full dashboards</strong>
+      <span class="hint">Grafana, embedded — all panels, drill-down &amp; time range</span>
+      <a href="/grafana/" target="_blank" rel="noopener">Open in a new tab ↗</a>
+    </div>
+    <iframe class="grafana-frame"
+            src="/grafana/d/homelab-fleet-health/fleet-host-health?theme=light"
+            title="Grafana fleet dashboards" loading="lazy"></iframe>
+  </div>
+% }
 </div>

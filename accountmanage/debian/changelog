@@ -1,3 +1,22 @@
+homelab-accountmanage (0.1.25) unstable; urgency=medium
+
+  * Release v0.1.25
+
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:59:52 -0500
+
+homelab-accountmanage (0.1.25) unstable; urgency=medium
+
+  * Embed Grafana in the Metrics tab: reverse-proxy the fleet Grafana under
+    /grafana (any method/subpath) so its FULL dashboards render inside
+    myaccount, off-network -- same origin, so the iframe just works. Gated
+    by metrics.view (session-cached so embedded assets don't re-introspect);
+    injects the trusted X-WEBAUTH-USER header Grafana's auth_proxy consumes.
+    New optional grafana.base_url config; postinst now opens egress to both
+    Prometheus and Grafana. Metrics tab gains the embedded dashboard iframe
+    + an "open in new tab" link.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 19:30:00 -0500
+
 homelab-accountmanage (0.1.24) unstable; urgency=medium
 
   * Release v0.1.24

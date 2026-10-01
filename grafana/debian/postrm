@@ -3,6 +3,10 @@ set -e
 case "$1" in
     purge)
         rm -f /etc/homelab/services/grafana.yml
+        rm -f /etc/systemd/system/grafana-server.service.d/homelab.conf
+        rm -rf /etc/homelab/grafana
+        rmdir /etc/systemd/system/grafana-server.service.d 2>/dev/null || true
+        systemctl daemon-reload >/dev/null 2>&1 || true
         # dpkg removes our provisioning files + dashboard JSON (they are
         # package-owned); drop the now-empty homelab dashboards dir.
         rmdir /etc/grafana/dashboards/homelab 2>/dev/null || true

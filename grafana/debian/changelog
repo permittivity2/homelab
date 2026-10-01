@@ -1,19 +1,19 @@
-homelab-grafana (0.1.0) unstable; urgency=medium
+homelab-grafana (0.2.0) unstable; urgency=medium
 
-  * Release v0.1.0
+  * Release v0.2.0
 
- -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:07:09 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:57:06 -0500
 
-homelab-grafana (0.1.0) unstable; urgency=medium
+homelab-grafana (0.2.0) unstable; urgency=medium
 
-  * Initial release: Grafana provisioning for the fleet monitoring host.
-    Ships a Prometheus datasource (local homelab-prometheus :9090, set
-    default) and a file dashboard provider loading JSON dashboards from
-    /etc/grafana/dashboards/homelab -- starting with "Fleet Host Health"
-    (per-host CPU/memory/root-disk/load from node_exporter, plus fleet
-    roll-up stats). Depends on the upstream grafana package (staged
-    separately; not in the Ubuntu archive). Advertises itself into the
-    fleet topology (kind: metrics-ui). Grafana auth stays at its default
-    here; SSO gating + the accountmanage embed land in a later phase.
+  * Embed support: ship a grafana-server systemd env drop-in (generated
+    from /etc/homelab/grafana/config) putting Grafana behind accountmanage's
+    /grafana reverse proxy -- served from the sub-path
+    (serve_from_sub_path + root_url), authenticated by the trusted
+    X-WEBAUTH-USER header accountmanage sets after a metrics.view check
+    (auth_proxy, whitelisted to the accountmanage host), proxy users get
+    Viewer, and allow_embedding so it renders inside the myaccount Metrics
+    tab. Lets the full dashboards be viewed from myaccount, off-network.
 
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 14:30:00 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 19:00:00 -0500
+

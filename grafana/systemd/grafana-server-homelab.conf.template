@@ -1,0 +1,25 @@
+# Managed by homelab-grafana (regenerated on configure from
+# /etc/homelab/grafana/config) -- do not hand-edit.
+#
+# Puts Grafana behind accountmanage's /grafana reverse proxy so the full
+# dashboards are viewable INSIDE myaccount, off-network:
+#  * served from the /grafana sub-path (matches accountmanage's route);
+#  * authenticated by the trusted X-WEBAUTH-USER header accountmanage sets
+#    ONLY after checking the metrics.view capability -- and only from the
+#    whitelisted accountmanage host;
+#  * iframe-embeddable (allow_embedding) so it renders in the Metrics tab.
+# Proxy-signed-up users get Viewer (read-only); the local admin login still
+# works via the tunnel at :3000/grafana/ for dashboard editing.
+[Service]
+Environment=GF_SERVER_ROOT_URL=__PUBLIC_ROOT_URL__
+Environment=GF_SERVER_SERVE_FROM_SUB_PATH=true
+Environment=GF_AUTH_PROXY_ENABLED=true
+Environment=GF_AUTH_PROXY_HEADER_NAME=X-WEBAUTH-USER
+Environment=GF_AUTH_PROXY_HEADER_PROPERTY=username
+Environment=GF_AUTH_PROXY_AUTO_SIGN_UP=true
+Environment=GF_AUTH_PROXY_WHITELIST=__AUTH_PROXY_WHITELIST__
+Environment=GF_AUTH_PROXY_SYNC_TTL=60
+Environment=GF_SECURITY_ALLOW_EMBEDDING=true
+Environment=GF_SECURITY_COOKIE_SAMESITE=lax
+Environment=GF_AUTH_ANONYMOUS_ENABLED=false
+Environment=GF_USERS_AUTO_ASSIGN_ORG_ROLE=Viewer

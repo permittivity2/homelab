@@ -13,6 +13,25 @@ case "$1" in
         chgrp -R grafana /etc/grafana/dashboards 2>/dev/null || true
         chmod 755 /etc/grafana/dashboards /etc/grafana/dashboards/homelab 2>/dev/null || true
 
+        # Put Grafana behind accountmanage's /grafana reverse proxy
+        # (sub-path + auth_proxy + embeddable) via a systemd env drop-in
+        # generated from /etc/homelab/grafana/config.
+        HL_GRAFANA_DIR=/etc/homelab/grafana
+        HL_GRAFANA_CONF="$HL_GRAFANA_DIR/config"
+        mkdir -p "$HL_GRAFANA_DIR"
+        [ -f "$HL_GRAFANA_CONF" ] || cp "$SHARE_DIR/config/grafana.conf" "$HL_GRAFANA_CONF"
+        PUBLIC_ROOT_URL="https://myaccount.test.mailmasker.org/grafana/"
+        AUTH_PROXY_WHITELIST="10.50.2.61"
+        # shellcheck disable=SC1090
+        . "$HL_GRAFANA_CONF" 2>/dev/null || true
+        DROPIN_DIR=/etc/systemd/system/grafana-server.service.d
+        mkdir -p "$DROPIN_DIR"
+        sed -e "s#__PUBLIC_ROOT_URL__#$PUBLIC_ROOT_URL#g" \
+            -e "s#__AUTH_PROXY_WHITELIST__#$AUTH_PROXY_WHITELIST#g" \
+            "$SHARE_DIR/systemd/grafana-server-homelab.conf.template" > "$DROPIN_DIR/homelab.conf"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        echo "  embed: Grafana served from $PUBLIC_ROOT_URL (auth-proxy, whitelist $AUTH_PROXY_WHITELIST)"
+
         # Fleet manifest (topology/services visibility).
         mkdir -p /etc/homelab/services
         chgrp homelab /etc/homelab/services 2>/dev/null || true
