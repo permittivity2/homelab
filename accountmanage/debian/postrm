@@ -9,6 +9,17 @@ case "$1" in
         # and the fleet dashboard shows a permanent phantom outage --
         # exactly the domain-admin/ct11 drift this cleans up).
         rm -f /etc/homelab/services/accountmanage.yml
+        # Remove the Metrics-tab egress firewall drop-in + its live rule
+        # (delete by comment, no ruleset flush so bad-ips survives).
+        if [ -f /etc/nftables.d/10-homelab-accountmanage-metrics.nft ]; then
+            rm -f /etc/nftables.d/10-homelab-accountmanage-metrics.nft
+            if command -v nft >/dev/null 2>&1 && nft list chain inet filter output >/dev/null 2>&1; then
+                for hh in $(nft -a list chain inet filter output 2>/dev/null \
+                        | awk '/homelab-accountmanage-metrics/ {print $NF}'); do
+                    nft delete rule inet filter output handle "$hh" 2>/dev/null || true
+                done
+            fi
+        fi
         ;;
 
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)

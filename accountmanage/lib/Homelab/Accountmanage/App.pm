@@ -18,6 +18,7 @@ use Homelab::Common::AuthClient qw(introspect);
 # it shows is gated by what that token is actually allowed to do.
 
 has 'api_base';
+has 'prometheus_base';
 has 'sso_base';
 has 'sso_internal_base';
 has 'sso_client_id';
@@ -57,6 +58,9 @@ sub startup ($self) {
 
     $self->api_base($config->{homelab_api}{base_url} // die "config: homelab_api.base_url is required\n");
     $self->public_base_url($config->{public_base_url} // die "config: public_base_url is required\n");
+    # Optional: the fleet Prometheus (monitoring host) the metrics.view-gated
+    # Metrics tab queries. If unset, that tab is simply never offered.
+    $self->prometheus_base($config->{prometheus}{base_url} // '');
 
     my $sso = $config->{sso} // die "config: sso.* is required (see config/accountmanage.example.yml)\n";
     $self->sso_base($sso->{base_url} // die "config: sso.base_url is required\n");
@@ -111,6 +115,11 @@ sub startup ($self) {
     $r->post('/admin/mail-quota')      ->to('account#admin_mail_quota');
     $r->post('/admin/block-link')      ->to('account#admin_block_link');
     $r->post('/admin/dkim')            ->to('account#admin_dkim');
+    # Fleet metrics summary (JSON; metrics.view gated -- site_admin always,
+    # plus any role granted metrics.view). Queries Prometheus server-side
+    # and returns a curated fleet-health summary (no arbitrary PromQL from
+    # the browser).
+    $r->get('/admin/metrics/summary')->to('account#admin_metrics_summary');
     # DKIM selector lifecycle detail (list + rotate/activate/retire/cancel), site_admin.
     $r->get('/admin/dkim/selectors')   ->to('account#admin_dkim_selectors');
     $r->post('/admin/dkim/rotate')     ->to('account#admin_dkim_rotate');
@@ -201,6 +210,93 @@ sub _admin_auth ($c) {
     return ($email, $jwt);
 }
 
+# Metrics gate: ($email, $jwt) if the caller holds the metrics.view
+# capability (site_admin always does; any other role if granted via the
+# RBAC UI), else (undef, undef). Uses introspect's ?capability -- the same
+# mechanism homelab-domain-admin's site_admin gating uses. Prometheus
+# itself is not capability-aware, so THIS is the access control.
+sub _metrics_auth ($c) {
+    my ($email, $jwt, $roles) = _current_auth($c);
+    return (undef, undef) unless $email && $jwt;
+    # site_admin always has every capability (api _has_capability_p
+    # short-circuits on it) -- skip the extra round-trip for the common case.
+    return ($email, $jwt) if grep { $_ eq 'site_admin' } @$roles;
+    my $r = introspect($jwt, api_base => $c->app->api_base, capability => 'metrics.view');
+    return (undef, undef) unless $r && $r->{has_capability};
+    return ($email, $jwt);
+}
+
+# --- Prometheus query helpers (used by the Metrics tab's BFF) -----------
+# One instant query -> arrayref of result series (or undef on failure).
+sub _prom_query ($prom, $query) {
+    my $url = Mojo::URL->new("$prom/api/v1/query")->query(query => $query);
+    my $tx  = $UA->get($url);
+    return undef if $tx->error;
+    my $j = eval { $tx->result->json };
+    return ($j && ($j->{status} // '') eq 'success') ? $j->{data}{result} : undef;
+}
+# Scalar value of an aggregate instant query (undef if no data).
+sub _prom_scalar ($prom, $query) {
+    my $res = _prom_query($prom, $query);
+    return undef unless $res && @$res;
+    return $res->[0]{value}[1] + 0;
+}
+# Per-host CPU/mem/disk %, assembled by the `host` label.
+sub _prom_hosts ($prom) {
+    my %h;
+    my %metric = (
+        cpu  => '100-(avg by(host)(rate(node_cpu_seconds_total{job="node",mode="idle"}[5m]))*100)',
+        mem  => '100*(1-node_memory_MemAvailable_bytes{job="node"}/node_memory_MemTotal_bytes{job="node"})',
+        disk => '100*(1-node_filesystem_avail_bytes{job="node",mountpoint="/"}/node_filesystem_size_bytes{job="node",mountpoint="/"})',
+    );
+    for my $m (sort keys %metric) {
+        my $res = _prom_query($prom, $metric{$m}) // [];
+        for my $r (@$res) {
+            my $host = $r->{metric}{host} // next;
+            $h{$host}{$m} = sprintf '%.0f', ($r->{value}[1] // 0);
+        }
+    }
+    return [ map { { host => $_, %{ $h{$_} } } } sort keys %h ];
+}
+# Services whose last heartbeat check failed (homelab_service_up == 0).
+sub _prom_down_services ($prom) {
+    my $res = _prom_query($prom, 'homelab_service_up==0') // [];
+    return [ map { { host => ($_->{metric}{hostname} // '?'), service => ($_->{metric}{service_name} // '?') } } @$res ];
+}
+
+# GET /admin/metrics/summary -- curated fleet-health summary from
+# Prometheus, metrics.view gated. A FIXED set of instant queries (no
+# arbitrary PromQL reaches the browser); returns a flat JSON the Metrics
+# tab renders as stat cards + a per-host table + a services-down list.
+sub admin_metrics_summary ($c) {
+    my ($email, $jwt) = _metrics_auth($c);
+    return $c->render(json => { error => 'metrics.view required' }, status => 403) unless $email;
+    my $prom = $c->app->prometheus_base;
+    return $c->render(json => { error => 'metrics not configured' }, status => 503) unless $prom;
+
+    my %q = (
+        hosts_up       => 'count(up{job="node"}==1)',
+        hosts_total    => 'count(up{job="node"})',
+        services_total => 'count(homelab_service_up)',
+        services_down  => 'count(homelab_service_up==0) or vector(0)',
+        probes_up      => 'sum(probe_success) or vector(0)',
+        probes_total   => 'count(probe_success) or vector(0)',
+        cert_days_min  => '(min(probe_ssl_earliest_cert_expiry-time())/86400) or vector(0)',
+        cpu_max        => 'max(100-(avg by(host)(rate(node_cpu_seconds_total{job="node",mode="idle"}[5m]))*100))',
+        mem_max        => 'max(100*(1-node_memory_MemAvailable_bytes{job="node"}/node_memory_MemTotal_bytes{job="node"}))',
+        disk_max       => 'max(100*(1-node_filesystem_avail_bytes{job="node",mountpoint="/"}/node_filesystem_size_bytes{job="node",mountpoint="/"}))',
+    );
+    my %out;
+    $out{$_} = _prom_scalar($prom, $q{$_}) for keys %q;
+    $out{hosts}              = _prom_hosts($prom);
+    $out{services_down_list} = _prom_down_services($prom);
+
+    # Signal an unreachable Prometheus distinctly from a healthy-but-empty
+    # fleet so the UI can say "metrics unavailable" rather than "0 hosts".
+    $out{ok} = defined $out{hosts_total} ? \1 : \0;
+    return $c->render(json => \%out);
+}
+
 # GET a homelab-api path with the user's token; returns decoded JSON, or
 # undef on any non-2xx / transport error (callers render "unavailable").
 sub _api_get ($c, $jwt, $path) {
@@ -283,6 +379,18 @@ sub dashboard ($c) {
         $admin_domains = _api_get($c, $jwt, '/api/v1/domains') // [];
     }
 
+    # Metrics tab visibility: only when a Prometheus is configured AND the
+    # caller holds metrics.view (site_admin always does -- skip the extra
+    # round-trip for them; other roles are checked via introspect).
+    my $has_metrics = 0;
+    if ($c->app->prometheus_base) {
+        if ($is_admin) { $has_metrics = 1; }
+        else {
+            my $mr = introspect($jwt, api_base => $c->app->api_base, capability => 'metrics.view');
+            $has_metrics = ($mr && $mr->{has_capability}) ? 1 : 0;
+        }
+    }
+
     return $c->render(
         template     => 'dashboard',
         email        => $email,
@@ -292,6 +400,7 @@ sub dashboard ($c) {
         mail_usage   => $mail_usage,
         roles        => $roles,
         is_admin     => ($is_admin ? 1 : 0),
+        has_metrics  => $has_metrics,
         admin_domains => $admin_domains,
         sso_forgot_url => $c->app->sso_base . '/forgot',
     );

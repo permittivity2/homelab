@@ -23,10 +23,13 @@ case "$1" in
 API_HOST="10.50.2.46"
 API_PORT="3000"
 FLEET_CIDR="10.50.2.0/24"
+# Hosts allowed to query Prometheus (:9090) / Grafana (:3000) -- the
+# accountmanage Metrics tab. Space/comma-separated.
+METRICS_CONSUMERS="10.50.2.61"
 EOF
             echo "  wrote $HL_CONFIG"
         fi
-        API_HOST="10.50.2.46"; API_PORT="3000"; FLEET_CIDR="10.50.2.0/24"
+        API_HOST="10.50.2.46"; API_PORT="3000"; FLEET_CIDR="10.50.2.0/24"; METRICS_CONSUMERS="10.50.2.61"
         # shellcheck disable=SC1090
         . "$HL_CONFIG" 2>/dev/null || true
         API_BASE="http://$API_HOST:$API_PORT"
@@ -47,19 +50,27 @@ EOF
 
         # --- egress firewall: api + fleet exporter ports -----------------
         if [ -d /etc/nftables.d ]; then
+            CONSUMER_SET="$(printf '%s' "$METRICS_CONSUMERS" | tr ', ' '\n\n' | grep -E '.' | paste -sd, -)"
+            [ -n "$CONSUMER_SET" ] || CONSUMER_SET="$API_HOST"
             sed -e "s#__API_HOST__#$API_HOST#g" \
                 -e "s#__API_PORT__#$API_PORT#g" \
                 -e "s#__FLEET_CIDR__#$FLEET_CIDR#g" \
+                -e "s#__CONSUMERS__#$CONSUMER_SET#g" \
                 "$SHARE_DIR/nftables/10-homelab-prometheus-egress.nft.template" > "$NFT_DROPIN"
-            if nft list chain inet filter output >/dev/null 2>&1; then
-                for hh in $(nft -a list chain inet filter output 2>/dev/null \
-                        | awk '/homelab-prometheus-egress/ {print $NF}'); do
-                    nft delete rule inet filter output handle "$hh" 2>/dev/null || true
-                done
-                nft -f "$NFT_DROPIN" 2>/dev/null \
-                    || echo "  WARNING: could not apply $NFT_DROPIN live -- effective on next nftables reload/boot."
-            fi
-            echo "  egress firewall: opened $API_HOST:$API_PORT + fleet exporter ports"
+            # Apply live without flushing the ruleset (bad-ips-safe). The
+            # drop-in now touches BOTH the output chain (egress) and the
+            # input chain (consumer ingress), so clean both by comment.
+            for chain in output input; do
+                if nft list chain inet filter "$chain" >/dev/null 2>&1; then
+                    for hh in $(nft -a list chain inet filter "$chain" 2>/dev/null \
+                            | awk '/homelab-prometheus-egress/ {print $NF}'); do
+                        nft delete rule inet filter "$chain" handle "$hh" 2>/dev/null || true
+                    done
+                fi
+            done
+            nft -f "$NFT_DROPIN" 2>/dev/null \
+                || echo "  WARNING: could not apply $NFT_DROPIN live -- effective on next nftables reload/boot."
+            echo "  firewall: egress to $API_HOST:$API_PORT + fleet exporter ports; ingress :9090/:3000 from { $CONSUMER_SET }"
         fi
 
         # --- fleet manifest (topology/services visibility) ---------------

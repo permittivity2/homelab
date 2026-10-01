@@ -213,6 +213,9 @@
         <button type="button" data-atab="fleet">🛰️ Fleet</button>
         <button type="button" data-atab="services">🧩 Services</button>
         <button type="button" data-atab="topology">🗺️ Topology</button>
+% if ($has_metrics) {
+        <button type="button" data-atab="metrics">📈 Metrics</button>
+% }
       </div>
 
       <div class="admin-panel" data-apanel="users">
@@ -573,6 +576,24 @@
           </div>
           <p class="muted" style="font-size:0.8rem;margin:0.6rem 0 0;">Nodes are host/service instances (live agent data + declared ingress); edges are proxy/gateway/mail/DNS connections. Health from the fleet agents. Metrics-on-hover and remote actions (reboot, service control) are planned once Prometheus lands.</p>
         </div>
+      </div>
+% if ($has_metrics) {
+      <div class="admin-panel" data-apanel="metrics">
+        <div class="card">
+          <h2>Fleet metrics <span class="hint">live from Prometheus</span></h2>
+          %= include '_metrics_panel'
+        </div>
+      </div>
+% }
+    </section>
+% }
+
+% if ($has_metrics and not $is_admin) {
+    <section class="section" id="metrics">
+      <p class="muted" style="margin:0 0 0.8rem;">Fleet metrics <span class="badge admin">metrics.view</span></p>
+      <div class="card">
+        <h2>Fleet metrics <span class="hint">live from Prometheus</span></h2>
+        %= include '_metrics_panel'
       </div>
     </section>
 % }

@@ -32,6 +32,31 @@ case "$1" in
         chown root:homelab "$CONFIG_FILE" 2>/dev/null || true
         chmod 640 "$CONFIG_FILE" 2>/dev/null || true
 
+        # Metrics tab egress: open this host -> the fleet Prometheus
+        # (prometheus.base_url in the config) so the metrics.view-gated
+        # Metrics tab can query it. The base output chain has a drop policy.
+        # Applied live via an incremental add rule (idempotent by comment)
+        # that never flushes the ruleset -- bad-ips' runtime set survives.
+        NFT_METRICS=/etc/nftables.d/10-homelab-accountmanage-metrics.nft
+        PROM_URL="$(grep -A3 '^prometheus:' "$CONFIG_FILE" 2>/dev/null | sed -n 's/.*base_url:[[:space:]]*//p' | sed 's/#.*//; s/[[:space:]]//g' | head -1)"
+        PROM_HP="$(printf '%s' "$PROM_URL" | sed 's#^https\{0,1\}://##')"
+        PROM_HOST="${PROM_HP%%:*}"; PROM_PORT="${PROM_HP##*:}"
+        if [ -n "$PROM_HOST" ] && [ -n "$PROM_PORT" ] && [ "$PROM_HOST" != "$PROM_PORT" ] && [ -d /etc/nftables.d ]; then
+            printf 'add rule inet filter output ip daddr %s tcp dport %s accept comment "homelab-accountmanage-metrics"\n' \
+                "$PROM_HOST" "$PROM_PORT" > "$NFT_METRICS"
+            if nft list chain inet filter output >/dev/null 2>&1; then
+                for hh in $(nft -a list chain inet filter output 2>/dev/null \
+                        | awk '/homelab-accountmanage-metrics/ {print $NF}'); do
+                    nft delete rule inet filter output handle "$hh" 2>/dev/null || true
+                done
+                nft -f "$NFT_METRICS" 2>/dev/null \
+                    || echo "  WARNING: could not apply $NFT_METRICS live -- effective on next nftables reload/boot."
+            fi
+            echo "  metrics egress: opened $PROM_HOST:$PROM_PORT (Prometheus)"
+        else
+            rm -f "$NFT_METRICS" 2>/dev/null || true
+        fi
+
         systemctl daemon-reload 2>/dev/null || true
         systemctl enable homelab-accountmanage 2>/dev/null || true
         systemctl restart homelab-accountmanage 2>/dev/null || true

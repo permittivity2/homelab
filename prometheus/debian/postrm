@@ -23,10 +23,14 @@ case "$1" in
         # ruleset flush so bad-ips' runtime set is untouched).
         if [ -f "$NFT_DROPIN" ]; then
             rm -f "$NFT_DROPIN"
-            if command -v nft >/dev/null 2>&1 && nft list chain inet filter output >/dev/null 2>&1; then
-                for hh in $(nft -a list chain inet filter output 2>/dev/null \
-                        | awk '/homelab-prometheus-egress/ {print $NF}'); do
-                    nft delete rule inet filter output handle "$hh" 2>/dev/null || true
+            if command -v nft >/dev/null 2>&1; then
+                for chain in output input; do
+                    if nft list chain inet filter "$chain" >/dev/null 2>&1; then
+                        for hh in $(nft -a list chain inet filter "$chain" 2>/dev/null \
+                                | awk '/homelab-prometheus-egress/ {print $NF}'); do
+                            nft delete rule inet filter "$chain" handle "$hh" 2>/dev/null || true
+                        done
+                    fi
                 done
             fi
         fi

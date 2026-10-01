@@ -25,6 +25,15 @@ homelab_api:
 # This app's own public address.
 public_base_url: https://myaccount.test.mailmasker.org
 
+# Optional: the fleet Prometheus (monitoring host) the Metrics tab queries.
+# Leave unset/empty to disable the Metrics tab entirely. The tab is further
+# gated by the metrics.view capability (site_admin always has it; it can be
+# granted to other roles via the Roles admin). This host needs egress to
+# this host:port (the postinst opens it) and Prometheus must list this host
+# in its METRICS_CONSUMERS.
+prometheus:
+  base_url: http://10.50.2.63:9090
+
 # homelab-sso: the only place a user types a password.
 sso:
   base_url: https://login.test.mailmasker.org        # BROWSER redirect target -- MUST be the public SSO vhost

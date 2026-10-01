@@ -9,3 +9,7 @@
 # postinst deletes any prior rule with this comment before re-applying.
 add rule inet filter output ip daddr __API_HOST__ tcp dport __API_PORT__ accept comment "homelab-prometheus-egress"
 add rule inet filter output ip daddr __FLEET_CIDR__ tcp dport { 8081, 8083, 8404, 9100, 9127, 9154, 9187, 9900 } accept comment "homelab-prometheus-egress"
+# Ingress: let the metrics consumer(s) (accountmanage's Metrics tab) query
+# Prometheus (:9090) and -- reserved for a future same-origin Grafana embed
+# -- Grafana (:3000). Scoped to the consumer host(s) only.
+add rule inet filter input ip saddr { __CONSUMERS__ } tcp dport { 9090, 3000 } accept comment "homelab-prometheus-egress"

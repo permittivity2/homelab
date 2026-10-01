@@ -1,15 +1,16 @@
-homelab-prometheus (0.3.0) unstable; urgency=medium
+homelab-prometheus (0.4.0) unstable; urgency=medium
 
-  * Release v0.3.0
+  * Release v0.4.0
 
- -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:31:10 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:39:07 -0500
 
-homelab-prometheus (0.3.0) unstable; urgency=medium
+homelab-prometheus (0.4.0) unstable; urgency=medium
 
-  * Add the blackbox-http scrape job (external HTTPS availability + TLS
-    cert expiry via homelab-blackbox-exporter's http_public module). Target
-    list ships with homelab-blackbox-exporter; standard relabel dance sends
-    each URL to the blackbox exporter and keeps it as the instance label.
+  * Firewall: also open INPUT :9090 (Prometheus) + :3000 (Grafana,
+    reserved for a future same-origin embed) from the metrics consumer
+    host(s) -- METRICS_CONSUMERS in the deployment config, default the
+    accountmanage host -- so the accountmanage Metrics tab (metrics.view
+    gated) can query Prometheus. postinst/postrm now clean both chains.
 
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 17:15:00 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 18:00:00 -0500
 

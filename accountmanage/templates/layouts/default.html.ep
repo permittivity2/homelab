@@ -219,6 +219,22 @@
       table.sessions tr { display: block; border-bottom: 1px solid #eef0f3; padding: 0.6rem 0; }
       .btn { min-height: 40px; display: inline-flex; align-items: center; }
     }
+
+    /* --- Metrics tab --- */
+    .metrics-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 0.6rem; margin: 0.3rem 0 1rem; }
+    .mcard { background: var(--panel, rgba(127,127,127,0.06)); border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem 0.8rem; text-align: center; }
+    .mcard .mval { font-size: 1.5rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .mcard .mlabel { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
+    .mcard.ok-v .mval { color: #1f9d55; }
+    .mcard.warn .mval { color: #c77400; }
+    .mcard.crit .mval { color: #c0392b; }
+    .metrics-down { background: rgba(192,57,43,0.08); border: 1px solid rgba(192,57,43,0.35); border-radius: 8px; padding: 0.5rem 0.7rem; margin-bottom: 0.8rem; font-size: 0.85rem; }
+    .metrics-hosts-wrap { overflow-x: auto; }
+    .metrics-hosts { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .metrics-hosts th, .metrics-hosts td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .metrics-hosts th:not(:first-child), .metrics-hosts td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+    .metrics-hosts td.warm { color: #c77400; }
+    .metrics-hosts td.hot { color: #c0392b; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -1239,6 +1255,61 @@
       var tabBtn = document.querySelector('.admin-tabs button[data-atab="topology"]');
       if (tabBtn) tabBtn.addEventListener('click', function () { load(false); setTimeout(function () { if (cy) cy.resize(); }, 60); });
       if ((location.hash || '').indexOf('admin:topology') >= 0) load(false);
+    })();
+
+    // --- Metrics tab: curated fleet-health summary from Prometheus -------
+    (function () {
+      if (!document.querySelector('[data-metrics-root]')) return;
+      function setCard(id, text, level) {
+        var el = document.getElementById(id); if (!el) return;
+        el.textContent = text;
+        var card = el.closest('.mcard');
+        if (card) { card.classList.remove('warn', 'crit', 'ok-v'); if (level) card.classList.add(level); }
+      }
+      function pct(v) { return (v == null) ? '—' : Math.round(v) + '%'; }
+      function lvl(v, warn, crit) { if (v == null) return null; if (v >= crit) return 'crit'; if (v >= warn) return 'warn'; return 'ok-v'; }
+      function load() {
+        fetch('/admin/metrics/summary', { credentials: 'same-origin' })
+          .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+          .then(function (d) {
+            setCard('m-hosts', (d.hosts_up || 0) + ' / ' + (d.hosts_total || 0), (d.hosts_up < d.hosts_total) ? 'crit' : 'ok-v');
+            var sUp = (d.services_total || 0) - (d.services_down || 0);
+            setCard('m-services', sUp + ' / ' + (d.services_total || 0), (d.services_down > 0) ? 'crit' : 'ok-v');
+            setCard('m-probes', (d.probes_up || 0) + ' / ' + (d.probes_total || 0), (d.probes_up < d.probes_total) ? 'crit' : 'ok-v');
+            var cert = (d.cert_days_min == null) ? null : Math.round(d.cert_days_min);
+            setCard('m-cert', cert == null ? '—' : cert + ' d', cert == null ? null : (cert < 14 ? 'crit' : cert < 30 ? 'warn' : 'ok-v'));
+            setCard('m-cpu', pct(d.cpu_max), lvl(d.cpu_max, 70, 90));
+            setCard('m-mem', pct(d.mem_max), lvl(d.mem_max, 80, 92));
+            setCard('m-disk', pct(d.disk_max), lvl(d.disk_max, 75, 90));
+            var body = document.getElementById('metrics-hosts-body');
+            if (body) {
+              if (!d.hosts || !d.hosts.length) { body.innerHTML = '<tr><td colspan="4" class="muted">No host data.</td></tr>'; }
+              else {
+                body.innerHTML = d.hosts.map(function (h) {
+                  function cell(v, warn, crit) { var n = (v == null) ? null : +v; var c = (n != null && n >= crit) ? ' class="hot"' : (n != null && n >= warn) ? ' class="warm"' : ''; return '<td' + c + '>' + (n == null ? '—' : n + '%') + '</td>'; }
+                  return '<tr><td>' + h.host + '</td>' + cell(h.cpu, 70, 90) + cell(h.mem, 80, 92) + cell(h.disk, 75, 90) + '</tr>';
+                }).join('');
+              }
+            }
+            var down = document.getElementById('metrics-down');
+            if (down) {
+              if (d.services_down_list && d.services_down_list.length) {
+                down.hidden = false;
+                down.innerHTML = '<strong>' + d.services_down_list.length + ' service(s) down:</strong> ' +
+                  d.services_down_list.map(function (s) { return s.host + '/' + s.service; }).join(', ');
+              } else { down.hidden = true; }
+            }
+            var up = document.getElementById('metrics-updated'); if (up) up.textContent = new Date().toLocaleTimeString();
+          })
+          .catch(function () {
+            var body = document.getElementById('metrics-hosts-body');
+            if (body) body.innerHTML = '<tr><td colspan="4" class="muted">Metrics unavailable.</td></tr>';
+          });
+      }
+      load();
+      setInterval(load, 30000);
+      var rf = document.getElementById('metrics-refresh');
+      if (rf) rf.addEventListener('click', function (e) { e.preventDefault(); load(); });
     })();
   </script>
 </body>

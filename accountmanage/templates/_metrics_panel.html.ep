@@ -1,0 +1,23 @@
+<div class="metrics-view" data-metrics-root>
+  <div class="metrics-cards">
+    <div class="mcard"><div class="mval" id="m-hosts">—</div><div class="mlabel">Hosts up</div></div>
+    <div class="mcard"><div class="mval" id="m-services">—</div><div class="mlabel">Services up</div></div>
+    <div class="mcard"><div class="mval" id="m-probes">—</div><div class="mlabel">External probes up</div></div>
+    <div class="mcard"><div class="mval" id="m-cert">—</div><div class="mlabel">Soonest cert expiry</div></div>
+    <div class="mcard"><div class="mval" id="m-cpu">—</div><div class="mlabel">Max CPU</div></div>
+    <div class="mcard"><div class="mval" id="m-mem">—</div><div class="mlabel">Max memory</div></div>
+    <div class="mcard"><div class="mval" id="m-disk">—</div><div class="mlabel">Max root disk</div></div>
+  </div>
+  <div id="metrics-down" class="metrics-down" hidden></div>
+  <div class="metrics-hosts-wrap">
+    <table class="metrics-hosts">
+      <thead><tr><th>Host</th><th>CPU&nbsp;%</th><th>Mem&nbsp;%</th><th>Disk&nbsp;%</th></tr></thead>
+      <tbody id="metrics-hosts-body"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <p class="muted" style="font-size:0.8rem;margin-top:0.6rem;">
+    Fleet Prometheus · updated <span id="metrics-updated">—</span> ·
+    <a href="#" id="metrics-refresh">refresh</a>.
+    Deep-dive dashboards live in Grafana on the monitoring host.
+  </p>
+</div>

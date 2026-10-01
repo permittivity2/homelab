@@ -1,3 +1,23 @@
+homelab-accountmanage (0.1.24) unstable; urgency=medium
+
+  * Release v0.1.24
+
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:46:36 -0500
+
+homelab-accountmanage (0.1.24) unstable; urgency=medium
+
+  * P5: role-gated Metrics tab. New 📈 Metrics admin tab (site_admins) +
+    standalone Metrics section (non-admin metrics.view holders) showing a
+    curated fleet-health summary -- hosts up, services up/down, external
+    probes, soonest cert expiry, fleet CPU/mem/disk maxes + a per-host
+    table -- fetched from the fleet Prometheus via a new
+    /admin/metrics/summary BFF (fixed queries, no PromQL reaches the
+    browser). Gated by the metrics.view capability (introspect ?capability;
+    site_admin always). New optional prometheus.base_url config; postinst
+    opens egress to it (bad-ips-safe nft drop-in).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 18:30:00 -0500
+
 homelab-accountmanage (0.1.23) unstable; urgency=medium
 
   * Release v0.1.23
