@@ -1,16 +1,18 @@
-homelab-postgres-exporter (0.1.0) unstable; urgency=medium
+homelab-postgres-exporter (0.2.0) unstable; urgency=medium
 
-  * Release v0.1.0
+  * Release v0.2.0
 
- -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:19:18 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:27:18 -0500
 
-homelab-postgres-exporter (0.1.0) unstable; urgency=medium
+homelab-postgres-exporter (0.2.0) unstable; urgency=medium
 
-  * Initial release: wraps the Ubuntu-archive prometheus-postgres-exporter
-    for the fleet DB host. Bootstraps a read-only 'homelab_exporter'
-    Postgres role (pg_monitor) via local sudo -u postgres, writes the
-    exporter DATA_SOURCE_NAME (root:prometheus 0640), and advertises the
-    exporter (kind: metrics-exporter, :9187) so homelab-prometheus
-    discovers + scrapes it. Install on the PostgreSQL host.
+  * P3 custom metrics: connect the exporter to the shared 'homelab' DB and
+    ship queries.yaml (--extend.query-path) exposing homelab_worker_jobs
+    (queue depth by state) + homelab_worker_oldest_pending_seconds +
+    homelab_service_up{hostname,service_name} (fleet service health
+    re-exported from the agent heartbeat view api.host_service_status).
+    Adds guarded read-only SELECT grants on worker.jobs +
+    api.host_service_status (skipped if a table isn't present yet).
 
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 15:45:00 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 16:30:00 -0500
+

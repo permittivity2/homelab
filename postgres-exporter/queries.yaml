@@ -1,0 +1,47 @@
+# Custom postgres_exporter queries (--extend.query-path). The exporter
+# connects to the shared 'homelab' database, so these can read app tables
+# directly -- turning DB-resident state into Prometheus series with no new
+# endpoint, firewall opening, or per-app instrumentation.
+#
+# homelab_exporter is granted only SELECT on exactly these tables (see the
+# package postinst); it remains a read-only pg_monitor role otherwise.
+
+# Worker job queue depth by state (homelab-worker). The single
+# highest-value custom metric: pending backlog + stuck/failed jobs.
+homelab_worker_jobs:
+  query: "SELECT state, count(*) AS count FROM worker.jobs GROUP BY state"
+  metrics:
+    - state:
+        usage: "LABEL"
+        description: "Worker job state (pending/active/completed/failed/...)"
+    - count:
+        usage: "GAUGE"
+        description: "Number of worker jobs currently in this state"
+
+# Age of the oldest still-pending job, in seconds (0 when none pending).
+# A climbing value means the worker is falling behind or wedged.
+homelab_worker_oldest_pending:
+  query: >-
+    SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(created_at)), 0) AS seconds
+    FROM worker.jobs WHERE state = 'pending'
+  metrics:
+    - seconds:
+        usage: "GAUGE"
+        description: "Age of the oldest pending worker job, in seconds"
+
+# Fleet service up/down, re-exported from the fleet-agent heartbeat view
+# (api.host_service_status). 1 = the service's last check passed. This
+# turns every agent-monitored service on every host into a Prometheus
+# series without touching the services themselves.
+homelab_service:
+  query: "SELECT hostname, service_name, actual::int AS up FROM api.host_service_status"
+  metrics:
+    - hostname:
+        usage: "LABEL"
+        description: "Fleet host the service runs on"
+    - service_name:
+        usage: "LABEL"
+        description: "Advertised service name"
+    - up:
+        usage: "GAUGE"
+        description: "1 if the service's last agent heartbeat check passed, else 0"

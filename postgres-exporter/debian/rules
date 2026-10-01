@@ -9,3 +9,5 @@ override_dh_install:
 	dh_install
 	install -D -m 644 services/postgres-exporter.yml \
 		debian/homelab-postgres-exporter/usr/share/homelab-postgres-exporter/services/postgres-exporter.yml
+	install -D -m 644 queries.yaml \
+		debian/homelab-postgres-exporter/usr/share/homelab-postgres-exporter/queries.yaml

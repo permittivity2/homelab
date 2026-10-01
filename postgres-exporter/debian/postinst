@@ -27,10 +27,37 @@ case "$1" in
         DBPORT="$(sudo -u postgres psql -tAc 'SHOW port;' 2>/dev/null | tr -d '[:space:]')"
         [ -n "$DBPORT" ] || DBPORT=5432
 
+        # Custom-query access: the exporter connects to the shared 'homelab'
+        # DB so queries.yaml can read a few app tables (read-only). Grants
+        # are guarded -- a table that doesn't exist yet (its package not
+        # migrated) is simply skipped; the role stays pg_monitor otherwise.
+        QUERIES_FILE=""
+        if sudo -u postgres psql -d homelab -tAc 'SELECT 1' >/dev/null 2>&1; then
+            sudo -u postgres psql -d homelab -q -c "GRANT CONNECT ON DATABASE homelab TO homelab_exporter;" || true
+            for spec in "worker:jobs" "api:host_service_status"; do
+                sch="${spec%:*}"; tbl="${spec#*:}"
+                if [ -n "$(sudo -u postgres psql -d homelab -tAc "SELECT to_regclass('$sch.$tbl')" 2>/dev/null | tr -d '[:space:]')" ]; then
+                    sudo -u postgres psql -d homelab -q \
+                        -c "GRANT USAGE ON SCHEMA $sch TO homelab_exporter;" \
+                        -c "GRANT SELECT ON $sch.$tbl TO homelab_exporter;" || true
+                fi
+            done
+            QUERIES_FILE="$SHARE_DIR/queries.yaml"
+            EXPORTER_DB=homelab
+        else
+            echo "  NOTE: no 'homelab' database here -- custom queries disabled, standard metrics only."
+            EXPORTER_DB=postgres
+        fi
+
         # DSN carries the role password -> keep the file root:prometheus 0640
         # (the exporter runs as the 'prometheus' user).
-        printf "DATA_SOURCE_NAME='postgresql://homelab_exporter:%s@localhost:%s/postgres?sslmode=disable'\nARGS=\"\"\n" \
-            "$PASS" "$DBPORT" > "$DEFAULT_FILE"
+        if [ -n "$QUERIES_FILE" ]; then
+            printf "DATA_SOURCE_NAME='postgresql://homelab_exporter:%s@localhost:%s/%s?sslmode=disable'\nARGS=\"--extend.query-path=%s\"\n" \
+                "$PASS" "$DBPORT" "$EXPORTER_DB" "$QUERIES_FILE" > "$DEFAULT_FILE"
+        else
+            printf "DATA_SOURCE_NAME='postgresql://homelab_exporter:%s@localhost:%s/%s?sslmode=disable'\nARGS=\"\"\n" \
+                "$PASS" "$DBPORT" "$EXPORTER_DB" > "$DEFAULT_FILE"
+        fi
         chown root:prometheus "$DEFAULT_FILE" 2>/dev/null || true
         chmod 640 "$DEFAULT_FILE"
 
