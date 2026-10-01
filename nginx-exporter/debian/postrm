@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+case "$1" in
+    purge)
+        rm -f /etc/homelab/services/nginx-exporter.yml
+        if [ -f /etc/nginx/conf.d/homelab-stub-status.conf ]; then
+            rm -f /etc/nginx/conf.d/homelab-stub-status.conf
+            nginx -t >/dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true
+        fi
+        ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear) ;;
+    *) echo "postrm called with unknown argument: $1"; exit 1 ;;
+esac
+exit 0

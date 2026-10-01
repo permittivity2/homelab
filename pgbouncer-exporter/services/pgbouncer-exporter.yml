@@ -1,0 +1,7 @@
+name: pgbouncer-exporter
+package: homelab-pgbouncer-exporter
+kind: metrics-exporter
+check:
+  systemd_unit: prometheus-pgbouncer-exporter
+  tcp_port: 9127
+description: "Prometheus pgbouncer_exporter: connection-pool stats on :9127 (DB host)"

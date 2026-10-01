@@ -1,0 +1,13 @@
+homelab-pgbouncer-exporter (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 20:12:51 -0500
+
+homelab-pgbouncer-exporter (0.1.0) unstable; urgency=medium
+
+  * Initial release: provisions a pgbouncer stats user + exporter
+    (connection-pool metrics on :9127) on the DB host; graceful SIGHUP
+    reload, dedicated conf.d include, advertises itself for discovery.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 20:15:00 -0500

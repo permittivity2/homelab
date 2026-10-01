@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+SHARE_DIR=/usr/share/homelab-dovecot-metrics
+CONF=/etc/dovecot/conf.d/99-homelab-metrics.conf
+case "$1" in
+    configure)
+        echo "homelab-dovecot-metrics post-installation setup..."
+        if [ ! -d /etc/dovecot/conf.d ]; then
+            echo "  ERROR: /etc/dovecot/conf.d missing -- install on a Dovecot host. (apt continues.)"; exit 0
+        fi
+        install -m 644 "$SHARE_DIR/config/99-homelab-metrics.conf" "$CONF"
+        if doveconf >/dev/null 2>&1; then
+            systemctl reload dovecot 2>/dev/null || true
+        else
+            echo "  WARNING: doveconf validation failed after adding $CONF -- removing it."; rm -f "$CONF"
+        fi
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/dovecot-metrics.yml" "/etc/homelab/services/dovecot-metrics.yml"
+        echo "homelab-dovecot-metrics configured (openmetrics on :9900)."
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure) ;;
+    *) echo "postinst called with unknown argument: $1"; exit 1 ;;
+esac
+exit 0

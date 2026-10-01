@@ -1,0 +1,18 @@
+Source: homelab-nginx-exporter
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-nginx-exporter
+Architecture: all
+Depends: prometheus-nginx-exporter, nginx
+Recommends: homelab-agent, homelab-node-exporter, homelab-webproxy
+Description: nginx (web proxy) metrics exporter wiring for homelab-*
+ Wraps the Ubuntu-archive prometheus-nginx-exporter on the web-proxy/edge
+ host. Ships an internal-only nginx stub_status endpoint (loopback
+ 127.0.0.1:8099), points the exporter at it, and advertises the exporter
+ (kind: metrics-exporter, :9113) so homelab-prometheus discovers + scrapes
+ nginx connection/request metrics. Install on the homelab-webproxy host.

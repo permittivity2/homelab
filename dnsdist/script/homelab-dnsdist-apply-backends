@@ -93,6 +93,20 @@ if ($acl && @$acl) {
     $cfg .= "setACL({$acl_list})\n\n";
 }
 
+# Prometheus metrics: dnsdist's built-in webserver serves /metrics on :8083.
+# NOTE: this webserver ACL is SEPARATE from the query ACL above -- it only
+# governs who may reach the metrics/console port, scoped to loopback + the
+# fleet plane (the monitoring host is further firewalled by
+# homelab-node-exporter). Override via backends.yml 'metrics_acl'.
+my $metrics_acl = $config->{metrics_acl} // '127.0.0.0/8, 10.50.2.0/24';
+# dnsdist's /metrics requires the webserver apiKey (sent as X-API-Key).
+# Fixed default so homelab-prometheus's scrape header matches without
+# cross-host key coordination; the port is ACL'd + firewalled to the
+# monitoring host, so this is defence-in-depth, not the only control.
+# Override via backends.yml 'metrics_api_key'.
+my $metrics_api_key = $config->{metrics_api_key} // 'homelab-dnsdist-metrics-ro';
+$cfg .= qq{webserver("0.0.0.0:8083")\nsetWebserverConfig({acl="$metrics_acl", apiKey="$metrics_api_key"})\n\n};
+
 for my $server (@$servers) {
     $cfg .= <<SERVER;
 newServer({
@@ -148,6 +162,15 @@ if (-d $manifest_dir) {
         description => 'dnsdist DNS load-balancer, proxy-protocol to ' . join(', ', @$servers),
         fronts      => [map { "dns\@$_" } @$servers],
     });
+    # Advertise the always-on Prometheus webserver so homelab-prometheus
+    # discovers + scrapes dnsdist at :8083.
+    push @manifest, {
+        name        => 'dnsdist-metrics',
+        package     => 'homelab-dnsdist',
+        kind        => 'metrics-exporter',
+        check       => { tcp_port => 8083 },
+        description => 'dnsdist built-in Prometheus webserver (:8083/metrics)',
+    };
     eval { DumpFile($manifest_file, \@manifest); 1 }
         or print "  WARNING: failed to write $manifest_file -- fleet status view may be stale: $@\n";
 }

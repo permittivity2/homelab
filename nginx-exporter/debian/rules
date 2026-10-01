@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+%:
+	dh $@ --buildsystem=perl_makemaker
+override_dh_auto_test:
+override_dh_install:
+	dh_install
+	install -D -m 644 config/homelab-stub-status.conf \
+		debian/homelab-nginx-exporter/usr/share/homelab-nginx-exporter/config/homelab-stub-status.conf
+	install -D -m 644 services/nginx-exporter.yml \
+		debian/homelab-nginx-exporter/usr/share/homelab-nginx-exporter/services/nginx-exporter.yml

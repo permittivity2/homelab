@@ -1,0 +1,7 @@
+name: postfix-exporter
+package: homelab-postfix-exporter
+kind: metrics-exporter
+check:
+  systemd_unit: prometheus-postfix-exporter
+  tcp_port: 9154
+description: "Prometheus postfix_exporter: mail-flow + queue metrics on :9154 (mail-send pool)"

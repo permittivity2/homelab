@@ -1,0 +1,19 @@
+Source: homelab-postfix-exporter
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-postfix-exporter
+Architecture: all
+Depends: prometheus-postfix-exporter
+Recommends: homelab-agent, homelab-node-exporter, homelab-postfix
+Description: Postfix (mail-flow) metrics exporter wiring for homelab-*
+ Wraps the Ubuntu-archive prometheus-postfix-exporter on the mail-sending
+ hosts. The upstream unit already reads the postfix journal
+ (--systemd.enable); this advertises the exporter (kind: metrics-exporter,
+ :9154) so homelab-prometheus discovers + scrapes mail-flow metrics
+ (messages processed/delivered/bounced/deferred, SMTP delays, queue sizes).
+ Install on each homelab-postfix host.

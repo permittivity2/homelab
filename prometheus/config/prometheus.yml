@@ -49,8 +49,13 @@ scrape_configs:
       - files: ['/etc/prometheus/homelab/targets/haproxy.json']
         refresh_interval: 30s
 
-  # dnsdist native Prometheus endpoint (:8083) -- the edge DNS front.
+  # dnsdist native Prometheus endpoint (:8083/metrics) -- the edge DNS
+  # front. Its /metrics requires the webserver apiKey, sent as X-API-Key
+  # (must match homelab-dnsdist's metrics_api_key default).
   - job_name: dnsdist
+    http_headers:
+      X-API-Key:
+        values: ['homelab-dnsdist-metrics-ro']
     file_sd_configs:
       - files: ['/etc/prometheus/homelab/targets/dnsdist.json']
         refresh_interval: 30s
@@ -65,6 +70,12 @@ scrape_configs:
   - job_name: dovecot
     file_sd_configs:
       - files: ['/etc/prometheus/homelab/targets/dovecot.json']
+        refresh_interval: 30s
+
+  # nginx / web proxy (prometheus-nginx-exporter :9113) -- the edge.
+  - job_name: nginx
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/nginx.json']
         refresh_interval: 30s
 
   # External/public HTTPS probes via blackbox_exporter: availability

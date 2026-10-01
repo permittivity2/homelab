@@ -13,6 +13,8 @@ override_dh_install:
 		debian/homelab-dns/usr/share/homelab-dns/backup-paths.txt
 	install -D -m 644 services/pdns.yml \
 		debian/homelab-dns/usr/share/homelab-dns/services/pdns.yml
+	install -D -m 644 services/pdns-metrics.yml \
+		debian/homelab-dns/usr/share/homelab-dns/services/pdns-metrics.yml
 	install -D -m 755 script/homelab-dns-pull-allow-from \
 		debian/homelab-dns/usr/bin/homelab-dns-pull-allow-from
 	install -D -m 644 systemd/homelab-dns-pull.service \

@@ -35,3 +35,6 @@ jobs:
   dovecot:
     feature: dovecot-metrics
     port: 9900
+  nginx:
+    feature: nginx-exporter
+    port: 9113

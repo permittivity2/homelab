@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+SHARE_DIR=/usr/share/homelab-postfix-exporter
+case "$1" in
+    configure)
+        echo "homelab-postfix-exporter post-installation setup..."
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/postfix-exporter.yml" "/etc/homelab/services/postfix-exporter.yml"
+        systemctl enable prometheus-postfix-exporter >/dev/null 2>&1 || true
+        systemctl restart prometheus-postfix-exporter \
+            || echo "  WARNING: prometheus-postfix-exporter restart failed -- check its journal."
+        echo "homelab-postfix-exporter configured (postfix_exporter on :9154)."
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure) ;;
+    *) echo "postinst called with unknown argument: $1"; exit 1 ;;
+esac
+exit 0

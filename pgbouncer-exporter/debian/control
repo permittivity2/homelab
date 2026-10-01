@@ -1,0 +1,21 @@
+Source: homelab-pgbouncer-exporter
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-pgbouncer-exporter
+Architecture: all
+Depends: prometheus-pgbouncer-exporter, pgbouncer, openssl
+Recommends: homelab-agent, homelab-node-exporter
+Description: PgBouncer metrics exporter wiring for the homelab-* ecosystem
+ Wraps the Ubuntu-archive prometheus-pgbouncer-exporter for the fleet DB
+ host. On configure it provisions a pgbouncer-only stats user (plaintext in
+ the root:postgres userlist), a dedicated conf.d include adding
+ stats_users + ignore_startup_parameters=extra_float_digits (required by
+ the exporter's pq driver), reloads pgbouncer gracefully (SIGHUP, no
+ dropped connections), writes the exporter connection string and advertises
+ the exporter (kind: metrics-exporter, :9127) for homelab-prometheus to
+ discover. Install on the PgBouncer host.

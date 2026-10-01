@@ -1,0 +1,18 @@
+Source: homelab-dovecot-metrics
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-dovecot-metrics
+Architecture: all
+Depends: dovecot-core | dovecot-imapd
+Recommends: homelab-agent, homelab-node-exporter, homelab-dovecot
+Description: Dovecot native openmetrics enablement for homelab-*
+ Drops a conf.d snippet enabling Dovecot 2.4's native openmetrics endpoint
+ (:9900/metrics) plus a few high-value metrics, reloads Dovecot gracefully
+ (a new listener only -- does not touch IMAP/LMTP), and advertises it
+ (kind: metrics-exporter, :9900) so homelab-prometheus discovers + scrapes
+ it. Install on each homelab-dovecot (mailstore) host.

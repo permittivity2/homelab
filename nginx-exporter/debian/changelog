@@ -1,0 +1,13 @@
+homelab-nginx-exporter (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 20:16:26 -0500
+
+homelab-nginx-exporter (0.1.0) unstable; urgency=medium
+
+  * Initial release: internal nginx stub_status + prometheus-nginx-exporter
+    on :9113 (webproxy connection/request metrics); advertises itself for
+    discovery. Install on the web-proxy host.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 20:45:00 -0500

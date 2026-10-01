@@ -1,0 +1,42 @@
+#!/bin/sh
+set -e
+
+SHARE_DIR=/usr/share/homelab-nginx-exporter
+STUB=/etc/nginx/conf.d/homelab-stub-status.conf
+DEFAULT_FILE=/etc/default/prometheus-nginx-exporter
+
+case "$1" in
+    configure)
+        echo "homelab-nginx-exporter post-installation setup..."
+
+        if [ ! -d /etc/nginx/conf.d ]; then
+            echo "  ERROR: /etc/nginx/conf.d missing -- install on the nginx/webproxy host. (apt continues.)"
+            exit 0
+        fi
+
+        install -m 644 "$SHARE_DIR/config/homelab-stub-status.conf" "$STUB"
+        if nginx -t >/dev/null 2>&1; then
+            systemctl reload nginx 2>/dev/null || true
+        else
+            echo "  WARNING: nginx -t failed after adding $STUB -- removing it and skipping."
+            rm -f "$STUB"
+        fi
+
+        printf 'ARGS="--nginx.scrape-uri=http://127.0.0.1:8099/stub_status"\n' > "$DEFAULT_FILE"
+
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/nginx-exporter.yml" "/etc/homelab/services/nginx-exporter.yml"
+
+        systemctl enable prometheus-nginx-exporter >/dev/null 2>&1 || true
+        systemctl restart prometheus-nginx-exporter \
+            || echo "  WARNING: prometheus-nginx-exporter restart failed -- check its journal."
+
+        echo "homelab-nginx-exporter configured (nginx-exporter on :9113)."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure) ;;
+    *) echo "postinst called with unknown argument: $1"; exit 1 ;;
+esac
+exit 0

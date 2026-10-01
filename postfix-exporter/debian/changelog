@@ -1,0 +1,12 @@
+homelab-postfix-exporter (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 20:19:55 -0500
+
+homelab-postfix-exporter (0.1.0) unstable; urgency=medium
+
+  * Initial release: advertises the Ubuntu-archive prometheus-postfix-exporter
+    (:9154, journal-based) for discovery on the mail-sending hosts.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 21:00:00 -0500

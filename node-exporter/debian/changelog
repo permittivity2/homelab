@@ -1,32 +1,14 @@
-homelab-node-exporter (0.2.0) unstable; urgency=medium
+homelab-node-exporter (0.3.0) unstable; urgency=medium
 
-  * Release v0.2.0
+  * Release v0.3.0
 
- -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 18:50:33 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 20:14:21 -0500
 
-homelab-node-exporter (0.2.0) unstable; urgency=medium
+homelab-node-exporter (0.3.0) unstable; urgency=medium
 
-  * Firewall: ship /etc/nftables.d/10-homelab-metrics.nft (generated from
-    /etc/homelab/node-exporter/config's MONITORING_HOSTS, default the ct19
-    monitoring host) that appends an accept for this host's exporter ports
-    { 8081, 8083, 8404, 9100, 9127, 9154, 9187, 9900 } to the base
-    'inet filter input' chain, scoped to the monitoring host(s). The base
-    input chain has a drop policy and only opens {22,53,80,443}, so nothing
-    could scrape :9100 until now. Applied live via an incremental
-    `add rule` (idempotent by rule comment) that never flushes the ruleset,
-    so bad-ips' runtime-populated set is not disturbed; also re-applied at
-    boot via nftables.conf's include. postrm purges the drop-in + live rule.
+  * Firewall: broaden the exporter-port allow to a range
+    { 8081, 8083, 8404, 9100-9199, 9900 } from the monitoring host, so new
+    Go exporters (nginx :9113, etc.) need no further firewall bump.
 
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 13:30:00 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 20:30:00 -0500
 
-homelab-node-exporter (0.1.0) unstable; urgency=medium
-
-  * Initial release: thin fleet wrapper around the Ubuntu-archive
-    prometheus-node-exporter. Depends on it (host CPU/load/mem/disk/
-    filesystem/tmpfs/network metrics on :9100) and ships an
-    /etc/homelab/services/node-exporter.yml manifest so homelab-agent
-    advertises the exporter into the fleet topology/services view
-    (kind: metrics-exporter). No config, no secrets -- deploy to every
-    fleet host; the monitoring host's Prometheus scrapes each :9100.
-
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 12:00:00 -0500

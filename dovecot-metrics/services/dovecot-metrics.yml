@@ -1,0 +1,7 @@
+name: dovecot-metrics
+package: homelab-dovecot-metrics
+kind: metrics-exporter
+check:
+  systemd_unit: dovecot
+  tcp_port: 9900
+description: "Dovecot native openmetrics: IMAP/auth metrics on :9900 (mailstore pool)"

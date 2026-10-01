@@ -1,0 +1,69 @@
+#!/bin/sh
+set -e
+
+SHARE_DIR=/usr/share/homelab-pgbouncer-exporter
+USERLIST=/etc/pgbouncer/userlist.txt
+PGB_INI=/etc/pgbouncer/pgbouncer.ini
+CONF_INCLUDE=/etc/pgbouncer/conf.d/91-homelab-pgbouncer-exporter.ini
+DEFAULT_FILE=/etc/default/prometheus-pgbouncer-exporter
+STATS_USER=pgbouncer_exporter
+
+case "$1" in
+    configure)
+        echo "homelab-pgbouncer-exporter post-installation setup..."
+
+        if [ ! -f "$USERLIST" ] || [ ! -f "$PGB_INI" ]; then
+            echo "  ERROR: no pgbouncer here ($USERLIST / $PGB_INI missing) -- install on the"
+            echo "         PgBouncer host. Not configured. (apt continues.)"
+            exit 0
+        fi
+
+        # Reuse the stats user's password across reinstalls (so the DSN keeps
+        # matching) by reading it back from the userlist; mint one on first install.
+        PW="$(awk -v u="\"$STATS_USER\"" '$1==u {gsub(/"/,"",$2); print $2}' "$USERLIST" 2>/dev/null)"
+        if [ -z "$PW" ]; then
+            PW="$(openssl rand -hex 16)"
+            # Plaintext is valid in a scram-sha-256 userlist (pgbouncer computes
+            # SCRAM from it). Keep the outage-sensitive root:postgres 0640.
+            printf '"%s" "%s"\n' "$STATS_USER" "$PW" >> "$USERLIST"
+            chown root:postgres "$USERLIST"; chmod 640 "$USERLIST"
+            echo "  added $STATS_USER to $USERLIST"
+        fi
+
+        # Dedicated include: stats access + the ignore_startup_parameters the
+        # exporter's pq driver needs (it sends extra_float_digits, which the
+        # pgbouncer admin console rejects otherwise).
+        cat > "$CONF_INCLUDE" <<EOF
+# Managed by homelab-pgbouncer-exporter -- do not hand-edit.
+[pgbouncer]
+stats_users = $STATS_USER
+ignore_startup_parameters = extra_float_digits
+EOF
+        grep -qF '91-homelab-pgbouncer-exporter.ini' "$PGB_INI" \
+            || printf '%%include %s\n' "$CONF_INCLUDE" >> "$PGB_INI"
+
+        # Graceful reload -- SIGHUP re-reads config without dropping pooled
+        # connections (never restart: this is the fleet's DB connection layer).
+        systemctl reload pgbouncer 2>/dev/null || pkill -HUP pgbouncer 2>/dev/null || true
+
+        printf "PGBOUNCER_EXPORTER_CONNECTION_STRING='host=localhost port=6432 user=%s password=%s dbname=pgbouncer sslmode=disable'\nARGS=\"\"\n" \
+            "$STATS_USER" "$PW" > "$DEFAULT_FILE"
+        chown root:postgres "$DEFAULT_FILE" 2>/dev/null || true
+        chmod 640 "$DEFAULT_FILE"
+
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/pgbouncer-exporter.yml" "/etc/homelab/services/pgbouncer-exporter.yml"
+
+        systemctl enable prometheus-pgbouncer-exporter >/dev/null 2>&1 || true
+        systemctl restart prometheus-pgbouncer-exporter \
+            || echo "  WARNING: prometheus-pgbouncer-exporter restart failed -- check its journal."
+
+        echo "homelab-pgbouncer-exporter configured (pgbouncer_exporter on :9127)."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure) ;;
+    *) echo "postinst called with unknown argument: $1"; exit 1 ;;
+esac
+exit 0

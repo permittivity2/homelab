@@ -207,6 +207,17 @@ case "$1" in
         install -m 644 /usr/share/homelab-dns/services/pdns.yml \
             /etc/homelab/services/pdns.yml
         chgrp homelab /etc/homelab/services/pdns.yml 2>/dev/null || true
+        # Metrics: advertise PowerDNS's native /metrics (same webserver) and
+        # seed the always-allowed extras file so homelab-dns-pull-allow-from
+        # keeps the monitoring host in webserver-allow-from (/metrics is
+        # allow-from-gated but NOT api-key-gated). Only meaningful when the
+        # API/webserver is enabled; harmless otherwise.
+        install -m 644 /usr/share/homelab-dns/services/pdns-metrics.yml \
+            /etc/homelab/services/pdns-metrics.yml
+        chgrp homelab /etc/homelab/services/pdns-metrics.yml 2>/dev/null || true
+        mkdir -p /etc/homelab/dns
+        [ -f /etc/homelab/dns/metrics-allow-from ] || \
+            echo "10.50.2.63" > /etc/homelab/dns/metrics-allow-from
 
         db_stop
 

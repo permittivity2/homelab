@@ -1,0 +1,7 @@
+name: nginx-exporter
+package: homelab-nginx-exporter
+kind: metrics-exporter
+check:
+  systemd_unit: prometheus-nginx-exporter
+  tcp_port: 9113
+description: "Prometheus nginx-exporter: webproxy connection/request metrics on :9113 (edge)"

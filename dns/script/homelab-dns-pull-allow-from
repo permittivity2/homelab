@@ -26,7 +26,17 @@ exit 0 unless @signers;
 
 my $cur = dc_get('homelab-dns/api_allow_from');
 (my $cur_norm = $cur) =~ s/\s+/,/g;
-my $desired = join(',', @signers);
+
+# Always-allowed extras beyond the signer set -- e.g. the Prometheus
+# monitoring host, which scrapes PowerDNS's /metrics on this same
+# webserver (webserver-allow-from gates /metrics too, and /metrics is NOT
+# api-key-gated). Optional one-per-line/comma file; absent -> no extras.
+my @extra;
+if (open my $efh, '<', '/etc/homelab/dns/metrics-allow-from') {
+    while (my $l = <$efh>) { $l =~ s/#.*//; push @extra, grep { /\S/ } split /[\s,]+/, $l; }
+    close $efh;
+}
+my $desired = join(',', sort keys %{ { map { $_ => 1 } (@signers, @extra) } });
 
 # self-pruning: the allowlist IS the current signer set (comma-sorted).
 if (join(',', sort split /,/, $cur_norm) eq $desired) { exit 0 }
