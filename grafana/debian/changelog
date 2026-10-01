@@ -1,19 +1,16 @@
-homelab-grafana (0.2.0) unstable; urgency=medium
+homelab-grafana (0.3.0) unstable; urgency=medium
 
-  * Release v0.2.0
+  * Release v0.3.0
 
- -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:57:06 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 20:33:23 -0500
 
-homelab-grafana (0.2.0) unstable; urgency=medium
+homelab-grafana (0.3.0) unstable; urgency=medium
 
-  * Embed support: ship a grafana-server systemd env drop-in (generated
-    from /etc/homelab/grafana/config) putting Grafana behind accountmanage's
-    /grafana reverse proxy -- served from the sub-path
-    (serve_from_sub_path + root_url), authenticated by the trusted
-    X-WEBAUTH-USER header accountmanage sets after a metrics.view check
-    (auth_proxy, whitelisted to the accountmanage host), proxy users get
-    Viewer, and allow_embedding so it renders inside the myaccount Metrics
-    tab. Lets the full dashboards be viewed from myaccount, off-network.
+  * Add four tier dashboards (all auto-installed from dashboards/*.json):
+    Database (PostgreSQL + PgBouncer), Proxy (HAProxy + nginx),
+    DNS (dnsdist + PowerDNS), and Mail Flow (Postfix + Dovecot) -- queue
+    depth, SASL failures, auth/IMAP rates, pool saturation, QPS/cache,
+    backend health, etc. -- over the newly-deployed exporters.
 
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 19:00:00 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 22:10:00 -0500
 

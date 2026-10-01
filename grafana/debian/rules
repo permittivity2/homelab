@@ -11,8 +11,10 @@ override_dh_install:
 		debian/homelab-grafana/etc/grafana/provisioning/datasources/homelab-prometheus.yaml
 	install -D -m 644 provisioning/dashboards/homelab.yaml \
 		debian/homelab-grafana/etc/grafana/provisioning/dashboards/homelab.yaml
-	install -D -m 644 dashboards/fleet-host-health.json \
-		debian/homelab-grafana/etc/grafana/dashboards/homelab/fleet-host-health.json
+	for d in dashboards/*.json; do \
+		install -D -m 644 "$$d" \
+			"debian/homelab-grafana/etc/grafana/dashboards/homelab/$$(basename $$d)"; \
+	done
 	install -D -m 644 services/grafana.yml \
 		debian/homelab-grafana/usr/share/homelab-grafana/services/grafana.yml
 	install -D -m 644 config/grafana.conf \
