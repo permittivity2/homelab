@@ -1,256 +1,36 @@
-homelab-common (0.1.25) unstable; urgency=medium
+homelab-common (0.1.27) unstable; urgency=medium
 
-  * Release v0.1.25
+  * Release v0.1.27
 
- -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:46:46 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 22:58:06 -0500
 
-homelab-common (0.1.25) unstable; urgency=medium
+homelab-common (0.1.27) unstable; urgency=medium
 
-  * Registry: add lookup_backends(feature) -- pull the full live backend
-    instance list for a feature (for HAProxy/PowerDNS pull-model consumers).
+  * Release v0.1.27
 
- -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:46:46 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 22:57:33 -0500
 
-homelab-common (0.1.24) unstable; urgency=medium
+homelab-common (0.1.27) unstable; urgency=medium
 
-  * Release v0.1.24
+  * mount_metrics_route: derive a clean service label from the app class
+    (Homelab::API::App -> "api") instead of Mojo's decamelized moniker.
 
- -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:44:19 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 23:00:00 -0500
 
-homelab-common (0.1.24) unstable; urgency=medium
+homelab-common (0.1.26) unstable; urgency=medium
 
-  * New bootstrap helpers for the always-behind-HAProxy signer model:
-    homelab-bootstrap-haproxy-backend (register a backend server into the
-    HAProxy host's backends.yml + regenerate) and
-    homelab-bootstrap-pdns-api-client (add a client IP to PowerDNS
-    webserver-allow-from). Same local/SSH/manual-print tiering as the
-    existing bootstrap-app-role/pgbouncer-entry helpers.
+  * Release v0.1.26
 
- -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 08:44:18 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 22:55:28 -0500
 
-homelab-common (0.1.23) unstable; urgency=medium
+homelab-common (0.1.26) unstable; urgency=medium
 
-  * Release v0.1.23
+  * Health: mount_health_route now also sets up per-app HTTP metrics
+    (new mount_metrics_route) -- every health-instrumented Mojolicious app
+    publishes homelab_http_requests_total / _duration_seconds /
+    _in_flight + homelab_app_up/uptime as node_exporter textfile *.prom
+    files (per-worker, multi-worker-safe), with no new port/scrape/firewall.
+    No-op where the textfile dir isn't present.
 
- -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 15:08:38 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 22:50:00 -0500
 
-homelab-common (0.1.23) unstable; urgency=medium
-
-  * Registry.pm: export system_agent_token() so a service can present
-    its own host's system_agent credential on an OUTBOUND
-    server-to-server call, not just for register()/lookup() -- needed
-    by homelab-api's own call into homelab-invite's consume endpoint.
-
- -- Gardner <gardner@homelab>  Thu, 24 Sep 2026 00:00:00 -0500
-
-homelab-common (0.1.22) unstable; urgency=medium
-
-  * Release v0.1.22
-
- -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 14:28:28 -0500
-
-homelab-common (0.1.21) unstable; urgency=medium
-
-  * Release v0.1.21
-
- -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 00:48:54 -0500
-
-homelab-common (0.1.20) unstable; urgency=medium
-
-  * Release v0.1.20
-
- -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 00:23:57 -0500
-
-homelab-common (0.1.19) unstable; urgency=medium
-
-  * Release v0.1.19
-
- -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 23:37:06 -0500
-
-homelab-common (0.1.18) unstable; urgency=medium
-
-  * Release v0.1.18
-
- -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 19:49:33 -0500
-
-homelab-common (0.1.18) unstable; urgency=medium
-
-  * Proxy::forward() converted to non-blocking (Mojo::UserAgent's
-    start_p instead of start) -- a blocking forward() parked an entire
-    hypnotoad worker's event loop for the full backend round trip on
-    every gateway-forwarded request, confirmed as a real cause of a
-    stress-test collapse in homelab-api. Callers must now call
-    $c->render_later before invoking forward(). AuditClient gains
-    enqueue_p, a non-blocking twin of enqueue() for callers running
-    inside a Mojo::Pg promise chain; enqueue() itself is unchanged.
-
- -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 19:50:00 -0500
-
-homelab-common (0.1.17) unstable; urgency=medium
-
-  * Release v0.1.17
-
- -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:47 -0500
-
-homelab-common (0.1.17) unstable; urgency=medium
-
-  * AuditClient::enqueue(): rename user_email to actor_email, add
-    required affected_user
-
- -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 12:09:40 -0500
-
-homelab-common (0.1.16) unstable; urgency=medium
-
-  * Release v0.1.16
-
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 21:54:20 -0500
-
-homelab-common (0.1.16) unstable; urgency=medium
-
-  * Gateway forward() now sets X-Forwarded-For/X-Real-IP on the outgoing
-    request to backend services
-
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 21:54:15 -0500
-
-homelab-common (0.1.15) unstable; urgency=medium
-
-  * Release v0.1.15
-
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:43:41 -0500
-
-homelab-common (0.1.15) unstable; urgency=medium
-
-  * Release v0.1.15
-
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:31:25 -0500
-
-homelab-common (0.1.15) unstable; urgency=medium
-
-  * Fix homelab-audit-grant-queue-insert: also grant USAGE on
-    audit.queue_id_seq (INSERT on the table alone isn't enough for a
-    BIGSERIAL column)
-
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:31:25 -0500
-
-homelab-common (0.1.14) unstable; urgency=medium
-
-  * Release v0.1.14
-
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:28:07 -0500
-
-homelab-common (0.1.14) unstable; urgency=medium
-
-  * Add Homelab::Common::AuditClient (system-wide audit trail write
-    path); AuthClient::introspect gains an optional capability param;
-    new homelab-audit-grant-queue-insert bootstrap script
-
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 19:27:24 -0500
-
-homelab-common (0.1.13) unstable; urgency=medium
-
-  * Release v0.1.13
-
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 16:20:19 -0500
-
-homelab-common (0.1.13) unstable; urgency=medium
-
-  * AuthClient::login gains optional client_user_agent/client_ip
-    passthrough (for homelab-sso to relay the real browser's values)
-
- -- Gardner <gardner@homelab>  Fri, 11 Sep 2026 16:20:17 -0500
-
-homelab-common (0.1.12) unstable; urgency=medium
-
-  * Release v0.1.12
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 21:26:43 -0500
-
-homelab-common (0.1.11) unstable; urgency=medium
-
-  * Release v0.1.11
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 21:24:34 -0500
-
-homelab-common (0.1.10) unstable; urgency=medium
-
-  * Release v0.1.10
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 21:20:50 -0500
-
-homelab-common (0.1.9) unstable; urgency=medium
-
-  * Release v0.1.9
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 08:20:20 -0500
-
-homelab-common (0.1.8) unstable; urgency=medium
-
-  * Release v0.1.8
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 07:26:55 -0500
-
-homelab-common (0.1.7) unstable; urgency=medium
-
-  * Release v0.1.7
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 05:12:46 -0500
-
-homelab-common (0.1.6) unstable; urgency=medium
-
-  * Release v0.1.6
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 05:12:39 -0500
-
-homelab-common (0.1.6) unstable; urgency=medium
-
-  * Release v0.1.6
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 04:50:04 -0500
-
-homelab-common (0.1.5) unstable; urgency=medium
-
-  * Release v0.1.5
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 01:37:10 -0500
-
-homelab-common (0.1.4) unstable; urgency=medium
-
-  * Release v0.1.4
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 01:32:18 -0500
-
-homelab-common (0.1.3) unstable; urgency=medium
-
-  * Release v0.1.3
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 01:14:19 -0500
-
-homelab-common (0.1.2) unstable; urgency=medium
-
-  * Release v0.1.2
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 01:12:44 -0500
-
-homelab-common (0.1.1) unstable; urgency=medium
-
-  * Release v0.1.1
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 01:12:37 -0500
-
-homelab-common (0.1.1) unstable; urgency=medium
-
-  * Release v0.1.1
-
- -- Gardner <gardner@homelab>  Wed, 09 Sep 2026 01:11:32 -0500
-
-homelab-common (0.1.0) unstable; urgency=medium
-
-  * Release v0.1.0
-
- -- Gardner <gardner@homelab>  Tue, 08 Sep 2026 22:01:20 -0500
-
-homelab-common (0.0.0) unstable; urgency=medium
-
-  * Placeholder seed entry — build-package.sh prepends real entries above this.
-
- -- Gardner <gardner@homelab>  Tue, 08 Sep 2026 21:52:27 -0500

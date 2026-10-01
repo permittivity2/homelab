@@ -1,14 +1,15 @@
-homelab-node-exporter (0.3.0) unstable; urgency=medium
+homelab-node-exporter (0.4.0) unstable; urgency=medium
 
-  * Release v0.3.0
+  * Release v0.4.0
 
- -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 20:14:21 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 22:54:41 -0500
 
-homelab-node-exporter (0.3.0) unstable; urgency=medium
+homelab-node-exporter (0.4.0) unstable; urgency=medium
 
-  * Firewall: broaden the exporter-port allow to a range
-    { 8081, 8083, 8404, 9100-9199, 9900 } from the monitoring host, so new
-    Go exporters (nginx :9113, etc.) need no further firewall bump.
+  * Enable the textfile collector (systemd drop-in,
+    /var/lib/prometheus/node-exporter made homelab-group-writable) so the
+    Mojolicious apps can publish per-app HTTP metrics there via
+    Homelab::Common::Health's mount_metrics_route, aggregated on :9100.
 
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 20:30:00 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 22:40:00 -0500
 

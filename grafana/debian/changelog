@@ -1,16 +1,15 @@
-homelab-grafana (0.3.0) unstable; urgency=medium
+homelab-grafana (0.4.0) unstable; urgency=medium
 
-  * Release v0.3.0
+  * Release v0.4.0
 
- -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 20:33:23 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 23:01:02 -0500
 
-homelab-grafana (0.3.0) unstable; urgency=medium
+homelab-grafana (0.4.0) unstable; urgency=medium
 
-  * Add four tier dashboards (all auto-installed from dashboards/*.json):
-    Database (PostgreSQL + PgBouncer), Proxy (HAProxy + nginx),
-    DNS (dnsdist + PowerDNS), and Mail Flow (Postfix + Dovecot) -- queue
-    depth, SASL failures, auth/IMAP rates, pool saturation, QPS/cache,
-    backend health, etc. -- over the newly-deployed exporters.
+  * Add the Mojolicious Services dashboard (per-app HTTP request rate,
+    5xx/4xx error rate, avg latency, in-flight, status-class breakdown,
+    uptime) over the homelab_http_* / homelab_app_* metrics the apps now
+    publish via Homelab::Common::Health's mount_metrics_route.
 
- -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 22:10:00 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 23:15:00 -0500
 

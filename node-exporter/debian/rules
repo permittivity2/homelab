@@ -13,3 +13,5 @@ override_dh_install:
 		debian/homelab-node-exporter/usr/share/homelab-node-exporter/nftables/10-homelab-metrics.nft.template
 	install -D -m 644 config/node-exporter.example \
 		debian/homelab-node-exporter/usr/share/homelab-node-exporter/config/node-exporter.example
+	install -D -m 644 systemd/prometheus-node-exporter-textfile.conf \
+		debian/homelab-node-exporter/usr/share/homelab-node-exporter/systemd/prometheus-node-exporter-textfile.conf

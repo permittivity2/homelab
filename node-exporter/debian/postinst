@@ -16,6 +16,18 @@ case "$1" in
         chmod 775 /etc/homelab/services 2>/dev/null || true
         cp "$SHARE_DIR/services/node-exporter.yml" "/etc/homelab/services/node-exporter.yml"
 
+        # --- textfile collector: enable it + make its dir homelab-writable
+        # so the Mojolicious apps (Homelab::Common::Health mount_metrics_route)
+        # can publish per-app *.prom files there, exposed on :9100. --------
+        TEXTFILE_DIR=/var/lib/prometheus/node-exporter
+        mkdir -p "$TEXTFILE_DIR"
+        chgrp homelab "$TEXTFILE_DIR" 2>/dev/null && chmod 0775 "$TEXTFILE_DIR" 2>/dev/null || true
+        DROPIN_DIR=/etc/systemd/system/prometheus-node-exporter.service.d
+        mkdir -p "$DROPIN_DIR"
+        install -m 644 "$SHARE_DIR/systemd/prometheus-node-exporter-textfile.conf" \
+            "$DROPIN_DIR/homelab-textfile.conf"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+
         # --- the exporter itself (Ubuntu package ships + enables it) -----
         systemctl enable prometheus-node-exporter >/dev/null 2>&1 || true
         if systemctl is-active --quiet prometheus-node-exporter; then

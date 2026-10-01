@@ -2,5 +2,5 @@ name: pdns-metrics
 package: homelab-dns
 kind: metrics-exporter
 check:
-  tcp_port: 8081
-description: "PowerDNS native Prometheus endpoint (webserver :8081/metrics)"
+  systemd_unit: pdns
+description: "PowerDNS native Prometheus endpoint (webserver :8081/metrics; binds the data-plane IP, so health = pdns service up)"
