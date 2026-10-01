@@ -1,0 +1,45 @@
+#!/bin/sh
+set -e
+
+SHARE_DIR=/usr/share/homelab-grafana
+
+case "$1" in
+    configure)
+        echo "homelab-grafana post-installation setup..."
+
+        # The provisioning files + dashboard JSON are installed by dpkg
+        # under /etc/grafana/. Make sure the grafana service user can read
+        # the dashboards dir we created.
+        chgrp -R grafana /etc/grafana/dashboards 2>/dev/null || true
+        chmod 755 /etc/grafana/dashboards /etc/grafana/dashboards/homelab 2>/dev/null || true
+
+        # Fleet manifest (topology/services visibility).
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/grafana.yml" "/etc/homelab/services/grafana.yml"
+
+        # Load the new datasource/dashboards (datasource provisioning is
+        # read at start; a restart is the clean way to apply it).
+        systemctl enable grafana-server >/dev/null 2>&1 || true
+        if systemctl is-active --quiet grafana-server; then
+            systemctl restart grafana-server \
+                || echo "  WARNING: grafana-server restart failed -- check 'journalctl -xeu grafana-server'."
+        else
+            systemctl start grafana-server \
+                || echo "  WARNING: grafana-server failed to start -- check 'journalctl -xeu grafana-server'."
+        fi
+
+        echo "homelab-grafana configured (Grafana on :3000; datasource + Fleet Host Health dashboard provisioned)."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

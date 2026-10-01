@@ -1,0 +1,89 @@
+{
+  "uid": "homelab-fleet-health",
+  "title": "Fleet Host Health",
+  "tags": ["homelab", "node-exporter"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Hosts Up",
+      "datasource": { "type": "prometheus", "uid": "homelab-prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "none", "textMode": "value_and_name" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "homelab-prometheus" }, "expr": "count(up{job=\"node\"} == 1)", "legendFormat": "up", "instant": true },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "homelab-prometheus" }, "expr": "count(up{job=\"node\"})", "legendFormat": "total", "instant": true }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Fleet CPU Busy (avg)",
+      "datasource": { "type": "prometheus", "uid": "homelab-prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "area" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "homelab-prometheus" }, "expr": "avg(100 - (avg by(host)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[5m])) * 100))", "legendFormat": "cpu" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Fleet Memory Used (avg)",
+      "datasource": { "type": "prometheus", "uid": "homelab-prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 92 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "area" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "homelab-prometheus" }, "expr": "avg(100 * (1 - node_memory_MemAvailable_bytes{job=\"node\"} / node_memory_MemTotal_bytes{job=\"node\"}))", "legendFormat": "mem" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Fleet Root Disk Used (max)",
+      "datasource": { "type": "prometheus", "uid": "homelab-prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "area" },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "homelab-prometheus" }, "expr": "max(100 * (1 - node_filesystem_avail_bytes{job=\"node\",mountpoint=\"/\"} / node_filesystem_size_bytes{job=\"node\",mountpoint=\"/\"}))", "legendFormat": "disk" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU Busy % by host",
+      "datasource": { "type": "prometheus", "uid": "homelab-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 8, "lineWidth": 1, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "homelab-prometheus" }, "expr": "100 - (avg by(host)(rate(node_cpu_seconds_total{job=\"node\",mode=\"idle\"}[5m])) * 100)", "legendFormat": "{{host}}" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory Used % by host",
+      "datasource": { "type": "prometheus", "uid": "homelab-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 8, "lineWidth": 1, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "homelab-prometheus" }, "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"node\"} / node_memory_MemTotal_bytes{job=\"node\"})", "legendFormat": "{{host}}" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Root Disk Used % by host",
+      "datasource": { "type": "prometheus", "uid": "homelab-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 8, "lineWidth": 1, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "homelab-prometheus" }, "expr": "100 * (1 - node_filesystem_avail_bytes{job=\"node\",mountpoint=\"/\"} / node_filesystem_size_bytes{job=\"node\",mountpoint=\"/\"})", "legendFormat": "{{host}}" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Load (1m) by host",
+      "datasource": { "type": "prometheus", "uid": "homelab-prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 13 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 8, "lineWidth": 1, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [ { "refId": "A", "datasource": { "type": "prometheus", "uid": "homelab-prometheus" }, "expr": "node_load1{job=\"node\"}", "legendFormat": "{{host}}" } ]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+name: grafana
+package: homelab-grafana
+kind: metrics-ui
+check:
+  systemd_unit: grafana-server
+  tcp_port: 3000
+description: "Grafana dashboards over Prometheus (monitoring host); fleet host-health + per-tier views"

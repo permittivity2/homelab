@@ -1,0 +1,15 @@
+# Managed by homelab-grafana. Loads JSON dashboards shipped by the
+# homelab-* packages from the directory below (file provider).
+apiVersion: 1
+
+providers:
+  - name: homelab
+    orgId: 1
+    folder: Homelab
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards/homelab
+      foldersFromFilesStructure: false

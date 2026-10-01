@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 provisioning/datasources/homelab-prometheus.yaml \
+		debian/homelab-grafana/etc/grafana/provisioning/datasources/homelab-prometheus.yaml
+	install -D -m 644 provisioning/dashboards/homelab.yaml \
+		debian/homelab-grafana/etc/grafana/provisioning/dashboards/homelab.yaml
+	install -D -m 644 dashboards/fleet-host-health.json \
+		debian/homelab-grafana/etc/grafana/dashboards/homelab/fleet-host-health.json
+	install -D -m 644 services/grafana.yml \
+		debian/homelab-grafana/usr/share/homelab-grafana/services/grafana.yml

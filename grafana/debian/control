@@ -1,0 +1,21 @@
+Source: homelab-grafana
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-grafana
+Architecture: all
+Depends: grafana, homelab-prometheus
+Recommends: homelab-agent
+Description: Grafana dashboard provisioning for the homelab-* ecosystem
+ Provisions Grafana on the fleet monitoring host: a Prometheus datasource
+ (pointed at the local homelab-prometheus on :9090) and the homelab
+ dashboards (fleet host-health to start; per-tier views are additive JSON
+ under /etc/grafana/dashboards/homelab). Depends on the upstream grafana
+ package -- Grafana is NOT in the Ubuntu archive, so its official .deb is
+ staged + installed on the monitoring host before this package. Advertises
+ itself into the fleet topology (kind: metrics-ui). SSO-gated access + the
+ accountmanage embed are layered on separately.
