@@ -63,6 +63,19 @@ defaults
     timeout client  30m
     timeout server  30m
 
+# Prometheus metrics: HAProxy's built-in exporter service on a dedicated
+# HTTP-mode frontend (the rest of this config is mode tcp). Scraped by the
+# fleet monitoring host at :8404/metrics; homelab-node-exporter's firewall
+# drop-in already opens :8404 to the monitoring host only. No auth here --
+# the port is firewalled to the monitoring host, same posture as every
+# other exporter in this fleet.
+frontend prometheus_metrics
+    bind *:8404
+    mode http
+    option httplog
+    http-request use-service prometheus-exporter if { path /metrics }
+    http-request return status 404 content-type "text/plain" string "not found"
+
 HEADER
 
 for my $backend (@backends) {
@@ -241,6 +254,15 @@ if (-d $manifest_dir) {
             fronts      => [map { "$b->{name}\@$_" } @t],
         };
     } @backends;
+    # Advertise the always-on Prometheus metrics frontend (HEADER above) so
+    # homelab-prometheus discovers + scrapes this host at :8404.
+    push @manifest, {
+        name        => 'haproxy-metrics',
+        package     => 'homelab-haproxy',
+        kind        => 'metrics-exporter',
+        check       => { tcp_port => 8404 },
+        description => 'HAProxy built-in Prometheus exporter (:8404/metrics)',
+    };
     eval { DumpFile($manifest_file, \@manifest); 1 }
         or print "  WARNING: failed to write $manifest_file -- fleet status view may be stale: $@\n";
 }

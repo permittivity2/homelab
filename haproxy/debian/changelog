@@ -1,122 +1,16 @@
-homelab-haproxy (0.1.11) unstable; urgency=medium
+homelab-haproxy (0.1.12) unstable; urgency=medium
 
-  * Release v0.1.11
+  * Release v0.1.12
 
- -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 19:58:07 -0500
+ -- Gardner <gardner@homelab>  Wed, 30 Sep 2026 19:23:43 -0500
 
-homelab-haproxy (0.1.11) unstable; urgency=medium
+homelab-haproxy (0.1.12) unstable; urgency=medium
 
-  * Fleet manifest: regenerate it on EVERY run, independent of whether
-    haproxy.cfg changed. The 0.1.10 no-op fast path exited before the
-    manifest write, so a discover: backend whose resolved server set was
-    already live left a stale 'fronts: [<name>@]' placeholder in the
-    manifest -- which materialized as a hostless node in the
-    topology/services view. Only the config install+reload is now gated on
-    an actual change; the manifest always reflects the resolved targets.
+  * Prometheus metrics: add an always-on HTTP-mode `prometheus_metrics`
+    frontend (:8404/metrics) using HAProxy's built-in prometheus-exporter
+    service, and advertise it as a `haproxy-metrics` fleet service
+    (kind: metrics-exporter) so homelab-prometheus discovers + scrapes it.
+    Port is firewalled to the monitoring host by homelab-node-exporter.
 
- -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 20:15:00 -0500
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 30 Sep 2026 16:00:00 -0500
 
-homelab-haproxy (0.1.10) unstable; urgency=medium
-
-  * Fleet manifest: report the RESOLVED backend servers (incl. discover:ed
-    ones) in each frontend's fronts, not a "<name>@" placeholder -- a
-    discover: backend previously emitted a malformed front-target that
-    materialized as a hostless node in the topology/services view.
-
- -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 19:52:00 -0500
-
-homelab-haproxy (0.1.9) unstable; urgency=medium
-
-  * Release v0.1.9
-
- -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:50:32 -0500
-
-homelab-haproxy (0.1.9) unstable; urgency=medium
-
-  * Pull model: backends.yml entries may use discover: <feature> to derive
-    their server list live from homelab-api (fleet-agent view) instead of a
-    static list; a homelab-haproxy-pull.timer re-runs apply-backends every
-    ~2min (no-op fast path avoids reloads when unchanged). Lets the DKIM
-    signer pool track the fleet with no cross-host push.
-
- -- Gardner <gardner@homelab>  Tue, 29 Sep 2026 09:50:32 -0500
-
-homelab-haproxy (0.1.8) unstable; urgency=medium
-
-  * Release v0.1.8
-
- -- Gardner <gardner@homelab>  Mon, 28 Sep 2026 22:08:32 -0500
-
-homelab-haproxy (0.1.7) unstable; urgency=medium
-
-  * Release v0.1.7
-
- -- Gardner <gardner@homelab>  Mon, 28 Sep 2026 21:23:30 -0500
-
-homelab-haproxy (0.1.6) unstable; urgency=medium
-
-  * Release v0.1.6
-
- -- Gardner <gardner@homelab>  Thu, 17 Sep 2026 05:51:58 -0500
-
-homelab-haproxy (0.1.6) unstable; urgency=medium
-
-  * Raise default timeout client/server from 1m to 30m -- 1m was
-    silently killing long-lived IMAP/IMAPS sessions mid-use.
-
- -- Gardner <gardner@homelab>  Thu, 17 Sep 2026 05:50:00 -0500
-
-homelab-haproxy (0.1.5) unstable; urgency=medium
-
-  * Release v0.1.5
-
- -- Gardner <gardner@homelab>  Wed, 16 Sep 2026 03:30:24 -0500
-
-homelab-haproxy (0.1.4) unstable; urgency=medium
-
-  * Release v0.1.4
-
- -- Gardner <gardner@homelab>  Tue, 15 Sep 2026 22:45:23 -0500
-
-homelab-haproxy (0.1.3) unstable; urgency=medium
-
-  * Release v0.1.3
-
- -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 23:41:06 -0500
-
-homelab-haproxy (0.1.2) unstable; urgency=medium
-
-  * Release v0.1.2
-
- -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 21:29:02 -0500
-
-homelab-haproxy (0.1.1) unstable; urgency=medium
-
-  * Release v0.1.1
-
- -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 10:00:16 -0500
-
-homelab-haproxy (0.1.1) unstable; urgency=medium
-
-  * Add send-proxy to every generated backend server line, confirmed
-    against this project's own production HAProxy (proxy01), which
-    uses exactly this on every mail-stack backend so postfix/dovecot
-    see the real client IP instead of the proxy's own
-
- -- Gardner <gardner@homelab>  Sun, 13 Sep 2026 09:59:51 -0500
-
-homelab-haproxy (0.1.0) unstable; urgency=medium
-
-  * Initial release: HAProxy TCP-passthrough edge for raw-TCP
-    protocols (SMTP, submission, IMAP, IMAPS) -- decouples "holds the
-    public IP" from "runs the actual service" so homelab-postfix/
-    homelab-dovecot can move off the internet-facing host while their
-    ports keep working from the same public IP. homelab-haproxy-apply-
-    backends regenerates /etc/haproxy/haproxy.cfg wholesale from an
-    editable backends.yml, validating with `haproxy -c` before ever
-    touching the live config -- a failed validation leaves the
-    previous working config completely untouched. Explicitly does not,
-    and structurally cannot, handle DNS's UDP traffic; out of scope for
-    this tool by design, not an oversight
-
- -- Gardner <gardner@homelab>  Sat, 12 Sep 2026 22:46:36 -0500
