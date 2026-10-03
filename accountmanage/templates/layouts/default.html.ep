@@ -545,7 +545,16 @@
         load().then(function (list) {
           if (!list.length) { listDiv.innerHTML = '<p class="muted">No managed domains.</p>'; return; }
           listDiv.innerHTML = list.map(function (x) {
-            return '<label style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0;font-size:0.88rem;"><input type="checkbox" class="ca-cb" value="' + hlEsc(x.domain) + '"><span>' + hlEsc(x.domain) + '</span><span class="muted" style="margin-left:auto;font-size:0.8rem;">' + (x.destination ? '→ ' + hlEsc(x.destination) : 'no catch-all') + '</span></label>';
+            var route;
+            if (x.destination) {
+              var sa = x.send_enabled
+                ? '<span style="color:var(--ok)">send-as on</span>' + (x.has_dkim ? '' : ' <span style="color:var(--danger)">(no DKIM)</span>')
+                : '<span class="muted">receive-only</span>';
+              route = '→ ' + hlEsc(x.destination) + ' · ' + sa;
+            } else {
+              route = 'no catch-all';
+            }
+            return '<label style="display:flex;align-items:center;gap:0.5rem;padding:0.25rem 0;font-size:0.88rem;"><input type="checkbox" class="ca-cb" value="' + hlEsc(x.domain) + '"><span>' + hlEsc(x.domain) + '</span><span class="muted" style="margin-left:auto;font-size:0.8rem;">' + route + '</span></label>';
           }).join('');
         });
       }
