@@ -1,0 +1,6 @@
+name: keepalived
+package: homelab-keepalived
+kind: ha-vrrp
+check:
+  systemd_unit: keepalived
+description: "VRRP virtual-IP failover (keepalived): floats the public edge VIP between internet-facing nodes; runs on every node in the VRRP group (one master, the rest standby)"

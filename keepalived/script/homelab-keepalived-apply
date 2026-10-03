@@ -1,0 +1,186 @@
+#!/usr/bin/perl
+# homelab-keepalived-apply -- generate /etc/keepalived/keepalived.conf and the
+# VRRP firewall drop-in from /etc/homelab/keepalived/vrrp.yml, validate, and
+# reload keepalived.
+#
+# keepalived.conf is a MANAGED file: do not hand-edit it. Edit vrrp.yml and
+# re-run this script. Safe to run repeatedly (idempotent): it only reloads
+# keepalived, and only re-applies firewall rules by delete-by-comment then
+# add (never flushing the ruleset, so bad-ips' runtime set is preserved).
+use strict;
+use warnings;
+use YAML::XS qw(LoadFile);
+
+my $CFG   = '/etc/homelab/keepalived/vrrp.yml';
+my $OUT   = '/etc/keepalived/keepalived.conf';
+my $NFT   = '/etc/nftables.d/15-homelab-vrrp.nft';
+my $CHECK = '/usr/bin/homelab-keepalived-check';
+
+die "homelab-keepalived-apply: no $CFG -- nothing to apply\n" unless -f $CFG;
+my $c = eval { LoadFile($CFG) } or die "homelab-keepalived-apply: cannot parse $CFG: $@\n";
+ref $c eq 'HASH' or die "homelab-keepalived-apply: $CFG is not a YAML mapping\n";
+
+# --- enabled toggle -------------------------------------------------------
+my $enabled = exists $c->{enabled} ? $c->{enabled} : 1;
+if (!$enabled) {
+    system(qw(systemctl disable --now keepalived));
+    print "homelab-keepalived: disabled via vrrp.yml (enabled: false)\n";
+    exit 0;
+}
+
+# --- required fields ------------------------------------------------------
+for my $k (qw(instance router_id priority vrrp_interface unicast_src vip vip_interface)) {
+    die "homelab-keepalived-apply: vrrp.yml missing required key: $k\n"
+        unless defined $c->{$k} && $c->{$k} ne '';
+}
+my @peers = grep { defined && /\S/ } @{ $c->{peers} || [] };
+die "homelab-keepalived-apply: vrrp.yml needs at least one entry under 'peers:'\n" unless @peers;
+
+my $state   = $c->{state}      // 'BACKUP';
+my $advert  = $c->{advert_int} // 1;
+my $auth    = substr(($c->{auth_pass} // 'hlvrrp'), 0, 8);  # keepalived PASS auth: max 8 chars
+my $gw      = $c->{default_route_via};
+my @track   = grep { defined && /\S/ } @{ $c->{track_services} || [] };
+my $weight  = $c->{track_weight} // -60;
+my $vip_if  = $c->{vip_interface};
+
+# --- render keepalived.conf ----------------------------------------------
+my $peerblock = join("\n", map { "        $_" } @peers);
+
+my ($trackscript, $trackref) = ('', '');
+if (@track) {
+    $trackscript = <<"EOS";
+vrrp_script chk_edge {
+    script "$CHECK"
+    interval 2
+    timeout 3
+    fall 2
+    rise 2
+    weight $weight
+}
+
+EOS
+    $trackref = "    track_script {\n        chk_edge\n    }\n";
+}
+
+my $vroutes = '';
+if (defined $gw && $gw ne '') {
+    $vroutes = "    virtual_routes {\n        default via $gw dev $vip_if\n    }\n";
+}
+
+my $conf = <<"EOC";
+! Managed by homelab-keepalived -- DO NOT EDIT BY HAND.
+! Regenerated from $CFG by homelab-keepalived-apply.
+global_defs {
+    enable_script_security
+    script_user root
+    vrrp_garp_master_refresh 60
+}
+
+$trackscript! vrrp_instance: unicast VRRP on the internal plane; the VIP + the
+! master-only default route float together on failover.
+vrrp_instance $c->{instance} {
+    state $state
+    interface $c->{vrrp_interface}
+    virtual_router_id $c->{router_id}
+    priority $c->{priority}
+    advert_int $advert
+    unicast_src_ip $c->{unicast_src}
+    unicast_peer {
+$peerblock
+    }
+    authentication {
+        auth_type PASS
+        auth_pass $auth
+    }
+    virtual_ipaddress {
+        $c->{vip} dev $vip_if
+    }
+$vroutes$trackref}
+EOC
+
+# --- write to a temp file, validate, then install atomically --------------
+my $tmp = "$OUT.new.$$";
+open my $fh, '>', $tmp or die "homelab-keepalived-apply: cannot write $tmp: $!\n";
+print $fh $conf;
+close $fh;
+chmod 0644, $tmp;
+
+# Loose validation: balanced braces + the instance keyword present. (We do
+# NOT use `keepalived --config-test` here: on some builds it tries to touch
+# interfaces, which is undesirable from a postinst.)
+{
+    open my $vf, '<', $tmp or die "homelab-keepalived-apply: cannot re-read $tmp: $!\n";
+    local $/; my $txt = <$vf>; close $vf;
+    my $open  = ($txt =~ tr/{//);
+    my $close = ($txt =~ tr/}//);
+    if ($open != $close || $txt !~ /vrrp_instance/) {
+        unlink $tmp;
+        die "homelab-keepalived-apply: generated config failed validation (braces $open/$close)\n";
+    }
+}
+rename $tmp, $OUT or die "homelab-keepalived-apply: cannot install $OUT: $!\n";
+chmod 0644, $OUT;
+print "homelab-keepalived: wrote $OUT\n";
+
+# --- VRRP firewall drop-in (IP proto 112 to/from peers) -------------------
+# Both input and output are opened only to the configured peers (+ self).
+# Output is included only when this host actually has a drop-policy output
+# base chain (otherwise it's unnecessary and the boot-time include would
+# reference a chain that may not exist).
+if (-d '/etc/nftables.d') {
+    my $peerset = join(', ', @peers, $c->{unicast_src});
+    my $have_out = (qx{nft list chain inet filter output 2>/dev/null} // '') =~ /policy\s+drop/;
+
+    my $body = "# Managed by homelab-keepalived -- regenerated from $CFG.\n"
+             . "# Opens VRRP (IP proto 112) between this node and its unicast peer(s)\n"
+             . "# so keepalived advertisements are exchanged. Appended to the\n"
+             . "# drop-policy base chain(s) WITHOUT flushing the ruleset.\n"
+             . "add rule inet filter input ip protocol vrrp ip saddr { $peerset } accept comment \"homelab-vrrp-allow\"\n";
+    $body .= "add rule inet filter output ip protocol vrrp ip daddr { $peerset } accept comment \"homelab-vrrp-out\"\n"
+        if $have_out;
+
+    if (open my $nf, '>', $NFT) {
+        print $nf $body;
+        close $nf;
+        chmod 0644, $NFT;
+
+        if (system('sh', '-c', 'nft list chain inet filter input >/dev/null 2>&1') == 0) {
+            # drop any prior rules carrying our comments, then re-apply (no flush)
+            _nft_delete_by_comment('input',  'homelab-vrrp-allow');
+            _nft_delete_by_comment('output', 'homelab-vrrp-out') if $have_out;
+            if (system("nft -f $NFT 2>/dev/null") == 0) {
+                print "homelab-keepalived: VRRP firewall opened to { $peerset }"
+                    . ($have_out ? " (input+output)\n" : " (input)\n");
+            } else {
+                warn "homelab-keepalived: WARNING could not apply $NFT live -- effective next nftables reload/boot.\n";
+            }
+        } else {
+            warn "homelab-keepalived: NOTE 'inet filter input' not found -- wrote $NFT for next boot only.\n";
+        }
+    } else {
+        warn "homelab-keepalived: WARNING cannot write $NFT: $!\n";
+    }
+}
+
+# --- reload / start keepalived -------------------------------------------
+system(qw(systemctl enable keepalived)) ;
+if (system(qw(systemctl is-active --quiet keepalived)) == 0) {
+    system(qw(systemctl reload keepalived));
+    print "homelab-keepalived: reloaded keepalived\n";
+} else {
+    if (system(qw(systemctl start keepalived)) == 0) {
+        print "homelab-keepalived: started keepalived\n";
+    } else {
+        warn "homelab-keepalived: WARNING keepalived failed to start -- check 'systemctl status keepalived' and 'journalctl -u keepalived'.\n";
+    }
+}
+exit 0;
+
+sub _nft_delete_by_comment {
+    my ($chain, $comment) = @_;
+    for my $line (qx{nft -a list chain inet filter $chain 2>/dev/null}) {
+        next unless $line =~ /\Q$comment\E/ && $line =~ /handle (\d+)/;
+        system("nft delete rule inet filter $chain handle $1 2>/dev/null");
+    }
+}

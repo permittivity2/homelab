@@ -1,0 +1,30 @@
+Source: homelab-keepalived
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-keepalived
+Architecture: all
+Depends: perl (>= 5.36), libyaml-libyaml-perl, keepalived, nftables
+Recommends: homelab-agent
+Description: VRRP virtual-IP failover (keepalived) for the homelab-* edge
+ Floats a public virtual IP (VIP) between two or more internet-facing
+ fleet nodes using keepalived/VRRP, so if the node that currently owns the
+ public IP dies, a standby node claims it -- sending a gratuitous ARP so
+ the upstream AT&T gateway follows the IP to the new node's MAC with no
+ gateway reconfiguration (the gateway routes the public subnet to the LAN
+ and resolves each public IP by ARP, so this "just works" with no AT&T
+ side change).
+ .
+ Reads an editable /etc/homelab/keepalived/vrrp.yml (priority, VRRP
+ interface + unicast peers on the internal plane, the VIP and its public
+ interface, the master-only default route) and regenerates
+ /etc/keepalived/keepalived.conf plus a safe (no-flush) VRRP firewall
+ drop-in. VRRP advertisements run as unicast on the internal service
+ plane; the VIP and the master-only default route move together on
+ failover. Pairs with homelab-webproxy / homelab-haproxy /
+ homelab-dnsdist, which bind 0.0.0.0 and so serve the VIP automatically
+ whenever this node holds it.

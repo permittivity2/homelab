@@ -1,0 +1,41 @@
+#!/bin/sh
+set -e
+
+NFT_DROPIN=/etc/nftables.d/15-homelab-vrrp.nft
+
+case "$1" in
+    purge)
+        # Remove our fleet manifest so homelab-agent stops advertising a
+        # service this host no longer runs (a stray manifest reads as a
+        # phantom outage -- see the fleet-agent manifest-drift fix).
+        rm -f /etc/homelab/services/keepalived.yml
+        rm -rf /etc/homelab/keepalived
+        rm -f /etc/keepalived/keepalived.conf
+        rm -f /etc/systemd/system/systemd-networkd-wait-online.service.d/10-homelab-any.conf
+        rmdir /etc/systemd/system/systemd-networkd-wait-online.service.d 2>/dev/null || true
+        systemctl daemon-reload >/dev/null 2>&1 || true
+
+        # Remove the VRRP firewall drop-in + the live rules (delete by our
+        # comments, no ruleset flush so bad-ips' runtime set is untouched).
+        if [ -f "$NFT_DROPIN" ]; then
+            rm -f "$NFT_DROPIN"
+            if command -v nft >/dev/null 2>&1 && nft list chain inet filter input >/dev/null 2>&1; then
+                for hh in $(nft -a list chain inet filter input 2>/dev/null \
+                        | awk '/homelab-vrrp-allow/ {print $NF}'); do
+                    nft delete rule inet filter input handle "$hh" 2>/dev/null || true
+                done
+                for hh in $(nft -a list chain inet filter output 2>/dev/null \
+                        | awk '/homelab-vrrp-out/ {print $NF}'); do
+                    nft delete rule inet filter output handle "$hh" 2>/dev/null || true
+                done
+            fi
+        fi
+        ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+exit 0

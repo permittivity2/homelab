@@ -1,0 +1,27 @@
+#!/bin/sh
+# homelab-keepalived-check -- exit 0 if all tracked edge services are active.
+#
+# Used as a keepalived vrrp_script (track_script). A NON-zero exit lowers
+# this node's effective VRRP priority by the configured track_weight, so a
+# peer whose services are healthy can take over the VIP even though this
+# node is still up. Reads the same track_services list from vrrp.yml that
+# homelab-keepalived-apply wrote into keepalived.conf, so the two never
+# drift. If no track_services are configured, this check is a no-op (0).
+set -eu
+
+CFG=/etc/homelab/keepalived/vrrp.yml
+[ -f "$CFG" ] || exit 0
+
+# Minimal YAML parse of the top-level "track_services:" list block.
+svcs=$(awk '
+    /^track_services:[[:space:]]*$/ { inlist=1; next }
+    inlist && /^[[:space:]]*-[[:space:]]*/ { line=$0; sub(/^[[:space:]]*-[[:space:]]*/,"",line); sub(/[[:space:]]*#.*$/,"",line); gsub(/[[:space:]]/,"",line); if (line != "") print line; next }
+    inlist && /^[^[:space:]-]/ { inlist=0 }
+' "$CFG")
+
+[ -z "$svcs" ] && exit 0
+
+for s in $svcs; do
+    systemctl is-active --quiet "$s" || exit 1
+done
+exit 0

@@ -1,0 +1,63 @@
+#!/bin/sh
+set -e
+
+CONFIG_DIR=/etc/homelab/keepalived
+VRRP_FILE="$CONFIG_DIR/vrrp.yml"
+SHARE_DIR=/usr/share/homelab-keepalived
+
+case "$1" in
+    configure)
+        echo "homelab-keepalived post-installation setup..."
+        mkdir -p "$CONFIG_DIR"
+
+        # --- fleet service manifest (topology/services visibility) -------
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/keepalived.yml" "/etc/homelab/services/keepalived.yml"
+
+        # --- boot-time fix for an address-less VIP interface -------------
+        # keepalived OWNS the VIP, so the vip_interface carries no address
+        # of its own. systemd-networkd-wait-online then blocks until its
+        # ~2min timeout waiting for that interface to become "routable",
+        # which delays every After=network-online.target service (nginx,
+        # haproxy, dnsdist...) by that long on each boot. Make wait-online
+        # succeed as soon as ANY interface is online. Only touches hosts
+        # actually using systemd-networkd.
+        if systemctl is-active --quiet systemd-networkd 2>/dev/null; then
+            WO_DROPIN=/etc/systemd/system/systemd-networkd-wait-online.service.d
+            mkdir -p "$WO_DROPIN"
+            printf '[Service]\nExecStart=\nExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any\n' \
+                > "$WO_DROPIN/10-homelab-any.conf"
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+
+        if [ ! -f "$VRRP_FILE" ]; then
+            cp "$SHARE_DIR/config/vrrp.example.yml" "$VRRP_FILE"
+            chmod 0644 "$VRRP_FILE"
+            echo "  wrote a starter $VRRP_FILE -- EDIT IT (priority, unicast_src,"
+            echo "  peers, vip), then run: homelab-keepalived-apply"
+            # Do NOT start keepalived with an unconfigured/sample VIP: a node
+            # that elected itself master could hijack the VIP before its peer
+            # relationship is set up. Keep it disabled until apply runs.
+            systemctl disable keepalived >/dev/null 2>&1 || true
+            systemctl stop keepalived >/dev/null 2>&1 || true
+        else
+            echo "  applying $VRRP_FILE..."
+            homelab-keepalived-apply \
+                || echo "  WARNING: homelab-keepalived-apply reported a problem -- see output above."
+        fi
+
+        echo "homelab-keepalived configured."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

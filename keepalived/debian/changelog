@@ -1,0 +1,23 @@
+homelab-keepalived (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Sat, 03 Oct 2026 12:25:37 -0500
+
+homelab-keepalived (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Sat, 03 Oct 2026 11:55:21 -0500
+
+homelab-keepalived (0.1.0) unstable; urgency=medium
+
+  * Initial release: VRRP virtual-IP failover (keepalived) for the
+    homelab-* internet-facing edge. Floats a public VIP between edge
+    nodes via unicast VRRP on the internal plane; the VIP and a
+    master-only default route move together on failover; optional
+    per-service health tracking lowers priority so a healthy peer wins;
+    ships a safe (no-flush, delete-by-comment) VRRP firewall drop-in for
+    the drop-policy input AND output base chains.
+
+ -- Gardner <gardner@homelab>  Fri, 03 Oct 2026 12:00:00 -0500

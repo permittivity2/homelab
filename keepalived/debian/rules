@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/vrrp.example.yml \
+		debian/homelab-keepalived/usr/share/homelab-keepalived/config/vrrp.example.yml
+	install -D -m 644 services/keepalived.yml \
+		debian/homelab-keepalived/usr/share/homelab-keepalived/services/keepalived.yml
+	install -D -m 755 script/homelab-keepalived-check \
+		debian/homelab-keepalived/usr/bin/homelab-keepalived-check
