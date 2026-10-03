@@ -446,7 +446,28 @@
       var bulk = document.getElementById('ca-bulk');
       var listDiv = document.getElementById('ca-list');
       var bulkStatus = document.getElementById('ca-bulk-status');
+      var sendCb = document.getElementById('ca-send');
+      var sendNote = document.getElementById('ca-send-note');
       var cache = null;
+      var curD = null;   // the currently-shown domain row (for the send-as note)
+
+      function updateSendNote() {
+        if (!sendNote || !sendCb) return;
+        var hasDkim = !!(curD && curD.has_dkim);
+        if (sendCb.checked && !hasDkim) {
+          sendNote.innerHTML = '<span style="color:var(--danger)">⚠ No active DKIM for this domain — outbound mail would be unsigned and likely rejected or spam-filed. Set up DKIM for this domain first, then enable send-as.</span>';
+        } else if (sendCb.checked) {
+          sendNote.innerHTML = '<span class="muted">Send-as enabled: the destination mailbox may send from any address at this domain (DKIM is active).</span>';
+        } else {
+          sendNote.innerHTML = '<span class="muted">Receive-only: forwards inbound mail; cannot send as this domain.</span>';
+        }
+      }
+      function renderSend(d) {
+        curD = d || null;
+        if (sendCb) sendCb.checked = !!(d && d.send_enabled);
+        updateSendNote();
+      }
+      if (sendCb) sendCb.addEventListener('change', updateSendNote);
 
       function load() {
         return fetch('/admin/domains/catch-alls', { headers: { 'Accept': 'application/json' } })
@@ -468,8 +489,9 @@
         (cache ? Promise.resolve(cache) : load()).then(function () {
           var d = findDomain(name);
           if (!d) { current.innerHTML = '<span class="muted">New domain — no catch-all yet. Setting one makes it receive &amp; forward all mail.</span>'; }
-          else if (d.destination) { current.innerHTML = 'Currently: <strong>all mail → ' + hlEsc(d.destination) + '</strong>' + (d.mail_enabled ? '' : ' <span style="color:var(--danger)">(inbound mail disabled)</span>'); if (destInput && !destInput.value) destInput.value = d.destination; }
+          else if (d.destination) { current.innerHTML = 'Currently: <strong>all mail → ' + hlEsc(d.destination) + '</strong>' + (d.mail_enabled ? '' : ' <span style="color:var(--danger)">(inbound mail disabled)</span>') + (d.send_enabled ? ' · <span style="color:var(--ok)">send-as on</span>' : ' · <span class="muted">receive-only</span>'); if (destInput && !destInput.value) destInput.value = d.destination; }
           else { current.innerHTML = '<span class="muted">No catch-all set for this domain.</span>'; }
+          renderSend(d);
         });
       }
 
@@ -500,8 +522,8 @@
         var domain = domainInput.value.trim(), dest = destInput.value.trim();
         if (!domain || !dest) { say(status, 'Enter a domain and a destination mailbox.', false); return; }
         say(status, 'Setting…', true);
-        post('/admin/domains/catch-all/set', { domain: domain, destination: dest }).then(function (r) {
-          if (r.ok) { say(status, 'All mail for ' + domain + ' now → ' + dest, true); cache = null; showCurrent(domain); }
+        post('/admin/domains/catch-all/set', { domain: domain, destination: dest, send_enabled: (sendCb && sendCb.checked) ? 1 : '' }).then(function (r) {
+          if (r.ok) { say(status, 'All mail for ' + domain + ' now → ' + dest + ((sendCb && sendCb.checked) ? ' (send-as enabled)' : ''), true); cache = null; showCurrent(domain); }
           else { say(status, (r.body && r.body.error) || 'Failed', false); }
         });
       });

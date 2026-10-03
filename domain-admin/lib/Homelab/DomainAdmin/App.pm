@@ -116,6 +116,35 @@ sub startup ($self) {
         return $result->{email};
     });
 
+    # site_admin OR a specific capability -- for abilities this otherwise
+    # site_admin-only service deliberately exposes to a NON-site_admin
+    # group that's been granted a named permission (e.g. domains.catchall
+    # for the catch-all routing area). Reuses introspect's ?capability=,
+    # the same mechanism homelab-api's _has_capability_p answers (site_admin
+    # always wins there, so a site_admin passes even without the row).
+    # Renders 401/403 + returns undef on failure, exactly like
+    # authenticated_email, so callers stay `my $email = ... or return;`.
+    $self->helper(authenticated_email_with_capability => sub ($c, $cap) {
+        my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+        unless ($jwt) {
+            $c->render(json => { error => 'not logged in' }, status => 401);
+            return undef;
+        }
+        my $result = introspect($jwt, api_base => $self->api_base, capability => $cap);
+        unless ($result) {
+            $c->render(json => { error => 'not logged in' }, status => 401);
+            return undef;
+        }
+        my $ok = (grep { $_ eq 'site_admin' } @{ $result->{roles} // [] })
+            || $result->{has_capability};
+        unless ($ok) {
+            $c->render(json => { error => "capability '$cap' required" }, status => 403);
+            return undef;
+        }
+        $c->stash(current_jti => $result->{jti});
+        return $result->{email};
+    });
+
     # NOT a human -- checks for the system_agent role instead, same
     # introspect()-based mechanism as the two helpers above (this
     # service doesn't hold the JWT signing secret, unlike homelab-api's

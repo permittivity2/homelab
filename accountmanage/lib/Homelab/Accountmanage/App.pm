@@ -220,6 +220,20 @@ sub _admin_auth ($c) {
     return ($email, $jwt);
 }
 
+# Catch-all routing gate: ($email, $jwt) if the caller is site_admin OR
+# holds the domains.catchall capability -- so a group can be granted the
+# "Domain catch-all routing" area (incl. domain send-as) without full
+# site_admin. site_admin short-circuits (it implicitly holds every
+# capability), else one introspect ?capability round-trip decides.
+sub _catchall_auth ($c) {
+    my ($email, $jwt, $roles) = _current_auth($c);
+    return (undef, undef) unless $email && $jwt;
+    return ($email, $jwt) if grep { $_ eq 'site_admin' } @$roles;
+    my $r = introspect($jwt, api_base => $c->app->api_base, capability => 'domains.catchall');
+    return (undef, undef) unless $r && $r->{has_capability};
+    return ($email, $jwt);
+}
+
 # Metrics gate: ($email, $jwt) if the caller holds the metrics.view
 # capability (site_admin always does; any other role if granted via the
 # RBAC UI), else (undef, undef). Uses introspect's ?capability -- the same
@@ -448,6 +462,15 @@ sub dashboard ($c) {
     if ($has_metrics) { $c->session(metrics_ok => 1, metrics_user => $email); }
     else              { delete $c->session->{metrics_ok}; delete $c->session->{metrics_user}; }
 
+    # Catch-all routing area: site_admin OR the domains.catchall capability
+    # (so a granted group sees the "Domain catch-all routing" area even
+    # without full site_admin). site_admin shortcut avoids the round-trip.
+    my $has_catchall = $is_admin ? 1 : 0;
+    unless ($is_admin) {
+        my $cr = introspect($jwt, api_base => $c->app->api_base, capability => 'domains.catchall');
+        $has_catchall = ($cr && $cr->{has_capability}) ? 1 : 0;
+    }
+
     return $c->render(
         template     => 'dashboard',
         email        => $email,
@@ -458,6 +481,7 @@ sub dashboard ($c) {
         roles        => $roles,
         is_admin     => ($is_admin ? 1 : 0),
         has_metrics  => $has_metrics,
+        has_catchall => $has_catchall,
         admin_domains => $admin_domains,
         sso_forgot_url => $c->app->sso_base . '/forgot',
     );
@@ -630,9 +654,13 @@ sub admin_user_usage ($c) {
 # (domain-admin's DB role can't see api.users, so this validation lives here).
 sub _user_exists ($c, $jwt, $addr) {
     return 0 unless $addr && $addr =~ /\@/ && length($addr) >= 3;
-    my $path = Mojo::URL->new('/api/v1/admin/users')->query(q => $addr, limit => 20)->to_string;
-    my $users = _api_get($c, $jwt, $path) // [];
-    return scalar grep { lc($_->{email} // '') eq lc($addr) } @$users;
+    # Narrow exact-match check (site_admin OR domains.catchall) -- works for a
+    # non-admin catch-all holder, unlike the site_admin-only /admin/users
+    # search this used to call. Both callers are the catch-all handlers,
+    # already gated to the same capability.
+    my $path = Mojo::URL->new('/api/v1/mail/recipient-exists')->query(email => $addr)->to_string;
+    my $res = _api_get($c, $jwt, $path);
+    return ($res && $res->{exists}) ? 1 : 0;
 }
 
 # ===== Invites + account activity (self-service) =====
@@ -860,15 +888,18 @@ sub admin_dovecot_status ($c) {
 # GET /admin/domains/catch-alls -- every managed domain + its current catch-all
 # destination. Feeds the domain search + the "view all domains" bulk picker.
 sub admin_catchalls ($c) {
-    my ($email, $jwt) = _admin_auth($c);
+    my ($email, $jwt) = _catchall_auth($c);
     return $c->render(json => [], status => 403) unless $email;
     return $c->render(json => (_api_get($c, $jwt, '/api/v1/domains/catch-alls') // []));
 }
 
-# POST /admin/domains/catch-all/set {domain, destination} -- validate the
-# destination is a real mailbox, then upsert the domain's catch-all.
+# POST /admin/domains/catch-all/set {domain, destination, send_enabled?} --
+# validate the destination is a real mailbox, then upsert the domain's
+# catch-all. send_enabled controls whether the catch-all may SEND AS
+# <anyone>@<domain> (domain send-as); the form always sends it, so it is
+# WYSIWYG against the checkbox (the UI pre-fills it from the current state).
 sub admin_set_catchall ($c) {
-    my ($email, $jwt) = _admin_auth($c);
+    my ($email, $jwt) = _catchall_auth($c);
     return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
     my $domain = _trim($c->param('domain') // '');
     my $dest   = _trim($c->param('destination') // '');
@@ -877,13 +908,14 @@ sub admin_set_catchall ($c) {
     return $c->render(json => { error => "$dest is not a real, active mailbox" }, status => 400)
         unless _user_exists($c, $jwt, $dest);
     my $tx = $UA->put($c->app->api_base . "/api/v1/domains/$domain/catch-all"
-        => { Authorization => "Bearer $jwt" } => json => { destination => $dest });
+        => { Authorization => "Bearer $jwt" }
+        => json => { destination => $dest, send_enabled => ($c->param('send_enabled') ? \1 : \0) });
     return $c->render(json => (eval { $tx->res->json } // { error => 'set failed' }), status => ($tx->res->code // 502));
 }
 
 # POST /admin/domains/catch-all/clear {domain}
 sub admin_clear_catchall ($c) {
-    my ($email, $jwt) = _admin_auth($c);
+    my ($email, $jwt) = _catchall_auth($c);
     return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
     my $domain = _trim($c->param('domain') // '');
     return $c->render(json => { error => 'domain is required' }, status => 400) unless $domain =~ /\./;
@@ -896,7 +928,7 @@ sub admin_clear_catchall ($c) {
 # -- set the SAME destination on several domains at once. Validates the
 # destination once, then applies per-domain, reporting per-domain results.
 sub admin_bulk_catchall ($c) {
-    my ($email, $jwt) = _admin_auth($c);
+    my ($email, $jwt) = _catchall_auth($c);
     return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
     my $dest = _trim($c->param('destination') // '');
     my @domains = grep { /\./ } map { _trim($_) } split /,/, ($c->param('domains') // '');

@@ -182,10 +182,12 @@ sub mine ($c) {
 # catch-all destination (null if none) + whether inbound mail is enabled.
 # Drives the admin "search a domain" + "view all domains" (bulk) UI.
 sub list_catchalls ($c) {
-    $c->authenticated_email or return;
+    $c->authenticated_email_with_capability('domains.catchall') or return;
     my $rows = $c->app->pg->db->query(
         q{SELECT d.domain_name AS domain, d.mail_enabled, d.active,
-                 a.destination, a.active AS catchall_active
+                 a.destination, a.active AS catchall_active, a.send_enabled,
+                 EXISTS (SELECT 1 FROM domainadmin.dkim_selectors s
+                          WHERE s.domain_id = d.id AND s.state = 'active') AS has_dkim
             FROM domainadmin.domains d
             LEFT JOIN domainadmin.mail_aliases a
               ON a.source_pattern = '@' || d.domain_name
@@ -196,7 +198,7 @@ sub list_catchalls ($c) {
 
 # GET /internal/v1/domains/:domain/catch-all -- one domain's catch-all.
 sub get_catchall ($c) {
-    $c->authenticated_email or return;
+    $c->authenticated_email_with_capability('domains.catchall') or return;
     my $domain = $c->stash('domain');
     my $row = $c->app->pg->db->query(
         q{SELECT d.domain_name AS domain, d.mail_enabled, d.active,
@@ -215,7 +217,7 @@ sub get_catchall ($c) {
 # PUT /internal/v1/domains/:domain/catch-all {destination}
 # Upserts the '@domain' catch-all AND ensures the domain accepts inbound mail.
 sub set_catchall ($c) {
-    my $email = $c->authenticated_email or return;
+    my $email = $c->authenticated_email_with_capability('domains.catchall') or return;
     my $domain = $c->stash('domain');
     my $body = $c->req->json // {};
     my $destination = $body->{destination};
@@ -247,28 +249,53 @@ sub set_catchall ($c) {
             'INSERT INTO domainadmin.domains (domain_name, mail_enabled, dns_managed, active, created_by) VALUES (?, true, false, true, ?)',
             $domain, $email);
     }
-    my $row = $c->app->pg->db->query(
-        q{INSERT INTO domainadmin.mail_aliases (source_pattern, destination, active, send_enabled, created_by)
-          VALUES (?, ?, true, false, ?)
-          ON CONFLICT (source_pattern) DO UPDATE
-              SET destination = EXCLUDED.destination, active = true, updated_at = NOW()
-          RETURNING *}, $source_pattern, $destination, $email,
-    )->hash;
+    # Whether this catch-all may SEND AS <anyone>@<domain> (domain-wide
+    # send-as). A catch-all is historically receive-only (send_enabled=false);
+    # this makes it settable. Done ATOMICALLY in the upsert (no read-then-write,
+    # so a concurrent change can't be lost):
+    #  * explicit in the body -> set it (INSERT value + ON CONFLICT SET).
+    #  * omitted (bulk/CLI)   -> PRESERVE the existing row's value (ON CONFLICT
+    #    leaves send_enabled untouched; a brand-new row defaults to false), so
+    #    a plain destination change never silently toggles send.
+    my ($row, $send_enabled);
+    if (exists $body->{send_enabled}) {
+        $send_enabled = $body->{send_enabled} ? 1 : 0;
+        $row = $c->app->pg->db->query(
+            q{INSERT INTO domainadmin.mail_aliases (source_pattern, destination, active, send_enabled, created_by)
+              VALUES (?, ?, true, ?, ?)
+              ON CONFLICT (source_pattern) DO UPDATE
+                  SET destination = EXCLUDED.destination, active = true,
+                      send_enabled = EXCLUDED.send_enabled, updated_at = NOW()
+              RETURNING *}, $source_pattern, $destination, $send_enabled, $email,
+        )->hash;
+    } else {
+        $row = $c->app->pg->db->query(
+            q{INSERT INTO domainadmin.mail_aliases (source_pattern, destination, active, send_enabled, created_by)
+              VALUES (?, ?, true, false, ?)
+              ON CONFLICT (source_pattern) DO UPDATE
+                  SET destination = EXCLUDED.destination, active = true, updated_at = NOW()
+              RETURNING *}, $source_pattern, $destination, $email,
+        )->hash;
+        $send_enabled = ($row && $row->{send_enabled}) ? 1 : 0;
+    }
     enqueue(
         $c->app->pg->db, actor_email => $email, affected_user => $destination,
         jti => $c->stash('current_jti'), action => 'mail_alias.set_catchall',
         resource_type => 'mail_alias', resource_id => $source_pattern, source_service => 'homelab-domain-admin',
         ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
-        detail => { domain => $domain, destination => $destination },
+        detail => { domain => $domain, destination => $destination, send_enabled => ($send_enabled ? \1 : \0) },
     );
-    return $c->render(json => { ok => \1, domain => $domain, destination => $destination, mail_enabled => \1 });
+    return $c->render(json => {
+        ok => \1, domain => $domain, destination => $destination,
+        mail_enabled => \1, send_enabled => ($send_enabled ? \1 : \0),
+    });
 }
 
 # DELETE /internal/v1/domains/:domain/catch-all -- remove the catch-all
 # (leaves the domain row + mail_enabled as-is; disable mail separately if
 # the whole domain should stop accepting).
 sub clear_catchall ($c) {
-    my $email = $c->authenticated_email or return;
+    my $email = $c->authenticated_email_with_capability('domains.catchall') or return;
     my $domain = $c->stash('domain');
     my $row = $c->app->pg->db->query(
         'DELETE FROM domainadmin.mail_aliases WHERE source_pattern = ? RETURNING *', '@' . $domain,

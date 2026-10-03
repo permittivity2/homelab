@@ -1,3 +1,18 @@
+homelab-api (0.1.52) unstable; urgency=medium
+
+  * Release v0.1.52
+
+ -- Gardner <gardner@homelab>  Fri, 02 Oct 2026 22:58:40 -0500
+
+homelab-api (0.1.52) unstable; urgency=medium
+
+  * Add GET /api/v1/mail/recipient-exists (site_admin OR domains.catchall):
+    a narrow exact-match mailbox existence check (no enumeration) so a
+    non-site_admin catch-all holder can have a destination validated.
+    New _require_capability sync helper. Migration 018 seeds domains.catchall.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 01 Oct 2026 11:00:00 -0500
+
 homelab-api (0.1.51) unstable; urgency=medium
 
   * Release v0.1.51

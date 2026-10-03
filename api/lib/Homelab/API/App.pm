@@ -142,6 +142,11 @@ sub startup ($self) {
     $r->delete('/api/v1/admin/roles/:role/permissions/:permission' => [role => qr/[^\/]+/, permission => qr/[^\/]+/]
         => sub ($c) { $self->_admin_revoke_permission($c) });
 
+    # Narrow mailbox-exists check (site_admin OR domains.catchall) -- lets
+    # accountmanage validate a catch-all destination without the
+    # site_admin-only user list.
+    $r->get('/api/v1/mail/recipient-exists' => sub ($c) { $self->_recipient_exists($c) });
+
     # --- Fleet agent (see migrations/010-fleet-agent.sql). Enroll is
     # site_admin-only (a human bootstrapping a new host's agent); redeem
     # and heartbeat are the agent's own unauthenticated-until-redeemed and
@@ -1722,6 +1727,47 @@ sub _require_site_admin ($self, $c) {
     }
 
     return $user;
+}
+
+# site_admin OR a named capability -- for routes a non-site_admin role may be
+# granted (role_permissions). Same shape as _require_site_admin: renders
+# 401/403 + returns undef on failure, returns {id,email} on success.
+sub _require_capability ($self, $c, $name) {
+    my $user = $self->_authenticated_user($c);
+    unless ($user) {
+        $c->render(json => { error => 'authentication required' }, status => 401);
+        return undef;
+    }
+    my $ok = $self->pg->db->query(
+        q{SELECT 1 WHERE
+            EXISTS (SELECT 1 FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+                     WHERE ur.user_id = ? AND r.name = 'site_admin')
+            OR EXISTS (SELECT 1 FROM api.user_roles ur
+                         JOIN api.role_permissions rp ON rp.role_id = ur.role_id
+                         JOIN api.permissions p ON p.id = rp.permission_id
+                        WHERE ur.user_id = ? AND p.name = ?)},
+        $user->{id}, $user->{id}, $name,
+    )->hash;
+    unless ($ok) {
+        $c->render(json => { error => "capability '$name' required" }, status => 403);
+        return undef;
+    }
+    return $user;
+}
+
+# GET /api/v1/mail/recipient-exists?email=<exact> -> {exists: bool}
+# Narrow EXACT-match mailbox existence check (NO enumeration / substring
+# search) for callers who may manage mail routing (site_admin OR
+# domains.catchall) -- e.g. accountmanage validating a catch-all
+# destination. Deliberately NOT the site_admin-only /admin/users search.
+sub _recipient_exists ($self, $c) {
+    $self->_require_capability($c, 'domains.catchall') or return;
+    my $email = $c->param('email') // '';
+    return $c->render(json => { exists => \0 }) unless $email =~ /\@/;
+    my $row = $self->pg->db->query(
+        'SELECT 1 FROM api.users WHERE lower(email) = lower(?) AND active LIMIT 1', $email,
+    )->hash;
+    return $c->render(json => { exists => ($row ? \1 : \0) });
 }
 
 # GET /api/v1/admin/users -- every user, with their granted role names.

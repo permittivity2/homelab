@@ -1,3 +1,36 @@
+homelab-domain-admin (0.1.36) unstable; urgency=medium
+
+  * Release v0.1.36
+
+ -- Gardner <gardner@homelab>  Fri, 02 Oct 2026 22:53:41 -0500
+
+homelab-domain-admin (0.1.36) unstable; urgency=medium
+
+  * set_catchall: make the send_enabled preserve path atomic (branch the
+    upsert instead of read-then-write) -- a concurrent change can no longer
+    be lost (review follow-up).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 01 Oct 2026 10:00:00 -0500
+
+homelab-domain-admin (0.1.35) unstable; urgency=medium
+
+  * Release v0.1.35
+
+ -- Gardner <gardner@homelab>  Fri, 02 Oct 2026 22:35:37 -0500
+
+homelab-domain-admin (0.1.35) unstable; urgency=medium
+
+  * Catch-all routing: set_catchall now accepts send_enabled, so a
+    domain catch-all can be set to SEND AS <anyone>@<domain> (not just
+    receive) -- preserved on a plain destination change. list_catchalls
+    returns send_enabled + has_dkim. The catch-all handlers
+    (list/get/set/clear) are now gated by site_admin OR the new
+    domains.catchall capability (new authenticated_email_with_capability
+    helper), so a granted group can run catch-all routing without full
+    site_admin.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 01 Oct 2026 09:00:00 -0500
+
 homelab-domain-admin (0.1.34) unstable; urgency=medium
 
   * Release v0.1.34
