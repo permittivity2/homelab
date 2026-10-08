@@ -1,0 +1,28 @@
+#!/usr/bin/make -f
+
+PKG = debian/homelab-backup-server
+DATA_DIR = $(PKG)/usr/share/homelab-backup-server
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	install -D -m 755 homelab-backup-server \
+		$(PKG)/usr/sbin/homelab-backup-server
+	install -D -m 755 setup-admin-recovery-key.sh \
+		$(DATA_DIR)/setup-admin-recovery-key.sh
+	install -D -m 644 completions/homelab-backup-server \
+		$(PKG)/usr/share/bash-completion/completions/homelab-backup-server
+	install -D -m 644 backup-paths.txt \
+		$(DATA_DIR)/backup-paths.txt
+	install -D -m 644 systemd/homelab-backup-server-reconcile.service.tmpl \
+		$(DATA_DIR)/systemd/homelab-backup-server-reconcile.service.tmpl
+	install -D -m 644 systemd/homelab-backup-server-reconcile.timer.tmpl \
+		$(DATA_DIR)/systemd/homelab-backup-server-reconcile.timer.tmpl
+
+override_dh_auto_build:
+	# No build step needed for a couple of scripts
+
+override_dh_auto_test:
+	# No package-build-time tests

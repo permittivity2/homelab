@@ -1,0 +1,217 @@
+homelab-backup-server (0.5.0) unstable; urgency=medium
+
+  * Release v0.5.0
+
+ -- Gardner <gardner@homelab>  Thu, 08 Oct 2026 06:40:34 -0500
+
+homelab-backup-server (0.4.5) unstable; urgency=medium
+
+  * Update the two `homelab-cli admin create-user` subprocess calls (and
+    matching log/error text) in _create_user_via_admin_session() to
+    `admin user --create --email ... --role ...`, matching homelab-cli
+    0.2.8's restructured admin command. Functionally identical -- the old
+    positional email argument is now `--email`.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 18:00:00 -0500
+
+homelab-backup-server (0.4.4) unstable; urgency=medium
+
+  * Fix: `setup` could stall invisibly forever right after "Checking for
+    an existing admin login..." -- caught live. That check spawns
+    `homelab-cli validate` with capture_output=True but no stdin
+    redirect, so it inherits this script's REAL terminal as its own
+    stdin; since root's ~/.config/homelab-cli almost never has an
+    api_url configured, homelab-cli fell into its interactive prompt --
+    but that prompt's text landed in the captured (invisible) output
+    pipe while it kept blocking on the real, visible terminal for a
+    line the operator had no way to know was being asked for. Every
+    homelab-cli subprocess call here now explicitly redirects stdin from
+    /dev/null (calls that already pass input= were unaffected). The
+    ambient admin-login check specifically also gets a 3-second timeout
+    now, since it's a best-effort probe, not the real work -- a slow or
+    unresponsive homelab-api there just falls straight through to the
+    explicit admin-login prompt instead of stalling setup.
+  * `setup` now prints the homelab-api URL it resolved and is using,
+    up front and again right before the admin-login prompt (which
+    checks a *different*, ambient session that may point elsewhere) --
+    an operator asked where the tool was even checking against.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 13:20:00 -0500
+
+homelab-backup-server (0.4.3) unstable; urgency=medium
+
+  * Renamed "service account"/"control-plane account" to "backup
+    account" throughout `setup`'s prompts, messages, and --help text --
+    an operator flagged that "service account" was genuinely ambiguous,
+    since a homelab-api box can have several (dovecot, drive, backup,
+    ...); this is specifically the one homelab-api account holding the
+    `backup` role, used by this server and its clients.
+  * Reordered/clarified the account-bootstrap flow. Previously, the
+    first attempt silently tried the operator's own ambient homelab-cli
+    session and only explained anything on failure -- but since `setup`
+    runs as root via sudo, that ambient session almost never exists, so
+    this was nearly always a silent failed step before the real admin
+    prompt. Now: checks for an ambient admin login up front and reports
+    what it found (or didn't) before attempting anything; if an ambient
+    session exists, `validate`'s roles are used to print a precise
+    message when it's rejected ("...failed while logged in as X (roles:
+    user) -- this usually needs site_admin...") instead of a bare API
+    error. homelab-api itself remains the sole authority on whether an
+    account can create others -- the roles fetched here are only ever
+    used for narration, never to block an attempt client-side.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 13:00:00 -0500
+
+homelab-backup-server (0.4.2) unstable; urgency=medium
+
+  * Fix: a Ctrl-C during `setup` (e.g. mid-subprocess while creating/
+    logging in the service account) surfaced as a raw Python traceback
+    instead of a clean interrupt -- caught live. Same fix already
+    applied to homelab-backup-client: caught at the top level, printing
+    "interrupted" and exiting 130. Running out of piped input entirely
+    (EOFError, e.g. a scripted invocation with too few answers) gets the
+    same clean-message treatment instead of its own traceback.
+  * Reworded the first `setup` prompt, which was genuinely ambiguous in
+    practice: an operator typed their own personal admin email there,
+    expecting it to be their own login, when it's actually asking what
+    identity the SERVER ITSELF should use going forward (almost always
+    the same shared account across the whole backup fleet, not a
+    personal one). Now explains this upfront, before the prompt, and
+    explicitly distinguishes it from the separate later prompt that
+    really does want the operator's own admin credentials.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 12:30:00 -0500
+
+homelab-backup-server (0.4.1) unstable; urgency=medium
+
+  * Fix: `setup` crashed with "config.yml: key not found and parent path
+    missing: homelab_cli.email" on any host whose config.yml was
+    migrated forward from the pre-redesign package -- that old config
+    never had a homelab_cli:/reconcile: block at all, and the config
+    editor could only insert a key under an EXISTING parent section, not
+    create a missing one. Caught live on a real host. It now appends a
+    brand-new top-level section when needed instead of failing outright.
+  * Reworded the interactive `setup` flow away from "control-plane
+    account"/"control-plane session" jargon toward plain language
+    ("logged in to homelab-api as X", "this server's homelab-api login
+    email") -- also drops a stale reference to an internal planning
+    document's rollout step from one error message. `setup` now also
+    prints a short explanation up front: this account doesn't need to
+    exist ahead of time, and if it's missing you'll be asked once for an
+    ADMIN homelab-api account to create it, never again after that.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 11:15:00 -0500
+
+homelab-backup-server (0.4.0) unstable; urgency=medium
+
+  * BREAKING: renamed from homelab-borg-service-backup-server to
+    homelab-backup-server (binary, package, config dir
+    /etc/homelab/homelab-borg-service-backup-server ->
+    /etc/homelab/backup/server, bash completion, man page). postinst
+    migrates an existing deployment's config dir forward automatically
+    on upgrade (old copy left in place as a rollback breadcrumb; the
+    borg repository itself is never touched).
+  * New `homelab-api` control-plane integration: client hosts now
+    enroll themselves via `homelab-cli backup enroll` instead of an
+    administrator running `enroll` here by hand for every host. This
+    server polls for pending enroll/revoke requests via the new
+    `reconcile` subcommand, run automatically by the new
+    homelab-backup-server-reconcile.timer (default every 15 seconds --
+    the poll itself is a single cheap local API call, so there's no
+    real cost to polling often; the low default exists specifically so
+    a freshly-enrolled client isn't left waiting on a slow timer before
+    its first backup. Configurable via config.yml's
+    reconcile.interval_seconds, though changing it there alone doesn't
+    take effect until 'setup' is re-run or the installed timer unit is
+    reloaded -- see the comment in config.yml).
+    `reconcile` reuses the exact same authorized_keys-building/parsing
+    functions `enroll`/`revoke` always have, now writing
+    authorized_keys via write-to-temp-file + os.rename() for true
+    atomicity since the file is touched unattended on a timer.
+    `reconcile` fails soft (WARNING + exit 0, authorized_keys untouched)
+    on any control-plane error so an API outage can never disable the
+    timer via systemd's failure-count limits.
+  * New interactive `setup` subcommand: connects this server to the
+    homelab-api control plane (bootstrapping its own service account if
+    needed), registers this host as the backup server via `homelab-cli
+    backup set-server-info`, and installs/enables the reconcile timer.
+    `postinst` stays non-interactive/skeleton-only, same division of
+    labor homelab-backup-client already uses between postinst and its
+    own setup.
+  * New hard dependency on homelab-cli (the reconcile job and `setup`
+    both shell out to it). Added Replaces:/Breaks: against the old
+    package name; Conflicts: borgbackup2 kept as-is.
+  * `enroll`/`list`/`revoke`/`admin-recovery-key` are unchanged and
+    remain available for manual/emergency use even with the
+    reconciliation job in place.
+
+ -- Gardner <gardner@homelab>  Sat, 29 Aug 2026 11:00:00 -0500
+
+homelab-borg-service-backup-server (0.2.5) unstable; urgency=medium
+
+  * Fix: the borgbackup system user was created with --shell
+    /usr/sbin/nologin, which silently broke every SSH forced command
+    for this account regardless of correct enrollment -- OpenSSH runs
+    an authorized_keys command="..." entry via the user's shell
+    ($SHELL -c "command"), and nologin unconditionally refuses to run
+    anything at all ("This account is currently not available."),
+    ignoring the command entirely. Caught live: no borg serve session
+    for this user could ever have succeeded. Now uses /bin/sh --
+    command="..."/restrict in authorized_keys already fully constrains
+    the connection, so nologin wasn't adding any extra restriction,
+    only breaking the one thing this account exists for. Existing
+    installs get their shell corrected automatically on upgrade.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 19:30:00 -0500
+
+homelab-borg-service-backup-server (0.2.4) unstable; urgency=medium
+
+  * Ship backup-paths.txt (its own config dir + the borgbackup user's
+    authorized_keys) for homelab-borg-service-backup-client's
+    homelab_only auto-discovery.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 18:00:00 -0500
+
+homelab-borg-service-backup-server (0.2.3) unstable; urgency=medium
+
+  * Update setup-admin-recovery-key.sh's admin-recovery key directory
+    name and printed usage example to match the client package's binary
+    rename to 'homelab-borg-service-backup-client'.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 09:30:00 -0500
+
+homelab-borg-service-backup-server (0.2.2) unstable; urgency=medium
+
+  * Release v0.2.2
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 12:32:43 -0500
+
+homelab-borg-service-backup-server (0.2.2) unstable; urgency=medium
+
+  * Ship bash tab completion for the CLI (enroll/list/revoke/
+    admin-recovery-key), installed to
+    /usr/share/bash-completion/completions/.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 09:00:00 -0500
+
+homelab-borg-service-backup-server (0.2.1) unstable; urgency=medium
+
+  * Release v0.2.1
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 23:26:35 -0500
+
+homelab-borg-service-backup-server (0.2.0) unstable; urgency=medium
+
+  * Release v0.2.0
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 23:18:32 -0500
+
+homelab-borg-service-backup-server (0.1.0) unstable; urgency=medium
+
+  * Initial release, split out of the former combined
+    homelab-borg-service-backup package. Creates the borgbackup system
+    user/group and backup directory (default /var/borgbackup), and
+    provides enroll/list/revoke/admin-recovery-key so clients never need
+    SSH or sudo access to this server to onboard.
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 23:00:00 -0500

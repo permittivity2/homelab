@@ -1,0 +1,119 @@
+#!/bin/sh
+# Non-interactive, idempotent server-side setup: creates the borgbackup
+# system user/group, the backup directory, a config.yml recording their
+# names/path plus the new control-plane/reconcile settings (see
+# config.yml's own comments below), and an empty authorized_keys skeleton
+# ready for `enroll`. Connecting to the homelab-api control plane and
+# installing the reconciliation timer is interactive and handled by
+# `homelab-backup-server setup`, not here -- same division of labor
+# homelab-backup-client already uses between postinst and its own
+# `setup`.
+set -e
+
+BACKUP_USER=borgbackup
+BACKUP_LOCATION=/var/borgbackup
+ETC_DIR=/etc/homelab/backup/server
+CONFIG=$ETC_DIR/config.yml
+
+# Pre-rename config location (homelab-borg-service-backup-server). Only
+# config/keys move here -- the borg repository under $BACKUP_LOCATION is
+# never touched by this migration. The old copy is left in place as a
+# rollback breadcrumb, not deleted.
+OLD_ETC_DIR=/etc/homelab/homelab-borg-service-backup-server
+
+if [ "$1" = "configure" ]; then
+    if ! getent group "$BACKUP_USER" >/dev/null; then
+        addgroup --system "$BACKUP_USER"
+    fi
+    if ! getent passwd "$BACKUP_USER" >/dev/null; then
+        # /bin/sh, not /usr/sbin/nologin: OpenSSH runs an authorized_keys
+        # command="..." forced command via the target user's configured
+        # shell ($SHELL -c "command"). nologin unconditionally refuses to
+        # run anything at all ("This account is currently not
+        # available.", ignoring the command entirely) -- confirmed live,
+        # this silently broke every borg serve session for this user
+        # regardless of correct enrollment. The command="..."/restrict
+        # pair in authorized_keys already fully constrains what the
+        # connection can do; nologin isn't adding any extra restriction
+        # here, only breaking the one thing this account exists for.
+        adduser --system --ingroup "$BACKUP_USER" --home /var/lib/borgbackup \
+            --shell /bin/sh --disabled-password --disabled-login \
+            "$BACKUP_USER"
+    elif [ "$(getent passwd "$BACKUP_USER" | cut -d: -f7)" = "/usr/sbin/nologin" ]; then
+        # Upgrade path for an existing install created before this fix.
+        echo "  fixing $BACKUP_USER's shell (was /usr/sbin/nologin, which"
+        echo "  breaks every SSH forced command for this account)"
+        usermod --shell /bin/sh "$BACKUP_USER"
+    fi
+
+    mkdir -p "$BACKUP_LOCATION"
+    chown "$BACKUP_USER":"$BACKUP_USER" "$BACKUP_LOCATION"
+    chmod 700 "$BACKUP_LOCATION"
+
+    if [ -d "$OLD_ETC_DIR" ] && [ ! -d "$ETC_DIR" ]; then
+        echo "  migrating config from $OLD_ETC_DIR to $ETC_DIR"
+        mkdir -p "$(dirname "$ETC_DIR")"
+        cp -a "$OLD_ETC_DIR" "$ETC_DIR"
+    fi
+
+    mkdir -p "$ETC_DIR"
+    if [ ! -f "$CONFIG" ]; then
+        cat > "$CONFIG" <<EOF
+# homelab-backup-server config.
+# backup_user: system account that owns repos and accepts client SSH keys.
+# backup_location: base directory under which each client's repo lives
+#   (repo path becomes <this>/<client-identifier>). Override here if this
+#   server predates the $BACKUP_LOCATION default (e.g. an existing
+#   deployment already using /mnt/borgbackup).
+backup_user: $BACKUP_USER
+backup_location: $BACKUP_LOCATION
+
+# Control-plane (homelab-api) integration. Left blank here on purpose --
+# filled in interactively by \`homelab-backup-server setup\`, which also
+# installs/enables the reconciliation timer these settings feed.
+homelab_api_url: ""
+homelab_cli:
+  config_dir: $ETC_DIR/homelab-cli
+  email: homelabbackup@homelab.internal
+  password: ""
+
+# How often homelab-backup-server-reconcile.timer polls homelab-api for
+# pending client enroll/revoke requests. Each poll costs one cheap local
+# API call (~100ms) -- there's no real cost to polling often, so this
+# defaults low specifically so a freshly-enrolled client doesn't sit
+# waiting on a slow timer before it can back up for the first time.
+#
+# IMPORTANT: changing this value here does NOT take effect by itself --
+# the systemd timer unit is only (re)generated when 'homelab-backup-server
+# setup' runs. After editing this, either re-run 'setup', or apply it
+# immediately by hand:
+#   sed -i 's/OnUnitActiveSec=.*/OnUnitActiveSec=<N>sec/' \\
+#     /etc/systemd/system/homelab-backup-server-reconcile.timer
+#   systemctl daemon-reload
+#   systemctl restart homelab-backup-server-reconcile.timer
+reconcile:
+  interval_seconds: 15
+EOF
+        chmod 644 "$CONFIG"
+    fi
+
+    user_home=$(getent passwd "$BACKUP_USER" | cut -d: -f6)
+    mkdir -p "$user_home/.ssh"
+    touch "$user_home/.ssh/authorized_keys"
+    chmod 700 "$user_home/.ssh"
+    chmod 600 "$user_home/.ssh/authorized_keys"
+    chown -R "$BACKUP_USER":"$BACKUP_USER" "$user_home/.ssh"
+
+    echo
+    echo "homelab-backup-server installed."
+    echo "'$BACKUP_USER' user/group, $BACKUP_LOCATION, and $CONFIG are ready."
+    echo "Run 'homelab-backup-server setup' next to connect this server to the"
+    echo "homelab-api control plane and enable the reconciliation timer."
+    echo "(enroll/list/revoke/admin-recovery-key remain available for manual/"
+    echo "emergency use.)"
+    echo
+fi
+
+#DEBHELPER#
+
+exit 0

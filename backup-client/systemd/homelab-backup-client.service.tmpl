@@ -1,0 +1,9 @@
+[Unit]
+Description=Homelab Borg backup (single run)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=__BIN_PATH__ backup
+User=root

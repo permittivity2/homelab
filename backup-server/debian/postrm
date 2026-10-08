@@ -1,0 +1,40 @@
+#!/bin/sh
+# Deliberately conservative: never touches the backup_location directory
+# or its contents, even on purge -- that's live backup data, not
+# package-owned config, and deleting it is a decision a human should
+# make explicitly, not something a package removal does implicitly.
+#
+# Also cleans up homelab-backup-server-reconcile.{service,timer}, which
+# `homelab-backup-server setup` writes to /etc/systemd/system/ at
+# runtime -- outside dpkg's file manifest, since they're generated from
+# templates (ExecStart=/OnUnitActiveSec= paths/values) rather than
+# shipped statically.
+set -e
+
+ETC_DIR=/etc/homelab/backup/server
+UNIT_DIR=/etc/systemd/system
+
+case "$1" in
+    remove|purge)
+        systemctl disable --now homelab-backup-server-reconcile.timer >/dev/null 2>&1 || true
+        systemctl disable --now homelab-backup-server-reconcile.service >/dev/null 2>&1 || true
+        rm -f "$UNIT_DIR/homelab-backup-server-reconcile.service" "$UNIT_DIR/homelab-backup-server-reconcile.timer"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+
+        # daemon-reload only re-reads unit FILES; it does not clear a
+        # unit's cached "failed" job state from a run that happened
+        # before removal. reset-failed clears that lingering state
+        # explicitly (see homelab-backup-client's postrm for the same
+        # fix, confirmed live there first).
+        systemctl reset-failed homelab-backup-server-reconcile.service >/dev/null 2>&1 || true
+        systemctl reset-failed homelab-backup-server-reconcile.timer >/dev/null 2>&1 || true
+        ;;
+esac
+
+if [ "$1" = "purge" ]; then
+    rm -rf "$ETC_DIR"
+fi
+
+#DEBHELPER#
+
+exit 0

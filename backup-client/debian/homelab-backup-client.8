@@ -1,0 +1,167 @@
+.TH HOMELAB-BACKUP-CLIENT 8 "2026-08-29" "homelab-backup" "System Administration"
+.SH NAME
+homelab-backup-client \- borg-based backup/restore client for homelab hosts
+.SH SYNOPSIS
+.B homelab-backup-client
+.I command
+.RI [ args ...]
+.SH DESCRIPTION
+.B homelab-backup-client
+pushes encrypted
+.BR borg (1)
+archives from this host to a centralized backup server over SSH, driven
+by
+.IR /etc/homelab/backup/client/config.yml .
+It exists to let an administrator restore a homelab host's config or
+data to a point in time after a disaster; it is not limited to
+.I /etc/homelab/*
+configs specifically (see
+.B mode:
+in config.yml) but is not a general end-user-data (Drive files,
+mailboxes) backup tool either.
+.PP
+Enrollment with the backup server is handled through homelab-api/
+homelab-cli: this host's SSH public key is submitted once
+.RB ( setup ),
+and applied automatically by
+.BR homelab-backup-server 's
+own periodic reconciliation job \- no manual admin command is required
+on the server. Each backup/check run's outcome is also optionally
+reported back through the same control plane for later visibility
+.RB ( "homelab-cli backup host-runs" ).
+.SH COMMANDS
+.TP
+.BR setup " (alias: " configure )
+Interactively (re-)configure this host: config values, an
+auto-generated per-host encryption passphrase, backup mode, schedule,
+and homelab-api enrollment. Run this after installing the package, and
+safe to re-run any time afterward to change settings (existing values
+are left alone unless you choose to change them). Not available outside
+of a Debian package install (see
+.B install/install.sh
+in a git checkout instead).
+.TP
+.BI "backup " "[--dry-run] [--once] [--config PATH]"
+Run a backup per config.yml. This is also what the installed systemd
+unit/timer invokes; running it with no subcommand at all is still
+accepted for compatibility and behaves identically.
+.B --dry-run
+prints the resolved sources, exclude patterns, and the exact
+.B borg create
+/
+.B borg prune
+commands without executing them.
+.B --once
+forces a single run even when
+.B schedule.mode
+is
+.BR continuous .
+.TP
+.BI "check " "[--config PATH]"
+Run
+.B borg check
+(read-only integrity verification, never
+.BR --repair ,
+which is a deliberate manual admin action) against this host's own
+repo. Also what the
+.B homelab-backup-client-check
+timer invokes, on the schedule set by
+.B integrity_check.mode
+in config.yml (default
+.BR monthly ).
+.TP
+.BI "list-archives " "[--host ID] [--server S] [--ssh-user U] [--location DIR] [--ssh-key PATH] [--passphrase-file PATH] [--archive NAME] [--names-only]"
+List archives in a repo, or (with
+.BR --archive )
+one specific archive's file contents instead. All override options
+default to the local config.yml (with the backup server itself
+auto-discovered via homelab-cli if
+.B backup_server
+is blank); override them to inspect a different host's repo, e.g.
+during disaster recovery with the admin recovery key (see
+.B setup-admin-recovery-key.sh ).
+.B --names-only
+prints just archive names, one per line, no other detail \- for
+scripting, and what shell completion uses to offer real archive names
+after
+.B --archive
+on both this command and
+.BR restore .
+.TP
+.BI "restore --archive NAME --target DIR " "[--paths ...] [--dry-run] [same overrides as list-archives]"
+Extract an archive into
+.IR DIR ,
+which is created if missing. Extraction always goes into an explicit
+target directory, never directly over
+.IR / ,
+so a restore is reviewable before anything is copied into place by
+hand.
+.B --dry-run
+lists what would be extracted without writing anything.
+.SH FILES
+.TP
+.I /etc/homelab/backup/client/config.yml
+Per-host configuration. Mode 600, root:root \- contains the repo
+encryption passphrase. See the shipped
+.I config.example.yml
+for the full documented schema.
+.TP
+.I /etc/homelab/backup/client/ssh/id_ed25519
+This host's dedicated SSH key, restricted server-side to
+.B "borg serve --restrict-to-repository"
+for this host's own repo path only.
+.TP
+.I /etc/homelab/backup/client/key-escrow/
+Exported borg key material (a
+.B "borg key export"
+and a
+.B --paper
+copy), written on first backup. Not replicated off this host
+automatically \- copy both this and the passphrase above to a secrets
+manager and an offline/paper copy.
+.TP
+.I /etc/homelab/backup/client/homelab-cli/
+This host's own isolated homelab-cli session directory (JWT/refresh
+token), separate from any interactively-logged-in human's
+.IR ~/.config/homelab-cli .
+.SH CONTROL PLANE (homelab-api / homelab-cli)
+If
+.B homelab_cli.disabled
+is not set in config.yml (the default), this host maintains its own
+homelab-cli session and uses it for three things: submitting its pubkey
+for enrollment during
+.BR setup ,
+discovering
+.BR backup_server / ssh_backup_server_username / backup_server_location
+when left blank in config.yml, and reporting each
+.B backup
+/
+.B check
+run's outcome
+.RB ( "homelab-cli backup report-run" / report-check ).
+Run-history reporting is best-effort \- a control-plane hiccup only logs
+a warning, and never fails or blocks an actual backup. Set
+.B homelab_cli.disabled: true
+to opt a host out of the control plane entirely (requires
+.B backup_server
+to be set explicitly).
+.SH DISASTER RECOVERY
+See the
+.B "Restoring onto a fresh/replacement host"
+section of this package's README for the full runbook: generate an
+admin recovery SSH key once on the backup server
+.RI ( setup-admin-recovery-key.sh ),
+retrieve the escrowed passphrase for the lost host, then
+.B list-archives
+/
+.B restore
+against its repo using
+.B --host
+and
+.B --ssh-key
+to point at the recovery key instead of the (destroyed) per-host key.
+.SH SEE ALSO
+.BR borg (1),
+.BR homelab-cli (1)
+.SH AUTHOR
+Jeff Gardner <mailmasker-api01@forge.name>

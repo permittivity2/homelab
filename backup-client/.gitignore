@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+debian/homelab-borg-service-backup/
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+debian/*.debhelper
+*.deb
+*.buildinfo
+*.changes

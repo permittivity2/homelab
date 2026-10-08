@@ -1,0 +1,340 @@
+homelab-backup-client (0.5.0) unstable; urgency=medium
+
+  * Release v0.5.0
+
+ -- Gardner <gardner@homelab>  Thu, 08 Oct 2026 06:40:32 -0500
+
+homelab-backup-client (0.4.5) unstable; urgency=medium
+
+  * Update install.sh's error hints from 'homelab-cli admin create-user'
+    to 'homelab-cli admin user --create', matching homelab-cli 0.2.8's
+    restructured admin command (no behavior change here, just text).
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 18:00:00 -0500
+
+homelab-backup-client (0.4.4) unstable; urgency=medium
+
+  * Fix: the same class of bug just found in homelab-backup-server's
+    config editor exists here too -- `setup` on a host migrated forward
+    from the pre-redesign package (whose config.yml never had a
+    homelab_cli: block) would crash the first time it tried to set
+    homelab_cli.api_url/email, since configedit.py could only insert a
+    key under an EXISTING parent section, not create a missing one. Now
+    appends a brand-new top-level section when needed, matching the fix
+    on the server side.
+  * Reworded "control-plane" jargon in install.sh's prompts/log lines
+    toward plain language ("homelab-api login email for this host",
+    "logging in to homelab-api as X"). The login-failure warning now
+    also explains that (unlike the backup server's own `setup`) this
+    client never creates the account -- it must already exist.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 11:15:00 -0500
+
+homelab-backup-client (0.4.3) unstable; urgency=medium
+
+  * `list-archives --archive NAME` now lists that one archive's file
+    contents (`borg list <repo>::<archive>`) instead of requiring
+    `restore --dry-run` with a throwaway `--target` just to browse an
+    archive. `--names-only` prints bare archive names, one per line, for
+    scripting -- and is what bash completion now uses: `--archive <Tab>`
+    on both `list-archives` and `restore` offers real archive names,
+    reusing whatever --host/--server/--ssh-user/--location/--ssh-key/
+    --passphrase-file overrides are already on the command line (so a
+    disaster-recovery restore against another host's repo completes
+    against that repo, not this host's own). Runs via `sudo -n` (the
+    config/SSH key are root-owned; a completion callback itself always
+    runs unprivileged) and with stdin redirected from /dev/null (so an
+    unresolvable passphrase fails fast instead of silently blocking on
+    an interactive prompt during a Tab press); any failure at all --
+    unreachable server, no passwordless sudo, nothing backed up yet --
+    just yields no completions, same as e.g. kubectl's dynamic
+    completion.
+  * Fix: `ssh` had no connect timeout of its own, so an unreachable or
+    misconfigured backup server address left it blocked in a raw TCP
+    connect() indefinitely -- caught live via the completion work above,
+    where it left orphaned `borg`/`ssh` processes running forever
+    against a bad address (`sudo` starts a new session for the command
+    it execs, which took them out of the process group an external
+    `timeout` was trying to signal). `BORG_RSH` now always sets
+    `-o ConnectTimeout=5`, matching the timeout this package's own SSH
+    trust probe already uses elsewhere. This bounds every borg operation
+    against an unreachable server, not just the new completion path.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 10:35:00 -0500
+
+homelab-backup-client (0.4.2) unstable; urgency=medium
+
+  * A Ctrl-C during `list-archives`/`restore`/`backup` (most commonly
+    mid-restore, while borg is streaming a long file list) surfaced as a
+    raw Python traceback from inside subprocess.run()'s wait loop --
+    harmless, but looked like a crash. Now caught at the top level and
+    printed as a plain "interrupted" message, exiting 130 (the usual
+    shell convention for "killed by SIGINT").
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 10:05:00 -0500
+
+homelab-backup-client (0.4.1) unstable; urgency=medium
+
+  * Fix: re-running `setup`/`configure` unconditionally rewrote and
+    re-enabled the backup and integrity-check systemd timers even when
+    nothing about the schedule actually changed. Both timers are
+    Persistent=true, so any restart/re-enable can make systemd fire an
+    immediate unscheduled "catch-up" run -- observed in practice as a
+    backup landing seconds after an otherwise no-op `setup` re-run, with
+    a spurious "config file not found" in its log even though the config
+    file was present the whole time. Two fixes:
+    - install.sh now writes generated unit files atomically (temp file +
+      rename) and diffs the generated content against what's already
+      installed, only touching systemd (disable/rewrite/daemon-reload/
+      enable) when something genuinely changed. A same-answers re-run of
+      `setup` now leaves the timers' last-trigger/next-elapse state and
+      unit files completely untouched. When a real schedule change does
+      require a reinstall, a new log line names the Persistent=true
+      timer and notes that a one-off catch-up run may follow.
+    - load_config() no longer uses os.path.exists() to decide "not
+      found" -- that call swallows any OSError (including a transient
+      permission/IO error) into a bare False, so a real read failure and
+      a genuinely-missing file produced an identical, misleading "config
+      file not found" message. Now distinguishes FileNotFoundError from
+      other OSErrors with separate log messages.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 09:45:00 -0500
+
+homelab-backup-client (0.4.0) unstable; urgency=medium
+
+  * BREAKING: renamed from homelab-borg-service-backup-client to
+    homelab-backup-client (binary, /etc/homelab/backup/client/ config
+    path, systemd units, bash completion, man page) -- part of a wider
+    redesign that replaces this package's identity/enrollment/bookkeeping
+    layer with homelab-api/homelab-cli integration, while leaving all
+    borg mechanics (the four backup modes, retention, restore, schedule
+    jitter, key escrow) untouched. Highlights:
+    - Enrollment is no longer a manual `enroll <id> <pubkey>` command run
+      by an administrator on the backup server. `setup` now submits this
+      host's pubkey via `homelab-cli backup enroll` once; a new
+      reconciliation job on homelab-backup-server applies it
+      automatically on its own timer. No SSH/sudo access to the backup
+      server is or ever was needed from this side.
+    - The optional run-history database feature no longer writes
+      directly to Postgres with its own credentials (all psycopg2 code,
+      database.* config, and install/schema.sql are gone). Each
+      backup/check run is now reported via `homelab-cli backup
+      report-run`/`report-check`, going through the same homelab-api
+      identity layer every other homelab-* package uses. Still
+      best-effort: a control-plane hiccup only logs a warning, never
+      fails or blocks an actual backup.
+    - backup_server/ssh_backup_server_username/backup_server_location
+      (renamed from borgbackup_server/etc.) are now all optional --
+      left blank, they're auto-discovered via `homelab-cli backup
+      server-info`. Set backup_server explicitly to keep working through
+      a homelab-api outage, or set homelab_cli.disabled: true to opt this
+      host out of the control plane entirely.
+    - New Depends: homelab-cli. Dropped Depends: postgresql-client,
+      Recommends: python3-psycopg2 -- this package never touches
+      Postgres directly, in any form, anymore.
+    - A host still configured under the old
+      /etc/homelab/borgbackup/ path is migrated forward automatically
+      (config, SSH keypair, key-escrow -- never regenerated) the first
+      time `setup`/install.sh runs on this version; the old copy is left
+      in place, not deleted.
+    - Reframed as a general homelab-recovery backup tool rather than
+      narrowly disaster recovery for /etc/homelab/* -- nothing about the
+      four backup modes themselves changed, just the README's framing.
+
+ -- Gardner <gardner@homelab>  Sat, 29 Aug 2026 12:00:00 -0500
+
+homelab-borg-service-backup-client (0.3.0) unstable; urgency=medium
+
+  * homelab_only mode no longer hardcodes per-package detection (which
+    triggered a `pg_dump mailserver` default off homelab-api/processor
+    merely being *installed*, and that pg_dump had no host/user at all,
+    so it always failed with `role "root" does not exist` running under
+    the systemd unit's `User=root`). populate_homelab_defaults() now
+    globs every installed package's own
+    /usr/share/homelab-<pkg>/backup-paths.txt for config paths to
+    include, and dump_databases() runs every
+    /usr/share/homelab-*/backup-hook.sh found (today, only
+    homelab-database's pg_dumpall) -- no hardcoded per-package knowledge
+    left in this tool at all; any future homelab-* package participates
+    just by shipping these files. The existing manual
+    homelab_only.paths/databases: config fields are untouched, purely
+    additive to this.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 18:00:00 -0500
+
+homelab-borg-service-backup-client (0.2.9) unstable; urgency=medium
+
+  * Fix: `apt remove` left a stale "Active: failed" status visible in
+    `systemctl status` for units that had already failed before
+    removal, even though the unit files themselves were correctly gone
+    (`Loaded: not-found`) -- caught live. `systemctl daemon-reload`
+    only re-reads unit files; it doesn't clear a unit's cached failed
+    job state. postrm and install/uninstall.sh now also call
+    `systemctl reset-failed` for each of the four units they manage.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 17:45:00 -0500
+
+homelab-borg-service-backup-client (0.2.8) unstable; urgency=medium
+
+  * Default the Postgres host prompt to localhost, the pgbouncer/manual
+    database host prompts to whatever Postgres host was already given,
+    and the database role name (both the automatic bootstrap flow and
+    the manual fallback's "Database user" prompt) to this package's own
+    name -- all previously required typing the same values every time.
+  * Fix: when the pgbouncer host resolves to this same host but
+    homelab-pgbouncer isn't installed here, the automatic setup flow
+    fell through to SSHing to itself to re-check -- caught live: this
+    silently fails (no passwordless root-to-root loopback SSH set up),
+    producing a confusing "pgbouncer registration unavailable/failed"
+    warning instead of a clear "not installed here" outcome. Both
+    run_bootstrap_app_role() and run_bootstrap_pgbouncer_entry() now
+    skip the SSH fallback entirely when the target is this host, since
+    SSHing to itself for a file already confirmed missing locally can't
+    ever find it.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 17:30:00 -0500
+
+homelab-borg-service-backup-client (0.2.7) unstable; urgency=medium
+
+  * Fix: the automatic bootstrap flow's final verification step reused
+    bootstrap_database(), which checks for the database's existence via
+    a connection to Postgres's "postgres" maintenance database -- caught
+    live: this fails through pgbouncer, whose [databases] stanza is a
+    deliberately curated allowlist exposing only "homelab", not
+    "postgres". Replaced with a direct SELECT 1 against "homelab"
+    (whose existence is already guaranteed by homelab-database at this
+    point) to verify the pgbouncer-fronted connection actually works.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 16:00:00 -0500
+
+homelab-borg-service-backup-client (0.2.6) unstable; urgency=medium
+
+  * Phase 3 pilot of the cross-package Postgres role strategy: the
+    run-tracking database prompt now offers automatic role/schema
+    bootstrap via homelab-database and registration via
+    homelab-pgbouncer (local or over SSH to whichever host has them),
+    instead of only accepting a pre-existing set of credentials. The
+    running service always connects through pgbouncer for runtime
+    traffic; direct Postgres access is only ever used for the one-time
+    setup step. Falls back to the previous manual host/port/user/
+    password entry unchanged if neither package is reachable.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 15:30:00 -0500
+
+homelab-borg-service-backup-client (0.2.5) unstable; urgency=medium
+
+  * Release v0.2.5
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 13:00:57 -0500
+
+homelab-borg-service-backup-client (0.2.5) unstable; urgency=medium
+
+  * Ship bash tab completion for the CLI (backup/check/list-archives/
+    restore/configure/setup and their flags), installed to
+    /usr/share/bash-completion/completions/, matching the server
+    package's completion support.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 10:00:00 -0500
+
+homelab-borg-service-backup-client (0.2.4) unstable; urgency=medium
+
+  * Release v0.2.4
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 12:47:28 -0500
+
+homelab-borg-service-backup-client (0.2.4) unstable; urgency=medium
+
+  * BREAKING: renamed the CLI binary from 'homelab-borgbackup' to
+    'homelab-borg-service-backup-client' (matching the package name,
+    same convention as the server package), along with its systemd
+    unit names, syslog identifier, and man page. Update any scripts,
+    cron jobs, or muscle memory referencing the old name. No compat
+    symlink is provided (no production host has this client configured
+    yet). Also fixed tests/conftest.py's broken cross-repo import path
+    left over from the client/server package split.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 09:30:00 -0500
+
+homelab-borg-service-backup-client (0.2.3) unstable; urgency=medium
+
+  * Release v0.2.3
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 12:32:46 -0500
+
+homelab-borg-service-backup-client (0.2.3) unstable; urgency=medium
+
+  * Add 'setup' as a friendlier alias for 'configure' (same command,
+    safe to re-run any time to change settings); updated the postinst
+    reminder and man page accordingly.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 09:00:00 -0500
+
+homelab-borg-service-backup-client (0.2.2) unstable; urgency=medium
+
+  * Release v0.2.2
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 08:22:12 -0500
+
+homelab-borg-service-backup-client (0.2.1) unstable; urgency=medium
+
+  * Release v0.2.1
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 23:26:34 -0500
+
+homelab-borg-service-backup-client (0.2.0) unstable; urgency=medium
+
+  * Release v0.2.0
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 23:18:31 -0500
+
+homelab-borg-service-backup-client (0.2.0) unstable; urgency=medium
+
+  * Renamed from homelab-borg-service-backup, split out of it as its own
+    independent source package with its own versioning. Server-side
+    setup (installing borg, creating the borgbackup user/group and
+    backup directory, and client enrollment) moved to the new, separate
+    homelab-borg-service-backup-server package. install.sh's SSH trust
+    setup now just prints the enroll command for an administrator to
+    run on the server, instead of SSHing into it as a sudo-capable
+    admin account.
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 23:00:00 -0500
+
+homelab-borg-service-backup (0.1.3) unstable; urgency=medium
+
+  * Release v0.1.3
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 22:32:44 -0500
+
+homelab-borg-service-backup (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 22:25:57 -0500
+
+homelab-borg-service-backup (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 14:41:19 -0500
+
+homelab-borg-service-backup (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 14:41:13 -0500
+
+homelab-borg-service-backup (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 14:06:29 -0500
+
+homelab-borg-service-backup (0.1.0) unstable; urgency=medium
+
+  * Initial packaged release: classic borg (not borg2), auto-generated
+    per-host repokey passphrases with key escrow export, restore/
+    list-archives subcommands, admin recovery SSH key for disaster
+    recovery, and Debian packaging.
+
+ -- Gardner <gardner@homelab>  Sun, 16 Aug 2026 00:00:00 -0500

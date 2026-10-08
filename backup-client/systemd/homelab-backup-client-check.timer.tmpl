@@ -1,0 +1,10 @@
+[Unit]
+Description=Homelab Borg repo integrity check schedule
+
+[Timer]
+OnCalendar=__ON_CALENDAR__
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

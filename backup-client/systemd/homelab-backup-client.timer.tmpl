@@ -1,0 +1,10 @@
+[Unit]
+Description=Homelab Borg backup schedule
+
+[Timer]
+OnCalendar=__ON_CALENDAR__
+RandomizedDelaySec=__JITTER_SECONDS__
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Homelab backup server control-plane reconciliation schedule
+
+[Timer]
+OnUnitActiveSec=__INTERVAL_SECONDS__sec
+Persistent=true
+
+[Install]
+WantedBy=timers.target

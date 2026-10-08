@@ -1,0 +1,919 @@
+#!/usr/bin/env python3
+"""CLI for the homelab-backup-server package.
+
+Manages client enrollment on the centralized borg backup server: creates
+each client's restricted repo directory and appends a forced-command SSH
+key entry to the borgbackup service account's authorized_keys.
+
+Two ways enrollment happens:
+  * Manually/in an emergency: an administrator runs `enroll`/`revoke`
+    directly on this server (unchanged since the original
+    homelab-borg-service-backup-server release -- client hosts never need
+    SSH or sudo access to this machine for this to work).
+  * Normally: client hosts submit an enrollment request to homelab-api
+    (`homelab-cli backup enroll`), and this server's own `reconcile`
+    subcommand -- run on a timer via homelab-backup-server-reconcile.timer
+    -- polls for pending requests and applies them here using the exact
+    same underlying functions as a manual `enroll`/`revoke`.
+
+`setup` logs this server in to homelab-api (creating its backup account
+first if needed -- the homelab-api account with the 'backup' role, used
+by this server and its clients; not to be confused with any other
+homelab-* account you may have, like dovecot or drive) and installs that
+timer; it's the interactive counterpart to `postinst`, which only lays
+down the non-interactive skeleton (system user/group, backup directory,
+empty config/authorized_keys).
+"""
+import argparse
+import copy
+import getpass
+import grp
+import json
+import os
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+CONFIG_DIR = "/etc/homelab/backup/server"
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.yml")
+
+# Pre-rename config location (homelab-borg-service-backup-server). postinst
+# migrates this forward automatically the first time the new package
+# configures on a host that still has it -- see debian/postinst. This
+# constant is kept here too so `setup`/diagnostics can mention it.
+LEGACY_CONFIG_DIR = "/etc/homelab/homelab-borg-service-backup-server"
+
+DEFAULT_BACKUP_USER = "borgbackup"
+DEFAULT_BACKUP_LOCATION = "/var/borgbackup"
+DEFAULT_HOMELAB_CLI_CONFIG_DIR = os.path.join(CONFIG_DIR, "homelab-cli")
+DEFAULT_ACCOUNT_EMAIL = "homelabbackup@homelab.internal"
+DEFAULT_RECONCILE_INTERVAL_SECONDS = 15
+# Floor, not just a "sane default" -- prevents a fat-fingered 0/negative
+# config.yml value from turning this into a busy-loop against homelab-api.
+MIN_RECONCILE_INTERVAL_SECONDS = 5
+
+IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+RESTRICT_RE = re.compile(r'--restrict-to-repository ([^"]+)')
+
+PACKAGED_DATA_DIR = "/usr/share/homelab-backup-server"
+
+CONFIG_DEFAULTS = {
+    "backup_user": DEFAULT_BACKUP_USER,
+    "backup_location": DEFAULT_BACKUP_LOCATION,
+    "homelab_api_url": "",
+    "homelab_cli": {
+        "config_dir": DEFAULT_HOMELAB_CLI_CONFIG_DIR,
+        "email": DEFAULT_ACCOUNT_EMAIL,
+        "password": "",
+    },
+    "reconcile": {
+        "interval_seconds": DEFAULT_RECONCILE_INTERVAL_SECONDS,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Pure functions shared by manual enroll/list/revoke AND `reconcile`. Kept
+# byte-for-byte identical in behavior to the original
+# homelab-borg-service-backup-server implementation -- only the module they
+# live in was renamed.
+# ---------------------------------------------------------------------------
+
+def is_valid_identifier(identifier):
+    """True if identifier is safe to use as a path component (no
+    traversal, no shell/authorized_keys-breaking characters)."""
+    return bool(IDENTIFIER_RE.match(identifier))
+
+
+def build_authorized_keys_line(pubkey, restrict_path):
+    return f'command="borg serve --restrict-to-repository {restrict_path}",restrict {pubkey}'
+
+
+def identifier_from_line(line):
+    """Best-effort identifier extraction from an authorized_keys line
+    previously written by build_authorized_keys_line(), for list/revoke."""
+    match = RESTRICT_RE.search(line)
+    if not match:
+        return None
+    return os.path.basename(match.group(1))
+
+
+def enroll_lines(existing_lines, pubkey, new_line):
+    """Returns (new_lines, already_present). Idempotent: a pubkey already
+    present anywhere in the file is left untouched rather than
+    duplicated, matching how the client's own install.sh dedupes."""
+    if any(pubkey in line for line in existing_lines):
+        return existing_lines, True
+    return existing_lines + [new_line], False
+
+
+def revoke_lines(existing_lines, identifier):
+    """Returns (kept_lines, removed_count)."""
+    kept = [line for line in existing_lines if identifier_from_line(line) != identifier]
+    return kept, len(existing_lines) - len(kept)
+
+
+# ---------------------------------------------------------------------------
+# Config handling. load_config() keeps its original signature/behavior
+# (used by enroll/list/revoke, unchanged); load_config_dict() is the new
+# full-schema reader used by setup/reconcile.
+# ---------------------------------------------------------------------------
+
+def _deep_update(base, overrides):
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_update(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def load_config_dict():
+    data = {}
+    if os.path.exists(CONFIG_PATH):
+        import yaml
+        with open(CONFIG_PATH) as f:
+            data = yaml.safe_load(f) or {}
+    merged = copy.deepcopy(CONFIG_DEFAULTS)
+    _deep_update(merged, data)
+    return merged
+
+
+def load_config():
+    cfg = load_config_dict()
+    return cfg["backup_user"], cfg["backup_location"]
+
+
+# ---------------------------------------------------------------------------
+# Targeted config.yml line editor -- preserves the documentation comments
+# postinst writes into config.yml (a full yaml.safe_load/dump round-trip
+# would strip them). Only understands the fixed one-level-of-nesting
+# structure this config actually uses. Modeled on
+# borg-backup-client/install/configedit.py's cmd_get/cmd_set_scalar.
+# ---------------------------------------------------------------------------
+
+def _cfg_iter_key_paths(lines):
+    stack = []
+    for i, raw in enumerate(lines):
+        stripped = raw.rstrip("\n")
+        content = stripped.strip()
+        if not content or content.startswith("#"):
+            continue
+        indent = len(stripped) - len(stripped.lstrip(" "))
+        if ":" not in content:
+            continue
+        key = content.split(":", 1)[0].strip().strip('"').strip("'")
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        path = tuple(k for _, k in stack) + (key,)
+        stack.append((indent, key))
+        yield i, indent, path
+
+
+def _cfg_find_line(lines, path):
+    path = tuple(path)
+    for i, indent, p in _cfg_iter_key_paths(lines):
+        if p == path:
+            return i, indent
+    return None, None
+
+
+def _cfg_find_insertion_point(lines, path):
+    parent_path = tuple(path[:-1])
+    if not parent_path:
+        return len(lines), 0
+    parent_i, parent_indent = _cfg_find_line(lines, parent_path)
+    if parent_i is None:
+        if len(parent_path) > 1:
+            # This editor only understands one level of nesting -- a
+            # missing grandparent means the file isn't shaped the way
+            # this tool expects at all, not something to paper over.
+            return None, None
+        # The top-level section itself doesn't exist yet -- e.g. a
+        # host migrated forward from the pre-redesign package, whose
+        # config.yml predates homelab_cli:/reconcile: entirely. Append
+        # a brand-new section rather than failing outright: this used
+        # to crash `setup` with "key not found and parent path missing"
+        # on every such host, since there was no way to create a
+        # missing parent, only insert under an existing one.
+        if lines and lines[-1].strip():
+            lines.append("\n")
+        lines.append(f"{parent_path[0]}:\n")
+        return len(lines), 2
+    item_indent = parent_indent + 2
+    j = parent_i + 1
+    while j < len(lines):
+        stripped = lines[j].rstrip("\n")
+        if stripped.strip() and not stripped.strip().startswith("#"):
+            cur_indent = len(stripped) - len(stripped.lstrip(" "))
+            if cur_indent < item_indent:
+                break
+        j += 1
+    return j, item_indent
+
+
+def cfg_set_scalar(path, value):
+    """Sets (or inserts) a scalar key in CONFIG_PATH, preserving every
+    other line untouched. `path` is a tuple like ("homelab_api_url",) or
+    ("homelab_cli", "email")."""
+    lines = []
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH) as f:
+            lines = f.readlines()
+
+    i, indent = _cfg_find_line(lines, path)
+    if i is None:
+        i, indent = _cfg_find_insertion_point(lines, path)
+        if i is None:
+            sys.exit(f"config.yml: key not found and parent path missing: {'.'.join(path)}")
+        replacing = False
+    else:
+        replacing = True
+
+    key = path[-1]
+    escaped = str(value).replace('"', '\\"')
+    new_line = f'{" " * indent}{key}: "{escaped}"\n'
+    if replacing:
+        lines[i] = new_line
+    else:
+        lines.insert(i, new_line)
+
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    with open(CONFIG_PATH, "w") as f:
+        f.writelines(lines)
+
+
+def require_root():
+    if os.geteuid() != 0:
+        sys.exit("must be run as root")
+
+
+def authorized_keys_path(backup_user):
+    home = pwd.getpwnam(backup_user).pw_dir
+    return os.path.join(home, ".ssh", "authorized_keys")
+
+
+def read_lines(path):
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [line.rstrip("\n") for line in f if line.strip()]
+
+
+def write_lines_as_backup_user(path, lines, backup_user):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for line in lines:
+            f.write(line + "\n")
+    uid = pwd.getpwnam(backup_user).pw_uid
+    gid = grp.getgrnam(backup_user).gr_gid
+    os.chown(os.path.dirname(path), uid, gid)
+    os.chown(path, uid, gid)
+    os.chmod(os.path.dirname(path), 0o700)
+    os.chmod(path, 0o600)
+
+
+def write_lines_atomic(path, lines, backup_user):
+    """Same effect as write_lines_as_backup_user(), but via write-to-temp
+    + os.rename() so a crash/power-loss mid-write can never leave
+    authorized_keys truncated or half-written. Used by `reconcile`, which
+    touches this file unattended on a timer rather than only when a human
+    runs `enroll`/`revoke` by hand."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    uid = pwd.getpwnam(backup_user).pw_uid
+    gid = grp.getgrnam(backup_user).gr_gid
+
+    fd, tmp_path = tempfile.mkstemp(prefix=".authorized_keys.", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as f:
+            for line in lines:
+                f.write(line + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chown(tmp_path, uid, gid)
+        os.chmod(tmp_path, 0o600)
+        os.rename(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    os.chown(directory, uid, gid)
+    os.chmod(directory, 0o700)
+
+
+def resolve_pubkey(raw):
+    raw = raw.strip()
+    if os.path.isfile(raw):
+        with open(raw) as f:
+            raw = f.read().strip()
+    if "ssh-" not in raw and "ecdsa-" not in raw:
+        sys.exit(f"'{raw}' does not look like an SSH public key (or a path to one)")
+    return raw
+
+
+# ---------------------------------------------------------------------------
+# enroll / list / revoke / admin-recovery-key -- unchanged behavior, just
+# living in the renamed module.
+# ---------------------------------------------------------------------------
+
+def cmd_enroll(args):
+    require_root()
+    backup_user, backup_location = load_config()
+    if not is_valid_identifier(args.identifier):
+        sys.exit(f"invalid identifier '{args.identifier}': must match {IDENTIFIER_RE.pattern}")
+    pubkey = resolve_pubkey(args.pubkey)
+
+    restrict_path = os.path.join(backup_location, args.identifier)
+    os.makedirs(restrict_path, exist_ok=True)
+    uid = pwd.getpwnam(backup_user).pw_uid
+    gid = grp.getgrnam(backup_user).gr_gid
+    os.chown(restrict_path, uid, gid)
+
+    ak_path = authorized_keys_path(backup_user)
+    existing = read_lines(ak_path)
+    new_line = build_authorized_keys_line(pubkey, restrict_path)
+    updated, already_present = enroll_lines(existing, pubkey, new_line)
+    write_lines_as_backup_user(ak_path, updated, backup_user)
+
+    if already_present:
+        print(f"'{args.identifier}' already enrolled, nothing to do")
+    else:
+        print(f"enrolled '{args.identifier}' -> {restrict_path}")
+
+
+def cmd_list(args):
+    backup_user, _ = load_config()
+    for line in read_lines(authorized_keys_path(backup_user)):
+        identifier = identifier_from_line(line)
+        if identifier:
+            print(identifier)
+
+
+def cmd_revoke(args):
+    require_root()
+    backup_user, _ = load_config()
+    ak_path = authorized_keys_path(backup_user)
+    existing = read_lines(ak_path)
+    kept, removed = revoke_lines(existing, args.identifier)
+    if removed == 0:
+        sys.exit(f"no enrolled key found for identifier '{args.identifier}'")
+    write_lines_as_backup_user(ak_path, kept, backup_user)
+    print(f"revoked {removed} key(s) for '{args.identifier}'")
+
+
+def cmd_admin_recovery_key(args):
+    require_root()
+    sibling = os.path.join(os.path.dirname(os.path.realpath(__file__)), "setup-admin-recovery-key.sh")
+    script = sibling if os.path.exists(sibling) else os.path.join(PACKAGED_DATA_DIR, "setup-admin-recovery-key.sh")
+    cmd = [script]
+    if args.backup_user:
+        cmd += ["--backup-user", args.backup_user]
+    if args.backup_location:
+        cmd += ["--backup-location", args.backup_location]
+    os.execv(script, cmd)
+
+
+# ---------------------------------------------------------------------------
+# reconcile -- polls homelab-api for pending enroll/revoke requests and
+# applies them, on a timer (homelab-backup-server-reconcile.timer). See
+# the plan's §7.4 for the full contract this implements.
+# ---------------------------------------------------------------------------
+
+def _log(msg):
+    print(f"[homelab-backup-server reconcile] {msg}")
+
+
+def _log_warning(msg):
+    print(f"[homelab-backup-server reconcile] WARNING: {msg}", file=sys.stderr)
+
+
+def _run_cli(cli_dir, *args, timeout=None):
+    # stdin is explicitly /dev/null, never inherited: without this, a
+    # homelab-cli subprocess that ends up needing to prompt for
+    # something (e.g. resolve_api_url() when no api_url is configured)
+    # inherits this script's REAL terminal as its stdin, while its
+    # prompt text -- along with everything else it prints -- lands in
+    # the capture_output pipe instead of the visible terminal. The
+    # result is an invisible stall: the subprocess is genuinely waiting
+    # on a prompt the operator can never see was asked. Caught live.
+    return subprocess.run(
+        ["homelab-cli", "--config", cli_dir, *args],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout,
+    )
+
+
+def _proc_error_text(proc):
+    return (proc.stderr or proc.stdout or "").strip() or f"exit code {proc.returncode}"
+
+
+def cmd_reconcile(args):
+    require_root()
+    cfg = load_config_dict()
+    cli_dir = cfg["homelab_cli"]["config_dir"]
+    backup_user = cfg["backup_user"]
+    backup_location = cfg["backup_location"]
+
+    validate = _run_cli(cli_dir, "validate")
+    if validate.returncode != 0:
+        # A homelab-api outage must never trip systemd's failure-count
+        # limits into disabling the timer, and authorized_keys must not
+        # be touched at all in this case -- exit 0, not 1.
+        _log_warning(f"not logged in to homelab-api, skipping this run: {_proc_error_text(validate)}")
+        return 0
+
+    pending_proc = _run_cli(cli_dir, "backup", "list-pending-enrollments")
+    if pending_proc.returncode != 0:
+        _log_warning(f"failed to fetch pending enrollments, skipping this run: {_proc_error_text(pending_proc)}")
+        return 0
+
+    try:
+        pending = json.loads(pending_proc.stdout).get("enrollments", [])
+    except (ValueError, AttributeError) as exc:
+        _log_warning(f"could not parse pending enrollments response, skipping this run: {exc}")
+        return 0
+
+    if not pending:
+        _log("no pending enrollments")
+        return 0
+
+    ak_path = authorized_keys_path(backup_user)
+    lines = read_lines(ak_path)
+    applied = []
+
+    for item in pending:
+        item_id = item.get("id")
+        identifier = item.get("identifier")
+        action = item.get("action")
+
+        if not identifier or not is_valid_identifier(identifier):
+            _log_warning(f"rejecting enrollment id={item_id!r}: invalid identifier {identifier!r}")
+            continue
+
+        if action == "enroll":
+            pubkey = (item.get("pubkey") or "").strip()
+            if not pubkey:
+                _log_warning(f"rejecting enrollment id={item_id!r}: missing pubkey")
+                continue
+            restrict_path = os.path.join(backup_location, identifier)
+            os.makedirs(restrict_path, exist_ok=True)
+            uid = pwd.getpwnam(backup_user).pw_uid
+            gid = grp.getgrnam(backup_user).gr_gid
+            os.chown(restrict_path, uid, gid)
+            new_line = build_authorized_keys_line(pubkey, restrict_path)
+            lines, already_present = enroll_lines(lines, pubkey, new_line)
+            _log(f"{'already enrolled' if already_present else 'enrolled'} '{identifier}' (id={item_id})")
+            applied.append(item)
+        elif action == "revoke":
+            lines, removed = revoke_lines(lines, identifier)
+            _log(f"revoked {removed} key(s) for '{identifier}' (id={item_id})")
+            applied.append(item)
+        else:
+            _log_warning(f"rejecting enrollment id={item_id!r}: unknown action {action!r}")
+            continue
+
+    if applied:
+        write_lines_atomic(ak_path, lines, backup_user)
+
+    for item in applied:
+        item_id = item["id"]
+        ack_args = ["backup", "ack-enrollment", str(item_id)]
+        if item.get("action") == "enroll":
+            ack_args += [
+                "--repo-ssh-user", backup_user,
+                "--repo-server", _discover_server_hostname(cli_dir) or "",
+                "--repo-location", os.path.join(backup_location, item["identifier"]),
+            ]
+        ack = _run_cli(cli_dir, *ack_args)
+        if ack.returncode != 0:
+            _log_warning(
+                f"applied id={item_id} to authorized_keys but failed to ack it "
+                f"({_proc_error_text(ack)}); will retry the ack next run"
+            )
+
+    return 0
+
+
+_server_hostname_cache = {}
+
+
+def _discover_server_hostname(cli_dir):
+    """Looks up this server's own registered hostname (set once by
+    `setup` via `backup set-server-info`) for use in enroll ack calls.
+    Cached per-process since this can be called once per applied item."""
+    if cli_dir in _server_hostname_cache:
+        return _server_hostname_cache[cli_dir]
+    proc = _run_cli(cli_dir, "backup", "server-info")
+    hostname = None
+    if proc.returncode == 0:
+        try:
+            hostname = json.loads(proc.stdout).get("hostname")
+        except (ValueError, AttributeError):
+            hostname = None
+    if not hostname:
+        _log_warning("could not discover this server's registered hostname (backup server-info); "
+                      "--repo-server will be omitted from enrollment acks")
+    _server_hostname_cache[cli_dir] = hostname
+    return hostname
+
+
+# ---------------------------------------------------------------------------
+# setup -- interactively logs this server in to homelab-api (creating its
+# account first if needed) and installs the reconcile timer.
+# ---------------------------------------------------------------------------
+
+def _prompt(message, default=None):
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{message}{suffix}: ").strip()
+    return value or (default or "")
+
+
+def _run_cli_ambient(*args, timeout=None):
+    """Like _run_cli(), but against the invoking operator's own default
+    homelab-cli session (~/.config/homelab-cli), not this server's own
+    isolated one -- used only to check for a pre-existing admin login.
+    stdin is /dev/null for the same reason as _run_cli() -- see there."""
+    return subprocess.run(
+        ["homelab-cli", *args], capture_output=True, text=True,
+        stdin=subprocess.DEVNULL, timeout=timeout,
+    )
+
+
+# How long the best-effort ambient-admin-session probe gets before giving
+# up and falling straight to the explicit admin-login prompt. This is
+# just a "is there already something usable here" check, not real work --
+# a slow/unresponsive homelab-api shouldn't be allowed to stall the whole
+# setup flow waiting on it, unlike the account-creation calls that follow
+# it (those are the actual work, and get no such short-circuit).
+AMBIENT_CHECK_TIMEOUT_SECONDS = 3
+
+
+def _check_login(cli_dir=None):
+    """Runs `validate` (against cli_dir's session, or the operator's own
+    ambient default session if cli_dir is None) purely to NARRATE what's
+    going on -- who's logged in and with what roles -- before attempting
+    anything privileged. The actual authorization decision always stays
+    with homelab-api itself (see _create_user_via_admin_session): a role
+    name we don't recognize here could still have grant rights via
+    api.role_grant_permissions, so this is never used to block an
+    attempt client-side, only to make the resulting message precise.
+    Returns {"ok", "email", "roles", "error"}."""
+    try:
+        if cli_dir:
+            proc = _run_cli(cli_dir, "validate")
+        else:
+            proc = _run_cli_ambient("validate", timeout=AMBIENT_CHECK_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "email": None, "roles": None,
+                "error": f"timed out after {AMBIENT_CHECK_TIMEOUT_SECONDS}s"}
+    if proc.returncode != 0:
+        return {"ok": False, "email": None, "roles": None, "error": _proc_error_text(proc)}
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return {"ok": False, "email": None, "roles": None, "error": f"unparseable response: {proc.stdout!r}"}
+    user = data.get("user") or {}
+    return {"ok": True, "email": user.get("email"), "roles": user.get("roles") or [], "error": None}
+
+
+def _create_user_via_admin_session(email, args, role="backup"):
+    """Creates/verifies this server's BACKUP ACCOUNT -- the homelab-api
+    account holding `role`, used by this server and its clients (not to
+    be confused with an admin account, or any other homelab-* account
+    that might exist on this box). Needs an admin account (one allowed
+    to create other accounts) to do this, used once, transiently:
+
+    1. Checks for an ambient admin login (the operator's own default
+       homelab-cli session, no --config override) and reports what it
+       found, so this isn't a silent guess.
+    2. If one was found, attempts `admin user --create` with it regardless
+       of how promising its roles looked -- homelab-api is always the
+       authority on whether an account can grant `role`, not a
+       client-side guess.
+    3. Falls back to an explicit admin login into a throwaway --config
+       dir (discarded after) only if no ambient session worked at all,
+       or the one found couldn't create the account.
+
+    Returns the parsed JSON response from `admin user --create`, or None
+    on failure."""
+    print(f"Checking for an existing admin login (using your own ~/.config/homelab-cli --")
+    print(f"this may point at a different homelab-api than this run's target, {args.api_url})...")
+    ambient = _check_login()
+    if ambient["ok"]:
+        roles_text = ", ".join(ambient["roles"]) or "none"
+        print(f"Found an existing login for '{ambient['email']}' (roles: {roles_text}).")
+
+        result = subprocess.run(
+            ["homelab-cli", "admin", "user", "--create", "--email", email, "--role", role],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            try:
+                return json.loads(result.stdout)
+            except ValueError:
+                print(f"warning: 'admin user --create' succeeded but returned unparseable output: {result.stdout!r}",
+                      file=sys.stderr)
+                return None
+        print(f"Could not create '{email}' using '{ambient['email']}' (roles: {roles_text}): "
+              f"{_proc_error_text(result)}")
+        print("This usually means that account needs site_admin (or an explicit grant) to "
+              "create other accounts.")
+    else:
+        print(f"No existing admin login found ({ambient['error']}).")
+
+    print(f"Log in with an admin account now (used once, right here, never saved) to "
+          f"create/verify the '{email}' backup account at {args.api_url}:")
+
+    with tempfile.TemporaryDirectory(prefix="homelab-backup-server-admin-") as tmp_dir:
+        os.chmod(tmp_dir, 0o700)
+        configure = subprocess.run(
+            ["homelab-cli", "--config", tmp_dir, "configure", "--set-api-url", args.api_url],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        )
+        if configure.returncode != 0:
+            print(f"error: could not configure temporary admin session: {_proc_error_text(configure)}",
+                  file=sys.stderr)
+            return None
+
+        admin_email = _prompt("Admin account email (needs rights to create other accounts)")
+        admin_password = getpass.getpass("Admin account password: ")
+        login = subprocess.run(
+            ["homelab-cli", "--config", tmp_dir, "login", "--email", admin_email, "--password-stdin"],
+            input=admin_password, capture_output=True, text=True,
+        )
+        if login.returncode != 0:
+            print(f"error: admin login failed: {_proc_error_text(login)}", file=sys.stderr)
+            return None
+
+        admin_check = _check_login(tmp_dir)
+        roles_text = ", ".join(admin_check["roles"] or []) if admin_check["ok"] else "unknown"
+        print(f"Logged in as '{admin_email}' (roles: {roles_text}).")
+
+        result = subprocess.run(
+            ["homelab-cli", "--config", tmp_dir, "admin", "user", "--create", "--email", email, "--role", role],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            print(f"error: 'admin user --create' failed while logged in as '{admin_email}' "
+                  f"(roles: {roles_text}): {_proc_error_text(result)}", file=sys.stderr)
+            print("This usually means that account needs site_admin (or an explicit grant) to "
+                  "create other accounts.", file=sys.stderr)
+            return None
+        try:
+            return json.loads(result.stdout)
+        except ValueError:
+            print(f"warning: 'admin user --create' succeeded but returned unparseable output: {result.stdout!r}",
+                  file=sys.stderr)
+            return None
+        # tmp_dir (and the admin session it briefly held) is discarded here.
+
+
+def _resolve_service_password(create_resp, args):
+    """Picks the password to log the backup account into. A freshly
+    created account's password always comes back in `create_resp`
+    (the server generates it -- `admin user --create` never accepts a
+    client-supplied password). If the account already existed (no
+    "password" key), we have no way to learn its current password from
+    the API; fall back to an explicitly supplied one, then finally to a
+    freshly generated one as a last resort (which will only succeed if
+    it happens to match -- in practice this path means the account's
+    password should be rotated first via `homelab-cli admin
+    reset-password` and supplied here with --password-file/--password-env)."""
+    if create_resp and create_resp.get("password"):
+        return create_resp["password"]
+
+    if args.password_file:
+        with open(args.password_file) as f:
+            return f.read().strip()
+    if args.password_env:
+        value = os.environ.get(args.password_env)
+        if value:
+            return value
+        print(f"warning: --password-env={args.password_env} set but that variable is empty/unset",
+              file=sys.stderr)
+
+    print(
+        f"warning: this homelab-api account already existed and no password was supplied "
+        f"(--password-file/--password-env); generating a new one via openssl, which will "
+        f"only work if it happens to match the account's real password. If login below "
+        f"fails, rotate the account's password first (homelab-cli admin user --reset-password) "
+        f"and re-run 'setup' with --password-file/--password-env.",
+        file=sys.stderr,
+    )
+    return subprocess.run(
+        ["openssl", "rand", "-base64", "24"], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def _install_reconcile_timer(interval_seconds):
+    interval_seconds = max(MIN_RECONCILE_INTERVAL_SECONDS, int(interval_seconds))
+    bin_path = shutil.which("homelab-backup-server") or "/usr/sbin/homelab-backup-server"
+
+    template_dir_candidates = [
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), "systemd"),
+        os.path.join(PACKAGED_DATA_DIR, "systemd"),
+    ]
+    template_dir = next((d for d in template_dir_candidates if os.path.isdir(d)), None)
+    if template_dir is None:
+        print("warning: could not find homelab-backup-server-reconcile systemd unit templates; "
+              "skipping timer install -- run reconcile manually or via cron instead", file=sys.stderr)
+        return
+
+    with open(os.path.join(template_dir, "homelab-backup-server-reconcile.service.tmpl")) as f:
+        service_content = f.read().replace("__BIN_PATH__", bin_path)
+    with open(os.path.join(template_dir, "homelab-backup-server-reconcile.timer.tmpl")) as f:
+        timer_content = f.read().replace("__INTERVAL_SECONDS__", str(interval_seconds))
+
+    unit_dir = "/etc/systemd/system"
+    os.makedirs(unit_dir, exist_ok=True)
+    with open(os.path.join(unit_dir, "homelab-backup-server-reconcile.service"), "w") as f:
+        f.write(service_content)
+    with open(os.path.join(unit_dir, "homelab-backup-server-reconcile.timer"), "w") as f:
+        f.write(timer_content)
+
+    # This is the ONLY thing that reads config.yml's reconcile.interval_seconds
+    # -- the timer unit itself is what systemd actually acts on from here.
+    # Editing config.yml alone does nothing until this runs again (via
+    # `homelab-backup-server setup`) or the unit file is hand-edited +
+    # `systemctl daemon-reload` + restarted -- see the warning printed by
+    # `setup` and the comment in config.yml itself.
+    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "enable", "--now", "homelab-backup-server-reconcile.timer"], check=True)
+    print(f"Installed and enabled homelab-backup-server-reconcile.timer (every {interval_seconds} second(s)).")
+
+
+def cmd_setup(args):
+    require_root()
+    cfg = load_config_dict()
+
+    api_url = args.api_url or cfg["homelab_api_url"]
+    if not api_url:
+        api_url = _prompt("homelab-api base URL (e.g. https://api.example.org)")
+    args.api_url = api_url  # so _create_user_via_admin_session can reuse it
+    cfg_set_scalar(("homelab_api_url",), api_url)
+    print(f"Using homelab-api at {api_url} for the rest of this setup.")
+
+    print()
+    print("Email for this server's BACKUP ACCOUNT -- the homelab-api account with the")
+    print("'backup' role, used by this server (and its clients) to talk to homelab-api.")
+    print("This is separate from any admin account, and separate from other homelab-*")
+    print("accounts you may have on this box (dovecot, drive, etc). Almost always keep")
+    print("the shared default below rather than typing a personal account here.")
+    email = args.account_email or cfg["homelab_cli"]["email"] or DEFAULT_ACCOUNT_EMAIL
+    email = _prompt("This server's backup account (Enter to accept the shared default)", email)
+    cfg_set_scalar(("homelab_cli", "email"), email)
+
+    cli_dir = cfg["homelab_cli"]["config_dir"] or DEFAULT_HOMELAB_CLI_CONFIG_DIR
+    os.makedirs(cli_dir, mode=0o700, exist_ok=True)
+    os.chmod(cli_dir, 0o700)
+
+    configure = _run_cli(cli_dir, "configure", "--set-api-url", api_url)
+    if configure.returncode != 0:
+        sys.exit(f"error: could not configure homelab-cli: {_proc_error_text(configure)}")
+
+    validate = _run_cli(cli_dir, "validate")
+    if validate.returncode == 0:
+        print(f"Backup account '{email}' is already logged in and working -- nothing more to do here.")
+    else:
+        print()
+        print(f"Backup account '{email}' isn't logged in yet.")
+        print("Creating/confirming it needs an ADMIN homelab-api account (one allowed to")
+        print("create other accounts) -- used once, right now, never saved. Since this runs")
+        print("as root via sudo, you almost certainly don't have your own admin login active")
+        print("here already; checking anyway before asking.")
+        create_resp = _create_user_via_admin_session(email, args)
+        if create_resp is None:
+            sys.exit(f"error: could not create or confirm the '{email}' backup account "
+                      "(no usable admin session). Log in as an admin yourself first "
+                      "(homelab-cli login), or re-run this with --password-file/--password-env "
+                      "if the backup account already exists and you just need to log this "
+                      "server in.")
+
+        password = _resolve_service_password(create_resp, args)
+        login = subprocess.run(
+            ["homelab-cli", "--config", cli_dir, "login", "--email", email, "--password-stdin"],
+            input=password, capture_output=True, text=True,
+        )
+        if login.returncode != 0:
+            sys.exit(f"error: login as '{email}' failed: {_proc_error_text(login)}")
+
+        validate = _run_cli(cli_dir, "validate")
+        if validate.returncode != 0:
+            sys.exit(f"error: backup account '{email}' still not logged in after login: {_proc_error_text(validate)}")
+        print(f"Backup account '{email}' logged in and working.")
+
+    # homelab_cli.password only ever holds a value transiently, if at all
+    # (--password-file/--password-env content is never itself persisted
+    # here) -- clear it so config.yml never carries a live credential.
+    cfg_set_scalar(("homelab_cli", "password"), "")
+
+    print()
+    print("Now registering this host as the backup server (hostname/ssh-user/location")
+    print("that client hosts will be told to use):")
+    hostname = _prompt(
+        "  This server's reachable hostname/IP for backup clients "
+        "(127.0.0.1 is correct if server and client are the same host)",
+        args.hostname or "127.0.0.1",
+    )
+    ssh_user = _prompt("  SSH user backup clients should connect as", args.ssh_user or cfg["backup_user"])
+    location = _prompt("  Backup storage location on this server", args.location or cfg["backup_location"])
+
+    register = _run_cli(cli_dir, "backup", "set-server-info",
+                         "--hostname", hostname, "--ssh-user", ssh_user, "--location", location)
+    if register.returncode != 0:
+        sys.exit(f"error: 'backup set-server-info' failed: {_proc_error_text(register)}")
+    print(f"Registered as backup server: {hostname} (ssh_user={ssh_user}, location={location}).")
+
+    interval_seconds = cfg["reconcile"]["interval_seconds"]
+    _install_reconcile_timer(interval_seconds)
+
+    print()
+    print("Setup complete.")
+    print(f"  Backup account: {email}")
+    print(f"  homelab-cli config dir: {cli_dir}")
+    print(f"  Reconciliation interval: every {interval_seconds} second(s)")
+    print("  (changing reconcile.interval_seconds in config.yml alone does NOT take")
+    print("  effect -- re-run 'setup' or edit/reload the installed timer unit, see")
+    print("  /etc/systemd/system/homelab-backup-server-reconcile.timer)")
+    print("  'enroll'/'list'/'revoke'/'admin-recovery-key' remain available for manual/")
+    print("  emergency use -- reconcile only ever adds to what they already do.")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="homelab-backup-server")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_enroll = sub.add_parser("enroll", help="Enroll a new client host")
+    p_enroll.add_argument("identifier", help="Client host identifier (its config.yml hostname)")
+    p_enroll.add_argument("pubkey", help="Client's public key (string, or path to a .pub file)")
+    p_enroll.set_defaults(func=cmd_enroll)
+
+    p_list = sub.add_parser("list", help="List enrolled client identifiers")
+    p_list.set_defaults(func=cmd_list)
+
+    p_revoke = sub.add_parser("revoke", help="Revoke a client's enrollment")
+    p_revoke.add_argument("identifier")
+    p_revoke.set_defaults(func=cmd_revoke)
+
+    p_admin = sub.add_parser("admin-recovery-key", help="Generate/install the broader admin recovery SSH key")
+    p_admin.add_argument("--backup-user")
+    p_admin.add_argument("--backup-location")
+    p_admin.set_defaults(func=cmd_admin_recovery_key)
+
+    p_reconcile = sub.add_parser(
+        "reconcile",
+        help="Poll homelab-api for pending enroll/revoke requests and apply them "
+             "(run automatically by homelab-backup-server-reconcile.timer)",
+    )
+    p_reconcile.set_defaults(func=cmd_reconcile)
+
+    p_setup = sub.add_parser(
+        "setup",
+        help="Interactively log this server in to its homelab-api backup account "
+             "(creating it first if needed) and install the reconciliation timer",
+    )
+    p_setup.add_argument("--api-url", help="homelab-api base URL. Prompted for if not set here or in config.yml.")
+    p_setup.add_argument("--account-email",
+        help="This server's backup account (the homelab-api account with the 'backup' "
+             "role) -- the SAME shared account across your whole backup fleet, not your "
+             f"own. Default: {DEFAULT_ACCOUNT_EMAIL}")
+    p_setup.add_argument("--password-file", help="Path to a file holding the backup account's password "
+                                                  "(only consulted if the account already existed).")
+    p_setup.add_argument("--password-env", help="Env var holding the backup account's password "
+                                                 "(only consulted if the account already existed).")
+    p_setup.add_argument("--hostname", help="This server's reachable hostname/IP for backup clients.")
+    p_setup.add_argument("--ssh-user", help="SSH user backup clients should connect as.")
+    p_setup.add_argument("--location", help="Backup storage location on this server.")
+    p_setup.set_defaults(func=cmd_setup)
+
+    args = parser.parse_args()
+    rc = args.func(args)
+    if isinstance(rc, int) and rc != 0:
+        sys.exit(rc)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        # A bare Ctrl-C during setup's subprocess calls (homelab-cli
+        # invocations, most commonly) otherwise surfaces as a raw Python
+        # traceback that looks like a crash rather than an interrupted
+        # command -- same fix already applied to homelab-backup-client.
+        # 128+SIGINT is the conventional shell exit code for this.
+        print("\ninterrupted", file=sys.stderr)
+        sys.exit(130)
+    except EOFError:
+        # setup's _prompt()/getpass calls hit this if stdin runs out
+        # entirely (e.g. a non-interactive/scripted invocation with too
+        # few answers piped in) -- same "don't crash with a traceback
+        # for an expected interruption" reasoning as KeyboardInterrupt.
+        print("\nerror: input ended unexpectedly (are you running this non-interactively "
+              "without enough answers piped in?)", file=sys.stderr)
+        sys.exit(1)

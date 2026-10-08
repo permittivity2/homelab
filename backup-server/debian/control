@@ -1,0 +1,27 @@
+Source: homelab-backup-server
+Section: admin
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-backup-server
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.10), python3-yaml, borgbackup, adduser, openssh-server, homelab-cli
+Replaces: homelab-borg-service-backup-server
+Breaks: homelab-borg-service-backup-server (<< 0.4.0)
+Conflicts: borgbackup2
+Description: Homelab service/config backup server built on borg
+ Centralized-server counterpart to homelab-backup-client. Installing
+ this package creates the borgbackup system user/group and backup
+ directory. Client hosts enroll themselves via the homelab-api control
+ plane (`homelab-cli backup enroll`); this server's own
+ `homelab-backup-server-reconcile.timer` polls for pending enroll/revoke
+ requests and applies them by granting/removing SSH access, restricted
+ via a forced `borg serve --restrict-to-repository` command -- client
+ hosts never need direct SSH or sudo access to this server. Run
+ `homelab-backup-server setup` after installing to connect to the
+ control plane and enable that timer.
+ `enroll`/`list`/`revoke`/`admin-recovery-key` remain available for
+ manual/emergency use without the control plane.

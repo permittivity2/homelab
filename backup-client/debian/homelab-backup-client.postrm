@@ -1,0 +1,48 @@
+#!/bin/sh
+# Cleans up the systemd units that `homelab-backup-client configure`/
+# install.sh write to /etc/systemd/system/ at runtime -- outside dpkg's
+# file manifest, since they're generated from templates (OnCalendar=,
+# ExecStart= paths) rather than shipped statically. Without this, `apt
+# remove`/`purge` would leave them enabled and running against a
+# possibly-removed binary/config. Mirrors install/uninstall.sh, which
+# remains authoritative for the non-packaged manual-install path.
+set -e
+
+UNIT_DIR=/etc/systemd/system
+ETC_DIR=/etc/homelab/backup/client
+
+case "$1" in
+    remove|purge)
+        systemctl disable --now homelab-backup-client.service >/dev/null 2>&1 || true
+        systemctl disable --now homelab-backup-client.timer >/dev/null 2>&1 || true
+        systemctl disable --now homelab-backup-client-check.service >/dev/null 2>&1 || true
+        systemctl disable --now homelab-backup-client-check.timer >/dev/null 2>&1 || true
+        rm -f "$UNIT_DIR/homelab-backup-client.service" "$UNIT_DIR/homelab-backup-client.timer" \
+              "$UNIT_DIR/homelab-backup-client-check.service" "$UNIT_DIR/homelab-backup-client-check.timer"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+
+        # daemon-reload only re-reads unit FILES; it does not clear a
+        # unit's cached "failed" job state from a run that happened
+        # before removal (confirmed live: `systemctl status` kept
+        # showing "Active: failed ... since <old timestamp>" after
+        # `apt remove`, even with "Loaded: not-found" correctly showing
+        # the file itself was gone). reset-failed clears that lingering
+        # state explicitly.
+        systemctl reset-failed homelab-backup-client.service >/dev/null 2>&1 || true
+        systemctl reset-failed homelab-backup-client.timer >/dev/null 2>&1 || true
+        systemctl reset-failed homelab-backup-client-check.service >/dev/null 2>&1 || true
+        systemctl reset-failed homelab-backup-client-check.timer >/dev/null 2>&1 || true
+        ;;
+esac
+
+if [ "$1" = "purge" ]; then
+    # Removes the config, SSH key, homelab-cli session, and any escrowed
+    # key exports. If those were never copied off this host (see the
+    # README's Encryption & key escrow section), this is the last copy --
+    # matches `uninstall.sh --purge`'s existing (intentional) behavior.
+    rm -rf "$ETC_DIR"
+fi
+
+#DEBHELPER#
+
+exit 0

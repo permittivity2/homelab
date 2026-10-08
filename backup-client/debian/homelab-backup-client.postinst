@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    echo
+    echo "homelab-backup-client installed."
+    echo "Run 'homelab-backup-client setup' to finish setup (encryption,"
+    echo "backup mode, schedule, and homelab-api enrollment). Safe to"
+    echo "re-run any time to change settings."
+    echo
+fi
+
+#DEBHELPER#
+
+exit 0

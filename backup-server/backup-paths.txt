@@ -1,0 +1,8 @@
+# Read by homelab-backup-client's homelab_only mode.
+# /var/lib/borgbackup is the borgbackup system user's home dir as
+# created by this package's own postinst (adduser --home
+# /var/lib/borgbackup) -- if that account pre-dates this package with a
+# different home directory, update this path to match (check with
+# `getent passwd borgbackup | cut -d: -f6`).
+/etc/homelab/backup/server
+/var/lib/borgbackup/.ssh/authorized_keys

@@ -1,0 +1,4 @@
+# Read by homelab-backup-client's homelab_only mode.
+# Yes, this package backs up its own config too (encryption passphrase,
+# dedicated SSH key, homelab-cli session).
+/etc/homelab/backup/client

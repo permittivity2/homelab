@@ -1,0 +1,9 @@
+[Unit]
+Description=Homelab Borg repo integrity check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=__BIN_PATH__ check
+User=root

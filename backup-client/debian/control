@@ -1,0 +1,27 @@
+Source: homelab-backup-client
+Section: admin
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-backup-client
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.10), python3-yaml, borgbackup, openssh-client, homelab-cli
+Recommends: python3-systemd
+Conflicts: borgbackup2
+Replaces: homelab-borg-service-backup-client, homelab-borg-service-backup
+Breaks: homelab-borg-service-backup-client (<< 0.4.0), homelab-borg-service-backup (<< 0.2.0)
+Description: Homelab backup client built on borg, homelab-api integrated
+ Client-side backup tool that pushes encrypted per-host borg archives to
+ a centralized backup server over SSH, driven by a per-host config in
+ /etc/homelab/backup/client/ and run under systemd. General homelab
+ disaster-recovery backup, not limited to /etc/homelab/* configs (see
+ mode: in config.yml). Run `homelab-backup-client setup` after installing
+ this package to set up config, encryption, and enrollment: the host's
+ SSH pubkey is submitted to homelab-api once and applied automatically by
+ homelab-backup-server's own reconciliation job -- no manual admin
+ `enroll` command needed. Depends on homelab-cli for this and for
+ optional run-history reporting; this package never talks to Postgres
+ directly.

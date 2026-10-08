@@ -1,0 +1,59 @@
+.TH HOMELAB-BACKUP-SERVER 8 "August 2026" "homelab-backup-server" "Homelab Administration"
+.SH NAME
+homelab-backup-server \- centralized borg backup server, control-plane enrollment reconciler
+.SH SYNOPSIS
+.B homelab-backup-server
+.I command
+[options]
+.SH DESCRIPTION
+.B homelab-backup-server
+manages client enrollment on the centralized borg backup server: it creates
+each client's restricted repo directory and appends a forced-command SSH key
+entry to the borgbackup service account's authorized_keys, so client hosts
+never need SSH or sudo access to this machine to onboard.
+
+Client hosts normally enroll themselves through the homelab-api control plane
+(\fBhomelab-cli backup enroll\fR); this server's \fBreconcile\fR subcommand,
+run automatically on a timer by
+.BR homelab-backup-server-reconcile.timer ,
+polls for pending enroll/revoke requests and applies them here.
+\fBenroll\fR/\fBlist\fR/\fBrevoke\fR/\fBadmin-recovery-key\fR remain available
+for manual or emergency use at any time.
+.SH COMMANDS
+.TP
+.BI "enroll " identifier " " pubkey
+Enroll a new client host: creates its restricted repo directory and grants it
+SSH access. \fIpubkey\fR may be the key contents or a path to a \fB.pub\fR
+file.
+.TP
+.B list
+List enrolled client identifiers.
+.TP
+.BI "revoke " identifier
+Revoke a client's enrollment (removes its authorized_keys entry).
+.TP
+.B admin-recovery-key
+Generate/install a broader admin recovery SSH key that can restore any host's
+repo on this server.
+.TP
+.B setup
+Interactively connect this server to the homelab-api control plane
+(bootstrapping its own service account if needed), register this host as the
+backup server, and install/enable the reconciliation timer. Safe to re-run
+any time to change settings.
+.TP
+.B reconcile
+Poll homelab-api for pending enroll/revoke requests and apply them. Normally
+invoked only by
+.BR homelab-backup-server-reconcile.timer ,
+never directly. Fails soft (a warning, exit 0) on any control-plane error,
+without touching authorized_keys, so an API outage can never disable the
+timer.
+.SH FILES
+.TP
+.I /etc/homelab/backup/server/config.yml
+Server configuration: backup_user, backup_location, homelab_api_url,
+homelab_cli.*, reconcile.interval_seconds.
+.SH SEE ALSO
+.BR homelab-backup-client (8),
+.BR homelab-cli (1)

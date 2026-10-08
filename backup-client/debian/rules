@@ -1,0 +1,38 @@
+#!/usr/bin/make -f
+
+PKG = debian/homelab-backup-client
+DATA_DIR = $(PKG)/usr/share/homelab-backup-client
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	install -D -m 755 bin/homelab-backup-client \
+		$(PKG)/usr/sbin/homelab-backup-client
+	install -D -m 755 install/install.sh \
+		$(DATA_DIR)/install/install.sh
+	install -D -m 755 install/configedit.py \
+		$(DATA_DIR)/install/configedit.py
+	install -D -m 644 config/config.example.yml \
+		$(DATA_DIR)/config/config.example.yml
+	install -D -m 644 systemd/homelab-backup-client.service.tmpl \
+		$(DATA_DIR)/systemd/homelab-backup-client.service.tmpl
+	install -D -m 644 systemd/homelab-backup-client-continuous.service.tmpl \
+		$(DATA_DIR)/systemd/homelab-backup-client-continuous.service.tmpl
+	install -D -m 644 systemd/homelab-backup-client.timer.tmpl \
+		$(DATA_DIR)/systemd/homelab-backup-client.timer.tmpl
+	install -D -m 644 systemd/homelab-backup-client-check.service.tmpl \
+		$(DATA_DIR)/systemd/homelab-backup-client-check.service.tmpl
+	install -D -m 644 systemd/homelab-backup-client-check.timer.tmpl \
+		$(DATA_DIR)/systemd/homelab-backup-client-check.timer.tmpl
+	install -D -m 644 completions/homelab-backup-client \
+		$(PKG)/usr/share/bash-completion/completions/homelab-backup-client
+	install -D -m 644 backup-paths.txt \
+		$(DATA_DIR)/backup-paths.txt
+
+override_dh_auto_build:
+	# No build step needed for a single Python script + shell installer
+
+override_dh_auto_test:
+	# No package-build-time tests

@@ -1,0 +1,137 @@
+# bash completion for homelab-backup-client
+#
+# Subcommand names and per-command flags below are hand-kept in sync with
+# bin/homelab-backup-client's argparse definitions (there is no
+# code-generation step) -- if a subcommand or flag is added there, mirror
+# it here too. See borg-backup-server/completions/ for the sibling
+# pattern this is modeled on.
+
+_homelab_backup_client_commands="backup check list-archives restore configure setup"
+
+# Flags whose value is a local filesystem path, across all subcommands.
+_homelab_backup_client_path_flags="--config --ssh-key --passphrase-file --target"
+
+_homelab_backup_client_is_path_flag() {
+    local flag="$1" f
+    for f in $_homelab_backup_client_path_flags; do
+        [[ "$flag" == "$f" ]] && return 0
+    done
+    return 1
+}
+
+_homelab_backup_client_filecomplete() {
+    if declare -F _filedir >/dev/null 2>&1; then
+        _filedir
+    else
+        COMPREPLY=( $(compgen -f -- "$cur") )
+    fi
+}
+
+# Repo-override flags shared by list-archives/restore -- if any are
+# already typed on this command line, reuse them verbatim when querying
+# archive names below, so e.g. a disaster-recovery restore targeting a
+# DIFFERENT host's repo (--host/--server/--ssh-key/--passphrase-file
+# pointed at another host's escrowed key) completes against THAT repo,
+# not this host's own default one.
+_homelab_backup_client_override_flags="--host --server --ssh-user --location --ssh-key --passphrase-file --config"
+
+# Dynamic completion for --archive <TAB>: asks the real repo for its
+# actual archive names via `list-archives --names-only` (plain one-per-
+# line output, no other decoration -- see bin/homelab-backup-client).
+#
+# Bounded to a couple seconds with `timeout` -- a network-unreachable
+# backup server must never hang a Tab press, since nothing in the normal
+# borg/ssh path enforces a short connect timeout of its own. stdin is
+# explicitly /dev/null: get_passphrase() falls back to an interactive
+# getpass prompt when stdin is a tty, and during real tab-completion
+# stdin often genuinely is one -- without this, pressing Tab could
+# silently start waiting on a password typed into a completion callback.
+#
+# Runs via `sudo -n` since config.yml/the SSH key are root-owned 0600/
+# 0700 (this command is normally run as `sudo homelab-backup-client
+# ...`, but a completion callback itself always runs as the unprivileged
+# shell user, sudo prefix or not) -- `-n` never prompts for a password,
+# it just fails immediately if passwordless sudo isn't set up for this
+# user, which folds into the same safe empty-completions fallback below.
+#
+# Any failure at all (no passwordless sudo, no config yet, no passphrase
+# resolvable non-interactively, network down, or just a genuinely empty/
+# fresh repo with zero archives) yields empty output here and therefore
+# no completions -- the standard, safe fallback for dynamic shell
+# completion (same as e.g. kubectl's pod-name completion silently
+# offering nothing it can't reach).
+_homelab_backup_client_complete_archive() {
+    local overrides=() i word next f
+    for (( i=1; i < COMP_CWORD - 1; i++ )); do
+        word="${COMP_WORDS[i]}"
+        for f in $_homelab_backup_client_override_flags; do
+            if [[ "$word" == "$f" ]]; then
+                next="${COMP_WORDS[i+1]}"
+                [[ -n "$next" ]] && overrides+=("$word" "$next")
+                break
+            fi
+        done
+    done
+
+    local archives
+    archives=$(timeout 2 sudo -n homelab-backup-client list-archives --names-only "${overrides[@]}" < /dev/null 2>/dev/null)
+    COMPREPLY=( $(compgen -W "$archives" -- "$cur") )
+}
+
+_homelab_backup_client_completions() {
+    local cur prev command i word
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    if _homelab_backup_client_is_path_flag "$prev"; then
+        _homelab_backup_client_filecomplete
+        return 0
+    fi
+
+    # First non-flag word after the program name is the subcommand.
+    command=""
+    for (( i=1; i < COMP_CWORD; i++ )); do
+        word="${COMP_WORDS[i]}"
+        [[ "$word" == -* ]] && continue
+        command="$word"
+        break
+    done
+
+    if [[ -z "$command" ]]; then
+        COMPREPLY=( $(compgen -W "-h --help $_homelab_backup_client_commands" -- "$cur") )
+        return 0
+    fi
+
+    if [[ "$prev" == "--archive" ]] && { [[ "$command" == "list-archives" ]] || [[ "$command" == "restore" ]]; }; then
+        _homelab_backup_client_complete_archive
+        return 0
+    fi
+
+    local opts
+    case "$command" in
+        backup)
+            opts="--dry-run --once --config"
+            ;;
+        check)
+            opts="--config"
+            ;;
+        list-archives)
+            opts="--archive --names-only --host --server --ssh-user --location --ssh-key --passphrase-file --config"
+            ;;
+        restore)
+            opts="--archive --target --paths --dry-run --host --server --ssh-user --location --ssh-key --passphrase-file --config"
+            ;;
+        configure|setup)
+            opts="--passphrase-file"
+            ;;
+        *)
+            opts=""
+            ;;
+    esac
+
+    COMPREPLY=( $(compgen -W "-h --help $opts" -- "$cur") )
+    return 0
+}
+
+complete -F _homelab_backup_client_completions homelab-backup-client
