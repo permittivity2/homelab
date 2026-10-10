@@ -25,6 +25,10 @@ Default:
 Description: Postgres host backing the shared 'homelab' database:
  Address of the homelab-database host this pgbouncer will front.
  Required -- config generation is skipped until this is set.
+ .
+ If the database is HA (Patroni + keepalived), set this to the database
+ VIP (not any single node's address) so pgbouncer keeps reaching the
+ current leader transparently across failovers.
 
 Template: homelab-pgbouncer/postgres_port
 Type: string

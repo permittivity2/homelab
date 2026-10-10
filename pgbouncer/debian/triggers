@@ -1,0 +1,5 @@
+# Other homelab-* packages register extra [pgbouncer] keys by dropping a
+# *.conf into /etc/pgbouncer/pgbouncer-section.d and activating this trigger
+# (dpkg-trigger homelab-pgbouncer-section); we then regenerate the 90 file so
+# those keys are folded into our single [pgbouncer] section.
+interest-noawait homelab-pgbouncer-section

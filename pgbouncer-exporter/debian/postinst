@@ -4,7 +4,9 @@ set -e
 SHARE_DIR=/usr/share/homelab-pgbouncer-exporter
 USERLIST=/etc/pgbouncer/userlist.txt
 PGB_INI=/etc/pgbouncer/pgbouncer.ini
-CONF_INCLUDE=/etc/pgbouncer/conf.d/91-homelab-pgbouncer-exporter.ini
+SECTION_D=/etc/pgbouncer/pgbouncer-section.d
+SECTION_FRAG="$SECTION_D/50-homelab-pgbouncer-exporter.conf"
+OLD_INCLUDE=/etc/pgbouncer/conf.d/91-homelab-pgbouncer-exporter.ini
 DEFAULT_FILE=/etc/default/prometheus-pgbouncer-exporter
 STATS_USER=pgbouncer_exporter
 
@@ -18,33 +20,45 @@ case "$1" in
             exit 0
         fi
 
-        # Reuse the stats user's password across reinstalls (so the DSN keeps
-        # matching) by reading it back from the userlist; mint one on first install.
+        # Reuse the stats user's password across reinstalls by reading it back
+        # from the userlist; mint one on first install.
         PW="$(awk -v u="\"$STATS_USER\"" '$1==u {gsub(/"/,"",$2); print $2}' "$USERLIST" 2>/dev/null)"
         if [ -z "$PW" ]; then
             PW="$(openssl rand -hex 16)"
-            # Plaintext is valid in a scram-sha-256 userlist (pgbouncer computes
-            # SCRAM from it). Keep the outage-sensitive root:postgres 0640.
             printf '"%s" "%s"\n' "$STATS_USER" "$PW" >> "$USERLIST"
             chown root:postgres "$USERLIST"; chmod 640 "$USERLIST"
             echo "  added $STATS_USER to $USERLIST"
         fi
 
-        # Dedicated include: stats access + the ignore_startup_parameters the
-        # exporter's pq driver needs (it sends extra_float_digits, which the
-        # pgbouncer admin console rejects otherwise).
-        cat > "$CONF_INCLUDE" <<EOF
-# Managed by homelab-pgbouncer-exporter -- do not hand-edit.
-[pgbouncer]
+        # --- L6 FIX ------------------------------------------------------
+        # pgbouncer applies the LAST [pgbouncer] section and resets omitted
+        # keys to their defaults (an unset listen_addr drops the TCP listener
+        # entirely). The old approach -- a separate 91-...-exporter.ini with
+        # its own trailing [pgbouncer] section -- therefore silently left
+        # pgbouncer bound to only the unix socket. Instead, register our keys
+        # as a fragment that homelab-pgbouncer folds into its single complete
+        # [pgbouncer] section, and trigger it to regenerate.
+        if grep -qF "$OLD_INCLUDE" "$PGB_INI" 2>/dev/null; then
+            sed -i "\#$OLD_INCLUDE#d" "$PGB_INI"
+            echo "  removed the old (listen_addr-clobbering) %include from $PGB_INI"
+        fi
+        rm -f "$OLD_INCLUDE"
+
+        mkdir -p "$SECTION_D"
+        cat > "$SECTION_FRAG" <<EOF
+# Managed by homelab-pgbouncer-exporter -- folded into homelab-pgbouncer's
+# single [pgbouncer] section (do not add a [pgbouncer] header here).
 stats_users = $STATS_USER
 ignore_startup_parameters = extra_float_digits
 EOF
-        grep -qF '91-homelab-pgbouncer-exporter.ini' "$PGB_INI" \
-            || printf '%%include %s\n' "$CONF_INCLUDE" >> "$PGB_INI"
+        chown root:postgres "$SECTION_FRAG" 2>/dev/null || true
+        chmod 640 "$SECTION_FRAG"
+        echo "  wrote $SECTION_FRAG"
 
-        # Graceful reload -- SIGHUP re-reads config without dropping pooled
-        # connections (never restart: this is the fleet's DB connection layer).
-        systemctl reload pgbouncer 2>/dev/null || pkill -HUP pgbouncer 2>/dev/null || true
+        # Ask homelab-pgbouncer to regenerate its config with our fragment
+        # folded in (+ reload pgbouncer). If homelab-pgbouncer is present this
+        # fires its trigger at end-of-run; harmless otherwise.
+        dpkg-trigger --no-await homelab-pgbouncer-section 2>/dev/null || true
 
         printf "PGBOUNCER_EXPORTER_CONNECTION_STRING='host=localhost port=6432 user=%s password=%s dbname=pgbouncer sslmode=disable'\nARGS=\"\"\n" \
             "$STATS_USER" "$PW" > "$DEFAULT_FILE"
@@ -57,8 +71,10 @@ EOF
         cp "$SHARE_DIR/services/pgbouncer-exporter.yml" "/etc/homelab/services/pgbouncer-exporter.yml"
 
         systemctl enable prometheus-pgbouncer-exporter >/dev/null 2>&1 || true
+        # It may take a moment for the triggered pgbouncer reload to make the
+        # stats user live; the service's own Restart= recovers if we race it.
         systemctl restart prometheus-pgbouncer-exporter \
-            || echo "  WARNING: prometheus-pgbouncer-exporter restart failed -- check its journal."
+            || echo "  NOTE: prometheus-pgbouncer-exporter will start once pgbouncer has reloaded the stats user."
 
         echo "homelab-pgbouncer-exporter configured (pgbouncer_exporter on :9127)."
         ;;

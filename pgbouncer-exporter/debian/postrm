@@ -3,9 +3,12 @@ set -e
 case "$1" in
     purge)
         rm -f /etc/homelab/services/pgbouncer-exporter.yml
-        # Leave the pgbouncer stats user + include in place (removing them
-        # would need another graceful reload on the SPOF's connection layer;
-        # deliberately out of scope for purge).
+        # Drop our [pgbouncer] section fragment and ask homelab-pgbouncer to
+        # regenerate without it. Leave the stats user in the userlist (removing
+        # it would need another reload of the SPOF's connection layer; out of
+        # scope for purge).
+        rm -f /etc/pgbouncer/pgbouncer-section.d/50-homelab-pgbouncer-exporter.conf
+        dpkg-trigger --no-await homelab-pgbouncer-section 2>/dev/null || true
         ;;
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear) ;;
     *) echo "postrm called with unknown argument: $1"; exit 1 ;;
