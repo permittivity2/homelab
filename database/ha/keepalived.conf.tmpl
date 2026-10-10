@@ -1,0 +1,35 @@
+# Managed by homelab-database-ha-bootstrap -- do NOT hand-edit.
+# Floats the database VIP to whichever node is the current Patroni leader.
+#
+# vip-manager (the usual Patroni VIP tool) is NOT used: the Debian 1.0.2 build
+# only speaks the etcd v2 API, but the cluster runs etcd v3 -- so instead
+# keepalived tracks a check script that hits Patroni's REST /leader endpoint,
+# which returns HTTP 200 only on the current leader (503 on replicas). A failed
+# check drops the node to FAULT and releases the VIP, so the VIP is only ever
+# held by the leader. Unicast VRRP (no multicast) keeps it firewall-friendly.
+vrrp_script chk_pg_leader {
+    script "/usr/bin/curl -sf -o /dev/null --max-time 2 http://@IP@:8008/leader"
+    interval 2
+    timeout 3
+    fall 2
+    rise 2
+}
+
+vrrp_instance pg_vip {
+    state BACKUP
+    interface @IFACE@
+    virtual_router_id @VRID@
+    priority 100
+    advert_int 1
+    nopreempt
+    unicast_src_ip @IP@
+    unicast_peer {
+@UNICAST_PEERS@
+    }
+    virtual_ipaddress {
+        @VIP@/@VIPMASK@
+    }
+    track_script {
+        chk_pg_leader
+    }
+}

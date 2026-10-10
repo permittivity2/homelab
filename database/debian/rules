@@ -21,3 +21,12 @@ override_dh_install:
 		debian/homelab-database/usr/share/homelab-database/backup-hook.sh
 	install -D -m 644 services/postgresql.yml \
 		debian/homelab-database/usr/share/homelab-database/services/postgresql.yml
+	# HA (Patroni + etcd + keepalived VIP) templates + bootstrap tool
+	install -D -m 644 ha/etcd.env.tmpl \
+		debian/homelab-database/usr/share/homelab-database/ha/etcd.env.tmpl
+	install -D -m 644 ha/patroni.yml.tmpl \
+		debian/homelab-database/usr/share/homelab-database/ha/patroni.yml.tmpl
+	install -D -m 644 ha/keepalived.conf.tmpl \
+		debian/homelab-database/usr/share/homelab-database/ha/keepalived.conf.tmpl
+	install -D -m 755 scripts/ha-bootstrap.sh \
+		debian/homelab-database/usr/sbin/homelab-database-ha-bootstrap

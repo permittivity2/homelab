@@ -1,0 +1,78 @@
+# Managed by homelab-database-ha-bootstrap -- do NOT hand-edit.
+# Patroni cluster-member config. Based on Debian's /etc/patroni/config.yml.in
+# (Debian directory layout + pg_createcluster/pg_clonecluster helpers), with an
+# etcd v3 DCS and the homelab fleet's networking filled in by the bootstrap tool.
+#
+# scope MUST be "<version>-<cluster>" (e.g. 18-main): the Debian
+# pg_createcluster_patroni / pg_clonecluster_patroni wrappers derive the PG
+# version + cluster name from it. A scope like "homelab" fails with
+# "invalid version 'homelab'".
+scope: "@SCOPE@"
+namespace: "@NAMESPACE@"
+name: @NODE@
+
+etcd3:
+  hosts:
+@ETCD_HOSTS_YAML@
+
+restapi:
+  listen: @IP@:8008
+  connect_address: @IP@:8008
+
+bootstrap:
+  # Create the initial cluster the Debian-native way so the leader's layout
+  # matches a normal Debian cluster exactly.
+  method: pg_createcluster
+  pg_createcluster:
+    command: /usr/share/patroni/pg_createcluster_patroni
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    check_timeline: true
+    postgresql:
+      use_pg_rewind: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        max_wal_senders: 10
+        max_replication_slots: 10
+
+postgresql:
+  # Clone replicas the Debian-native way (wraps pg_basebackup).
+  create_replica_method:
+    - pg_clonecluster
+  pg_clonecluster:
+    command: /usr/share/patroni/pg_clonecluster_patroni
+  listen: "*:5432"
+  connect_address: @IP@:5432
+  use_unix_socket: true
+  data_dir: /var/lib/postgresql/@PGVER@/@CLUSTER@
+  bin_dir: /usr/lib/postgresql/@PGVER@/bin
+  config_dir: /etc/postgresql/@PGVER@/@CLUSTER@
+  pgpass: /var/lib/postgresql/@PGVER@-@CLUSTER@.pgpass
+  authentication:
+    replication:
+      username: "replicator"
+      password: "@REPLPW@"
+    superuser:
+      username: "postgres"
+  parameters:
+    unix_socket_directories: '/var/run/postgresql/'
+    logging_collector: 'on'
+    log_directory: '/var/log/postgresql'
+    log_filename: 'postgresql-@PGVER@-@CLUSTER@.log'
+  pg_hba:
+    - local   all             all                                     peer
+    - host    all             all             127.0.0.1/32            scram-sha-256
+    - host    all             all             ::1/128                 scram-sha-256
+    - host    all             all             @APP_NETWORK@           scram-sha-256
+    - local   replication     all                                     peer
+    # loopback replication entries are REQUIRED: Patroni does its own timeline
+    # check over a replication connection to localhost (resolves to ::1) --
+    # without these a freshly-bootstrapped leader can never promote out of
+    # recovery.
+    - host    replication     replicator      127.0.0.1/32            scram-sha-256
+    - host    replication     replicator      ::1/128                 scram-sha-256
+@REPL_HBA_HOSTS@

@@ -10,6 +10,7 @@ Package: homelab-database
 Architecture: all
 Depends: ${misc:Depends}, postgresql, postgresql-client, homelab-common
 Recommends: homelab-agent
+Suggests: patroni, etcd-server, etcd-client, python3-etcd, python3-dnspython, keepalived
 Description: PostgreSQL provisioning substrate for the homelab-* ecosystem
  Installs/configures PostgreSQL itself and idempotently creates the one
  shared `homelab` database every feature's own narrow schema lives
