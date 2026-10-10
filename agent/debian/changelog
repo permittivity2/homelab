@@ -1,3 +1,17 @@
+homelab-agent (0.1.8) unstable; urgency=medium
+
+  * Ship a fleet-trust nftables baseline drop-in
+    (/etc/nftables.d/10-homelab-fleet-trust.nft). Accepts all intra-fleet
+    traffic on the three private planes (service 10.50.0.0/22, storage
+    10.45.0.0/16, mgmt 10.20.0.0/16) in both the base input and output
+    chains, so homelab-* services no longer need per-port host-firewall
+    rules to reach each other. Perimeter stays at the edge CTs + the
+    bad-ips table (a separate prerouting hook, untouched). Applied live
+    without flushing the ruleset (bad-ips' runtime set survives) and at
+    boot via the /etc/nftables.d include.
+
+ -- Gardner <gardner@homelab>  Fri, 09 Oct 2026 23:27:00 -0500
+
 homelab-agent (0.1.7) unstable; urgency=medium
 
   * Release v0.1.7

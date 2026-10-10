@@ -1,0 +1,29 @@
+# Managed by homelab-agent -- fleet-trust firewall baseline. DO NOT edit by hand
+# (re-copied from /usr/share/homelab-agent/nftables/ on every package configure).
+#
+# Every homelab-* host sits on an isolated private PVE fleet with nothing
+# facing the internet. The security perimeter is the edge CTs (CT00-02)
+# plus the bad-ips dynamic blocklist -- a SEPARATE 'inet badips' table on
+# the prerouting hook (priority -150), untouched by this file. On the
+# internal planes, host firewalls dropping individual service ports buy no
+# security; they only cause per-service "open one more port" churn every
+# time two homelab-* services need to talk (pgbouncer<->postgres, api<->
+# dovecot, LMTP, VRRP, metrics, ...).
+#
+# This appends a single accept for all intra-fleet traffic on the three
+# private planes to the base 'inet filter' input+output chains (both have
+# `policy drop`). An accept living in a separate table cannot override
+# another base chain's drop, so it MUST be added into these chains.
+#
+# Loaded two ways, both safe:
+#   * at boot, via /etc/nftables.conf's `include "/etc/nftables.d/*"`,
+#     inside that file's single atomic `flush ruleset` load;
+#   * live on package configure, via `nft -f` of just this file (a bare
+#     `add rule`, no `flush`) -- so the bad-ips dynamic set (runtime state,
+#     not on disk) is never lost. The postinst deletes any prior rule
+#     carrying the "homelab-fleet-trust" comment before re-applying, so a
+#     live re-apply never stacks duplicates.
+#
+#   service plane 10.50.0.0/22 | storage/NFS 10.45.0.0/16 | mgmt 10.20.0.0/16
+add rule inet filter input  ip saddr { 10.50.0.0/22, 10.45.0.0/16, 10.20.0.0/16 } accept comment "homelab-fleet-trust"
+add rule inet filter output ip daddr { 10.50.0.0/22, 10.45.0.0/16, 10.20.0.0/16 } accept comment "homelab-fleet-trust"

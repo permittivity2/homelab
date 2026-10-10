@@ -85,6 +85,36 @@ case "$1" in
             echo "  NOT starting homelab-agent -- no credential yet (see above)."
         fi
 
+        # --- fleet-trust firewall baseline ------------------------------
+        # Open intra-fleet traffic on the private planes (service 10.50,
+        # storage 10.45, mgmt 10.20) so individual homelab-* services never
+        # need per-port host-firewall rules. The perimeter stays at the
+        # edge CTs + the bad-ips table (a separate prerouting hook, left
+        # alone here). Applied live WITHOUT flushing the ruleset so bad-ips'
+        # runtime dynamic set survives: drop any prior rule carrying our
+        # comment, then load just this bare-`add rule` drop-in. Also lands
+        # at boot via /etc/nftables.conf's `include "/etc/nftables.d/*"`.
+        NFT_SRC="$SHARE_DIR/nftables/10-homelab-fleet-trust.nft"
+        NFT_DROPIN=/etc/nftables.d/10-homelab-fleet-trust.nft
+        if [ -f "$NFT_SRC" ] && [ -d /etc/nftables.d ]; then
+            cp "$NFT_SRC" "$NFT_DROPIN"
+            if nft list chain inet filter input >/dev/null 2>&1; then
+                for chain in input output; do
+                    for hh in $(nft -a list chain inet filter "$chain" 2>/dev/null \
+                            | awk '/homelab-fleet-trust/ {print $NF}'); do
+                        nft delete rule inet filter "$chain" handle "$hh" 2>/dev/null || true
+                    done
+                done
+                if nft -f "$NFT_DROPIN" 2>/dev/null; then
+                    echo "  fleet-trust firewall baseline applied (intra-fleet 10.50/10.45/10.20)."
+                else
+                    echo "  WARNING: could not apply $NFT_DROPIN live -- effective on next nftables reload/boot."
+                fi
+            else
+                echo "  NOTE: 'inet filter input' chain not found -- wrote $NFT_DROPIN for next boot but did not apply live."
+            fi
+        fi
+
         db_stop
         echo ""
         echo "homelab-agent configured."

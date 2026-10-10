@@ -19,3 +19,5 @@ override_dh_install:
 	dh_install
 	install -D -m 644 config/agent.example.yml \
 		debian/homelab-agent/usr/share/homelab-agent/config/agent.example.yml
+	install -D -m 644 nftables/10-homelab-fleet-trust.nft \
+		debian/homelab-agent/usr/share/homelab-agent/nftables/10-homelab-fleet-trust.nft
