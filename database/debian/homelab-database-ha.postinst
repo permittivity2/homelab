@@ -1,0 +1,62 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+case "$1" in
+    configure)
+        db_get homelab-database-ha/members || true;              MEMBERS="$RET"
+        db_get homelab-database-ha/this_node || true;            THIS="${RET:-$(hostname -s)}"
+        db_get homelab-database-ha/vip || true;                  VIP="$RET"
+        db_get homelab-database-ha/app_network || true;          APPNET="${RET:-10.50.0.0/22}"
+        db_get homelab-database-ha/replication_password || true; REPLPW="$RET"
+        db_get homelab-database-ha/wipe_existing || true;        WIPE="${RET:-false}"
+        db_stop
+
+        if [ -z "$MEMBERS" ]; then
+            IP="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
+            MEMBERS="$THIS:$IP"
+        fi
+
+        # Replication password must be identical on every member. Auto-generate
+        # only for a genuine single-node cluster; for multi-node, require it
+        # (an auto-generated per-node value would never match).
+        NMEM=$(printf '%s' "$MEMBERS" | tr ',' '\n' | grep -c .)
+        if [ -z "$REPLPW" ]; then
+            if [ "$NMEM" -le 1 ]; then
+                REPLPW="$(openssl rand -hex 16)"
+                echo "  generated a replication password (single-node cluster)."
+            else
+                echo "  WARNING: no replication password set for a $NMEM-node cluster."
+                echo "           Set the SAME value on every member and re-run:"
+                echo "           sudo dpkg-reconfigure homelab-database-ha"
+                exit 0
+            fi
+        fi
+
+        set -- --members "$MEMBERS" --this-node "$THIS" \
+               --replication-password "$REPLPW" --app-network "$APPNET" --yes
+        [ -n "$VIP" ] && set -- "$@" --vip "$VIP"
+        [ "$WIPE" = "true" ] && set -- "$@" --wipe-existing-cluster
+
+        echo "homelab-database-ha: bootstrapping HA member '$THIS' ($NMEM-node cluster)..."
+        if homelab-database-ha-bootstrap "$@"; then
+            echo "homelab-database-ha configured."
+            echo "  check the cluster: patronictl -c /etc/patroni/config.yml list"
+            [ "$NMEM" -gt 1 ] && echo "  run this package's install on the OTHER members too (same --members)."
+        else
+            echo "  WARNING: HA bootstrap failed -- see output above, then"
+            echo "           'sudo dpkg-reconfigure homelab-database-ha' to retry."
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

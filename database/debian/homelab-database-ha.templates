@@ -1,0 +1,38 @@
+Template: homelab-database-ha/members
+Type: string
+Description: Cluster members as name:ip (comma-separated):
+ Every Patroni member including this node, e.g.
+ "pg01:10.0.0.1,pg02:10.0.0.2,pg03:10.0.0.3". For a single-node cluster
+ just this host -- you can extend later by installing this package on the
+ other members with the SAME list. Defaults to this host if left blank.
+
+Template: homelab-database-ha/this_node
+Type: string
+Description: This node's name (must appear in the member list):
+ Defaults to the short hostname.
+
+Template: homelab-database-ha/vip
+Type: string
+Description: Database VIP, floated to the leader by keepalived (optional):
+ Point pgbouncer and apps at this address so they follow the primary
+ across failovers. Leave blank to skip keepalived (no VIP).
+
+Template: homelab-database-ha/app_network
+Type: string
+Default: 10.50.0.0/22
+Description: CIDR allowed to connect to the databases (pg_hba):
+ The network your apps/pgbouncer connect from.
+
+Template: homelab-database-ha/replication_password
+Type: password
+Description: Replication password (MUST be identical on every member):
+ Leave blank to auto-generate -- only safe for a single-node cluster. For
+ a multi-node cluster set the SAME value on every member (config is
+ skipped with a warning if blank on a multi-node member).
+
+Template: homelab-database-ha/wipe_existing
+Type: boolean
+Default: false
+Description: Drop an existing PostgreSQL cluster so Patroni can create its own?
+ DESTRUCTIVE. Only needed if this host already has a non-Patroni cluster at
+ the data dir -- dump any data first. A fresh host needs this left false.

@@ -23,3 +23,26 @@ Description: PostgreSQL provisioning substrate for the homelab-* ecosystem
  identical fix: a remote feature host's role-bootstrap SSHes INTO this
  host and runs that tool locally here, which needs the binary present
  on THIS side, not just the caller's.
+
+Package: homelab-database-ha
+Architecture: all
+Depends: ${misc:Depends},
+         homelab-database (= ${source:Version}),
+         patroni,
+         etcd-server,
+         etcd-client,
+         python3-etcd,
+         python3-dnspython,
+         keepalived
+Description: Install-time Patroni/etcd/keepalived HA for homelab-database
+ Turns a homelab-database host into a Patroni-managed PostgreSQL cluster
+ member at install time, instead of as a manual after-the-fact step.
+ Pulls the HA stack (patroni + a 3-node-capable etcd + keepalived) as
+ hard dependencies -- so they are present before this package's postinst
+ runs -- then drives homelab-database-ha-bootstrap (shipped by
+ homelab-database) from debconf answers: a fresh install comes up HA-ready
+ even as a single-node (one-member) cluster that is trivially extended by
+ installing this package on the other members with the same member list.
+ The database VIP (keepalived) follows the Patroni leader so pgbouncer and
+ apps reach the current primary transparently across failovers. Install
+ plain homelab-database instead for a standalone (non-HA) node.
