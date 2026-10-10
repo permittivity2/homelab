@@ -26,9 +26,15 @@ bootstrap:
   pg_createcluster:
     command: /usr/share/patroni/pg_createcluster_patroni
   dcs:
-    ttl: 30
-    loop_wait: 10
-    retry_timeout: 10
+    # Generous lock TTL: these are small CTs on a shared hypervisor, so the
+    # Patroni process can briefly lose CPU to co-tenants. The default ttl=30/
+    # loop_wait=10 is too tight there -- a transient stall misses the lock
+    # renewal, triggers a false failover, and the ensuing pg_rewind adds load
+    # that causes the NEXT false failover (a self-sustaining flap storm).
+    # ttl=90 tolerates the contention; RTO on a real crash is still ~ttl.
+    ttl: 90
+    loop_wait: 20
+    retry_timeout: 30
     maximum_lag_on_failover: 1048576
     check_timeline: true
     postgresql:

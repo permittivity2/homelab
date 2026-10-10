@@ -107,7 +107,7 @@ echo "homelab-database HA bootstrap on $THIS_NODE ($THIS_IP)"
 echo "  scope=$SCOPE  members=[$INITIAL_CLUSTER]  vip=${VIP:-none}${VIP:+/$VIP_MASK on $VIP_IFACE}"
 
 # ---- ensure packages ------------------------------------------------------
-NEED="patroni etcd-server etcd-client python3-etcd python3-dnspython keepalived curl"
+NEED="patroni etcd-server etcd-client python3-etcd python3-dnspython python3-systemd keepalived curl"
 MISSING=""
 for p in $NEED; do dpkg -s "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"; done
 if [ -n "$MISSING" ]; then
@@ -152,6 +152,14 @@ echo "  [patroni] writing /etc/patroni/config.yml"
 install -d /etc/patroni
 render "$SHARE/patroni.yml.tmpl" /etc/patroni/config.yml
 chown root:postgres /etc/patroni/config.yml; chmod 640 /etc/patroni/config.yml
+# The Debian patroni.service is Type=notify with TimeoutSec=30. patroni needs
+# python3-systemd (a NEED dep above) to send the readiness notify at all; even
+# with it, on a busy node reaching ready can exceed 30s. Without a generous
+# start timeout systemd kills+restarts patroni in a loop that manifests as a
+# relentless failover storm (learned the hard way). Give it headroom.
+install -d /etc/systemd/system/patroni.service.d
+printf '[Service]\nTimeoutStartSec=300\n' > /etc/systemd/system/patroni.service.d/override.conf
+systemctl daemon-reload
 systemctl reset-failed patroni 2>/dev/null || true
 systemctl enable patroni >/dev/null 2>&1 || true
 systemctl start patroni --no-block

@@ -33,6 +33,7 @@ Depends: ${misc:Depends},
          etcd-client,
          python3-etcd,
          python3-dnspython,
+         python3-systemd,
          keepalived
 Description: Install-time Patroni/etcd/keepalived HA for homelab-database
  Turns a homelab-database host into a Patroni-managed PostgreSQL cluster
