@@ -144,6 +144,7 @@ sub startup ($self) {
     $r->get('/admin/fleet/hosts')      ->to('account#admin_fleet_hosts');
     $r->get('/admin/fleet/mismatches') ->to('account#admin_fleet_mismatches');
     $r->get('/admin/topology')         ->to('account#admin_topology');
+    $r->get('/admin/ha/status')        ->to('account#admin_ha_status');
     $r->post('/admin/spf')             ->to('account#admin_spf');
     $r->post('/admin/dmarc')           ->to('account#admin_dmarc');
     $r->post('/admin/domains/add')     ->to('account#admin_domain_add');
@@ -1149,6 +1150,12 @@ sub admin_topology ($c) {
     my ($email, $jwt) = _admin_auth($c);
     return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
     return $c->render(json => (_api_get($c, $jwt, '/api/v1/admin/agent/topology') // { nodes => [], edges => [], hosts => [] }));
+}
+
+sub admin_ha_status ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/admin/ha/status') // { components => [] }));
 }
 
 sub admin_dns_record_delete ($c) {

@@ -108,6 +108,7 @@ sub startup ($self) {
     $r->post('/api/v1/admin/users/:id/mail-quota' => sub ($c) { $self->_admin_set_mail_quota($c) });
     $r->get('/api/v1/admin/mail-usage'           => sub ($c) { $self->_admin_mail_usage($c) });
     $r->get('/api/v1/admin/dovecot/status'       => sub ($c) { $self->_admin_dovecot_status($c) });
+    $r->get('/api/v1/admin/ha/status'            => sub ($c) { $self->_admin_ha_status($c) });
     $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
     $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
     # Mints a real api.users row for a system-owned mailbox identity
@@ -1881,6 +1882,108 @@ sub _admin_dovecot_status ($self, $c) {
                         . 'indexes). All three paths fail over together to a standby if the active '
                         . 'host goes down. Enforced by homelab-haproxy active_passive; keep the pool '
                         . 'here in sync with its backends.yml.',
+    });
+}
+
+# GET /api/v1/admin/ha/status -- HA components (PostgreSQL/Patroni + pgbouncer),
+# each as members with role/state/health, for the accountmanage "HA" tab.
+# PostgreSQL role/state/lag come from Patroni's own /cluster REST (read from
+# the DCS, so any one node's answer describes the whole cluster); pgbouncer
+# liveness comes from the fleet agent heartbeat. Extensible: add more
+# components (dovecot active/passive, edge VRRP) under the same shape later.
+sub _admin_ha_status ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    my $cfg = $self->config->{postgres_ha} // {
+        vip       => '10.50.2.130',
+        rest_port => 8008,
+        nodes     => [
+            { name => 'prod-homelab06', address => '10.50.2.150' },
+            { name => 'prod-homelab07', address => '10.50.2.151' },
+            { name => 'prod-homelab08', address => '10.50.2.152' },
+        ],
+        pgbouncer => [
+            { name => 'prod-homelab09', address => '10.50.2.153' },
+            { name => 'prod-homelab10', address => '10.50.2.154' },
+            { name => 'prod-homelab11', address => '10.50.2.155' },
+        ],
+    };
+    my $rest_port = $cfg->{rest_port} // 8008;
+
+    # heartbeat health keyed by address (healthy = seen in the last 3 min).
+    my %hb;
+    for my $r (@{ $self->pg->db->query(
+        q{SELECT address, last_heartbeat,
+                 (last_heartbeat > NOW() - INTERVAL '3 minutes') AS healthy
+          FROM api.hosts})->hashes->to_array }) {
+        $hb{ $r->{address} } = $r;
+    }
+
+    # Patroni: query each node's REST /cluster; first good answer describes the
+    # whole cluster. Short timeouts -- a dead node must not stall the page.
+    my $ua = Mojo::UserAgent->new(connect_timeout => 3, request_timeout => 5);
+    my ($cluster, %rest_ok);
+    for my $n (@{ $cfg->{nodes} // [] }) {
+        my $tx = eval { $ua->get("http://$n->{address}:$rest_port/cluster") };
+        next unless $tx && !$tx->error && eval { $tx->res->json };
+        $rest_ok{ $n->{address} } = 1;
+        $cluster //= $tx->res->json;
+    }
+    my %pmem;
+    for my $m (@{ ($cluster && $cluster->{members}) || [] }) {
+        $pmem{ $m->{name} } = $m if defined $m->{name};
+        $pmem{ $m->{host} } = $m if defined $m->{host};
+    }
+    my @pg_members = map {
+        my $p = $pmem{ $_->{name} } // $pmem{ $_->{address} };
+        my $h = $hb{ $_->{address} };
+        my $state = $p ? ($p->{state} // 'unknown')
+                       : ($rest_ok{ $_->{address} } ? 'unknown' : 'unreachable');
+        +{
+            name           => $_->{name},
+            address        => $_->{address},
+            role           => ($p ? ($p->{role} // 'unknown') : 'unknown'),
+            state          => $state,
+            lag            => ($p ? $p->{lag} : undef),
+            timeline       => ($p ? $p->{timeline} : undef),
+            healthy        => ($state =~ /^(running|streaming)$/ ? \1 : \0),
+            last_heartbeat => ($h ? $h->{last_heartbeat} : undef),
+        };
+    } @{ $cfg->{nodes} // [] };
+    my ($leader) = grep { ($_->{role} // '') eq 'leader' } @pg_members;
+
+    my @pb_members = map {
+        my $h = $hb{ $_->{address} };
+        +{
+            name           => $_->{name},
+            address        => $_->{address},
+            role           => 'pooler',
+            state          => ($h && $h->{healthy} ? 'up' : 'down'),
+            healthy        => ($h && $h->{healthy} ? \1 : \0),
+            last_heartbeat => ($h ? $h->{last_heartbeat} : undef),
+        };
+    } @{ $cfg->{pgbouncer} // [] };
+
+    return $c->render(json => {
+        components => [
+            {
+                name    => 'PostgreSQL (Patroni)',
+                kind    => 'patroni',
+                vip     => $cfg->{vip},
+                leader  => ($leader ? $leader->{name} : undef),
+                members => \@pg_members,
+                note    => 'Patroni + etcd + keepalived VIP ' . ($cfg->{vip} // '?')
+                         . ' (follows the leader; apps reach it via pgbouncer). Role/state/lag '
+                         . 'are Patroni\'s own cluster view via each node\'s :' . $rest_port
+                         . '/cluster REST; "unreachable" means that node\'s Patroni REST did not answer.',
+            },
+            {
+                name    => 'Connection poolers (pgbouncer)',
+                kind    => 'pgbouncer',
+                members => \@pb_members,
+                note    => 'Every pooler fronts the database VIP, so any one keeps serving across a '
+                         . 'leader failover. Liveness is the fleet agent heartbeat (:6432 manifest).',
+            },
+        ],
     });
 }
 

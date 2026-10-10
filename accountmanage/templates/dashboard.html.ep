@@ -223,6 +223,7 @@
         <button type="button" data-atab="fleet">🛰️ Fleet</button>
         <button type="button" data-atab="services">🧩 Services</button>
         <button type="button" data-atab="topology">🗺️ Topology</button>
+        <button type="button" data-atab="ha">🔺 HA</button>
 % if ($has_metrics) {
         <button type="button" data-atab="metrics">📈 Metrics</button>
 % }
@@ -508,6 +509,17 @@
         <div class="card">
           <h2>Hosts <span class="hint">agent version + last heartbeat</span></h2>
           <div id="fleet-hosts"><p class="muted">Loading…</p></div>
+        </div>
+      </div>
+
+      <div class="admin-panel" data-apanel="ha">
+        <div class="card">
+          <h2>PostgreSQL cluster <span class="hint">Patroni leader + replicas</span></h2>
+          <div id="ha-postgres"><p class="muted">Loading…</p></div>
+        </div>
+        <div class="card">
+          <h2>Connection poolers <span class="hint">pgbouncer</span></h2>
+          <div id="ha-pgbouncer"><p class="muted">Loading…</p></div>
         </div>
       </div>
 

@@ -824,6 +824,52 @@
       if ((location.hash || '').indexOf('dovecot') >= 0) load();
     })();
 
+    // --- HA status (admin): PostgreSQL/Patroni + pgbouncer -----------
+    (function () {
+      var pg = document.getElementById('ha-postgres'), pb = document.getElementById('ha-pgbouncer');
+      if (!pg || !pb) return;
+      var loaded = false;
+      function health(ok) { return ok ? '<span style="color:var(--ok)">● up</span>' : '<span style="color:var(--danger)">● down</span>'; }
+      function roleBadge(role) { return role === 'leader' ? '<span class="badge admin">LEADER</span>' : '<span class="badge">' + hlEsc(role || '?') + '</span>'; }
+      function renderPatroni(comp) {
+        if (!comp) { pg.innerHTML = '<p class="muted">Status unavailable.</p>'; return; }
+        var rows = (comp.members || []).map(function (m) {
+          return '<tr><td>' + hlEsc(m.name) + '</td><td class="muted">' + hlEsc(m.address) + '</td><td>' + roleBadge(m.role)
+            + '</td><td class="muted">' + hlEsc(m.state) + '</td><td class="muted">' + (m.lag == null ? '' : hlEsc(String(m.lag)))
+            + '</td><td>' + health(m.healthy) + '</td></tr>';
+        }).join('');
+        var head = comp.vip ? '<p class="muted" style="font-size:0.82rem;margin:0 0 0.4rem;">VIP <strong>' + hlEsc(comp.vip) + '</strong>'
+          + (comp.leader ? ' → leader <strong>' + hlEsc(comp.leader) + '</strong>' : ' → <span style="color:var(--danger)">no leader</span>') + '</p>' : '';
+        pg.innerHTML = head
+          + '<table class="sessions"><thead><tr><th>Node</th><th>Address</th><th>Role</th><th>State</th><th>Lag</th><th>Health</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          + (comp.note ? '<p class="muted" style="font-size:0.8rem;margin:0.8rem 0 0;">' + hlEsc(comp.note) + '</p>' : '');
+      }
+      function renderPgb(comp) {
+        if (!comp) { pb.innerHTML = '<p class="muted">Status unavailable.</p>'; return; }
+        var rows = (comp.members || []).map(function (m) {
+          return '<tr><td>' + hlEsc(m.name) + '</td><td class="muted">' + hlEsc(m.address) + '</td><td class="muted">' + hlEsc(m.state) + '</td><td>' + health(m.healthy) + '</td></tr>';
+        }).join('');
+        pb.innerHTML = '<table class="sessions"><thead><tr><th>Node</th><th>Address</th><th>State</th><th>Health</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          + (comp.note ? '<p class="muted" style="font-size:0.8rem;margin:0.8rem 0 0;">' + hlEsc(comp.note) + '</p>' : '');
+      }
+      function load() {
+        if (loaded) return; loaded = true;
+        pg.innerHTML = '<p class="muted">Loading…</p>'; pb.innerHTML = '<p class="muted">Loading…</p>';
+        fetch('/admin/ha/status', { headers: { 'Accept': 'application/json' } })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) {
+            if (!d || !d.components) { pg.innerHTML = '<p class="muted">Status unavailable.</p>'; pb.innerHTML = '<p class="muted">Status unavailable.</p>'; return; }
+            var byKind = {}; d.components.forEach(function (c) { byKind[c.kind] = c; });
+            renderPatroni(byKind.patroni);
+            renderPgb(byKind.pgbouncer);
+          })
+          .catch(function () { pg.innerHTML = '<p class="muted">Status unavailable.</p>'; pb.innerHTML = '<p class="muted">Status unavailable.</p>'; });
+      }
+      var tab = document.querySelector('.admin-tabs button[data-atab="ha"]');
+      if (tab) tab.addEventListener('click', load);
+      if ((location.hash || '').indexOf('admin:ha') >= 0) load();
+    })();
+
     // --- Service accounts / invite quota / a user's sessions (admin) --
     (function () {
       function post(path, body) { var d = Object.keys(body).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(body[k]); }).join('&'); return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: d }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); }); }

@@ -56,3 +56,18 @@ server:
   # under the heaviest realistic combined request pattern, not CPU alone.
   workers: 8
   pid_file: /var/lib/homelab/api-hypnotoad.pid
+
+# HA status view (accountmanage "HA" tab, GET /api/v1/admin/ha/status).
+# Optional -- the handler falls back to this same code default if omitted.
+# Point at the PostgreSQL HA nodes' Patroni REST (:8008) + the pgbouncer poolers.
+postgres_ha:
+  vip: 10.50.2.130
+  rest_port: 8008
+  nodes:
+    - { name: prod-homelab06, address: 10.50.2.150 }
+    - { name: prod-homelab07, address: 10.50.2.151 }
+    - { name: prod-homelab08, address: 10.50.2.152 }
+  pgbouncer:
+    - { name: prod-homelab09, address: 10.50.2.153 }
+    - { name: prod-homelab10, address: 10.50.2.154 }
+    - { name: prod-homelab11, address: 10.50.2.155 }
