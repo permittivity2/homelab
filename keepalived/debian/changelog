@@ -1,3 +1,20 @@
+homelab-keepalived (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Sun, 25 Oct 2026 16:13:23 -0500
+
+homelab-keepalived (0.1.2) unstable; urgency=medium
+
+  * Float multiple VIPs, each on its own interface, via a new `vips:` list
+    in vrrp.yml (one public IP per interface; all float together in the one
+    VRRP instance so a single node owns them). Original single `vip:`/
+    `vip_interface:` form still accepted. Optional `default_route_interface`
+    pins the master-only default route (else the first vip's interface).
+    apply-script paths are env-overridable for testing; added t/apply.t.
+
+ -- Gardner <gardner@homelab>  Sun, 25 Oct 2026 16:13:15 -0500
+
 homelab-keepalived (0.1.1) unstable; urgency=medium
 
   * Release v0.1.1

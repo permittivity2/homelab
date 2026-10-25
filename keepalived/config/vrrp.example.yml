@@ -25,13 +25,24 @@ peers:                         # the OTHER node(s)' IP on their vrrp_interface
   - 10.50.2.77
 auth_pass: hlvrrp              # shared secret (<=8 chars), identical on all peers
 
-# The floating public VIP and where it lives.
-vip: 23.116.91.67/24           # the public virtual IP, as CIDR
-vip_interface: eth5            # public interface the VIP is added to on the master
-default_route_via: 23.116.91.70  # default route installed on the MASTER only
-                               # (the public gateway); backups have no default
-                               # route via the public side. Omit to not manage
-                               # the default route at all.
+# The floating public VIP(s) and which interface each lives on. Use the
+# list form for one-public-IP-per-interface -- all VIPs float together in
+# this single VRRP instance, so whichever node is master owns every one:
+vips:
+  - address: 23.116.91.66/24   # e.g. web + mail
+    interface: eth7
+  - address: 23.116.91.68/24   # e.g. DNS
+    interface: eth6
+# Single-VIP shorthand (original form, still supported):
+#   vip: 23.116.91.67/24
+#   vip_interface: eth5
+
+# OPTIONAL master-only default route via the public gateway, installed on
+# default_route_interface (or the first vip's interface if unset). Backups
+# never get it. OMIT it entirely (as here) when the edge already egresses
+# via its own LAN default route -- setting it would override that.
+# default_route_via: 23.116.91.70
+# default_route_interface: eth7
 
 # Optional: fail the VIP over to a peer if any of these services stop on
 # the current owner (not only if the whole node dies).
