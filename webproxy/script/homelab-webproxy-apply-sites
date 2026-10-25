@@ -41,6 +41,36 @@ my $template = do {
     <$fh>;
 };
 
+# Any site with `websocket: true` references $connection_upgrade in its
+# vhost (see the per-site block below), which must be defined by an
+# http-context `map`. Drop that map into conf.d -- Debian/Ubuntu's stock
+# nginx.conf already include's this directory from inside http{}, so it
+# loads with no nginx.conf edit. Written whenever at least one site needs
+# it; a map{} and the vhosts that use it can appear in any order within
+# http{}, so this needn't precede them textually. Only-if-changed, and
+# flag a reload (via $pool_changed, below) so it takes effect even on a
+# run where every vhost step is skipped (all sites already HTTPS).
+my $ws_map_conf = "$CONFD_DIR/homelab-webproxy-websocket.conf";
+if (grep { $_->{websocket} } @sites) {
+    my $ws_map_content =
+          "# Managed by homelab-webproxy's homelab-webproxy-apply-sites.\n"
+        . "# Maps the request's Upgrade header so that a websocket site's\n"
+        . "# `proxy_set_header Connection \$connection_upgrade` sends\n"
+        . "# \"upgrade\" for a websocket request and \"close\" otherwise.\n"
+        . "map \$http_upgrade \$connection_upgrade {\n"
+        . "    default upgrade;\n"
+        . "    ''      close;\n"
+        . "}\n";
+    my $existing_map = '';
+    if (open(my $rf, '<', $ws_map_conf)) { local $/; $existing_map = <$rf>; close($rf); }
+    if ($existing_map ne $ws_map_content) {
+        open(my $wf, '>', $ws_map_conf) or die "Cannot write $ws_map_conf: $!\n";
+        print $wf $ws_map_content;
+        close($wf);
+        $pool_changed = 1;
+    }
+}
+
 my $applied = 0;
 for my $site (@sites) {
     my $domain = $site->{domain} // die "sites.yml: a site is missing 'domain'\n";
@@ -190,10 +220,32 @@ for my $site (@sites) {
                 . "        client_body_timeout 3600s;\n";
         }
 
+        # 'websocket: true' -- proxy websocket Upgrade handshakes AND
+        # stream (don't buffer) the response, with long timeouts. Needed
+        # by any app whose live features ride a persistent websocket --
+        # the motivating case is Plex (its notifications / live /
+        # streaming features silently break behind a plain proxy that
+        # drops the Upgrade/Connection headers). $connection_upgrade
+        # comes from the http-context map this script writes to conf.d
+        # whenever any site sets this (see above). proxy_read/send_timeout
+        # may duplicate the large-upload block's values if both flags are
+        # set on one site -- harmless (identical values, last wins).
+        my $websocket_directives = '';
+        if ($site->{websocket}) {
+            $websocket_directives =
+                  "        proxy_http_version 1.1;\n"
+                . "        proxy_set_header Upgrade \$http_upgrade;\n"
+                . "        proxy_set_header Connection \$connection_upgrade;\n"
+                . "        proxy_buffering off;\n"
+                . "        proxy_read_timeout 3600s;\n"
+                . "        proxy_send_timeout 3600s;\n";
+        }
+
         my $vhost = $template;
         $vhost =~ s/__DOMAIN__/$domain/g;
         $vhost =~ s/__UPSTREAM__/$upstream/g;
         $vhost =~ s/__MAX_BODY_SIZE__/$max_body/g;
+        $vhost =~ s/__WEBSOCKET_DIRECTIVES__/$websocket_directives/g;
         $vhost =~ s/__LARGE_UPLOAD_DIRECTIVES__/$large_directives/g;
 
         open(my $fh, '>', $vhost_path) or die "Cannot write $vhost_path: $!\n";

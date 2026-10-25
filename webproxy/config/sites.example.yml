@@ -35,3 +35,13 @@ sites:
   - domain: api.test.mailmasker.org
     upstream: 127.0.0.1:3000
     max_body_size: 5g
+  # websocket: true proxies websocket Upgrade handshakes and streams
+  # (doesn't buffer) the response with long timeouts -- needed by any
+  # app whose live features ride a persistent websocket. The motivating
+  # case is Plex: its notifications / live / streaming features silently
+  # break behind a plain proxy that drops the Upgrade/Connection headers.
+  # Setting it on ANY site also makes apply-sites drop an http-context
+  # `map $http_upgrade $connection_upgrade` into /etc/nginx/conf.d.
+  # - domain: plex.forge.name
+  #   upstream: 10.10.0.106:32400
+  #   websocket: true

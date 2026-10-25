@@ -144,4 +144,42 @@ my $stateless_pool_conf = "$confd/stateless-pooled.test.mailmasker.org-upstream.
 my $stateless_pool = do { local (@ARGV, $/) = $stateless_pool_conf; <> };
 unlike($stateless_pool, qr/hash \$cookie/, 'no sticky_cookie means plain round-robin -- no hash directive at all');
 
+# 'websocket: true' -- inject the Upgrade/Connection + streaming
+# directives into the vhost, and drop the http-context
+# $connection_upgrade map into conf.d. (The motivating case is Plex,
+# whose live/streaming features ride a persistent websocket and break
+# behind a plain proxy.)
+open(my $wsfh, '>', $sites_yml) or die $!;
+print $wsfh <<YAML;
+letsencrypt_email: admin\@test.mailmasker.org
+sites:
+  - domain: ws.test.mailmasker.org
+    upstream: 10.10.0.106:32400
+    websocket: true
+  - domain: plain.test.mailmasker.org
+    upstream: 127.0.0.1:3000
+YAML
+close($wsfh);
+
+my $output4 = `perl script/homelab-webproxy-apply-sites 2>&1`;
+is($? >> 8, 0, 'script exits 0 for a websocket site') or diag($output4);
+
+my $ws_vhost = do { local (@ARGV, $/) = "$available/ws.test.mailmasker.org"; <> };
+like($ws_vhost, qr/proxy_http_version 1\.1;/, 'websocket site negotiates HTTP/1.1 (required for Upgrade)');
+like($ws_vhost, qr/proxy_set_header Upgrade \$http_upgrade;/, 'websocket site forwards the Upgrade header');
+like($ws_vhost, qr/proxy_set_header Connection \$connection_upgrade;/, 'websocket site sets Connection from the upgrade map');
+like($ws_vhost, qr/proxy_buffering off;/, 'websocket site disables response buffering for streaming');
+unlike($ws_vhost, qr/__[A-Z_]+__/, 'no template placeholders left unsubstituted on a websocket vhost');
+
+my $ws_map = "$confd/homelab-webproxy-websocket.conf";
+ok(-f $ws_map, 'the $connection_upgrade map was written to conf.d when a site uses websocket');
+my $ws_map_body = do { local (@ARGV, $/) = $ws_map; <> };
+like($ws_map_body, qr/map \$http_upgrade \$connection_upgrade \{/, 'conf.d map defines $connection_upgrade from $http_upgrade');
+
+# A non-websocket site in the SAME run must NOT get the upgrade
+# directives -- the flag is strictly per-site, normal vhosts are unchanged.
+my $plain_vhost = do { local (@ARGV, $/) = "$available/plain.test.mailmasker.org"; <> };
+unlike($plain_vhost, qr/proxy_set_header Upgrade/, 'a non-websocket site has no Upgrade directive');
+unlike($plain_vhost, qr/proxy_buffering off/, 'a non-websocket site keeps default response buffering');
+
 done_testing;

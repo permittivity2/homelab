@@ -1,3 +1,21 @@
+homelab-webproxy (0.1.10) unstable; urgency=medium
+
+  * Release v0.1.10
+
+ -- Gardner <gardner@homelab>  Sun, 25 Oct 2026 12:59:22 -0500
+
+homelab-webproxy (0.1.10) unstable; urgency=medium
+
+  * Add a per-site `websocket: true` flag: proxies websocket Upgrade
+    handshakes (proxy_http_version 1.1 + Upgrade/Connection headers) and
+    streams the response (proxy_buffering off + 3600s timeouts). Fixes
+    Plex's live/notifications/streaming behind the edge, which a plain
+    proxy silently broke. apply-sites also drops an http-context
+    `map $http_upgrade $connection_upgrade` into conf.d whenever any site
+    uses the flag. Non-websocket vhosts are unchanged.
+
+ -- Gardner <gardner@homelab>  Sun, 25 Oct 2026 12:58:18 -0500
+
 homelab-webproxy (0.1.9) unstable; urgency=medium
 
   * Release v0.1.9
