@@ -1,0 +1,22 @@
+# Managed by homelab-postfix -- do NOT edit by hand (re-copied from
+# /usr/share/homelab-postfix/nftables/ on every package configure).
+#
+# The postfix sender pool must make OUTBOUND connections to arbitrary
+# external MX servers on tcp/25 to deliver mail off-fleet. The fleet base
+# firewall's 'inet filter output' chain is `policy drop`, and the
+# homelab-agent fleet-trust baseline only accepts intra-fleet destinations
+# (10.50.0.0/22, 10.45.0.0/16, 10.20.0.0/16) -- external MX hosts are
+# arbitrary public IPs not in that set, so without this the senders cannot
+# reach any public :25. An accept living in a separate table cannot
+# override another base chain's drop, so it MUST be added into this chain.
+#
+# Loaded two ways, both safe (same pattern as homelab-agent fleet-trust /
+# homelab-node-exporter metrics):
+#   * at boot via /etc/nftables.conf's `include "/etc/nftables.d/*"`,
+#     inside that file's single atomic `flush ruleset` load;
+#   * live on package configure via `nft -f` of just this file (a bare
+#     `add rule`, no `flush`) -- so the bad-ips dynamic set (runtime
+#     state, not on disk) is never lost. The postinst deletes any prior
+#     rule carrying the comment below before re-applying, so a live
+#     re-apply never stacks duplicates.
+add rule inet filter output tcp dport 25 accept comment "homelab-postfix-smtp-egress"

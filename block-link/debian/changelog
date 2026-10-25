@@ -1,3 +1,9 @@
+homelab-block-link (0.1.2) unstable; urgency=medium
+
+  * Release v0.1.2
+
+ -- Gardner <gardner@homelab>  Sun, 18 Oct 2026 12:13:01 -0500
+
 homelab-block-link (0.1.1) unstable; urgency=medium
 
   * Release v0.1.1

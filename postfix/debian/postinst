@@ -88,7 +88,7 @@ case "$1" in
             'local_recipient_maps =' \
             'mynetworks = 127.0.0.0/8 [::1]/128' \
             "virtual_mailbox_domains = $MAIL_DOMAIN" \
-            "virtual_mailbox_maps = pgsql:$MAP_CF" \
+            "virtual_mailbox_maps = proxy:pgsql:$MAP_CF" \
             "virtual_transport = lmtp:inet:$DOVECOT_HOST:24" \
             'smtpd_sasl_type = dovecot' \
             "smtpd_sasl_path = inet:$DOVECOT_HOST:12345" \
@@ -114,11 +114,17 @@ case "$1" in
             [ -n "$INSTANCE_ID" ] && ROLE_SUFFIX_ARGS="--role-suffix $INSTANCE_ID"
 
             echo "  bootstrapping 'homelab_postfix_runtime${INSTANCE_ID:+_$INSTANCE_ID}' on $DB_HOST..."
-            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-postfix-bootstrap-role" --db-host "$DB_HOST" $ROLE_SUFFIX_ARGS)"
+            # </dev/null: force EOF on the bootstrap-role's stdin so its manual
+            # path emits MANUAL=1 + exits instead of blocking on an interactive
+            # "Press Enter" read -- debconf's confmodule has reopened this
+            # postinst's fd 0 to the frontend channel, so without this the
+            # subprocess would block there (not get EOF) and hang the install.
+            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-postfix-bootstrap-role" --db-host "$DB_HOST" $ROLE_SUFFIX_ARGS </dev/null || true)"
 
             ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^ROLE=//p')"
             PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^PASSWORD=//p')"
             SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^SCRAM_SECRET=//p')"
+            MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MANUAL=//p')"
 
             if [ -z "$ROLE" ]; then
                 echo "ERROR: homelab-postfix-bootstrap-role did not report success -- see output above."
@@ -128,10 +134,21 @@ case "$1" in
                 exit 0
             fi
 
-            echo "  registering '$ROLE' with pgbouncer on $PGBOUNCER_HOST..."
-            homelab-bootstrap-pgbouncer-entry --role "$ROLE" \
-                --scram-secret "$SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
-                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$ROLE' by hand."
+            # Manual (no-SSH-to-DB) bootstrap: SCRAM is empty + the role doesn't
+            # exist on the DB yet, so skip pgbouncer-register. The operator/
+            # orchestrator applies the pending SQL on the primary + registers
+            # pgbouncer out of band; the pgsql maps written below are complete
+            # from ROLE+PASSWORD and start working once the role exists + is
+            # registered (a later dpkg-reconfigure re-runs the probes cleanly).
+            if [ "$MANUAL" = "1" ]; then
+                echo "  manual bootstrap: wrote pending SQL; skipping pgbouncer-register for '$ROLE'"
+                echo "    -> apply the SQL on the DB primary + register '$ROLE' in pgbouncer, then: dpkg-reconfigure homelab-postfix"
+            else
+                echo "  registering '$ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+                homelab-bootstrap-pgbouncer-entry --role "$ROLE" \
+                    --scram-secret "$SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                    || echo "  WARNING: pgbouncer registration failed -- see output above; register '$ROLE' by hand."
+            fi
 
             sed \
                 -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
@@ -201,7 +218,7 @@ case "$1" in
             # rejecting mail for an already-deployed domain.
             DOMAIN_PROBE="$(postmap -q "$MAIL_DOMAIN" "pgsql:$DOMAINS_CF" 2>/dev/null || true)"
             if [ "$DOMAIN_PROBE" = "1" ]; then
-                postconf -e "virtual_mailbox_domains = pgsql:$DOMAINS_CF"
+                postconf -e "virtual_mailbox_domains = proxy:pgsql:$DOMAINS_CF"
                 echo "  virtual_mailbox_domains now backed by a live domainadmin.domains lookup"
             else
                 echo "  WARNING: live domain lookup returned '$DOMAIN_PROBE' (expected '1') for '$MAIL_DOMAIN' -- NOT flipping virtual_mailbox_domains over to it."
@@ -240,9 +257,9 @@ case "$1" in
         if [ -f "$RECIPIENT_ACCESS_CF" ]; then
             CURRENT_RESTRICTIONS="$(postconf -h smtpd_recipient_restrictions 2>/dev/null || true)"
             case "$CURRENT_RESTRICTIONS" in
-                *"check_recipient_access pgsql:$RECIPIENT_ACCESS_CF"*) ;;
+                *"check_recipient_access proxy:pgsql:$RECIPIENT_ACCESS_CF"*) ;;
                 *)
-                    postconf -e "smtpd_recipient_restrictions = check_recipient_access pgsql:$RECIPIENT_ACCESS_CF, $CURRENT_RESTRICTIONS"
+                    postconf -e "smtpd_recipient_restrictions = check_recipient_access proxy:pgsql:$RECIPIENT_ACCESS_CF, $CURRENT_RESTRICTIONS"
                     echo "  added check_recipient_access to smtpd_recipient_restrictions"
                     ;;
             esac
@@ -271,7 +288,7 @@ case "$1" in
             echo "  wrote $ALIAS_MAPS_CF"
         fi
         if [ -f "$ALIAS_MAPS_CF" ]; then
-            postconf -e "virtual_alias_maps = pgsql:$ALIAS_MAPS_CF"
+            postconf -e "virtual_alias_maps = proxy:pgsql:$ALIAS_MAPS_CF"
             echo "  virtual_alias_maps now backed by a live domainadmin.mail_aliases lookup"
         fi
 
@@ -288,7 +305,7 @@ case "$1" in
             echo "  wrote $SENDER_LOGIN_CF"
         fi
         if [ -f "$SENDER_LOGIN_CF" ]; then
-            postconf -e "smtpd_sender_login_maps = pgsql:$SENDER_LOGIN_CF"
+            postconf -e "smtpd_sender_login_maps = proxy:pgsql:$SENDER_LOGIN_CF"
             echo "  smtpd_sender_login_maps now backed by a live domainadmin.mail_aliases lookup"
         fi
 
@@ -486,6 +503,34 @@ case "$1" in
         # changes.
         mkdir -p /etc/homelab/services
         cp "$SHARE_DIR/config/postfix.manifest.yml" /etc/homelab/services/postfix.yml
+
+        # --- outbound SMTP :25 egress ----------------------------------
+        # The sender pool must reach arbitrary external MX servers on
+        # tcp/25 to deliver mail off-fleet; the base 'inet filter output'
+        # chain is `policy drop` and the fleet-trust baseline only accepts
+        # intra-fleet destinations, so ship a drop-in that accepts dport
+        # 25 outbound. Applied live WITHOUT flushing the ruleset so
+        # bad-ips' runtime dynamic set survives: drop any prior rule
+        # carrying our comment, then load just this bare-`add rule`
+        # drop-in. Also lands at boot via /etc/nftables.conf's include.
+        NFT_SRC="$SHARE_DIR/nftables/50-smtp-egress.nft"
+        NFT_DROPIN=/etc/nftables.d/50-smtp-egress.nft
+        if [ -f "$NFT_SRC" ] && [ -d /etc/nftables.d ]; then
+            cp "$NFT_SRC" "$NFT_DROPIN"
+            if command -v nft >/dev/null 2>&1 && nft list chain inet filter output >/dev/null 2>&1; then
+                for hh in $(nft -a list chain inet filter output 2>/dev/null \
+                        | awk '/homelab-postfix-smtp-egress/ {print $NF}'); do
+                    nft delete rule inet filter output handle "$hh" 2>/dev/null || true
+                done
+                if nft -f "$NFT_DROPIN" 2>/dev/null; then
+                    echo "  outbound SMTP :25 egress firewall drop-in applied."
+                else
+                    echo "  WARNING: could not apply $NFT_DROPIN live -- effective on next nftables reload/boot."
+                fi
+            else
+                echo "  NOTE: 'inet filter output' chain not found -- wrote $NFT_DROPIN for next boot but did not apply live."
+            fi
+        fi
 
         db_stop
 

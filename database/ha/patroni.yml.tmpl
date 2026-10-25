@@ -44,6 +44,14 @@ bootstrap:
         hot_standby: "on"
         max_wal_senders: 10
         max_replication_slots: 10
+        # Raised from PG's default 100: the fleet runs behind pgbouncer but
+        # still needs headroom for all the per-app roles' pools + replication
+        # + admin (connection-exhaustion incident, 2026-10). Cluster-wide via
+        # the DCS so every member agrees (max_connections is restart-required
+        # and replicas must be >= the primary). Applied only at fresh cluster
+        # bootstrap; an already-bootstrapped cluster is changed with
+        # `patronictl edit-config` (the existing prod cluster already is 300).
+        max_connections: 300
 
 postgresql:
   # Clone replicas the Debian-native way (wraps pg_basebackup).

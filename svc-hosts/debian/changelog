@@ -1,0 +1,15 @@
+homelab-svc-hosts (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Sun, 18 Oct 2026 11:26:59 -0500
+
+homelab-svc-hosts (0.0.9) unstable; urgency=medium
+
+  * Initial package: manage a BEGIN/END block in /etc/hosts from
+    /etc/homelab/svc-hosts/hosts.yml, mapping stable internal service names
+    (api.svc.homelab, pgbouncer.svc.homelab, db.svc.homelab) to their 10.50
+    service-plane VIPs. Idempotent, atomic write; `mode: dns` removes the
+    block to converge on an authoritative svc.homelab DNS zone later.
+
+ -- Gardner <gardner@homelab>  Sun, 18 Oct 2026 11:00:00 -0500

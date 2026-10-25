@@ -38,6 +38,7 @@ case "$1" in
             RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
             MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
             MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+            BOOTSTRAP_MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^BOOTSTRAP_MANUAL=//p')"
 
             if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
                 echo "ERROR: homelab-bootstrap-app-role did not report success — see output above."
@@ -46,11 +47,9 @@ case "$1" in
                 exit 0
             fi
 
-            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
-            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
-                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
-                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
-
+            # Write config from the generated passwords FIRST -- complete even in
+            # the manual (multi-host, no-SSH) case, where the DB role + pgbouncer
+            # entry are done by hand afterward.
             sed \
                 -e "s#https://api\.test\.mailmasker\.org#$API_BASE#g" \
                 -e "s#https://blockemail\.test\.mailmasker\.org#$PUBLIC_BASE_URL#g" \
@@ -68,6 +67,30 @@ case "$1" in
             chown root:homelab "$CONFIG_FILE"
             chmod 640 "$CONFIG_FILE"
             echo "  wrote $CONFIG_FILE"
+
+            # Manual (multi-host, no-SSH-to-DB) bootstrap: config is fully
+            # written above, but the DB role + pgbouncer entry must be done by
+            # hand (runbook already printed by homelab-bootstrap-app-role). Skip
+            # pgbouncer-register (SCRAM is empty here) and migrate (role doesn't
+            # exist yet); the operator finishes via dpkg-reconfigure afterward.
+            if [ "$BOOTSTRAP_MANUAL" = "1" ]; then
+                echo ""
+                echo "  ================================================================"
+                echo "  CONFIG WRITTEN -- but DB-side steps remain (runbook printed above):"
+                echo "    1) run the role SQL on the DB primary"
+                echo "    2) register '$RUNTIME_ROLE' in pgbouncer on each pooler"
+                echo "  Then finish this host (applies migrations + starts the service):"
+                echo "      sudo dpkg-reconfigure homelab-block-link"
+                echo "  ================================================================"
+                echo ""
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
         else
             echo "  $CONFIG_FILE already exists -- leaving it untouched"
             echo "  (dpkg-reconfigure homelab-block-link to redo the prompts)"

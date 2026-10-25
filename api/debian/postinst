@@ -42,6 +42,7 @@ case "$1" in
             RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
             MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
             MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+            BOOTSTRAP_MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^BOOTSTRAP_MANUAL=//p')"
 
             if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
                 echo "ERROR: homelab-bootstrap-app-role did not report success — see output above."
@@ -50,13 +51,10 @@ case "$1" in
                 exit 0
             fi
 
-            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
-            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
-                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
-                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
-
+            # Write config from the generated passwords FIRST -- so it's
+            # complete even in the manual (multi-host, no-SSH) case, where
+            # the DB role + pgbouncer entry are done by hand afterward.
             JWT_SECRET="$(openssl rand -base64 32)"
-
             sed \
                 -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
                 -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
@@ -69,6 +67,25 @@ case "$1" in
             chown root:homelab "$CONFIG_FILE"
             chmod 640 "$CONFIG_FILE"
             echo "  wrote $CONFIG_FILE"
+
+            if [ "$BOOTSTRAP_MANUAL" = "1" ]; then
+                echo ""
+                echo "  ================================================================"
+                echo "  CONFIG WRITTEN -- but DB-side steps remain (runbook printed above):"
+                echo "    1) run the role SQL on the DB primary"
+                echo "    2) register '$RUNTIME_ROLE' in pgbouncer on each pooler"
+                echo "  Then finish this host (applies migrations + starts the service):"
+                echo "      sudo dpkg-reconfigure homelab-api"
+                echo "  ================================================================"
+                echo ""
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed — see output above; register '$RUNTIME_ROLE' by hand."
         fi
 
         # RUNTIME_ROLE is only set above on a fresh install (the `if

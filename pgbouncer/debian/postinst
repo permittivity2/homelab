@@ -53,8 +53,17 @@ generate_config() {
         echo "auth_type = scram-sha-256"
         echo "auth_file = $USERLIST"
         echo "pool_mode = $POOL_MODE"
-        echo "max_client_conn = 100"
-        echo "default_pool_size = 20"
+        # Raised for the connection-exhaustion incident (2026-10). These MUST
+        # live in this managed drop-in, not the vendor pgbouncer.ini: the
+        # drop-in is %include'd last and resets the whole [pgbouncer] section
+        # (last-wins), so values set anywhere else are silently inert.
+        # max_db_connections caps server-side conns at 250 < the DB's
+        # max_connections=300 -- safe because the pgbouncer tier is
+        # active/standby (one keepalived VIP holder serves at a time), so
+        # there is never more than one pooler opening connections to the DB.
+        echo "max_client_conn = 500"
+        echo "default_pool_size = 30"
+        echo "max_db_connections = 250"
         echo "min_pool_size = 2"
         echo "log_connections = 1"
         echo "log_disconnections = 1"

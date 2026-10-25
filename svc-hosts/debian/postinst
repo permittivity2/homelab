@@ -1,0 +1,43 @@
+#!/bin/sh
+set -e
+
+SHARE_DIR=/usr/share/homelab-svc-hosts
+CONFIG_DIR=/etc/homelab/svc-hosts
+MAP_FILE="$CONFIG_DIR/hosts.yml"
+
+case "$1" in
+    configure)
+        echo "homelab-svc-hosts post-installation setup..."
+        mkdir -p "$CONFIG_DIR"
+
+        # Seed the editable map on first install; never clobber an edited one
+        # (static per-host config -- unlike the shipped default in SHARE_DIR,
+        # which always refreshes with the package).
+        if [ ! -f "$MAP_FILE" ]; then
+            cp "$SHARE_DIR/hosts.yml" "$MAP_FILE"
+            chmod 0644 "$MAP_FILE"
+            echo "  wrote starter map $MAP_FILE"
+        else
+            echo "  $MAP_FILE exists -- leaving it untouched"
+            echo "  (edit it, then run: homelab-svc-hosts-apply)"
+        fi
+
+        # Write/refresh the managed /etc/hosts block. Non-fatal: a resolution
+        # glitch should not abort the install of a package whose whole job is
+        # best-effort convenience naming.
+        homelab-svc-hosts-apply \
+            || echo "  WARNING: homelab-svc-hosts-apply reported a problem -- see output above."
+
+        echo "homelab-svc-hosts configured."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

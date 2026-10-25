@@ -1,0 +1,45 @@
+#!/bin/sh
+set -e
+
+RC_CONFIG=/etc/roundcube/config.inc.php
+RC_PLUGIN_LINK=/var/lib/roundcube/plugins/homelab_account_menu
+BACKUP="$RC_CONFIG.pre-account-menu.bak"
+
+case "$1" in
+    remove)
+        # The symlink's target (this package's $SHARE_DIR) is gone or
+        # about to be -- remove the now-dangling link so Roundcube's
+        # plugin directory stays clean, and restore config.inc.php from
+        # the pre-edit backup this package's postinst made. Without this,
+        # $config['plugins'] would still list 'homelab_account_menu'
+        # pointing at a broken symlink, and Roundcube would fatal-error
+        # loading a nonexistent plugin class on every page load --
+        # removing this package must not leave Roundcube itself broken.
+        rm -f "$RC_PLUGIN_LINK"
+        if [ -f "$BACKUP" ]; then
+            cp "$BACKUP" "$RC_CONFIG"
+            PHP_VERSION="$(ls /etc/php/ 2>/dev/null | sort -V | tail -1)"
+            if [ -n "$PHP_VERSION" ]; then
+                systemctl restart "php$PHP_VERSION-fpm" 2>/dev/null || true
+            fi
+        fi
+        ;;
+
+    purge)
+        rm -f "$BACKUP"
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

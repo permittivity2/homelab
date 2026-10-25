@@ -75,11 +75,17 @@ case "$1" in
             [ -n "$INSTANCE_ID" ] && ROLE_SUFFIX_ARGS="--role-suffix $INSTANCE_ID"
 
             echo "  bootstrapping 'homelab_dovecot_runtime${INSTANCE_ID:+_$INSTANCE_ID}' on $DB_HOST..."
-            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-dovecot-bootstrap-role" --db-host "$DB_HOST" $ROLE_SUFFIX_ARGS)"
+            # </dev/null: force EOF on the bootstrap-role's stdin so its manual
+            # path emits MANUAL=1 + exits instead of blocking on an interactive
+            # "Press Enter" read -- debconf's confmodule has reopened this
+            # postinst's fd 0 to the frontend channel, so without this the
+            # subprocess would block there (not get EOF) and hang the install.
+            BOOTSTRAP_OUT="$("$SHARE_DIR/script/homelab-dovecot-bootstrap-role" --db-host "$DB_HOST" $ROLE_SUFFIX_ARGS </dev/null || true)"
 
             ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^ROLE=//p')"
             PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^PASSWORD=//p')"
             SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^SCRAM_SECRET=//p')"
+            MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MANUAL=//p')"
 
             if [ -z "$ROLE" ]; then
                 echo "ERROR: homelab-dovecot-bootstrap-role did not report success -- see output above."
@@ -89,11 +95,9 @@ case "$1" in
                 exit 0
             fi
 
-            echo "  registering '$ROLE' with pgbouncer on $PGBOUNCER_HOST..."
-            homelab-bootstrap-pgbouncer-entry --role "$ROLE" \
-                --scram-secret "$SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
-                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$ROLE' by hand."
-
+            # Write config FIRST (from ROLE + the generated PASSWORD) -- complete
+            # even in the manual (no-SSH-to-DB) case, where the DB role + pgbouncer
+            # entry are done out of band afterward.
             mkdir -p "$CONF_D"
             sed \
                 -e "s#__DB_HOST__#$PGBOUNCER_HOST#g" \
@@ -108,6 +112,29 @@ case "$1" in
             chgrp dovecot "$MARKER" 2>/dev/null || true
             echo "  wrote $MARKER"
             [ -n "$MAIL_DOMAIN" ] && echo "  primary mail domain: $MAIL_DOMAIN (informational only, not enforced)"
+
+            # Manual (no-SSH-to-DB) bootstrap: config is complete above, but the
+            # role doesn't exist on the DB yet and we have no SCRAM -- skip
+            # pgbouncer-register. The operator/orchestrator applies the pending
+            # SQL on the primary + registers pgbouncer, then dpkg-reconfigure
+            # (config-exists path) restarts dovecot cleanly.
+            if [ "$MANUAL" = "1" ]; then
+                echo ""
+                echo "  ================================================================"
+                echo "  CONFIG WRITTEN -- but DB-side steps remain (runbook printed above):"
+                echo "    1) run the role SQL on the DB primary"
+                echo "    2) register '$ROLE' in pgbouncer on each pooler"
+                echo "  Then finish this host:  sudo dpkg-reconfigure homelab-dovecot"
+                echo "  ================================================================"
+                echo ""
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$ROLE" \
+                --scram-secret "$SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$ROLE' by hand."
         else
             echo "  $MARKER already exists -- leaving it and the bootstrapped role untouched"
             echo "  (dpkg-reconfigure homelab-dovecot to redo bootstrap, e.g. after a password rotation)"

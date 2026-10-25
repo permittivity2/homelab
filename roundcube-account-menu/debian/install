@@ -1,0 +1,2 @@
+plugins/homelab_account_menu usr/share/homelab-roundcube-account-menu/plugins
+plugins/apply-plugin.php usr/share/homelab-roundcube-account-menu/

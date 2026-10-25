@@ -5,7 +5,7 @@ use Mojo::UserAgent;
 use File::Temp qw(tempfile);
 
 use lib 'lib';
-use Homelab::Common::AuthClient qw(introspect login refresh revoke);
+use Homelab::Common::AuthClient qw(introspect login refresh revoke issue);
 
 # Same subprocess-fake-API pattern as t/registry.t — see that file for
 # why (same-process Mojo::Server::Daemon + blocking UA doesn't reliably
@@ -55,6 +55,22 @@ $app->routes->post('/api/v1/auth/logout' => sub {
     my $body = $c->req->json // {};
     return $c->render(json => { success => \1 }) if ($body->{refresh_token} // '') eq 'rt';
     return $c->render(json => { error => 'unknown token' }, status => 400);
+});
+# system_agent-gated in reality; the fake only accepts the agent bearer
+# 'agent-token' and mints a DIFFERENT token/refresh pair than login's,
+# so the test can prove issue() returns an independent credential.
+$app->routes->post('/api/v1/auth/issue' => sub {
+    my $c    = shift;
+    my ($token) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+    return $c->render(json => { error => 'system_agent role required' }, status => 403)
+        unless ($token // '') eq 'agent-token';
+    my $body = $c->req->json // {};
+    return $c->render(json => { error => 'email is required' }, status => 400)
+        unless length($body->{email} // '');
+    return $c->render(json => {
+        success => \1, token => 'rp-token', refresh_token => 'rp-rt', expires_in => 86400,
+        email => $body->{email},
+    });
 });
 my $daemon = Mojo::Server::Daemon->new(app => $app, listen => ['http://127.0.0.1:18791']);
 $daemon->start;
@@ -120,6 +136,21 @@ ok(!refresh('rt', api_base => 'http://127.0.0.1:1')->{success}, 'refresh() repor
 ok(revoke('rt', api_base => $api_base), 'revoke() returns true for a token the fake API accepts');
 ok(!revoke('not-a-real-refresh-token', api_base => $api_base), 'revoke() returns false for a rejected token, not dying');
 ok(!revoke('rt', api_base => 'http://127.0.0.1:1'), 'revoke() returns false (not dies) on a transport failure');
+
+my $issue_ok = issue('user@test.mailmasker.org', api_base => $api_base, agent_token => 'agent-token', client_id => 'roundcube');
+ok($issue_ok->{success}, 'issue() reports success with a valid system_agent token');
+is($issue_ok->{token}, 'rp-token', 'issue() returns a freshly-minted token');
+isnt($issue_ok->{token}, $login_ok->{token}, 'the issued RP token is INDEPENDENT of the login/IdP token -- the whole point of the per-RP mint');
+
+my $issue_unauth = issue('user@test.mailmasker.org', api_base => $api_base, agent_token => 'not-the-agent');
+ok(!$issue_unauth->{success}, 'issue() reports failure (not dies) when the caller is not a system_agent');
+is($issue_unauth->{_status}, 403, 'issue() surfaces the real 403 so the caller can fall back to the shared IdP token');
+
+ok(!issue('user@test.mailmasker.org', api_base => 'http://127.0.0.1:1', agent_token => 'agent-token')->{success},
+    'issue() reports failure (not dies) on a transport failure');
+
+eval { issue('user@test.mailmasker.org', api_base => $api_base) };
+like($@, qr/agent_token required/, 'issue() dies if no agent_token is supplied -- it is never an unauthenticated call');
 
 kill('TERM', $pid);
 waitpid($pid, 0);

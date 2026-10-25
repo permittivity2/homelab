@@ -36,7 +36,11 @@ public_base_url: https://login.test.mailmasker.org
 # confirmation), so the service installs cleanly before this is set up.
 mailer:
   email: noreply@test.mailmasker.org
-  smtp_host: 127.0.0.1
+  # Must be a submission endpoint that accepts a plain (non-PROXY)
+  # connection -- the edge HAProxy submission frontend, NOT the postfix
+  # pool directly and NOT loopback (the pool's :587 demands a PROXY
+  # header this app's direct Net::SMTP client cannot send).
+  smtp_host: smtp.test.mailmasker.org
   smtp_port: 587
   smtp_password: YOUR_MAILER_ACCOUNT_PASSWORD_HERE
 

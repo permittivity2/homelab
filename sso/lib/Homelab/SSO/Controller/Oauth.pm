@@ -4,7 +4,8 @@ use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::URL;
 use Mojo::Util qw(secure_compare);
 
-use Homelab::Common::AuthClient qw(login introspect refresh revoke);
+use Homelab::Common::AuthClient qw(login introspect refresh revoke issue);
+use Homelab::Common::Registry qw(system_agent_token);
 
 # One-time authorization codes live in Postgres (sso.oauth_codes), not
 # in-process -- a code minted by one hypnotoad worker must be visible
@@ -62,6 +63,44 @@ sub _take_code ($c, $code) {
 sub _purge_expired ($c) {
     $c->app->pg->db->query(q{DELETE FROM sso.oauth_codes WHERE expires_at < NOW()});
     return;
+}
+
+# Mints a FRESH, independent token pair for the relying party this
+# authorize request is being issued to, so each app (Roundcube, Drive,
+# myaccount, ...) holds its OWN access+refresh token instead of a copy of
+# the IdP session's. Under the old behavior every app plus the IdP shared
+# one rotating refresh_token, so the instant any one of them refreshed,
+# every other app's token silently died -- the "SSO not seamless" bug
+# (issue #012 follow-up). Now each app refreshes/revokes in isolation.
+#
+# Falls back to the supplied IdP-session tokens ($fallback_*) if the mint
+# can't be done (this host has no homelab-agent credential, or the call
+# fails): login then degrades to exactly the old shared-token behavior
+# rather than breaking outright, and Track A's longer token lifetime keeps
+# that degraded case tolerable. The fallback is logged so a silently-
+# permanent degradation can't hide.
+sub _rp_tokens ($c, $email, $fallback_jwt, $fallback_refresh, $fallback_expires_in) {
+    my $agent_token = eval { system_agent_token() };
+    unless ($agent_token) {
+        $c->app->log->warn('homelab-sso: no system_agent credential on this host -- '
+            . 'per-RP token mint skipped, relying party gets the shared IdP token');
+        return ($fallback_jwt, $fallback_refresh, $fallback_expires_in);
+    }
+
+    my $res = issue(
+        $email,
+        api_base          => $c->app->api_base,
+        agent_token       => $agent_token,
+        client_id         => $c->param('client_id'),
+        client_user_agent => $c->req->headers->user_agent,
+        client_ip         => $c->tx->remote_address,
+    );
+    return ($res->{token}, $res->{refresh_token}, $res->{expires_in}) if $res->{success};
+
+    $c->app->log->warn('homelab-sso: per-RP token mint failed ('
+        . ($res->{error} // ('HTTP ' . ($res->{_status} // '?')))
+        . ') -- relying party gets the shared IdP token');
+    return ($fallback_jwt, $fallback_refresh, $fallback_expires_in);
 }
 
 # Mints a one-time code for the given tokens and redirects the browser
@@ -124,9 +163,13 @@ sub authorize ($c) {
     if (my $jwt = $c->session('jwt')) {
         my $info = introspect($jwt, api_base => $c->app->api_base);
         if ($info && $info->{email}) {
+            my ($rp_jwt, $rp_refresh, $rp_expires) = _rp_tokens(
+                $c, $info->{email},
+                $jwt, $c->session('refresh_token'), $c->app->config->{jwt_expiry_hint} // 1800,
+            );
             return _issue_code_and_redirect(
                 $c, $client_id, $redirect_uri, $state, $info->{email}, $scope,
-                $jwt, $c->session('refresh_token'), $c->app->config->{jwt_expiry_hint} // 1800,
+                $rp_jwt, $rp_refresh, $rp_expires,
             );
         }
 
@@ -135,9 +178,13 @@ sub authorize ($c) {
             my $result = refresh($refresh_token, api_base => $c->app->api_base);
             if ($result->{success}) {
                 _establish_session($c, $result->{token}, $result->{refresh_token}, $c->session('email'));
+                my ($rp_jwt, $rp_refresh, $rp_expires) = _rp_tokens(
+                    $c, $c->session('email'),
+                    $result->{token}, $result->{refresh_token}, $result->{expires_in},
+                );
                 return _issue_code_and_redirect(
                     $c, $client_id, $redirect_uri, $state, $c->session('email'), $scope,
-                    $result->{token}, $result->{refresh_token}, $result->{expires_in},
+                    $rp_jwt, $rp_refresh, $rp_expires,
                 );
             }
         }
@@ -196,10 +243,16 @@ sub authorize_submit ($c) {
         return $render_form_error->($msg);
     }
 
+    # The login just created the IdP session (its own token pair, kept in
+    # $c->session for future skip-login/refresh). The relying party gets a
+    # SEPARATE, freshly-minted pair so the two never share a refresh_token.
     _establish_session($c, $result->{token}, $result->{refresh_token}, $email);
+    my ($rp_jwt, $rp_refresh, $rp_expires) = _rp_tokens(
+        $c, $email, $result->{token}, $result->{refresh_token}, $result->{expires_in},
+    );
     _issue_code_and_redirect(
         $c, $client_id, $redirect_uri, $state, $email, $scope,
-        $result->{token}, $result->{refresh_token}, $result->{expires_in},
+        $rp_jwt, $rp_refresh, $rp_expires,
     );
 }
 

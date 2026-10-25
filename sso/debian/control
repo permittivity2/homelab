@@ -13,6 +13,8 @@ Depends: perl (>= 5.36),
          libmojolicious-perl,
          libyaml-libyaml-perl,
          libmojo-pg-perl,
+         libio-socket-ssl-perl,
+         libauthen-sasl-perl,
          adduser
 Recommends: homelab-database, homelab-pgbouncer, homelab-api, homelab-agent
 Description: OIDC-style SSO provider for the homelab-* ecosystem

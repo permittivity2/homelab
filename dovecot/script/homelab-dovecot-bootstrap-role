@@ -267,8 +267,18 @@ MSG
         print STDERR "Press Enter once that's been run to fetch the role's secret (or 's' to skip): ";
         my $reply = <STDIN>;
         unless (defined $reply) {
-            warn_msg('no input available; skipping');
-            return undef;
+            # Non-interactive (no tty -- e.g. a fleet orchestrator's dpkg run
+            # on a no-SSH-to-DB host). Do NOT die (that aborts the postinst
+            # under set -e). Emit the manual-bootstrap contract so the postinst
+            # can still write a COMPLETE config from the generated password,
+            # then skip pgbouncer-register; the operator/orchestrator applies
+            # the pending SQL on the DB primary + registers pgbouncer out of
+            # band, and a later dpkg-reconfigure finishes the host.
+            warn_msg('non-interactive: emitting manual-bootstrap markers (apply the SQL above on the DB primary, then register pgbouncer, then dpkg-reconfigure)');
+            print "ROLE=$ROLE\n";
+            print "PASSWORD=$opts{password}\n";
+            print "MANUAL=1\n";
+            exit 0;
         }
         chomp $reply;
         return undef if lc($reply) eq 's';

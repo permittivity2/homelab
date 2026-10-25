@@ -251,6 +251,26 @@ service auth {
 # __BEHIND_HAPROXY__): inert when nothing sends a PROXY header.
 haproxy_trusted_networks = 10.50.0.0/16
 
+# --- Client-facing TLS certificate (Dovecot 2.4 keys) ----------------
+# Serve the real mail-service cert on IMAPS/POP3S/submission, overriding
+# dovecot-core's stock 10-ssl.conf snakeoil (CN=<this host>.forge.name,
+# which every mail client rejects -- the cutover symptom was Thunderbird
+# flagging "Common Name prod-homelabvm62.forge.name"). Dovecot 2.4 RENAMED
+# these from the pre-2.4 ssl_cert/ssl_key to the *_file forms below; the
+# old keys are silently accepted-then-IGNORED on 2.4.2 (confirmed live), so
+# the cert would otherwise never actually be served. Additive / later-wins:
+# this file (91) is read AFTER 10-ssl.conf. Only the PATH is set here -- the
+# cert+key file CONTENT is delivered out of band (the pull-based cert-server
+# follow-up; until then it's an admin-mediated copy from the edge's
+# certbot). The path is identical on every mail host, so a literal (like
+# haproxy_trusted_networks above / the LMTP/auth ports / the 1T quota) is
+# correct here -- no debconf needed. doveconf does NOT open these files, so
+# a host whose cert hasn't landed yet still starts cleanly; only the TLS
+# handshake fails until the cert-server delivers it. Key must be 0600
+# root-owned.
+ssl_server_cert_file = /etc/dovecot/private/mail-mailmasker.pem
+ssl_server_key_file = /etc/dovecot/private/mail-mailmasker.key
+
 # process_min_avail: Dovecot's default (0) keeps zero pre-forked
 # imap-login workers on standby and forks new ones on demand as
 # connections arrive. Under a burst of ~60 near-simultaneous new

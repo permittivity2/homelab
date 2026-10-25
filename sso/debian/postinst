@@ -33,7 +33,7 @@ case "$1" in
             db_get homelab-sso/homelab_api_base_url || true; API_BASE="${RET:-http://127.0.0.1:3000}"
             db_get homelab-sso/public_base_url || true;      PUBLIC_BASE_URL="${RET:-https://login.test.mailmasker.org}"
             db_get homelab-sso/mailer_email || true;         MAILER_EMAIL="${RET:-noreply@test.mailmasker.org}"
-            db_get homelab-sso/mailer_smtp_host || true;     MAILER_SMTP_HOST="${RET:-127.0.0.1}"
+            db_get homelab-sso/mailer_smtp_host || true;     MAILER_SMTP_HOST="${RET:-smtp.test.mailmasker.org}"
             db_get homelab-sso/mailer_smtp_port || true;     MAILER_SMTP_PORT="${RET:-587}"
             db_get homelab-sso/mailer_smtp_password || true; MAILER_SMTP_PASSWORD="$RET"
             db_get homelab-sso/listen_port || true;          LISTEN_PORT="${RET:-2502}"
@@ -70,6 +70,7 @@ case "$1" in
             RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
             MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
             MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+            BOOTSTRAP_MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^BOOTSTRAP_MANUAL=//p')"
 
             if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
                 echo "ERROR: homelab-bootstrap-app-role did not report success -- see output above."
@@ -77,11 +78,6 @@ case "$1" in
                 db_stop
                 exit 0
             fi
-
-            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
-            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
-                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
-                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$RUNTIME_ROLE' by hand."
 
             SESSION_SECRET="$(openssl rand -base64 32)"
             # Only auto-generate a client secret when the admin left the
@@ -94,7 +90,6 @@ case "$1" in
             [ -z "$ROUNDCUBE_SECRET" ] && ROUNDCUBE_SECRET="$(openssl rand -base64 24)"
 
             sed \
-                -e "s#YOUR_POSTGRES_HOST#$PGBOUNCER_HOST#g" \
                 -e "s#pgbouncer.example.com#$PGBOUNCER_HOST#g" \
                 -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
                 -e "s#homelab_sso_runtime#$RUNTIME_ROLE#g" \
@@ -104,7 +99,7 @@ case "$1" in
                 -e "s#http://127\.0\.0\.1:3000#$API_BASE#g" \
                 -e "s#https://login\.test\.mailmasker\.org#$PUBLIC_BASE_URL#g" \
                 -e "s#email: noreply@test\.mailmasker\.org#email: $MAILER_EMAIL#g" \
-                -e "s#smtp_host: 127\.0\.0\.1#smtp_host: $MAILER_SMTP_HOST#g" \
+                -e "s#smtp_host: smtp\.test\.mailmasker\.org#smtp_host: $MAILER_SMTP_HOST#g" \
                 -e "s#smtp_port: 587#smtp_port: $MAILER_SMTP_PORT#g" \
                 -e "s#YOUR_MAILER_ACCOUNT_PASSWORD_HERE#$MAILER_SMTP_PASSWORD#g" \
                 -e "s#0\.0\.0\.0:2502#0.0.0.0:$LISTEN_PORT#g" \
@@ -127,6 +122,30 @@ case "$1" in
             echo "    roundcube client_secret:  $ROUNDCUBE_SECRET"
             echo "  ============================================================"
             echo ""
+
+            # Manual (multi-host, no-SSH-to-DB) bootstrap: config + client
+            # secrets are fully written above, but the DB role + pgbouncer
+            # entry must be done by hand (runbook already printed by
+            # homelab-bootstrap-app-role). Skip pgbouncer-register (SCRAM is
+            # empty here) and migrate (role doesn't exist yet); the operator
+            # finishes via dpkg-reconfigure after the DB-side steps.
+            if [ "$BOOTSTRAP_MANUAL" = "1" ]; then
+                echo "  ================================================================"
+                echo "  CONFIG WRITTEN -- but DB-side steps remain (runbook printed above):"
+                echo "    1) run the role SQL on the DB primary"
+                echo "    2) register '$RUNTIME_ROLE' in pgbouncer on each pooler"
+                echo "  Then finish this host (applies migrations + starts the service):"
+                echo "      sudo dpkg-reconfigure homelab-sso"
+                echo "  ================================================================"
+                echo ""
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$RUNTIME_ROLE' by hand."
         else
             echo "  $CONFIG_FILE already exists -- leaving it and the bootstrapped role untouched"
             echo "  (dpkg-reconfigure homelab-sso to redo bootstrap, e.g. after a password rotation)"

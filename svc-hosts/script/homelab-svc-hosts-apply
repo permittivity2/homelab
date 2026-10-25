@@ -1,0 +1,92 @@
+#!/usr/bin/perl
+# homelab-svc-hosts-apply -- seed/refresh a managed block in /etc/hosts from
+# /etc/homelab/svc-hosts/hosts.yml, mapping stable internal service names
+# (api.svc.homelab, pgbouncer.svc.homelab, db.svc.homelab, ...) to their
+# VIP/host addresses on the 10.50 service plane.
+#
+# The block is delimited by "# BEGIN homelab-svc-hosts" / "# END
+# homelab-svc-hosts" markers and is the ONLY part of /etc/hosts this tool
+# touches -- everything outside the markers is preserved verbatim. Idempotent:
+# re-running replaces the block in place. Writes atomically (temp file +
+# rename) so /etc/hosts is never left half-written.
+#
+# These names are internal-only and STABLE: they always point at the internal
+# VIP and never change at cutover (only public FQDNs flip, in authoritative
+# DNS). Set `mode: dns` in hosts.yml to REMOVE the managed block -- used once
+# an authoritative svc.homelab DNS zone serves the fleet and names resolve
+# there instead.
+use strict;
+use warnings;
+use YAML::XS qw(LoadFile);
+
+my $CFG   = $ENV{HOMELAB_SVC_HOSTS_CONFIG} // '/etc/homelab/svc-hosts/hosts.yml';
+my $HOSTS = $ENV{HOMELAB_SVC_HOSTS_FILE}   // '/etc/hosts';   # overridable for tests
+my $BEGIN = '# BEGIN homelab-svc-hosts (managed -- edit /etc/homelab/svc-hosts/hosts.yml, then run homelab-svc-hosts-apply)';
+my $END   = '# END homelab-svc-hosts';
+
+die "homelab-svc-hosts-apply: no $CFG -- nothing to apply\n" unless -f $CFG;
+my $c = eval { LoadFile($CFG) } or die "homelab-svc-hosts-apply: cannot parse $CFG: $@\n";
+ref $c eq 'HASH' or die "homelab-svc-hosts-apply: $CFG is not a YAML mapping\n";
+
+my $mode = lc($c->{mode} // 'hosts');
+$mode =~ /^(?:hosts|dns)$/
+    or die "homelab-svc-hosts-apply: mode must be 'hosts' or 'dns' (got '$mode')\n";
+
+# --- build the managed block lines from `entries` ------------------------
+my @lines;
+if ($mode eq 'hosts') {
+    my $entries = $c->{entries} // {};
+    ref $entries eq 'HASH'
+        or die "homelab-svc-hosts-apply: 'entries' must be a mapping of name: ip\n";
+    for my $name (sort keys %$entries) {
+        my $ip = $entries->{$name};
+        defined $ip && "$ip" =~ /\S/
+            or die "homelab-svc-hosts-apply: entry '$name' has no address\n";
+        $name =~ /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\z/
+            or die "homelab-svc-hosts-apply: invalid hostname '$name'\n";
+        $ip =~ /^[0-9A-Fa-f:.]+\z/
+            or die "homelab-svc-hosts-apply: entry '$name' address '$ip' is not an IP\n";
+        push @lines, sprintf('%-18s %s', $ip, $name);
+    }
+}
+
+# --- read current /etc/hosts, stripping any existing managed block -------
+open my $in, '<', $HOSTS or die "homelab-svc-hosts-apply: cannot read $HOSTS: $!\n";
+my @kept;
+my $in_block = 0;
+while (my $l = <$in>) {
+    chomp $l;
+    if (index($l, '# BEGIN homelab-svc-hosts') == 0) { $in_block = 1; next; }
+    if ($in_block) {
+        $in_block = 0 if index($l, '# END homelab-svc-hosts') == 0;
+        next;
+    }
+    push @kept, $l;
+}
+close $in;
+
+# Trim trailing blank lines so the file stays tidy across re-runs.
+pop @kept while @kept && $kept[-1] !~ /\S/;
+
+# --- assemble + write atomically -----------------------------------------
+my @out = @kept;
+if ($mode eq 'hosts' && @lines) {
+    push @out, '' if @out;          # one blank-line separator
+    push @out, $BEGIN, @lines, $END;
+}
+my $content = @out ? join("\n", @out) . "\n" : "\n";
+
+my $tmp = "$HOSTS.homelab-svc-hosts.$$";
+open my $o, '>', $tmp or die "homelab-svc-hosts-apply: cannot write $tmp: $!\n";
+print $o $content;
+close $o or die "homelab-svc-hosts-apply: error closing $tmp: $!\n";
+chmod 0644, $tmp;
+rename $tmp, $HOSTS
+    or do { my $e = $!; unlink $tmp; die "homelab-svc-hosts-apply: cannot rename $tmp -> $HOSTS: $e\n"; };
+
+if ($mode eq 'dns') {
+    print "homelab-svc-hosts: mode=dns -- removed managed block from $HOSTS (resolving via DNS)\n";
+} else {
+    printf "homelab-svc-hosts: wrote %d name(s) to %s\n", scalar(@lines), $HOSTS;
+}
+exit 0;

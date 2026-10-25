@@ -21,7 +21,7 @@ WriteMakefile(
         'Test::More' => '1.3',
         'Test::Mojo' => '0.0',
     },
-    EXE_FILES    => ['script/homelab-api', 'script/homelab-api-migrate'],
+    EXE_FILES    => ['script/homelab-api', 'script/homelab-api-migrate', 'script/homelab-api-create-admin'],
     DIR          => [],
     dist         => { COMPRESS => 'gzip -9f', SUFFIX => '.gz' },
     clean        => { FILES    => 'Homelab-API-* *.deb *.changes *.buildinfo' },

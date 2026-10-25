@@ -1,0 +1,129 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+RC_CONFIG=/etc/roundcube/config.inc.php
+# Debian's roundcube-core does NOT scan /usr/share/roundcube/plugins/
+# directly -- rcube_plugin_api::load_plugin() resolves plugins against
+# /var/lib/roundcube/plugins/ (the same gotcha homelab-roundcube's and
+# homelab-roundcube-invite's own postinsts already document: without a
+# symlink placed THERE, a real request logs "Failed to load plugin file
+# /var/lib/roundcube/plugins/homelab_account_menu/homelab_account_menu.php"
+# and the plugin silently never loads -- no error surfaced, just a
+# missing account menu).
+RC_PLUGIN_DIR=/var/lib/roundcube/plugins/homelab_account_menu
+SHARE_DIR=/usr/share/homelab-roundcube-account-menu
+OWN_PLUGIN_DIR="$SHARE_DIR/plugins/homelab_account_menu"
+BACKUP="$RC_CONFIG.pre-account-menu.bak"
+
+case "$1" in
+    configure)
+        echo "homelab-roundcube-account-menu post-installation setup..."
+
+        # Belt-and-suspenders on top of the hard dpkg Depends on
+        # homelab-roundcube: dpkg only guarantees homelab-roundcube's
+        # OWN postinst ran, not that ITS bootstrap actually succeeded
+        # (it could have hit its own failure branch and left
+        # config.inc.php.bootstrapped unwritten). Refuse gracefully
+        # rather than half-configuring a Roundcube that was never
+        # finished, and don't fail the whole apt transaction over it.
+        if [ ! -f "$RC_CONFIG.bootstrapped" ]; then
+            echo "  homelab-roundcube is installed but not configured yet -- run"
+            echo "  'dpkg-reconfigure homelab-roundcube' first, then re-run"
+            echo "  'dpkg-reconfigure homelab-roundcube-account-menu'."
+            db_stop
+            exit 0
+        fi
+
+        db_get homelab-roundcube-account-menu/myaccount_url || true
+        MYACCOUNT_URL="${RET:-https://myaccount.mailmasker.org}"
+        # Strip any trailing slash -- the plugin appends paths/#fragments.
+        MYACCOUNT_URL="$(printf '%s' "$MYACCOUNT_URL" | sed 's#/*$##')"
+
+        # Mandatory symlink, not a copy -- Roundcube's plugin loader only
+        # resolves against /var/lib/roundcube/plugins/, not the $SHARE_DIR
+        # this package's files live under. Linking rather than copying
+        # means an upgrade of THIS package (new plugin code under
+        # $SHARE_DIR) takes effect with no re-link. -f: safe to re-run.
+        mkdir -p "$(dirname "$RC_PLUGIN_DIR")"
+        ln -sf "$OWN_PLUGIN_DIR" "$RC_PLUGIN_DIR"
+        echo "  linked $RC_PLUGIN_DIR -> $OWN_PLUGIN_DIR"
+
+        # Backup once, not on every reconfigure -- a second run (upgrade,
+        # or dpkg-reconfigure to change the URL) must not overwrite an
+        # already-good backup with an already-edited file.
+        if [ ! -f "$BACKUP" ]; then
+            cp "$RC_CONFIG" "$BACKUP"
+        fi
+
+        echo "  registering homelab_account_menu in \$config['plugins']..."
+        EDIT_RESULT="$(php "$SHARE_DIR/apply-plugin.php" "$RC_CONFIG")" || {
+            echo "  ERROR: could not add homelab_account_menu to \$config['plugins'] -- see error above."
+            echo "         $RC_CONFIG was NOT modified. Add 'homelab_account_menu' to its"
+            echo "         plugins array by hand, then restart php-fpm."
+            db_stop
+            exit 0
+        }
+        echo "  $EDIT_RESULT"
+
+        # Validate BEFORE touching anything else -- a broken
+        # config.inc.php reloaded into every php-fpm worker would 500 the
+        # whole webmail; restore the pre-edit backup instead.
+        if ! php -l "$RC_CONFIG" >/dev/null 2>&1; then
+            echo "  ERROR: $RC_CONFIG failed php -l after the plugins edit -- restoring the backup."
+            cp "$BACKUP" "$RC_CONFIG"
+            db_stop
+            exit 0
+        fi
+
+        # Idempotent: replace the value in place if the key already
+        # exists (dpkg-reconfigure to a new URL), else append it once.
+        # A second append would leave a stale shadowed assignment above
+        # the new one (PHP takes the last, so it would still work, but two
+        # contradictory lines are confusing) -- so replace, don't re-append.
+        if grep -q "account_menu_url" "$RC_CONFIG"; then
+            sed -i "s#\$config\['account_menu_url'\] = '[^']*';#\$config['account_menu_url'] = '$MYACCOUNT_URL';#" "$RC_CONFIG"
+        else
+            {
+                echo ""
+                echo "// Added by homelab-roundcube-account-menu's postinst -- do not hand-edit,"
+                echo "// use dpkg-reconfigure homelab-roundcube-account-menu instead."
+                echo "\$config['account_menu_url'] = '$MYACCOUNT_URL';"
+            } >> "$RC_CONFIG"
+        fi
+
+        if ! php -l "$RC_CONFIG" >/dev/null 2>&1; then
+            echo "  ERROR: $RC_CONFIG failed php -l after setting account_menu_url -- restoring the backup."
+            cp "$BACKUP" "$RC_CONFIG"
+            db_stop
+            exit 0
+        fi
+
+        PHP_VERSION="$(ls /etc/php/ 2>/dev/null | sort -V | tail -1)"
+        if [ -n "$PHP_VERSION" ]; then
+            systemctl restart "php$PHP_VERSION-fpm" \
+                || echo "  WARNING: php$PHP_VERSION-fpm restart failed -- check 'systemctl status php$PHP_VERSION-fpm' by hand."
+        else
+            echo "  WARNING: no PHP version found under /etc/php/ -- could not restart php-fpm to pick up the change."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-roundcube-account-menu configured."
+        echo "plugin:  $RC_PLUGIN_DIR -> $OWN_PLUGIN_DIR"
+        echo "config:  $RC_CONFIG (account_menu_url = $MYACCOUNT_URL)"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -17,23 +17,31 @@
 #   1. Local (--db-host is this host): `sudo -u postgres psql` directly.
 #   2. Remote + SSH trust works: identical bootstrap, piped through
 #      `ssh <db-host> sudo -u postgres psql ...` instead of a local shell.
-#   3. Neither works: the SQL is written to a file and printed for a
-#      human to run by hand on the DB host; this script then polls for
-#      the resulting roles' secrets once told to.
+#   3. Neither works (multi-host, no SSH trust -- the normal case when the
+#      DB is on its own host): the SQL is written to a file and a runbook
+#      is printed for an operator to (a) create the roles on the DB
+#      primary, (b) read the runtime SCRAM off the DB, (c) register it
+#      with pgbouncer by hand. This script does NOT block or poll -- it
+#      returns immediately so the caller can still write the service
+#      config from the generated passwords.
 #
-# On success, prints (to stdout only — all logging goes to stderr, since
-# callers capture stdout to parse these lines):
+# Prints to stdout only (all logging goes to stderr, since callers capture
+# stdout to parse these lines):
 #   RUNTIME_ROLE=<role>
 #   RUNTIME_PASSWORD=<password>
-#   RUNTIME_SCRAM_SECRET=<secret>
+#   RUNTIME_SCRAM_SECRET=<secret>   (automatic paths 1/2 only)
 #   MIGRATE_ROLE=<role>
 #   MIGRATE_PASSWORD=<password>
-#   MIGRATE_SCRAM_SECRET=<secret>
-# SCRAM secrets come straight from pg_authid.rolpassword (already in
-# ready-to-use scram-secret format) — callers registering the runtime
-# role with homelab-pgbouncer's userlist.txt use it directly, no
-# separate hashing step. The migrate role is deliberately never
-# registered with pgbouncer — see CLAUDE.md.
+#   MIGRATE_SCRAM_SECRET=<secret>   (automatic paths 1/2 only)
+#   BOOTSTRAP_MANUAL=0|1
+# BOOTSTRAP_MANUAL=1 means tier 3: the roles were NOT created and no SCRAM
+# was read -- the caller should write config but DEFER pgbouncer
+# registration, migrations, and service start until the operator finishes
+# the printed runbook (then `dpkg-reconfigure` the package). On the
+# automatic paths, SCRAM secrets come straight from pg_authid.rolpassword
+# (ready-to-use scram-secret format) -- callers registering the runtime
+# role with homelab-pgbouncer's userlist.txt use it directly. The migrate
+# role is never registered with pgbouncer -- see CLAUDE.md.
 #
 # Usage: homelab-bootstrap-app-role --feature NAME --schema NAME \
 #            --db-host HOST [--db homelab]
@@ -277,38 +285,71 @@ sub run_manual {
     print $fh build_sql(%opts);
     close($fh);
     chmod(0600, $pending_file);
+    my $base = "${FEATURE}-bootstrap.sql";
 
-    warn_msg("cannot bootstrap '$FEATURE' automatically (not local, and no SSH trust to $DB_HOST)");
+    # Multi-host, no SSH trust: we deliberately have (and want) no admin
+    # reach into the DB from an app host, so the role must be created by
+    # hand. Print a clean, ordered runbook and RETURN -- do NOT block on
+    # input or poll the DB. The previous interactive "press Enter to fetch
+    # the SCRAM" loop could never succeed without the very DB access we
+    # don't have, and hung silently in a non-interactive postinst. The
+    # caller still writes the service config from the passwords we
+    # generated (see main's manual branch); the runtime role's SCRAM is
+    # read off the DB by the operator in step 2 and pasted into step 3.
+    warn_msg("'$FEATURE' DB role can't be created automatically (this host isn't the DB and has no SSH trust to $DB_HOST -- by design).");
     print STDERR <<MSG;
 
-  On $DB_HOST, have an administrator run:
-    sudo -u postgres psql -d $DB -v ON_ERROR_STOP=1 -f $pending_file
-  (copy $pending_file to $DB_HOST first if it isn't already there)
+======================================================================
+ MANUAL DB BOOTSTRAP REQUIRED -- '$FEATURE' (multi-host install)
+======================================================================
+ App hosts intentionally get no admin reach into the database, so the
+ role/schema is created on the DB by hand. The service config is still
+ written automatically (from the generated password); only these three
+ DB-side steps remain:
+
+ 1. Create the roles + schema on the PostgreSQL PRIMARY. '$DB_HOST' is
+    the DB endpoint -- on an HA cluster that's whichever node currently
+    holds the primary / VIP (the Patroni leader). Copy the SQL there and
+    run it as the postgres superuser:
+
+      scp $pending_file <primary>:/tmp/
+      sudo -u postgres psql -d $DB -v ON_ERROR_STOP=1 -f /tmp/$base
+
+ 2. On that same primary, read the RUNTIME role's SCRAM secret:
+
+      sudo -u postgres psql -d $DB -tAc \\
+        "SELECT rolpassword FROM pg_authid WHERE rolname='$RUNTIME_ROLE'"
+
+ 3. On EACH pgbouncer node, register that secret (paste it from step 2):
+
+      sudo homelab-bootstrap-pgbouncer-entry --role $RUNTIME_ROLE \\
+        --scram-secret '<SCRAM from step 2>' --pgbouncer-host localhost
+
+    ('$MIGRATE_ROLE' is intentionally NOT registered with pgbouncer -- it
+     connects straight to Postgres for migrations only.)
+======================================================================
 
 MSG
+    return;
+}
 
-    while (1) {
-        print STDERR "Press Enter once that's been run to fetch both roles' secrets (or 's' to skip): ";
-        my $reply = <STDIN>;
-        unless (defined $reply) {
-            warn_msg('no input available; skipping');
-            return ();
-        }
-        chomp $reply;
-        return () if lc($reply) eq 's';
+# Success emitter for the automatic (local / SSH) paths. BOOTSTRAP_MANUAL=0
+# tells the caller the DB + pgbouncer side is fully done.
+sub emit_complete {
+    my ($opts, $secrets) = @_;
+    die_msg('bootstrap failed or was skipped') unless %$secrets;
+    die_msg('bootstrap reported success but no SCRAM secret was returned for the runtime role')
+        unless $secrets->{$RUNTIME_ROLE};
+    die_msg('bootstrap reported success but no SCRAM secret was returned for the migrate role')
+        unless $secrets->{$MIGRATE_ROLE};
 
-        if (is_local_host($DB_HOST)) {
-            my %secrets = fetch_scram_secrets('sudo', '-u', 'postgres', 'psql', '-d', $DB, '-X', '-tA');
-            return %secrets if %secrets;
-        }
-        elsif (ssh_trust_works()) {
-            my %secrets = fetch_scram_secrets('ssh', @SSH_OPTS, $DB_HOST, "sudo -u postgres psql -d $DB -X -tA");
-            return %secrets if %secrets;
-        }
-        else {
-            warn_msg("still no SSH trust to $DB_HOST; run the command above, then retry from a host that does");
-        }
-    }
+    print "RUNTIME_ROLE=$RUNTIME_ROLE\n";
+    print "RUNTIME_PASSWORD=$opts->{runtime_password}\n";
+    print "RUNTIME_SCRAM_SECRET=$secrets->{$RUNTIME_ROLE}\n";
+    print "MIGRATE_ROLE=$MIGRATE_ROLE\n";
+    print "MIGRATE_PASSWORD=$opts->{migrate_password}\n";
+    print "MIGRATE_SCRAM_SECRET=$secrets->{$MIGRATE_ROLE}\n";
+    print "BOOTSTRAP_MANUAL=0\n";
 }
 
 sub main {
@@ -317,23 +358,29 @@ sub main {
         migrate_password => random_password(),
     );
 
-    my %secrets =
-        is_local_host($DB_HOST) ? run_local(%opts)
-      : ssh_trust_works()       ? run_remote(%opts)
-      :                           run_manual(%opts);
-
-    die_msg('bootstrap failed or was skipped') unless %secrets;
-    die_msg('bootstrap reported success but no SCRAM secret was returned for the runtime role')
-        unless $secrets{$RUNTIME_ROLE};
-    die_msg('bootstrap reported success but no SCRAM secret was returned for the migrate role')
-        unless $secrets{$MIGRATE_ROLE};
-
-    print "RUNTIME_ROLE=$RUNTIME_ROLE\n";
-    print "RUNTIME_PASSWORD=$opts{runtime_password}\n";
-    print "RUNTIME_SCRAM_SECRET=$secrets{$RUNTIME_ROLE}\n";
-    print "MIGRATE_ROLE=$MIGRATE_ROLE\n";
-    print "MIGRATE_PASSWORD=$opts{migrate_password}\n";
-    print "MIGRATE_SCRAM_SECRET=$secrets{$MIGRATE_ROLE}\n";
+    if (is_local_host($DB_HOST)) {
+        my %secrets = run_local(%opts);
+        emit_complete(\%opts, \%secrets);
+    }
+    elsif (ssh_trust_works()) {
+        my %secrets = run_remote(%opts);
+        emit_complete(\%opts, \%secrets);
+    }
+    else {
+        # Multi-host, no SSH trust: print the operator runbook, then still
+        # emit the role names + generated passwords so the caller can write
+        # the service's config now. NO *_SCRAM_SECRET lines here -- the
+        # operator reads the runtime SCRAM off the DB and registers it with
+        # pgbouncer by hand (see the runbook run_manual just printed).
+        # BOOTSTRAP_MANUAL=1 tells the caller to write config but skip the
+        # pgbouncer/migrate/start steps until those manual steps are done.
+        run_manual(%opts);
+        print "RUNTIME_ROLE=$RUNTIME_ROLE\n";
+        print "RUNTIME_PASSWORD=$opts{runtime_password}\n";
+        print "MIGRATE_ROLE=$MIGRATE_ROLE\n";
+        print "MIGRATE_PASSWORD=$opts{migrate_password}\n";
+        print "BOOTSTRAP_MANUAL=1\n";
+    }
 }
 
 main();

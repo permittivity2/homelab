@@ -1,3 +1,9 @@
+homelab-mailbridge (0.1.18) unstable; urgency=medium
+
+  * Release v0.1.18
+
+ -- Gardner <gardner@homelab>  Sun, 18 Oct 2026 12:12:56 -0500
+
 homelab-mailbridge (0.1.17) unstable; urgency=medium
 
   * Release v0.1.17

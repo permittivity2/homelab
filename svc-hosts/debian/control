@@ -1,0 +1,27 @@
+Source: homelab-svc-hosts
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-svc-hosts
+Architecture: all
+Depends: ${misc:Depends}, perl (>= 5.36), libyaml-libyaml-perl
+Recommends: homelab-agent
+Description: Internal service-name resolution for the homelab-* fleet
+ Seeds a managed block in /etc/hosts mapping stable internal service names
+ (api.svc.homelab, pgbouncer.svc.homelab, db.svc.homelab, ...) to their
+ VIP/host addresses on the 10.50 service plane, so homelab-* configs can
+ reference stable names instead of raw IPs.
+ .
+ These names are internal-only and always resolve to the internal VIP; they
+ never change at cutover (only public FQDNs flip, in authoritative DNS). The
+ map lives in /etc/homelab/svc-hosts/hosts.yml -- edit it and re-run
+ homelab-svc-hosts-apply. The block is delimited by BEGIN/END markers and is
+ the only part of /etc/hosts this package touches.
+ .
+ Set `mode: dns` in that file to stop managing /etc/hosts (removing the block)
+ once an authoritative svc.homelab DNS zone serves the fleet -- the planned
+ convergence from the /etc/hosts seed to real DNS.

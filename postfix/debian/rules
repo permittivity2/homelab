@@ -23,6 +23,8 @@ override_dh_install:
 		debian/homelab-postfix/usr/share/homelab-postfix/script/homelab-postfix-bootstrap-role
 	install -D -m 644 config/postfix.manifest.yml \
 		debian/homelab-postfix/usr/share/homelab-postfix/config/postfix.manifest.yml
+	install -D -m 644 nftables/50-smtp-egress.nft \
+		debian/homelab-postfix/usr/share/homelab-postfix/nftables/50-smtp-egress.nft
 
 override_dh_auto_build:
 	# Nothing to compile

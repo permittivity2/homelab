@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|purge)
+        # The -apply script is already gone by now (files removed before
+        # postrm on `remove`), so strip the managed block inline. Markers are
+        # unique to this package, so this never touches other /etc/hosts lines.
+        if [ -f /etc/hosts ]; then
+            sed -i '/^# BEGIN homelab-svc-hosts/,/^# END homelab-svc-hosts/d' /etc/hosts || true
+        fi
+        ;;
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+if [ "$1" = purge ]; then
+    rm -f /etc/homelab/svc-hosts/hosts.yml
+    rmdir /etc/homelab/svc-hosts 2>/dev/null || true
+fi
+
+exit 0

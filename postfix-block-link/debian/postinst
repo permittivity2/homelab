@@ -17,6 +17,15 @@ case "$1" in
             exit 1
         fi
 
+        # The milter service runs as User=homelab, but a postfix host does not
+        # otherwise have that user -- create it (same system-user recipe every
+        # other homelab-* app postinst uses). Without this the unit dies
+        # 217/USER in a restart loop.
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab
+        chown homelab:homelab /var/lib/homelab 2>/dev/null || true
+
         mkdir -p /etc/homelab/services
         chgrp homelab /etc/homelab/services 2>/dev/null || true
         chmod 775 /etc/homelab/services
@@ -45,11 +54,12 @@ case "$1" in
             # explicitly. Confirmed via `dpkg -c` on the built .deb
             # before fixing this (real bug hit on first live install,
             # not caught by syntax-checking alone).
-            BOOTSTRAP_OUT="$(homelab-postfix-block-link-bootstrap-role --db-host "$DB_HOST" $ROLE_SUFFIX_ARGS)"
+            BOOTSTRAP_OUT="$(homelab-postfix-block-link-bootstrap-role --db-host "$DB_HOST" $ROLE_SUFFIX_ARGS </dev/null || true)"
 
             ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^ROLE=//p')"
             PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^PASSWORD=//p')"
             SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^SCRAM_SECRET=//p')"
+            MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MANUAL=//p')"
 
             if [ -z "$ROLE" ]; then
                 echo "ERROR: homelab-postfix-block-link-bootstrap-role did not report success -- see output above."
@@ -59,10 +69,15 @@ case "$1" in
                 exit 0
             fi
 
-            echo "  registering '$ROLE' with pgbouncer on $PGBOUNCER_HOST..."
-            homelab-bootstrap-pgbouncer-entry --role "$ROLE" \
-                --scram-secret "$SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
-                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$ROLE' by hand."
+            if [ "$MANUAL" = "1" ]; then
+                echo "  manual bootstrap: wrote pending SQL; skipping pgbouncer-register for '$ROLE'"
+                echo "    -> apply the SQL on the DB primary + register '$ROLE' in pgbouncer, then: dpkg-reconfigure homelab-postfix-block-link"
+            else
+                echo "  registering '$ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+                homelab-bootstrap-pgbouncer-entry --role "$ROLE" \
+                    --scram-secret "$SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                    || echo "  WARNING: pgbouncer registration failed -- see output above; register '$ROLE' by hand."
+            fi
 
             sed \
                 -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \

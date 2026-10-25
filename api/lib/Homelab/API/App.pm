@@ -68,6 +68,11 @@ sub startup ($self) {
     $r->post('/api/v1/auth/username-availability'  => sub ($c) { $self->_username_availability($c) });
     $r->post('/api/v1/auth/password-reset/request' => sub ($c) { $self->_password_reset_request($c) });
     $r->post('/api/v1/auth/password-reset/confirm' => sub ($c) { $self->_password_reset_confirm($c) });
+    # Credential-issuance primitive for the SSO IdP (also system_agent-gated):
+    # mints a fresh, INDEPENDENT token for a relying party without a password,
+    # so each app holds its own session instead of a shared copy of the IdP
+    # session's token. See _issue below.
+    $r->post('/api/v1/auth/issue' => sub ($c) { $self->_issue($c) });
 
     # Session visibility/revocation -- JWT-only for the caller's own
     # (?user= honored only for site_admin, see _sessions_scope_target
@@ -770,6 +775,98 @@ sub _login ($self, $c) {
     })->catch(sub ($err) {
         return if ref $err eq 'SCALAR' && $err == $ALREADY_RENDERED;
         $c->app->log->error("_login failed: $err");
+        $c->render(json => { error => 'internal server error' }, status => 500);
+    });
+
+    return;
+}
+
+# POST /api/v1/auth/issue {email, client_id?, client_user_agent?, client_ip?}
+# system_agent-gated. Mints a FRESH, INDEPENDENT access+refresh token pair
+# (its own api.sessions row) for an already-authenticated user, WITHOUT a
+# password. This is the trusted-caller credential-issuance primitive
+# homelab-sso uses to hand each relying party (Roundcube, Drive, myaccount,
+# ...) its OWN token, instead of giving every app a copy of the SSO IdP
+# session's single token. Under the old copy-the-IdP-token behavior all the
+# apps + the IdP shared one rotating refresh_token, so the moment any one of
+# them refreshed, every other app's token died -- the "SSO not seamless"
+# bug (issue #012 follow-up). With a per-app session each app refreshes and
+# revokes in isolation.
+#
+# The gate is the whole security story: only a trusted fleet caller holding
+# a system_agent credential (homelab-sso presenting its host's homelab-agent
+# token) can mint a token for an arbitrary email without that user's
+# password. It is never on the public surface. client_id is recorded for
+# the audit trail only -- it does NOT scope the token (this deployment's
+# tokens are per-session, not per-client). client_user_agent/client_ip are
+# the real browser's values relayed by SSO so the session row reflects the
+# device, not SSO's own backend (same rationale as _login's).
+#
+# Non-blocking (Mojo::Pg promises), same as _login and for the same reason:
+# this is on homelab-sso's /oauth/authorize path, and a blocking mint here
+# would park the whole hypnotoad worker's event loop per call.
+sub _issue ($self, $c) {
+    $self->_require_system_agent($c) or return;
+    my $body     = $c->req->json // {};
+    my $email_in = $body->{email};
+    return $c->render(json => { error => 'email is required' }, status => 400)
+        unless defined $email_in && length $email_in;
+
+    my $client_id  = $body->{client_id};
+    my $user_agent = $body->{client_user_agent} // 'homelab-sso';
+    $user_agent = 'unknown' unless defined $user_agent && length $user_agent;
+    my $ip_address = $body->{client_ip} // $c->tx->remote_address;
+
+    $c->render_later;
+
+    # Look up case-insensitively but mint with the account's STORED casing,
+    # so the JWT subject matches exactly what _login/_refresh produce for
+    # the same account (every relying party keys on this email).
+    $self->pg->db->query_p(
+        'SELECT id, email FROM api.users WHERE lower(email) = lower(?) AND active = TRUE', $email_in,
+    )->then(sub ($results) {
+        my $user = $results->hash;
+        unless ($user) {
+            $c->render(json => { error => 'no such active user' }, status => 404);
+            return Mojo::Promise->reject($ALREADY_RENDERED);
+        }
+        return $user;
+    })->then(sub ($user) {
+        my $email = $user->{email};
+        my $jti   = generate_jti();
+        my ($jwt, $expires_in) = generate_jwt($email, secret => $self->config->{jwt}{secret}, expires_in => $self->config->{jwt}{expiry_seconds}, jti => $jti);
+        my $refresh_token    = generate_refresh_token();
+        my $refresh_ttl_days = $self->config->{jwt}{refresh_expiry_days} // 30;
+
+        return $self->pg->db->query_p(
+            q{INSERT INTO api.refresh_tokens (user_id, token, expires_at) VALUES (?, ?, NOW() + (? * INTERVAL '1 day')) RETURNING id},
+            $user->{id}, $refresh_token, $refresh_ttl_days,
+        )->then(sub ($results) {
+            my $refresh_row = $results->hash;
+            return $self->pg->db->query_p(
+                q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at, user_agent, ip_address, first_seen_at)
+                  VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'), ?, ?, NOW())},
+                $jti, $user->{id}, $refresh_row->{id}, $expires_in, $user_agent, $ip_address,
+            );
+        })->then(sub {
+            return enqueue_p(
+                $self->pg->db, actor_email => $email, affected_user => $email, jti => $jti, action => 'auth.issue',
+                resource_type => 'user', resource_id => $user->{id}, source_service => 'homelab-api',
+                ip_address => $ip_address, user_agent => $user_agent,
+                detail => (defined $client_id ? { client_id => $client_id } : undef),
+            );
+        })->then(sub {
+            $c->render(json => {
+                success       => \1,
+                token         => $jwt,
+                refresh_token => $refresh_token,
+                expires_in    => $expires_in,
+                email         => $email,
+            });
+        });
+    })->catch(sub ($err) {
+        return if ref $err eq 'SCALAR' && $err == $ALREADY_RENDERED;
+        $c->app->log->error("_issue failed: $err");
         $c->render(json => { error => 'internal server error' }, status => 500);
     });
 

@@ -4,7 +4,7 @@ use Mojo::UserAgent;
 use Mojo::URL;
 use Exporter 'import';
 
-our @EXPORT_OK = qw(introspect login refresh revoke);
+our @EXPORT_OK = qw(introspect login refresh revoke issue);
 
 # Verifies a bearer JWT against homelab-api's /api/v1/auth/introspect —
 # the one place identity actually lives (see CLAUDE.md). Every feature
@@ -113,6 +113,46 @@ sub revoke {
     my $err = $tx->error;
     return 0 if $err && !$err->{code};
     return $tx->result->code == 200 ? 1 : 0;
+}
+
+# Mints a FRESH, independent access+refresh token pair for an
+# already-authenticated user by calling homelab-api's system_agent-gated
+# /api/v1/auth/issue — WITHOUT a password. Used by homelab-sso to give
+# each relying party its OWN token instead of a shared copy of the IdP
+# session's token (the "SSO not seamless" fix; see homelab-api's _issue).
+#
+# Unlike the other calls in this module, /auth/issue is NOT public: it
+# requires a system_agent bearer credential, so the caller MUST pass
+# `agent_token` (Homelab::Common::Registry::system_agent_token on a host
+# that runs homelab-agent). Without a valid one the API returns 401/403
+# and this returns { success => 0, ... } like any other failure — the
+# caller (homelab-sso's _rp_tokens) is responsible for falling back to
+# the shared IdP token so a missing credential degrades gracefully rather
+# than breaking login. Same success/_status body shape as login().
+#
+# issue($email, api_base => ..., agent_token => $tok,
+#       client_id => ..., client_user_agent => ..., client_ip => ...)
+sub issue {
+    my ($email, %opts) = @_;
+    my $api_base    = $opts{api_base}    // die "issue(): api_base required\n";
+    my $agent_token = $opts{agent_token} // die "issue(): agent_token required\n";
+
+    my %payload = (email => $email);
+    $payload{client_id}         = $opts{client_id}         if defined $opts{client_id};
+    $payload{client_user_agent} = $opts{client_user_agent} if defined $opts{client_user_agent};
+    $payload{client_ip}         = $opts{client_ip}         if defined $opts{client_ip};
+
+    my $tx  = $UA->post("$api_base/api/v1/auth/issue",
+        { Authorization => "Bearer $agent_token" }, json => \%payload);
+    my $err = $tx->error;
+    return { success => 0, error => $err->{message} // 'connection error', _status => 0 }
+        if $err && !$err->{code};
+
+    my $res  = $tx->result;
+    my $body = eval { $res->json } // {};
+    $body->{_status} = $res->code;
+    $body->{success} = ($res->code == 200) ? 1 : 0;
+    return $body;
 }
 
 1;

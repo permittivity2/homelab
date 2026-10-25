@@ -1,0 +1,13 @@
+Template: homelab-roundcube-account-menu/myaccount_url
+Type: string
+Default: https://myaccount.mailmasker.org
+Description: Public URL of the self-service account app (myaccount.<domain>):
+ Written into config.inc.php's $config['account_menu_url']. The
+ "Manage your account" entry (and its security/sessions deep links)
+ point the browser here. It MUST be the public, browser-reachable
+ vhost of the homelab-accountmanage service -- not an internal address
+ -- because it is a link the user's browser follows; the accountmanage
+ app auto-logs-in through the shared SSO session, so no second password
+ prompt appears. Leave the default unless this fleet serves the account
+ app under a different hostname (e.g. the test environment's
+ myaccount.test.mailmasker.org).

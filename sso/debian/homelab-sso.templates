@@ -37,8 +37,15 @@ Description: Service mailbox password-reset emails are sent FROM:
 
 Template: homelab-sso/mailer_smtp_host
 Type: string
-Default: 127.0.0.1
+Default: smtp.test.mailmasker.org
 Description: SMTP submission host for password-reset email:
+ Must be a submission endpoint that accepts a plain (non-PROXY-protocol)
+ connection -- i.e. the edge HAProxy submission frontend, NOT the postfix
+ submission pool directly and NOT loopback. The pool's :587 requires a
+ PROXY-protocol header (smtpd_upstream_proxy_protocol=haproxy) that this
+ app's direct Net::SMTP client cannot send, so pointing at the pool or
+ 127.0.0.1 makes every reset email fail with "haproxy read: timeout".
+ Set this to the edge host's reachable (e.g. data-plane) address.
 
 Template: homelab-sso/mailer_smtp_port
 Type: string

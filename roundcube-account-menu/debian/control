@@ -1,0 +1,43 @@
+Source: homelab-roundcube-account-menu
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-roundcube-account-menu
+Architecture: all
+Depends: ${misc:Depends}, homelab-roundcube (>= 0.1.17)
+Description: Gmail-style account menu for an already-installed homelab-roundcube
+ A pure PHP/JS Roundcube plugin (homelab_account_menu), shipped as its
+ own package rather than bundled into homelab-roundcube itself -- it is
+ nothing without Roundcube already installed and configured (hence the
+ hard Depends, not a Recommends), so it is an add-on in the true sense:
+ postinst verifies homelab-roundcube's own config.inc.php.bootstrapped
+ marker exists before touching anything, refusing gracefully (not
+ failing the whole apt transaction) if Roundcube is not set up yet.
+ .
+ Adds a persistent account menu to the top of the webmail UI -- a
+ circular avatar showing the signed-in user's initial that opens a
+ Gmail-style dropdown: the user's display name and email, a "Manage
+ your account" link to the self-service account app
+ (myaccount.<domain>, the homelab-accountmanage service), a couple of
+ deep links (security, sessions), and "Sign out". It matches the
+ top-right profile dropdown the other homelab web apps already show, so
+ webmail feels like part of the same suite.
+ .
+ Holds NO credential and NO database role of its own. "Manage your
+ account" is a plain link that auto-logs-in through the shared SSO
+ session (the accountmanage app is a registered SSO client); "Sign out"
+ reuses Roundcube's own logout command, which already chains through
+ homelab-sso's single-logout. The plugin reads only the signed-in
+ user's identity from Roundcube's own session -- same minimal trust
+ boundary as it takes to render any other skin element.
+ .
+ Because Roundcube writes config.inc.php exactly once (a .bootstrapped
+ marker, never rewritten by dpkg-reconfigure), this package's postinst
+ makes a structurally-anchored, idempotent edit to the already-written
+ $config['plugins'] array to register itself -- the same technique
+ (and the same safety net: backs the file up first, validates with
+ php -l, restores on failure) proven by homelab-roundcube-invite.

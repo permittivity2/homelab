@@ -1,0 +1,123 @@
+#!/usr/bin/perl
+# homelab-api-create-admin -- create (or reset the password of) a login user
+# in api.users and grant it a role. Run LOCALLY on a homelab-api host.
+#
+# This is the greenfield bootstrap path for the FIRST site_admin. Every
+# user-creation HTTP route is site_admin-gated (see App.pm's
+# _require_site_admin), so there is a chicken-and-egg before any admin
+# exists. The legitimate no-auth boundary is shell access on an api host:
+# whoever has that can already read the config + DB credentials, so a local
+# tool that writes api.users directly grants no new trust. It reuses the
+# api's own argon2id hash_password() so the credential verifies through the
+# normal /login path, and connects with the service's own runtime config
+# (database: section -> pgbouncer, as the <feature>_runtime role, which has
+# CRUD on api.*).
+#
+# Idempotent: re-running for an existing email RESETS that user's password
+# and re-asserts active + the role -- so it also serves as a break-glass
+# password reset when no admin can log in to do it the normal way.
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+use MIME::Base64 qw(encode_base64);
+use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(runtime_pg);
+use Homelab::API::Auth qw(hash_password);
+
+my %o = (role => 'site_admin');
+GetOptions(\%o,
+    'email=s', 'password=s', 'recovery-email=s', 'role=s',
+    'generate', 'config=s', 'help',
+) or die "homelab-api-create-admin: bad options (try --help)\n";
+
+if ($o{help} || !$o{email}) {
+    print <<'USAGE';
+Usage: homelab-api-create-admin --email <addr> [options]
+
+  --email ADDR           login email (required)
+  --password PW          set this exact password (else prompt, or --generate)
+  --generate             generate a strong random password and print it once
+  --recovery-email ADDR  optional recovery email
+  --role NAME            role to grant (default: site_admin; e.g. 'user')
+  --config PATH          api config (default: $HOMELAB_API_CONFIG or
+                         /etc/homelab/api/config.yml)
+  --help                 this message
+
+Creates the user, or -- if the email already exists -- RESETS its password
+and re-asserts active + the role (idempotent / break-glass).
+USAGE
+    exit($o{email} ? 0 : 1);
+}
+
+# --- resolve the password -------------------------------------------------
+my $password = $o{password};
+if (!defined $password && $o{generate}) {
+    require Crypt::URandom;
+    $password = encode_base64(Crypt::URandom::urandom(18), '');
+    $password =~ tr{+/}{-_};        # url-safe, no shell-hostile chars
+}
+$password = _prompt_password() unless defined $password;
+die "homelab-api-create-admin: password is empty\n"
+    unless defined $password && length $password;
+
+# --- connect as the app's runtime role (CRUD on api.*) --------------------
+my $config = load_config('HOMELAB_API_CONFIG',
+    $o{config} // '/etc/homelab/api/config.yml');
+my $db = runtime_pg(%{ $config->{database} })->db;
+
+my $hash = hash_password($password);
+
+# Upsert the user: create, or reset password + reactivate if it exists.
+my ($user_id, $action);
+my $existing = $db->query('SELECT id FROM api.users WHERE email = ?', $o{email})->hash;
+if ($existing) {
+    $db->query(
+        q{UPDATE api.users
+             SET password_hash = ?, active = true,
+                 recovery_email = COALESCE(?, recovery_email)
+           WHERE id = ?},
+        $hash, $o{'recovery-email'}, $existing->{id},
+    );
+    ($user_id, $action) = ($existing->{id}, 'updated (password reset)');
+} else {
+    my $row = $db->query(
+        q{INSERT INTO api.users (email, password_hash, active, recovery_email)
+          VALUES (?, ?, true, ?) RETURNING id},
+        $o{email}, $hash, $o{'recovery-email'},
+    )->hash;
+    ($user_id, $action) = ($row->{id}, 'created');
+}
+
+my $role = $db->query('SELECT id FROM api.roles WHERE name = ?', $o{role})->hash
+    or die "homelab-api-create-admin: role '$o{role}' does not exist in api.roles\n";
+$db->query(
+    q{INSERT INTO api.user_roles (user_id, role_id) VALUES (?, ?)
+      ON CONFLICT DO NOTHING},
+    $user_id, $role->{id},
+);
+
+printf "%s: api.users id=%d email=%s role=%s\n",
+    $action, $user_id, $o{email}, $o{role};
+print "generated password: $password\n" if $o{generate};
+exit 0;
+
+# Prompt twice with echo off (best-effort: Term::ReadKey if present).
+sub _prompt_password {
+    my $have_rk = eval { require Term::ReadKey; 1 };
+    print STDERR 'New password: ';
+    my $pw  = _read_line($have_rk);
+    print STDERR "\nConfirm password: ";
+    my $pw2 = _read_line($have_rk);
+    print STDERR "\n";
+    die "homelab-api-create-admin: passwords do not match\n" unless $pw eq $pw2;
+    return $pw;
+}
+
+sub _read_line {
+    my ($have_rk) = @_;
+    Term::ReadKey::ReadMode('noecho') if $have_rk;
+    my $line = <STDIN>;
+    Term::ReadKey::ReadMode('restore') if $have_rk;
+    chomp $line if defined $line;
+    return $line // '';
+}

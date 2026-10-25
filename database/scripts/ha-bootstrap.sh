@@ -130,8 +130,28 @@ systemctl stop etcd 2>/dev/null || true
 rm -rf /var/lib/etcd/default /var/lib/etcd/homelab
 install -d -o etcd -g etcd -m 700 /var/lib/etcd/homelab
 render "$SHARE/etcd.env.tmpl" /etc/default/etcd
-systemctl restart etcd
-echo "  [etcd] started (cluster forms once all members are up)"
+# etcd is Type=notify: a fresh member of a 3-node cluster cannot signal READY
+# until quorum (>=2 members) forms. The vendor unit's default start timeout plus
+# a BLOCKING start means bootstrapping the FIRST member alone gets killed at the
+# timeout, and its half-written data dir then makes every retry die with
+# "member ... has already been bootstrapped". Same fix as patroni below: a
+# generous start timeout so systemd doesn't kill it mid-wait, and --no-block so
+# THIS run returns immediately and the operator can bring up the other members
+# (quorum then forms across them, and all three reach READY together).
+install -d /etc/systemd/system/etcd.service.d
+printf '[Service]\nTimeoutStartSec=300\n' > /etc/systemd/system/etcd.service.d/override.conf
+systemctl daemon-reload
+systemctl reset-failed etcd 2>/dev/null || true
+systemctl enable etcd >/dev/null 2>&1 || true
+systemctl restart etcd --no-block
+echo "  [etcd] starting (waits for the other members; cluster forms once >=2 are up)"
+# An already-joined member MUST restart as state=existing, or etcd fatals with
+# "member ... has already been bootstrapped" on the next start (reboot, crash,
+# or a manual restart) -- found the hard way. The process just started read
+# state=new for THIS initial bootstrap; flip the on-disk env so every later
+# start rejoins the existing cluster instead. Only affects future starts, never
+# the running process.
+sed -i 's/^ETCD_INITIAL_CLUSTER_STATE=.*/ETCD_INITIAL_CLUSTER_STATE=existing/' /etc/default/etcd
 
 # ---- postgresql handoff to Patroni ---------------------------------------
 echo "  [pg] disabling Debian postgresql units (Patroni owns Postgres)"
