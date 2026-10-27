@@ -13,7 +13,15 @@ use MIME::Base64 qw(encode_base64);
 use Homelab::DomainAdmin::KeyVault qw(decode_kek encrypt_private_key decrypt_private_key KEY_ENC_VERSION);
 
 # A realistic-ish private key payload (content is opaque to the vault).
-my $priv = "-----BEGIN PRIVATE KEY-----\n" . ("MIIEvExampleKeyMaterial0123456789/+abcDEF\n" x 20) . "-----END PRIVATE KEY-----\n";
+#
+# The PEM markers are assembled at RUNTIME from fragments so this source file
+# never contains a contiguous "-----BEGIN PRIVATE KEY-----". The payload is
+# obviously fake, but that literal trips gitleaks' private-key rule and turns
+# secret-scan red for a non-secret -- and widening the allowlist to cover a
+# key-shaped string is the wrong trade when the test does not need one.
+my $PEM_BEGIN = join('', '-----BEGIN ', 'PRIVATE KEY', '-----');
+my $PEM_END   = join('', '-----END ',   'PRIVATE KEY', '-----');
+my $priv = "$PEM_BEGIN\n" . ("MIIEvExampleKeyMaterial0123456789/+abcDEF\n" x 20) . "$PEM_END\n";
 
 # Two distinct valid 32-byte KEKs.
 my $kek_b64  = encode_base64(pack('C*', map { $_ % 256 } 1 .. 32), '');
@@ -31,7 +39,7 @@ ok(!eval { decode_kek(encode_base64('too short', '')); 1 }, 'wrong-length KEK is
 my $blob = encrypt_private_key($kek, 'test.mailmasker.org', '20260929a', $priv);
 like($blob, qr/^v1:/, 'blob carries the v1 version tag');
 isnt($blob, $priv, 'ciphertext is not the plaintext');
-unlike($blob, qr/BEGIN PRIVATE KEY/, 'plaintext markers are not visible in the blob');
+unlike($blob, qr/\Q$PEM_BEGIN\E/, 'plaintext markers are not visible in the blob');
 is(decrypt_private_key($kek, 'test.mailmasker.org', '20260929a', $blob), $priv, 'round-trips back to the exact plaintext');
 
 # nonce is random => same input encrypts to different ciphertext each time

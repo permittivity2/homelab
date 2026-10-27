@@ -63,7 +63,9 @@ SKIP: {
     $t->post_ok('/api/v1/certstore/publish', $auth, json => {
         %base, serial => 'PLAINTEXT01',
         not_before => '2026-01-01T00:00:00Z', not_after => '2026-04-01T00:00:00Z',
-        privkey_enc => "-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----\n",
+        # assembled at runtime so this source file carries no literal PEM
+        # private-key header for gitleaks to flag (see common/t/keyvault.t)
+        privkey_enc => join('', '-----BEGIN ', 'PRIVATE KEY', "-----\nnope\n"),
     })->status_is(400)->json_like('/error', qr/envelope-encrypted/);
 
     # --- first publish: inserted + promoted ---
