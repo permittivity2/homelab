@@ -1,0 +1,37 @@
+# homelab-cert-server configuration.
+# Edit, then run:  homelab-cert-issue        (issue/renew + publish)
+#                  homelab-cert-publish --all (publish what is already on disk)
+
+# homelab-api on the SERVICE PLANE, plain HTTP. Deliberately NOT the public
+# https://api.mailmasker.org: that would loop back through the very nginx whose
+# certificate this host rotates, so publishing the `api` lineage would depend on
+# the certificate being published. Use the VIP.
+api_base: http://10.50.2.132:3000
+
+# Envelope-encryption key for everything this host publishes. Generate ONCE with
+#   openssl rand -base64 32
+# and place the SAME value on every consumer (that is what lets them decrypt).
+# It must never appear in the database.
+key_encryption_key: "REPLACE-ME"
+
+letsencrypt_email: admin@mailmasker.org
+
+# How long to wait after writing an _acme-challenge TXT before telling Let's
+# Encrypt to look. All three PowerDNS instances are primary=yes over one shared
+# database with every zone NATIVE, so the write is authoritative instantly --
+# this wait is for the stock negative-cache TTL (negquery-cache-ttl=60), which
+# makes a resolver that asked BEFORE we wrote keep saying NXDOMAIN for up to a
+# minute.
+dns_propagation_seconds: 90
+
+# The zones this host may solve challenges in. Used to map a certificate name
+# to its zone (longest-suffix match), e.g. mail.mailmasker.org -> mailmasker.org.
+# Listed explicitly because there is no "is this a managed zone" probe a
+# system_agent credential is allowed to call.
+zones:
+  - mailmasker.org
+
+# The certificates to issue/renew. `domains` defaults to [name].
+lineages:
+  - name: mail.mailmasker.org
+    domains: [mail.mailmasker.org]

@@ -95,6 +95,33 @@ sub startup ($self) {
         return $result->{email};
     });
 
+    # system_agent twin of authenticated_email: for internal, machine-only
+    # callers that hold an agent credential rather than a human site_admin
+    # login. Today the ONE user is the cert server's ACME DNS-01 hook (see
+    # acme_challenge_* in Controller::Dns) -- it needs to write a
+    # _acme-challenge TXT during issuance, and giving a host a site_admin
+    # credential just for that would be a far larger grant than the job
+    # needs. The route itself constrains WHAT may be written; this helper
+    # only establishes WHO is asking.
+    $self->helper(authenticated_system_agent => sub ($c) {
+        my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+        unless ($jwt) {
+            $c->render(json => { error => 'not logged in' }, status => 401);
+            return undef;
+        }
+        my $result = introspect($jwt, api_base => $self->api_base);
+        unless ($result) {
+            $c->render(json => { error => 'not logged in' }, status => 401);
+            return undef;
+        }
+        unless (grep { $_ eq 'system_agent' } @{ $result->{roles} // [] }) {
+            $c->render(json => { error => 'system_agent role required' }, status => 403);
+            return undef;
+        }
+        $c->stash(current_jti => $result->{jti});
+        return $result->{email};
+    });
+
     # Same JWT check as authenticated_email above, minus the site_admin
     # requirement -- the one self-service exception in this otherwise
     # entirely site_admin-only service: GET .../mail-aliases/mine lets
@@ -265,6 +292,16 @@ sub startup ($self) {
     $r->get('/internal/v1/domains/:domain/catch-all'    => [domain => qr/[^\/]+/])->to('mail_aliases#get_catchall');
     $r->put('/internal/v1/domains/:domain/catch-all'    => [domain => qr/[^\/]+/])->to('mail_aliases#set_catchall');
     $r->delete('/internal/v1/domains/:domain/catch-all' => [domain => qr/[^\/]+/])->to('mail_aliases#clear_catchall');
+
+    # ACME DNS-01 challenge records. Deliberately SEPARATE from the general
+    # dns/records routes above: those are site_admin-only, while this pair is
+    # system_agent-gated so the cert server can solve a challenge with the
+    # agent credential it already has. The controller hard-restricts these to
+    # _acme-challenge* TXT records, so holding an agent token does NOT confer
+    # the ability to edit arbitrary DNS -- which is the whole point of not
+    # simply relaxing the gate on dns/records.
+    $r->post('/internal/v1/domains/:domain/acme-challenge'   => [domain => qr/[^\/]+/])->to('dns#acme_challenge_set');
+    $r->delete('/internal/v1/domains/:domain/acme-challenge' => [domain => qr/[^\/]+/])->to('dns#acme_challenge_clear');
 
     $r->get('/internal/v1/domains/:domain/dns/records'    => [domain => qr/[^\/]+/])->to('dns#list_records');
     $r->post('/internal/v1/domains/:domain/dns/records'   => [domain => qr/[^\/]+/])->to('dns#upsert_record');

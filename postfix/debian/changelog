@@ -1,3 +1,22 @@
+homelab-postfix (0.1.24) unstable; urgency=medium
+
+  * Release v0.1.24
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 02:52:08 -0500
+
+homelab-postfix (0.1.24) unstable; urgency=medium
+
+  * TLS: stop hardcoding the self-signed snakeoil certificate. The postinst
+    now uses /etc/postfix/tls/mail-mailmasker.{pem,key} when present and only
+    falls back to snakeoil (with a loud NOTE) when it is absent. Previously a
+    host with the real fleet mail cert on disk STILL served self-signed on
+    :25 and :587 -- verified live from off-network, submission clients doing
+    strict TLS validation were being failed. Path mirrors homelab-dovecot's
+    convention; the cert itself is delivered out-of-band today (admin copy)
+    pending the pull-based cert-sync follow-up.
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 03:05:00 -0500
+
 homelab-postfix (0.1.23) unstable; urgency=medium
 
   * Release v0.1.23

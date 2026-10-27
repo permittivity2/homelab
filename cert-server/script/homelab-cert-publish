@@ -1,0 +1,157 @@
+#!/usr/bin/perl
+# homelab-cert-publish -- publish ONE certificate lineage into the fleet
+# certificate store (homelab-api /api/v1/certstore/publish).
+#
+# Invoked two ways, both of which matter:
+#   * from certbot's deploy-hook, with $RENEWED_LINEAGE set -- the fast path,
+#     so a renewal reaches consumers within seconds; and
+#   * from homelab-cert-server.timer with --all -- the SAFETY NET. certbot runs
+#     deploy hooks with check=False and only WARNS on a non-zero exit, so
+#     without a reconciling timer an API blip during renewal would silently
+#     lose the publish until the next renewal ~60 days later.
+#
+# Every PEM is envelope-encrypted here, before it leaves this host, under the
+# KEK from this host's own config. homelab-api therefore stores and serves
+# CIPHERTEXT and can never hand out a usable private key.
+use strict;
+use warnings;
+use v5.36;
+use lib '/usr/share/homelab-cert-server/lib';
+use Homelab::CertServer::Util qw(load_config api_token api_request log_msg);
+use Homelab::Common::KeyVault qw(decode_kek encrypt_secret KEY_ENC_VERSION);
+use Getopt::Long;
+use File::Path qw(make_path);
+use Digest::SHA qw(sha256_hex);
+use Mojo::JSON qw(encode_json decode_json);
+
+my $LIVE_DIR = $ENV{HOMELAB_CERT_LIVE_DIR} // '/etc/letsencrypt/live';
+my $SPOOL    = $ENV{HOMELAB_CERT_SPOOL}    // '/var/lib/homelab/cert-publish';
+
+my ($lineage, $all, $drain_only);
+GetOptions('lineage=s' => \$lineage, 'all' => \$all, 'drain' => \$drain_only)
+    or die "usage: homelab-cert-publish [--lineage NAME | --all] [--drain]\n";
+$lineage //= $ENV{RENEWED_LINEAGE};
+# certbot gives the full live-dir path; we want the lineage name.
+$lineage =~ s{^.*/}{} if $lineage;
+
+my $cfg = load_config();
+my $kek = decode_kek($cfg->{key_encryption_key}, 'cert-server key_encryption_key');
+make_path($SPOOL) unless -d $SPOOL;
+
+my @todo;
+if ($all) {
+    opendir(my $dh, $LIVE_DIR) or die "cannot read $LIVE_DIR: $!\n";
+    @todo = grep { $_ !~ /^\.|^README$/ && -d "$LIVE_DIR/$_" } readdir $dh;
+    closedir $dh;
+} elsif ($lineage) {
+    @todo = ($lineage);
+}
+
+# Always drain the spool first: a queued publish is older than anything we are
+# about to read, and the store's promotion rule is monotonic, so order is safe
+# either way -- but draining first keeps the spool from growing unboundedly if
+# the live path keeps failing.
+drain_spool();
+exit 0 if $drain_only;
+
+die "nothing to publish: pass --lineage NAME or --all (or set RENEWED_LINEAGE)\n" unless @todo;
+
+my $failures = 0;
+for my $name (sort @todo) {
+    my $ok = eval { publish_one($name); 1 };
+    unless ($ok) { log_msg("ERROR publishing $name: $@"); $failures++ }
+}
+# Exit 0 even on failure when running as a certbot hook: a publish problem
+# must never make certbot think the RENEWAL failed -- the certificate on disk
+# is valid and already installed. The spool + timer are what retry.
+exit 0;
+
+sub publish_one ($name) {
+    my $dir = "$LIVE_DIR/$name";
+    die "no such lineage dir: $dir\n" unless -d $dir;
+
+    my %pem = map { $_ => slurp("$dir/$_.pem") } qw(cert chain fullchain privkey);
+
+    # Identity comes from the leaf serial, never from a hash of the stored
+    # bytes: GCM uses a fresh nonce per encryption, so ciphertext differs on
+    # every run and could never be an idempotency key.
+    my $serial = qx{openssl x509 -noout -serial -in \Q$dir/cert.pem\E 2>/dev/null};
+    chomp $serial; $serial =~ s/^serial=//;
+    die "could not read serial for $name\n" unless $serial =~ /^[0-9A-Fa-f]+$/;
+
+    my ($nb, $na) = dates("$dir/cert.pem");
+    my @domains   = san_names("$dir/cert.pem");
+
+    my $aad = "$name/$serial";
+    my $payload = {
+        lineage          => $name,
+        serial           => uc($serial),
+        not_before       => $nb,
+        not_after        => $na,
+        cert_enc         => encrypt_secret($kek, $aad, $pem{cert}),
+        chain_enc        => encrypt_secret($kek, $aad, $pem{chain}),
+        fullchain_enc    => encrypt_secret($kek, $aad, $pem{fullchain}),
+        privkey_enc      => encrypt_secret($kek, $aad, $pem{privkey}),
+        key_enc_version  => KEY_ENC_VERSION,
+        # hashes of the PLAINTEXT, so a consumer can compare against what is
+        # on its own disk without decrypting first.
+        sha256_fullchain => sha256_hex($pem{fullchain}),
+        sha256_privkey   => sha256_hex($pem{privkey}),
+        domains          => \@domains,
+    };
+
+    my $res = eval { api_request($cfg, api_token(), 'POST', '/api/v1/certstore/publish', $payload) };
+    if (!$res || $res->{error}) {
+        spool($name, $payload);
+        die(($res ? $res->{error} : $@) . " (spooled for retry)\n");
+    }
+    log_msg(sprintf('published %s serial %s (inserted=%s promoted=%s)',
+        $name, $payload->{serial}, $res->{inserted} ? 1 : 0, $res->{promoted} ? 1 : 0));
+    return;
+}
+
+sub drain_spool {
+    opendir(my $dh, $SPOOL) or return;
+    my @queued = grep { /\.json$/ } readdir $dh;
+    closedir $dh;
+    return unless @queued;
+    log_msg('draining ' . scalar(@queued) . ' spooled publish(es)');
+    for my $f (sort @queued) {
+        my $path = "$SPOOL/$f";
+        my $payload = eval { decode_json(slurp($path)) };
+        unless ($payload) { log_msg("WARNING unreadable spool file $f -- removing"); unlink $path; next }
+        my $res = eval { api_request($cfg, api_token(), 'POST', '/api/v1/certstore/publish', $payload) };
+        if ($res && !$res->{error}) {
+            unlink $path;
+            log_msg("drained $f (inserted=" . ($res->{inserted} ? 1 : 0) . ')');
+        } else {
+            log_msg("spool retry failed for $f -- leaving queued");
+        }
+    }
+}
+
+sub spool ($name, $payload) {
+    my $f = "$SPOOL/$name-$payload->{serial}.json";
+    open(my $fh, '>', "$f.tmp") or return;
+    print $fh encode_json($payload); close $fh;
+    chmod 0600, "$f.tmp";
+    rename "$f.tmp", $f;
+    log_msg("spooled $name to $f");
+}
+
+sub slurp ($p) { open(my $fh, '<', $p) or die "cannot read $p: $!\n"; local $/; my $c = <$fh>; close $fh; return $c }
+
+sub dates ($cert) {
+    my $out = qx{openssl x509 -noout -dates -in \Q$cert\E 2>/dev/null};
+    my ($nb) = $out =~ /notBefore=(.+)/; my ($na) = $out =~ /notAfter=(.+)/;
+    chomp for grep { defined } ($nb, $na);
+    die "could not read dates from $cert\n" unless $nb && $na;
+    # openssl's format is unambiguous to Postgres' timestamptz parser.
+    return ($nb, $na);
+}
+
+sub san_names ($cert) {
+    my $out = qx{openssl x509 -noout -ext subjectAltName -in \Q$cert\E 2>/dev/null};
+    my @n = $out =~ /DNS:([^,\s]+)/g;
+    return @n;
+}

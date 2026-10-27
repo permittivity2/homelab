@@ -8,8 +8,9 @@ Homepage: https://github.com/permittivity2/homelab
 
 Package: homelab-keepalived
 Architecture: all
-Depends: perl (>= 5.36), libyaml-libyaml-perl, keepalived, nftables
-Recommends: homelab-agent
+Depends: perl (>= 5.36), libyaml-libyaml-perl, keepalived, nftables,
+ iproute2, isc-dhcp-client
+Recommends: homelab-agent, iputils-arping
 Description: VRRP virtual-IP failover (keepalived) for the homelab-* edge
  Floats a public virtual IP (VIP) between two or more internet-facing
  fleet nodes using keepalived/VRRP, so if the node that currently owns the

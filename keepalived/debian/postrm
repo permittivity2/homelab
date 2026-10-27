@@ -5,6 +5,16 @@ NFT_DROPIN=/etc/nftables.d/15-homelab-vrrp.nft
 
 case "$1" in
     purge)
+        # Tear down any leftover notify-managed macvlan VIPs (so a reservation
+        # MAC can't linger on the public L2 after the package is gone), then
+        # drop the spec that named them.
+        if [ -f /etc/homelab/keepalived/dhcp-vips.conf ]; then
+            while read -r name _rest; do
+                case "$name" in ''|\#*) continue ;; esac
+                ip link del "$name" 2>/dev/null || true
+            done < /etc/homelab/keepalived/dhcp-vips.conf
+        fi
+
         # Remove our fleet manifest so homelab-agent stops advertising a
         # service this host no longer runs (a stray manifest reads as a
         # phantom outage -- see the fleet-agent manifest-drift fix).
@@ -13,6 +23,9 @@ case "$1" in
         rm -f /etc/keepalived/keepalived.conf
         rm -f /etc/systemd/system/systemd-networkd-wait-online.service.d/10-homelab-any.conf
         rmdir /etc/systemd/system/systemd-networkd-wait-online.service.d 2>/dev/null || true
+        # the keepalived ExecStopPost teardown drop-in (conffile removed by dpkg;
+        # clean the now-empty dir) and the networkd pubvip guard
+        rmdir /etc/systemd/system/keepalived.service.d 2>/dev/null || true
         systemctl daemon-reload >/dev/null 2>&1 || true
 
         # Remove the VRRP firewall drop-in + the live rules (delete by our
@@ -26,6 +39,14 @@ case "$1" in
                 done
                 for hh in $(nft -a list chain inet filter output 2>/dev/null \
                         | awk '/homelab-vrrp-out/ {print $NF}'); do
+                    nft delete rule inet filter output handle "$hh" 2>/dev/null || true
+                done
+                for hh in $(nft -a list chain inet filter input 2>/dev/null \
+                        | awk '/homelab-vrrp-dhcp-in/ {print $NF}'); do
+                    nft delete rule inet filter input handle "$hh" 2>/dev/null || true
+                done
+                for hh in $(nft -a list chain inet filter output 2>/dev/null \
+                        | awk '/homelab-vrrp-dhcp-out/ {print $NF}'); do
                     nft delete rule inet filter output handle "$hh" 2>/dev/null || true
                 done
             fi

@@ -1,0 +1,30 @@
+#!/usr/bin/perl
+# homelab-cert-dns-cleanup -- certbot --manual-cleanup-hook for DNS-01.
+#
+# Removes the _acme-challenge TXT published by homelab-cert-dns-auth. certbot
+# calls this after validation whether it SUCCEEDED OR FAILED, so a failed
+# issuance does not leave a stale challenge record behind in the zone.
+#
+# Deliberately best-effort: a cleanup failure must never fail the issuance
+# (the certificate may already be issued by this point). A leftover
+# _acme-challenge TXT is inert -- it is overwritten by the next attempt.
+use strict;
+use warnings;
+use lib '/usr/share/homelab-cert-server/lib';
+use Homelab::CertServer::Util qw(load_config api_token api_request zone_for log_msg);
+
+my $domain = $ENV{CERTBOT_DOMAIN} or exit 0;
+
+my $ok = eval {
+    my $cfg   = load_config();
+    my $token = api_token();
+    my $zone  = zone_for($cfg, $token, $domain) or die "no managed zone for '$domain'\n";
+    my $res   = api_request($cfg, $token, 'DELETE', "/api/v1/domains/$zone/acme-challenge",
+        { name => "_acme-challenge.$domain" });
+    die(($res->{error} // 'unknown error') . "\n") unless $res && $res->{ok};
+    log_msg("cleared challenge _acme-challenge.$domain (zone $zone)");
+    1;
+};
+log_msg("WARNING cleanup failed for $domain: $@ (harmless -- the record is inert and will be overwritten)")
+    unless $ok;
+exit 0;

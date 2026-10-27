@@ -1,0 +1,35 @@
+Source: homelab-cert-server
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-cert-server
+Architecture: all
+Depends: ${misc:Depends},
+         perl (>= 5.36),
+         homelab-common (>= 0.1.30),
+         libyaml-libyaml-perl,
+         libmojolicious-perl,
+         libcryptx-perl,
+         certbot,
+         openssl
+Recommends: homelab-agent
+Description: Fleet TLS certificate issuance (DNS-01) and publication
+ Owns certificate issuance for the whole fleet from ONE dedicated host, so
+ renewal no longer depends on which internet-facing edge node happens to be
+ powered on -- the problem with per-edge certbot under a manual, one-node-at-a-
+ time edge model, where a standby holds no ACME account and silently cannot
+ renew anything.
+ .
+ Solves ACME challenges over DNS-01 through homelab-api's narrow, system_agent-
+ gated _acme-challenge endpoint, so this host needs no inbound :80/:443 (it is
+ never public-facing) and holds no credential capable of editing arbitrary DNS.
+ .
+ Each issued certificate is envelope-encrypted here, under a key-encryption-key
+ held only in this host's config, and published to the shared certificate store
+ in homelab-api. The API therefore stores and serves ciphertext and can never
+ hand out a usable private key; only a consumer holding the same KEK can
+ decrypt. Consumers pull with homelab-certsync.

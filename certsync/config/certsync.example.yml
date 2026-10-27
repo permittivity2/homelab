@@ -1,0 +1,35 @@
+# homelab-certsync -- pulls this host's certificates from the fleet store.
+#
+# Runs at boot (ordered BEFORE the consuming service) and hourly thereafter.
+# Every run is a no-op unless the published certificate differs byte-for-byte
+# from what is already on disk.
+
+api_base: http://10.50.2.132:3000
+
+# MUST be the same key the cert server publishes with -- that is what lets this
+# host decrypt. It never appears in the database.
+key_encryption_key: "REPLACE-ME"
+
+targets:
+  # --- dovecot ---
+  # - lineage: mail.mailmasker.org
+  #   mode: files
+  #   cert_path: /etc/dovecot/private/mail-mailmasker.pem
+  #   key_path:  /etc/dovecot/private/mail-mailmasker.key
+  #   cert_mode: "0644"
+  #   key_mode:  "0600"
+  #   reload: dovecot
+  #
+  # --- postfix ---
+  # - lineage: mail.mailmasker.org
+  #   mode: files
+  #   cert_path: /etc/postfix/tls/mail-mailmasker.pem
+  #   key_path:  /etc/postfix/tls/mail-mailmasker.key
+  #   reload: postfix
+  #
+  # --- an edge node (keeps certbot's archive/ + live/ symlink layout, because
+  #     nginx references live/ and plain files there would break certbot's own
+  #     bookkeeping on that host) ---
+  # - lineage: mail.mailmasker.org
+  #   mode: letsencrypt
+  #   reload: nginx

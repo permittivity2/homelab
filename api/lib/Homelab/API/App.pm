@@ -168,6 +168,24 @@ sub startup ($self) {
     # feature and self-configure, so a new signer needs no cross-host push.
     $r->get('/api/v1/agent/feature-backends/:feature' => [feature => qr/[A-Za-z0-9._-]+/]
         => sub ($c) { $self->_agent_feature_backends($c) });
+    # --- Certificate store -------------------------------------------
+    # The hand-off between the ONE host that issues TLS certificates and
+    # the many that serve them. Publish + fetch are system_agent-gated
+    # (same posture as feature-backends above): the issuer and every
+    # consumer hold only an agent credential, not a site_admin login.
+    #
+    # Key material is ENVELOPE-ENCRYPTED by the publisher before it ever
+    # arrives here, and is served back still encrypted -- this API never
+    # holds a decryptable private key, and the KEK that would decrypt one
+    # lives only in each consuming host's local config. See
+    # migrations/019-cert-store.sql and Homelab::Common::KeyVault.
+    $r->post('/api/v1/certstore/publish' => sub ($c) { $self->_certstore_publish($c) });
+    $r->get('/api/v1/certstore/:lineage' => [lineage => qr/[A-Za-z0-9._-]+/]
+        => sub ($c) { $self->_certstore_fetch($c) });
+    # Visibility (site_admin): what is published and how long it has left.
+    # Deliberately reads the ciphertext-free api.certificate_status view.
+    $r->get('/api/v1/admin/certstore' => sub ($c) { $self->_certstore_list($c) });
+
     $r->get('/api/v1/admin/agent/hosts' => sub ($c) { $self->_agent_list_hosts($c) });
     $r->get('/api/v1/admin/agent/status' => sub ($c) { $self->_agent_list_status($c) });
     $r->get('/api/v1/admin/agent/status/mismatches' => sub ($c) { $self->_agent_list_mismatches($c) });
@@ -1457,6 +1475,131 @@ sub _agent_feature_backends ($self, $c) {
     } @$rows;
 
     return $c->render(json => \@out);
+}
+
+# --- Certificate store ------------------------------------------------
+# See migrations/019-cert-store.sql for the schema + security model. The
+# short version: the publisher encrypts every PEM under a KEK this API
+# does not have, so everything below moves OPAQUE blobs. Nothing here can
+# decrypt a private key, by construction.
+
+# POST /api/v1/certstore/publish
+# Body: { lineage, serial, not_before, not_after, cert_enc, chain_enc,
+#         fullchain_enc, privkey_enc, key_enc_version, sha256_fullchain,
+#         sha256_privkey, domains[] }
+#
+# Idempotent by design: the issuer calls this from a certbot deploy-hook
+# AND from a reconcile timer, so the same (lineage, serial) arrives more
+# than once in normal operation. A repeat is a silent success, not an error.
+sub _certstore_publish ($self, $c) {
+    my $agent = $self->_require_system_agent($c) or return;
+    my $b = $c->req->json // {};
+
+    for my $f (qw(lineage serial not_before not_after cert_enc chain_enc
+                  fullchain_enc privkey_enc sha256_fullchain sha256_privkey)) {
+        return $c->render(json => { error => "missing required field: $f" }, status => 400)
+            unless defined $b->{$f} && length $b->{$f};
+    }
+    # Refuse anything that is not in the vault's envelope format. Without this
+    # a misconfigured publisher could quietly store PLAINTEXT key material --
+    # the one failure mode this whole design exists to prevent.
+    for my $f (qw(cert_enc chain_enc fullchain_enc privkey_enc)) {
+        return $c->render(json => { error => "$f is not envelope-encrypted (expected a 'v1:' blob)" },
+                          status => 400)
+            unless $b->{$f} =~ /^v1:/;
+    }
+
+    my $domains = (ref($b->{domains} // '') eq 'ARRAY') ? $b->{domains} : [];
+
+    my $db = $self->pg->db;
+    my $tx = $db->begin;
+
+    # ON CONFLICT DO NOTHING => an empty RETURNING means "already published".
+    my $ins = $db->query(
+        q{INSERT INTO api.certificates
+              (lineage, serial, not_before, not_after,
+               cert_enc, chain_enc, fullchain_enc, privkey_enc, key_enc_version,
+               sha256_fullchain, sha256_privkey, domains, published_by)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT (lineage, serial) DO NOTHING
+          RETURNING id},
+        $b->{lineage}, $b->{serial}, $b->{not_before}, $b->{not_after},
+        $b->{cert_enc}, $b->{chain_enc}, $b->{fullchain_enc}, $b->{privkey_enc},
+        ($b->{key_enc_version} // 1),
+        $b->{sha256_fullchain}, $b->{sha256_privkey},
+        $domains, ($agent->{email} // 'system_agent'),
+    )->hash;
+
+    my $existing = $ins ? undef : $db->query(
+        'SELECT id FROM api.certificates WHERE lineage = ? AND serial = ?',
+        $b->{lineage}, $b->{serial},
+    )->hash;
+    my $cert_id = $ins ? $ins->{id} : ($existing ? $existing->{id} : undef);
+    unless ($cert_id) {
+        $tx->rollback;
+        return $c->render(json => { error => 'publish failed: row neither inserted nor found' }, status => 500);
+    }
+
+    # Promotion is SEPARATE and MONOTONIC. A drained spool entry carrying an
+    # older serial may legitimately be published long after a newer one is
+    # live; it must never become current. "Later not_after wins" is the rule.
+    my $promoted = $db->query(
+        q{INSERT INTO api.certificate_current (lineage, certificate_id, updated_at)
+          VALUES (?, ?, NOW())
+          ON CONFLICT (lineage) DO UPDATE
+             SET certificate_id = EXCLUDED.certificate_id,
+                 updated_at     = NOW()
+           WHERE (SELECT not_after FROM api.certificates WHERE id = EXCLUDED.certificate_id)
+               > (SELECT not_after FROM api.certificates WHERE id = api.certificate_current.certificate_id)
+          RETURNING certificate_id},
+        $b->{lineage}, $cert_id,
+    )->hash;
+
+    $tx->commit;
+
+    return $c->render(json => {
+        lineage   => $b->{lineage},
+        serial    => $b->{serial},
+        id        => $cert_id,
+        inserted  => $ins ? \1 : \0,     # false => this serial was already stored
+        promoted  => $promoted ? \1 : \0, # false => a newer cert is (still) current
+    });
+}
+
+# GET /api/v1/certstore/:lineage
+# Returns the CURRENT version for a lineage, ciphertext included. The caller
+# decrypts locally with its own KEK.
+sub _certstore_fetch ($self, $c) {
+    $self->_require_system_agent($c) or return;
+    my $lineage = $c->stash('lineage');
+
+    my $row = $self->pg->db->query(
+        q{SELECT c.lineage, c.serial, c.not_before, c.not_after,
+                 c.cert_enc, c.chain_enc, c.fullchain_enc, c.privkey_enc,
+                 c.key_enc_version, c.sha256_fullchain, c.sha256_privkey,
+                 c.domains, c.published_at
+          FROM api.certificate_current cc
+          JOIN api.certificates c ON c.id = cc.certificate_id
+          WHERE cc.lineage = ?},
+        $lineage,
+    )->hash;
+
+    return $c->render(json => { error => "no certificate published for '$lineage'" }, status => 404)
+        unless $row;
+
+    return $c->render(json => $row);
+}
+
+# GET /api/v1/admin/certstore -- visibility only, never ciphertext.
+sub _certstore_list ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    my $rows = $self->pg->db->query(
+        q{SELECT lineage, serial, not_before, not_after, days_remaining,
+                 domains, sha256_fullchain, published_by, published_at, promoted_at
+          FROM api.certificate_status
+          ORDER BY not_after},
+    )->hashes->to_array;
+    return $c->render(json => $rows);
 }
 
 # The declarative seed for service-dependency edges that NO manifest

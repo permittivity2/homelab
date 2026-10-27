@@ -258,6 +258,27 @@ for my $site (@sites) {
         system('systemctl', 'reload', 'nginx') == 0 or die "nginx reload failed after adding $domain\n";
     }
 
+    # PREFER a certificate that is already on disk over asking certbot for a
+    # new one. Since the fleet gained a central certificate store
+    # (homelab-cert-server issues once; homelab-certsync distributes), an edge
+    # node normally HAS the cert before this ever runs -- and a standby edge
+    # deliberately holds no ACME account at all, so calling certbot there fails
+    # by design and would leave the vhost HTTP-only. Wiring the existing files
+    # is both correct and the only thing that works on a non-issuing node.
+    my $live = "/etc/letsencrypt/live/$domain";
+    if (-s "$live/fullchain.pem" && -s "$live/privkey.pem") {
+        print "  certificate already present for $domain -- wiring it (no certbot needed)\n";
+        if (_enable_tls_for($vhost_path, $domain, $live)) {
+            if (system('nginx', '-t') == 0) {
+                system('systemctl', 'reload', 'nginx');
+                print "  $domain is live over HTTPS (existing certificate).\n";
+            } else {
+                warn "  WARNING: nginx -t failed after enabling TLS for $domain -- left as-is.\n";
+            }
+        }
+        next;
+    }
+
     print "  requesting a cert for $domain via certbot...\n";
     my $rc = system(
         'certbot', '--nginx', '-d', $domain,
@@ -266,6 +287,8 @@ for my $site (@sites) {
     if ($rc != 0) {
         warn "  WARNING: certbot failed for $domain (exit $rc) — $domain is live on HTTP only for now.\n";
         warn "           Check DNS actually resolves to this host, then re-run: certbot --nginx -d $domain\n";
+        warn "           (On a standby edge this is EXPECTED: only the cert server issues. Install\n";
+        warn "            homelab-certsync so the certificate arrives, then re-run this.)\n";
     }
     else {
         print "  $domain is live over HTTPS.\n";
@@ -332,4 +355,45 @@ sub _vhost_has_https {
     my $content = <$fh>;
     close($fh);
     return $content =~ /listen\s+443\s+ssl/ ? 1 : 0;
+}
+
+# Turn an HTTP-only vhost into the same shape certbot's --nginx --redirect
+# produces: a :443 TLS server plus a :80 redirect. Written by hand because the
+# certificate came from the fleet store rather than from certbot on this host.
+sub _enable_tls_for {
+    my ($vhost_path, $domain, $live) = @_;
+    open(my $in, '<', $vhost_path) or do { warn "  cannot read $vhost_path: $!\n"; return 0 };
+    local $/; my $conf = <$in>; close $in;
+    return 0 if $conf =~ /ssl_certificate\s/;          # already TLS
+
+    # Add the TLS bits to the existing server block, then append a redirect
+    # server for :80. Keep the original listen 80 line inside the redirect.
+    my $tls = qq{\n    listen 443 ssl;\n    listen [::]:443 ssl;\n}
+            . qq{    ssl_certificate $live/fullchain.pem;\n}
+            . qq{    ssl_certificate_key $live/privkey.pem;\n};
+    $tls .= qq{    include /etc/letsencrypt/options-ssl-nginx.conf;\n}
+        if -f '/etc/letsencrypt/options-ssl-nginx.conf';
+    $tls .= qq{    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;\n}
+        if -f '/etc/letsencrypt/ssl-dhparams.pem';
+
+    # drop the plain listen 80 from the main block and close it with the TLS bits
+    $conf =~ s/^\s*listen\s+(\[::\]:)?80;\s*$//mg;
+    $conf =~ s/\}\s*\z/$tls}\n/s;
+
+    # Plain concatenation, NOT qq{...}: a literal '}' inside a brace-delimited
+    # qq closes the quote early, which silently emitted the rest of the
+    # expression into the config as text and made nginx -t fail with
+    # `unknown directive "."`.
+    $conf .= "\nserver {\n"
+           . "    listen 80;\n"
+           . "    listen [::]:80;\n"
+           . "    server_name $domain;\n"
+           . "    return 301 https://\$host\$request_uri;\n"
+           . "}\n";
+
+    my $tmp = "$vhost_path.tls.$$";
+    open(my $out, '>', $tmp) or do { warn "  cannot write $tmp: $!\n"; return 0 };
+    print $out $conf; close $out;
+    rename($tmp, $vhost_path) or do { warn "  cannot install $vhost_path: $!\n"; return 0 };
+    return 1;
 }

@@ -1,3 +1,38 @@
+homelab-keepalived (0.1.4) unstable; urgency=medium
+
+  * Release v0.1.4
+
+ -- Gardner <gardner@homelab>  Sun, 25 Oct 2026 22:58:20 -0500
+
+homelab-keepalived (0.1.3) unstable; urgency=medium
+
+  * Release v0.1.3
+
+ -- Gardner <gardner@homelab>  Sun, 25 Oct 2026 22:54:08 -0500
+
+homelab-keepalived (0.1.3) unstable; urgency=medium
+
+  * Notify-managed public VIPs via a new `dhcp_vips:` list in vrrp.yml. Each
+    entry floats a public IP on a macvlan carrying a SPECIFIC reservation MAC
+    and takes its address via DHCP -- NOT a keepalived virtual_ipaddress,
+    which would present the host NIC's MAC or a VRRP 00:00:5e:00:01:xx vMAC
+    that the upstream pfSense/CARP rejects. New homelab-keepalived-notify
+    hook (wired via notify_master/backup/fault) builds/tears the macvlan and
+    runs dhclient; new homelab-keepalived-dhclient-script applies ONLY the
+    leased address (no default route -> no egress hijack, no resolv.conf
+    rewrite). mode: dhcp (pure) | static+dhcp (static for instant failover
+    with DHCP alongside to re-register the reservation MAC).
+  * apply now writes /etc/homelab/keepalived/dhcp-vips.conf (the notify spec,
+    regenerated every run so it never drifts) and opens DHCP (UDP 67/68) in
+    the no-flush nft drop-in when dhcp_vips are present. keepalived-managed
+    `vips:` and notify-managed `dhcp_vips:` can coexist in the one instance.
+  * Ship /etc/sysctl.d/60-homelab-keepalived-arp.conf (arp_ignore=1,
+    arp_announce=2) so multi-homed VIP ARP hygiene is packaged, not
+    hand-placed; postinst loads it. Depends: iproute2, isc-dhcp-client,
+    iputils-arping. postrm purge tears down leftover macvlans + DHCP rules.
+
+ -- Gardner <gardner@homelab>  Sat, 25 Oct 2026 20:05:00 -0500
+
 homelab-keepalived (0.1.2) unstable; urgency=medium
 
   * Release v0.1.2

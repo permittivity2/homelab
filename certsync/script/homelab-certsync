@@ -1,0 +1,274 @@
+#!/usr/bin/perl
+# homelab-certsync -- pull this host's certificates from the fleet certificate
+# store, install them, and reload the consuming service -- but only when they
+# actually changed.
+#
+# Runs TWICE by design (see the systemd units):
+#   * at BOOT, ordered Before= the consuming service, so a host that has been
+#     powered off for weeks serves a CURRENT certificate from its first
+#     connection rather than an expired one until a timer happens to fire; and
+#   * on a steady-state TIMER, for renewals that land while the host is up.
+#
+# Fail-safe throughout, deliberately: every unmet precondition and every
+# fetch failure is a logged no-op and exit 0. An unreachable API must never
+# stop nginx/postfix/dovecot from starting -- serving a stale certificate is
+# strictly better than serving nothing. The one thing it will NOT do quietly
+# is let an expired certificate pass unmentioned: that is logged loudly so it
+# surfaces in `fleet status` instead of being found by a user.
+use strict;
+use warnings;
+use v5.36;
+use lib '/usr/share/homelab-certsync/lib';
+use Homelab::CertSync::Util qw(load_config api_token api_request log_msg);
+use Homelab::Common::KeyVault qw(decode_kek decrypt_secret);
+use Digest::SHA qw(sha256_hex);
+use File::Basename qw(dirname);
+use File::Temp ();
+use Getopt::Long;
+
+my ($dry, $force, $only);
+GetOptions('dry-run' => \$dry, 'force' => \$force, 'lineage=s' => \$only)
+    or die "usage: homelab-certsync [--dry-run] [--force] [--lineage NAME]\n";
+
+my $cfg = eval { load_config() };
+unless ($cfg) { log_msg("no usable config -- nothing to do ($@)"); exit 0 }
+
+my $kek = eval { decode_kek($cfg->{key_encryption_key}, 'certsync key_encryption_key') };
+unless ($kek) { log_msg("ERROR $@"); exit 0 }
+
+my @targets = @{ $cfg->{targets} // [] };
+@targets = grep { ($_->{lineage} // '') eq $only } @targets if $only;
+unless (@targets) { log_msg('no targets configured -- nothing to do'); exit 0 }
+
+my %reload_needed;
+for my $t (@targets) {
+    my $ok = eval { sync_one($t, \%reload_needed); 1 };
+    log_msg("ERROR syncing $t->{lineage}: $@") unless $ok;
+}
+
+# Reload each affected service ONCE, after all of its files are in place --
+# never per-file, which would make a multi-file update visible half-applied.
+for my $svc (sort keys %reload_needed) {
+    if ($dry) { log_msg("[dry-run] would reload $svc"); next }
+    reload_service($svc);
+}
+exit 0;
+
+sub sync_one ($t, $reload) {
+    my $lineage = $t->{lineage} or die "target has no lineage\n";
+
+    my $res = eval { api_request($cfg, api_token(), 'GET', "/api/v1/certstore/$lineage") };
+    if (!$res || $res->{error}) {
+        # Leave what is on disk alone. A failed fetch is NOT evidence that the
+        # local certificate is wrong.
+        log_msg("fetch failed for $lineage: " . ($res ? $res->{error} : $@) . ' -- leaving local files untouched');
+        check_local_expiry($t, $lineage);
+        return;
+    }
+
+    my $aad       = "$lineage/$res->{serial}";
+    my $fullchain = decrypt_secret($kek, $aad, $res->{fullchain_enc});
+    my $privkey   = decrypt_secret($kek, $aad, $res->{privkey_enc});
+
+    # --- pre-write gates. All of these run BEFORE a single byte is written,
+    #     because a half-valid certificate on disk is worse than a stale one.
+    gate($fullchain =~ /-----BEGIN CERTIFICATE-----/, 'fetched fullchain is not a PEM certificate');
+    my $n_certs = () = $fullchain =~ /-----BEGIN CERTIFICATE-----/g;
+    gate($n_certs >= 2, "fetched fullchain has $n_certs cert(s) -- expected a full chain, not a bare leaf");
+    gate($privkey =~ /-----BEGIN (?:EC |RSA )?PRIVATE KEY-----/, 'fetched privkey is not a PEM private key');
+    gate(sha256_hex($fullchain) eq ($res->{sha256_fullchain} // ''), 'fullchain sha256 does not match the published hash');
+    gate(sha256_hex($privkey)   eq ($res->{sha256_privkey}   // ''), 'privkey sha256 does not match the published hash');
+    gate(cert_not_expired($fullchain), 'fetched certificate is ALREADY EXPIRED -- refusing to install it');
+    gate(key_matches_cert($fullchain, $privkey), 'fetched certificate and private key do not match');
+
+    # --- change detection: compare the BYTES we would write against what is
+    #     already there. Not mtime (untrustworthy), not the serial (a byte hash
+    #     also catches a rotated intermediate and the fresh key minted on every
+    #     renewal).
+    my $mode = $t->{mode} // 'files';
+    my ($changed, $what);
+    if ($mode eq 'files') {
+        ($changed, $what) = install_files($t, $fullchain, $privkey);
+    } elsif ($mode eq 'letsencrypt') {
+        ($changed, $what) = install_letsencrypt($t, $lineage, $res, $fullchain, $privkey);
+    } else {
+        die "unknown target mode '$mode'\n";
+    }
+
+    if ($changed) {
+        log_msg("$lineage: updated ($what), serial $res->{serial}");
+        $reload->{ $t->{reload} } = 1 if $t->{reload};
+    } else {
+        log_msg("$lineage: already current (serial $res->{serial}) -- no change, no reload");
+    }
+    return;
+}
+
+sub gate ($cond, $msg) { die "$msg\n" unless $cond }
+
+# mode: files -- the dovecot/postfix shape. Two plain files at fixed paths.
+sub install_files ($t, $fullchain, $privkey) {
+    my $cert_path = $t->{cert_path} or die "target needs cert_path\n";
+    my $key_path  = $t->{key_path}  or die "target needs key_path\n";
+    my $cert_mode = oct($t->{cert_mode} // '0644');
+    my $key_mode  = oct($t->{key_mode}  // '0600');
+
+    my $c_same = file_is($cert_path, $fullchain);
+    my $k_same = file_is($key_path,  $privkey);
+    return (0, 'unchanged') if $c_same && $k_same && !$force;
+
+    if ($dry) { log_msg("[dry-run] would write $cert_path + $key_path"); return (1, 'dry-run') }
+
+    # Key FIRST, then cert: if we are interrupted between the two, a service
+    # reloading on its own would find an old cert with an old key (consistent)
+    # rather than a new cert with an old key (broken handshake).
+    atomic_write($key_path,  $privkey,   $key_mode);
+    atomic_write($cert_path, $fullchain, $cert_mode);
+    return (1, 'cert+key');
+}
+
+# mode: letsencrypt -- the edge/nginx shape. Keep certbot's archive+live
+# symlink layout: nginx configs reference live/, and plain files there would
+# work for nginx but break certbot's own bookkeeping on that host.
+sub install_letsencrypt ($t, $lineage, $res, $fullchain, $privkey) {
+    my $base    = $t->{letsencrypt_dir} // '/etc/letsencrypt';
+    my $live    = "$base/live/$lineage";
+    my $archive = "$base/archive/$lineage";
+
+    return (0, 'unchanged') if !$force
+        && file_is("$live/fullchain.pem", $fullchain)
+        && file_is("$live/privkey.pem",   $privkey);
+
+    if ($dry) { log_msg("[dry-run] would install $lineage into $archive + repoint $live"); return (1, 'dry-run') }
+
+    my $cert  = decrypt_secret($kek, "$lineage/$res->{serial}", $res->{cert_enc});
+    my $chain = decrypt_secret($kek, "$lineage/$res->{serial}", $res->{chain_enc});
+
+    require File::Path;
+    File::Path::make_path($archive, { mode => 0755 }) unless -d $archive;
+    File::Path::make_path($live,    { mode => 0755 }) unless -d $live;
+
+    # Next archive version number, the way certbot numbers them.
+    my $n = 0;
+    if (opendir(my $dh, $archive)) {
+        for (readdir $dh) { $n = $1 if /^cert(\d+)\.pem$/ && $1 > $n }
+        closedir $dh;
+    }
+    $n++;
+
+    my %w = (cert => $cert, chain => $chain, fullchain => $fullchain, privkey => $privkey);
+    for my $k (sort keys %w) {
+        atomic_write("$archive/$k$n.pem", $w{$k}, ($k eq 'privkey' ? 0600 : 0644));
+    }
+    # Re-point each live symlink atomically (symlink to a temp name, rename over).
+    for my $k (sort keys %w) {
+        my $link = "$live/$k.pem";
+        my $tmp  = "$link.new.$$";
+        unlink $tmp;
+        symlink("../../archive/$lineage/$k$n.pem", $tmp) or die "symlink $tmp failed: $!\n";
+        rename($tmp, $link) or die "rename $tmp -> $link failed: $!\n";
+    }
+    return (1, "archive v$n + live symlinks");
+}
+
+sub file_is ($path, $want) {
+    return 0 unless -f $path;
+    open(my $fh, '<', $path) or return 0;
+    local $/; my $have = <$fh>; close $fh;
+    return (defined $have && $have eq $want) ? 1 : 0;
+}
+
+# Temp file in the SAME directory (so rename is atomic on that filesystem),
+# created at its final mode before any content lands -- never a world-readable
+# window on a private key.
+sub atomic_write ($path, $content, $mode) {
+    my $dir = dirname($path);
+    require File::Path; File::Path::make_path($dir) unless -d $dir;
+    my $tmp = "$path.certsync.$$";
+    sysopen(my $fh, $tmp, Fcntl::O_WRONLY() | Fcntl::O_CREAT() | Fcntl::O_TRUNC(), $mode)
+        or die "cannot create $tmp: $!\n";
+    print $fh $content or die "write to $tmp failed: $!\n";
+    close $fh or die "close $tmp failed: $!\n";
+    chmod $mode, $tmp;
+    rename($tmp, $path) or die "rename $tmp -> $path failed: $!\n";
+    return;
+}
+
+sub cert_not_expired ($pem) {
+    my $tmp = File::Temp->new(SUFFIX => '.pem'); print {$tmp} $pem; close $tmp;
+    return _quiet_system('openssl', 'x509', '-checkend', '0', '-noout', '-in', "$tmp") == 0;
+}
+
+# A cert/key mismatch is the classic way to take a service down on reload, and
+# it is cheap to rule out: compare the public keys.
+sub key_matches_cert ($cert_pem, $key_pem) {
+    my $c = File::Temp->new(SUFFIX => '.pem'); print {$c} $cert_pem; close $c;
+    my $k = File::Temp->new(SUFFIX => '.pem'); print {$k} $key_pem;  close $k;
+    my $cp = qx{openssl x509 -noout -pubkey -in "$c" 2>/dev/null};
+    my $kp = qx{openssl pkey -pubout -in "$k" 2>/dev/null};
+    return ($cp && $kp && $cp eq $kp) ? 1 : 0;
+}
+
+# When we could not refresh, say something USEFUL about what is on disk --
+# silence here is how an expired certificate reaches a user.
+sub check_local_expiry ($t, $lineage) {
+    my $path = $t->{cert_path}
+        // (($t->{letsencrypt_dir} // '/etc/letsencrypt') . "/live/$lineage/fullchain.pem");
+    return unless -f $path;
+    if (_quiet_system('openssl', 'x509', '-checkend', '0', '-noout', '-in', $path) != 0) {
+        log_msg("CRITICAL local certificate for $lineage at $path is EXPIRED and could not be refreshed");
+    } elsif (_quiet_system('openssl', 'x509', '-checkend', '604800', '-noout', '-in', $path) != 0) {
+        log_msg("WARNING local certificate for $lineage expires within 7 days and could not be refreshed");
+    }
+    return;
+}
+
+sub reload_service ($svc) {
+    # SKIP when the service is not running. At BOOT this unit is ordered
+    # Before= the consuming service, so there is nothing to reload yet -- the
+    # service will simply read the fresh certificate when it starts. Calling
+    # reload on an inactive unit is an error, not a no-op.
+    if (system('systemctl', 'is-active', '--quiet', $svc) != 0) {
+        log_msg("$svc is not running -- skipping reload (it will read the new certificate when it starts)");
+        return;
+    }
+
+    # Validate BEFORE reloading where the service supports it. For nginx this
+    # is the difference between one bad vhost and `nginx -t` failing every
+    # vhost on the host. These are plain binaries, not systemd jobs, so they
+    # are safe to run synchronously.
+    my %validate = (nginx => ['nginx', '-t'], haproxy => ['haproxy', '-c', '-f', '/etc/haproxy/haproxy.cfg']);
+    if (my $cmd = $validate{$svc}) {
+        if (system(@$cmd) != 0) {
+            log_msg("ERROR $svc config validation failed -- NOT reloading (certificates are installed; fix the config)");
+            return;
+        }
+    }
+
+    # --no-block is REQUIRED, not an optimisation. This unit declares
+    # Before=<svc>, so a BLOCKING `systemctl reload <svc>` deadlocks: systemd
+    # will not run the reload job until this unit finishes starting, and this
+    # unit is sitting in reload waiting for it. That self-deadlock hangs until
+    # TimeoutStartSec kills us -- the certificate lands on disk but the service
+    # is never told, which is exactly the silent half-finished state this whole
+    # package exists to avoid. Queue the job and let systemd run it once we
+    # exit.
+    if (system('systemctl', 'reload', '--no-block', $svc) == 0) {
+        log_msg("reload of $svc queued");
+    } else {
+        log_msg("ERROR could not queue a reload of $svc");
+    }
+    return;
+}
+
+# openssl -checkend prints "Certificate will not expire" to stdout on success,
+# which is pure noise in a journal. We only care about the exit status.
+sub _quiet_system (@cmd) {
+    open(my $saved, '>&', \*STDOUT) or return system(@cmd);
+    open(STDOUT, '>', '/dev/null');
+    my $rc = system(@cmd);
+    open(STDOUT, '>&', $saved);
+    return $rc;
+}
+
+BEGIN { require Fcntl }

@@ -80,6 +80,42 @@ case "$1" in
         # nudge to add one. See homelab-haproxy's own package for the
         # loopback-proxy pattern (matching homelab-webproxy's existing
         # one) for a single-box install.
+        # --- TLS certificate -----------------------------------------
+        # Prefer the real fleet mail certificate if it has been delivered
+        # to this host; fall back to the self-signed snakeoil cert so a
+        # fresh install still comes up with working (if untrusted) TLS
+        # rather than refusing to start.
+        #
+        # This file is NOT shipped by this package -- Postfix terminates
+        # TLS itself (homelab-haproxy is TCP-passthrough for mail, so it
+        # never presents a cert on our behalf) and the cert is issued by
+        # certbot over on the edge. Today it is an admin-mediated copy;
+        # the pull-based cert-sync follow-up is what will keep it fresh
+        # automatically. Path deliberately mirrors homelab-dovecot's
+        # /etc/dovecot/private/mail-mailmasker.{pem,key} convention.
+        #
+        # This used to be hardcoded to snakeoil UNCONDITIONALLY, so a host
+        # with the real cert on disk still served self-signed on :25/:587
+        # -- found live from off-network: `openssl s_client -starttls smtp
+        # mail.mailmasker.org:587` returned the backend's own
+        # CN=<host>.forge.name cert, so strict-TLS submission clients were
+        # being failed by us.
+        mkdir -p /etc/postfix/tls
+        chmod 0755 /etc/postfix/tls
+        TLS_CERT=/etc/postfix/tls/mail-mailmasker.pem
+        TLS_KEY=/etc/postfix/tls/mail-mailmasker.key
+        if [ -s "$TLS_CERT" ] && [ -s "$TLS_KEY" ]; then
+            echo "  TLS: using the fleet mail certificate ($TLS_CERT)"
+        else
+            TLS_CERT=/etc/ssl/certs/ssl-cert-snakeoil.pem
+            TLS_KEY=/etc/ssl/private/ssl-cert-snakeoil.key
+            echo "  TLS: NOTE no fleet mail certificate at /etc/postfix/tls/ --"
+            echo "       falling back to the self-signed snakeoil certificate."
+            echo "       Clients doing strict TLS validation on :25/:587 will reject it."
+            echo "       Install mail-mailmasker.{pem,key} there, then run"
+            echo "       'dpkg-reconfigure homelab-postfix' to pick it up."
+        fi
+
         postconf -e \
             "myhostname = $HOSTNAME" \
             "mydomain = $MAIL_DOMAIN" \
@@ -95,8 +131,8 @@ case "$1" in
             'smtpd_sasl_auth_enable = yes' \
             'smtpd_sasl_security_options = noanonymous' \
             'broken_sasl_auth_clients = yes' \
-            'smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem' \
-            'smtpd_tls_key_file = /etc/ssl/private/ssl-cert-snakeoil.key' \
+            "smtpd_tls_cert_file = $TLS_CERT" \
+            "smtpd_tls_key_file = $TLS_KEY" \
             'smtpd_tls_security_level = may' \
             'smtp_tls_security_level = may' \
             'smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination' \

@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+case "$1" in
+    remove|purge)
+        systemctl disable --now homelab-certsync.timer >/dev/null 2>&1 || true
+        ;;
+esac
+case "$1" in
+    purge)
+        rm -f /etc/homelab/services/certsync.yml
+        rm -rf /etc/homelab/certsync
+        # The spool may hold un-published certificate material; remove it on
+        # purge rather than leaving encrypted blobs lying around.
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        ;;
+esac
+exit 0

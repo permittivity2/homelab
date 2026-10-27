@@ -10,6 +10,24 @@ case "$1" in
         echo "homelab-keepalived post-installation setup..."
         mkdir -p "$CONFIG_DIR"
 
+        # --- ARP hygiene for multi-homed VIP hosts -----------------------
+        # Load the shipped sysctl drop-in now so arp_ignore/arp_announce take
+        # effect without a reboot (the file itself persists them across boots).
+        if [ -f /etc/sysctl.d/60-homelab-keepalived-arp.conf ]; then
+            sysctl -p /etc/sysctl.d/60-homelab-keepalived-arp.conf >/dev/null 2>&1 || true
+        fi
+
+        # --- pick up the ExecStopPost teardown drop-in -------------------
+        # (guarantees macvlan teardown even on a keepalived crash/SIGKILL)
+        systemctl daemon-reload >/dev/null 2>&1 || true
+
+        # --- mark the public-VIP macvlans Unmanaged by networkd ----------
+        # so networkd never starts a second DHCP client on them (egress/DNS
+        # hijack guard). Reload networkd so the .network match applies now.
+        if systemctl is-active --quiet systemd-networkd 2>/dev/null; then
+            networkctl reload >/dev/null 2>&1 || true
+        fi
+
         # --- fleet service manifest (topology/services visibility) -------
         mkdir -p /etc/homelab/services
         chgrp homelab /etc/homelab/services 2>/dev/null || true

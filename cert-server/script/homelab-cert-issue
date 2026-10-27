@@ -1,0 +1,66 @@
+#!/usr/bin/perl
+# homelab-cert-issue -- issue or renew the configured lineages via DNS-01,
+# then publish them. This is the cert server's main entry point; the timer
+# runs it, and an operator can run it by hand for one lineage.
+#
+# DNS-01 (not HTTP-01) is the whole reason this host can own issuance: it
+# never needs inbound :80/:443, so it is not public-facing and does not have
+# to be whichever edge node happens to be powered on.
+use strict;
+use warnings;
+use v5.36;
+use lib '/usr/share/homelab-cert-server/lib';
+use Homelab::CertServer::Util qw(load_config log_msg);
+use Getopt::Long;
+
+my ($only, $force, $dry);
+GetOptions('lineage=s' => \$only, 'force' => \$force, 'dry-run' => \$dry)
+    or die "usage: homelab-cert-issue [--lineage NAME] [--force] [--dry-run]\n";
+
+my $cfg   = load_config();
+my $email = $cfg->{letsencrypt_email} or die "letsencrypt_email is required in the config\n";
+my @lins  = @{ $cfg->{lineages} // [] };
+die "no lineages configured\n" unless @lins;
+@lins = grep { ($_->{name} // '') eq $only } @lins if $only;
+die "no configured lineage named '$only'\n" if $only && !@lins;
+
+my $AUTH    = '/usr/bin/homelab-cert-dns-auth';
+my $CLEANUP = '/usr/bin/homelab-cert-dns-cleanup';
+my $PUBLISH = '/usr/bin/homelab-cert-publish';
+
+my $rc = 0;
+for my $l (@lins) {
+    my $name = $l->{name} or next;
+    my @domains = @{ $l->{domains} // [$name] };
+
+    my @cmd = (
+        'certbot', 'certonly', '--non-interactive', '--agree-tos',
+        '--email', $email,
+        '--manual', '--preferred-challenges', 'dns',
+        '--manual-auth-hook', $AUTH,
+        '--manual-cleanup-hook', $CLEANUP,
+        '--cert-name', $name,
+        (map { ('-d', $_) } @domains),
+        # certbot's own renewal-window logic decides whether work is needed;
+        # --keep-until-expiring makes a run that is not yet due a cheap no-op
+        # rather than a needless re-issue (and a needless rate-limit hit).
+        ($force ? '--force-renewal' : '--keep-until-expiring'),
+        '--deploy-hook', $PUBLISH,
+    );
+
+    if ($dry) { say join(' ', @cmd); next }
+
+    log_msg("issuing/renewing $name (" . join(', ', @domains) . ')');
+    my $status = system(@cmd);
+    if ($status != 0) {
+        log_msg("ERROR certbot failed for $name (status $status)");
+        $rc = 1;
+        next;
+    }
+    # The deploy-hook only fires when something was actually renewed. Publish
+    # unconditionally too (it is idempotent on (lineage, serial)) so a lineage
+    # issued before the store existed still gets in.
+    system($PUBLISH, '--lineage', $name) == 0
+        or log_msg("WARNING publish returned non-zero for $name (spooled; the timer will retry)");
+}
+exit $rc;

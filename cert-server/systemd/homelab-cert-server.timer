@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic certificate issuance/renewal + publish (homelab cert server)
+
+[Timer]
+# Twice daily, the same cadence certbot's own packaged timer uses. certbot
+# only acts inside its 30-day renewal window, so most runs are a no-op; the
+# run still matters because it also drains the publish spool.
+OnCalendar=*-*-* 03,15:17:00
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

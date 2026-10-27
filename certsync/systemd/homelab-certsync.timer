@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic TLS certificate refresh from the fleet certificate store
+
+[Timer]
+# The boot run is handled by the service's own WantedBy=multi-user.target +
+# Before= ordering, so this timer is purely the steady-state safety net for a
+# renewal that lands while the host is already up.
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

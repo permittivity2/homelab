@@ -1,0 +1,15 @@
+# Managed by homelab-keepalived.
+#
+# The notify-managed public VIP macvlans (pub66/pub68/...) are owned ENTIRELY
+# by homelab-keepalived-notify + its dedicated dhclient. Mark them Unmanaged so
+# systemd-networkd (the active network manager on the edge, which runs eth5's
+# DHCP) never starts its OWN DHCP client on them -- a second client would race
+# ours for the reservation MAC and, unlike our minimal lease script, would
+# install the AT&T lease's default route and rewrite resolv.conf: the exact
+# egress + DNS hijack this whole design exists to prevent.
+[Match]
+Name=pub*
+Kind=macvlan
+
+[Link]
+Unmanaged=yes

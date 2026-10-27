@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+case "$1" in
+    remove|purge)
+        systemctl disable --now homelab-cert-server.timer >/dev/null 2>&1 || true
+        ;;
+esac
+case "$1" in
+    purge)
+        rm -f /etc/homelab/services/cert-server.yml
+        rm -rf /etc/homelab/cert-server
+        # The spool may hold un-published certificate material; remove it on
+        # purge rather than leaving encrypted blobs lying around.
+        rm -rf /var/lib/homelab/cert-publish
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        ;;
+esac
+exit 0

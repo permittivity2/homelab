@@ -1,0 +1,43 @@
+#!/bin/sh
+set -e
+
+CONFIG_DIR=/etc/homelab/cert-server
+CONFIG="$CONFIG_DIR/cert-server.yml"
+SHARE=/usr/share/homelab-cert-server
+
+case "$1" in
+    configure)
+        echo "homelab-cert-server post-installation setup..."
+        mkdir -p "$CONFIG_DIR"
+        mkdir -p /var/lib/homelab/cert-publish
+        chmod 0700 /var/lib/homelab/cert-publish
+
+        # fleet service manifest (topology/fleet-status visibility)
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE/services/cert-server.yml" /etc/homelab/services/cert-server.yml
+
+        if [ ! -f "$CONFIG" ]; then
+            cp "$SHARE/config/cert-server.example.yml" "$CONFIG"
+            # The KEK lives here; nothing but root should read it.
+            chmod 0600 "$CONFIG"
+            echo "  wrote a starter $CONFIG -- EDIT IT (key_encryption_key, zones, lineages),"
+            echo "  then run: homelab-cert-issue"
+            # Do NOT enable the timer against a placeholder config: it would
+            # try to issue for the example lineage and burn rate limit.
+            systemctl disable --now homelab-cert-server.timer >/dev/null 2>&1 || true
+        else
+            chmod 0600 "$CONFIG"
+            systemctl daemon-reload >/dev/null 2>&1 || true
+            systemctl enable --now homelab-cert-server.timer >/dev/null 2>&1 \
+                || echo "  WARNING could not enable homelab-cert-server.timer -- check 'systemctl status homelab-cert-server.timer'"
+            echo "  timer enabled (issue/renew + publish, twice daily)"
+        fi
+
+        echo "homelab-cert-server configured."
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure) ;;
+    *) echo "postinst called with unknown argument: $1"; exit 1 ;;
+esac
+exit 0

@@ -1,0 +1,31 @@
+[Unit]
+Description=Pull current TLS certificates from the fleet certificate store and install them
+Documentation=file:///usr/share/doc/homelab-certsync/README.md
+After=network-online.target
+Wants=network-online.target
+# THE BOOT GUARANTEE. A host that has been powered off for weeks -- a standby
+# edge, say -- must not start serving a stale or expired certificate and only
+# fix it whenever a timer next fires. Ordering this before the consuming
+# services means the certificate on disk is current from the first connection.
+#
+# These are ordering-only (Before=), NOT requirement (Requires=) relationships,
+# and they are harmless on a host where a given unit is not installed.
+Before=nginx.service postfix.service dovecot.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/homelab-certsync
+# Bounded, and the script itself always exits 0: an unreachable API must never
+# prevent nginx/postfix/dovecot from starting. Serving the certificate already
+# on disk is strictly better than not serving at all.
+#
+# NB the script reloads the consuming service with `systemctl reload
+# --no-block`. A blocking reload would SELF-DEADLOCK against the Before=
+# ordering above (systemd cannot run the reload job while this unit is still
+# starting) and hang here until this timeout -- leaving the new certificate on
+# disk with the service never told about it.
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

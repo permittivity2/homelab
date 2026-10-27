@@ -1,0 +1,45 @@
+#!/bin/sh
+set -e
+
+CONFIG_DIR=/etc/homelab/certsync
+CONFIG="$CONFIG_DIR/certsync.yml"
+SHARE=/usr/share/homelab-certsync
+
+case "$1" in
+    configure)
+        echo "homelab-certsync post-installation setup..."
+        mkdir -p "$CONFIG_DIR"
+
+        # fleet service manifest (topology/fleet-status visibility)
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE/services/certsync.yml" /etc/homelab/services/certsync.yml
+
+        if [ ! -f "$CONFIG" ]; then
+            cp "$SHARE/config/certsync.example.yml" "$CONFIG"
+            # The KEK lives here; nothing but root should read it.
+            chmod 0600 "$CONFIG"
+            echo "  wrote a starter $CONFIG -- EDIT IT (key_encryption_key, zones, lineages),"
+            echo "  then run: homelab-cert-issue"
+            # Do NOT enable the timer against a placeholder config: it would
+            # try to issue for the example lineage and burn rate limit.
+            systemctl disable --now homelab-certsync.timer >/dev/null 2>&1 || true
+        else
+            chmod 0600 "$CONFIG"
+            systemctl daemon-reload >/dev/null 2>&1 || true
+            systemctl enable homelab-certsync.service >/dev/null 2>&1 || true
+            systemctl enable --now homelab-certsync.timer >/dev/null 2>&1 \
+                || echo "  WARNING could not enable homelab-certsync.timer"
+            # Pull once NOW so installing the package converges the host
+            # immediately rather than at the next timer tick.
+            /usr/bin/homelab-certsync || true
+            echo "  enabled: boot-time sync (before nginx/postfix/dovecot) + hourly timer"
+        fi
+
+        echo "homelab-certsync configured."
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure) ;;
+    *) echo "postinst called with unknown argument: $1"; exit 1 ;;
+esac
+exit 0

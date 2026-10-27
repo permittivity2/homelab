@@ -1,0 +1,51 @@
+#!/usr/bin/perl
+# homelab-cert-dns-auth -- certbot --manual-auth-hook for DNS-01.
+#
+# certbot invokes this once per domain being validated, with:
+#   CERTBOT_DOMAIN      the domain the challenge is for
+#   CERTBOT_VALIDATION  the token to publish as the TXT value
+#
+# We publish it via homelab-api's narrow, system_agent-gated ACME endpoint
+# (POST /api/v1/domains/:zone/acme-challenge) rather than touching PowerDNS
+# directly. That endpoint can ONLY write _acme-challenge TXT records, so this
+# host never holds a credential capable of editing arbitrary DNS -- which is
+# the whole reason DNS-01 is safe to run from a dedicated cert server.
+#
+# Multiple SAN names in one certificate each get their own challenge; certbot
+# calls this once per name, and the endpoint accumulates values for a shared
+# name rather than overwriting (certbot clears them all afterwards).
+use strict;
+use warnings;
+use lib '/usr/share/homelab-cert-server/lib';
+use Homelab::CertServer::Util qw(load_config api_token api_request zone_for log_msg);
+
+my $domain = $ENV{CERTBOT_DOMAIN}     or die "CERTBOT_DOMAIN not set (this runs as a certbot auth hook)\n";
+my $value  = $ENV{CERTBOT_VALIDATION} or die "CERTBOT_VALIDATION not set\n";
+
+my $cfg   = load_config();
+my $token = api_token();
+my $zone  = zone_for($cfg, $token, $domain)
+    or die "could not determine a managed zone for '$domain'\n";
+
+# The challenge name is _acme-challenge.<domain>, which for a SAN like
+# mail.mailmasker.org is _acme-challenge.mail.mailmasker.org -- NOT the zone
+# apex. Pass the full name; the server qualifies + validates it.
+my $name = "_acme-challenge.$domain";
+
+my $res = api_request($cfg, $token, 'POST', "/api/v1/domains/$zone/acme-challenge",
+    { name => $name, value => $value });
+die "failed to publish challenge for $domain: " . ($res->{error} // 'unknown error') . "\n"
+    unless $res && $res->{ok};
+
+log_msg("published challenge $name (zone $zone)");
+
+# Wait for the record to be visible. All three PowerDNS instances are
+# primary=yes over ONE shared database with every zone NATIVE, so the write is
+# authoritative immediately -- there is no AXFR/NOTIFY to wait on. What we DO
+# have to outlast is the stock negative-answer cache (negquery-cache-ttl=60):
+# anything that already asked for this name before we wrote it will be told
+# NXDOMAIN for up to a minute.
+my $wait = $cfg->{dns_propagation_seconds} // 90;
+log_msg("waiting ${wait}s for DNS propagation");
+sleep $wait;
+exit 0;

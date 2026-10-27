@@ -1,0 +1,59 @@
+#!/bin/sh
+# homelab-keepalived-dhclient-script -- minimal dhclient lease handler for the
+# notify-managed edge VIPs (invoked via `dhclient -sf`).
+#
+# It applies ONLY the leased IPv4 address (plus a gratuitous ARP) to the
+# macvlan. It deliberately does NOT do any of what the stock
+# /sbin/dhclient-script does: no default route, no static routes, no
+# resolv.conf / hostname / NTP changes. That is the whole point -- the AT&T
+# public-subnet lease must not install a default route (which would hijack
+# the edge's existing eth5 -> 192.168.1.254 egress) or rewrite the edge's
+# DNS. keepalived + the notify hook own the interface lifecycle; this script
+# only pins the address dhclient negotiated for the reservation MAC.
+set -u
+
+# dotted-quad netmask -> prefix length
+mask2prefix() {
+    _m="${1:-}"; _p=0
+    for _o in $(printf '%s' "$_m" | tr '.' ' '); do
+        case "$_o" in
+            255) _p=$((_p+8)) ;; 254) _p=$((_p+7)) ;; 252) _p=$((_p+6)) ;;
+            248) _p=$((_p+5)) ;; 240) _p=$((_p+4)) ;; 224) _p=$((_p+3)) ;;
+            192) _p=$((_p+2)) ;; 128) _p=$((_p+1)) ;; 0) ;; *) ;;
+        esac
+    done
+    printf '%s' "$_p"
+}
+
+log() { logger -t homelab-keepalived-dhcp "$@" 2>/dev/null || true; }
+
+case "${reason:-}" in
+    PREINIT|PREINIT6)
+        # bring the link up so dhclient can send/receive; nothing else
+        [ -n "${interface:-}" ] && ip link set "${interface}" up 2>/dev/null || true
+        ;;
+    BOUND|RENEW|REBIND|REBOOT|TIMEOUT)
+        [ -n "${new_ip_address:-}" ] || exit 0
+        # Drop a prior address first: `ip addr replace` only overwrites when IP
+        # AND prefix both match, so a changed prefix (e.g. a static /29 pre-set
+        # by notify vs a leased /24) or a changed lease IP would otherwise leave
+        # a stale secondary address + bogus connected route on the macvlan.
+        if [ -n "${old_ip_address:-}" ] && [ "${old_ip_address}" != "${new_ip_address}" ]; then
+            ip addr del "${old_ip_address}" dev "${interface}" 2>/dev/null || true
+        fi
+        pfx=$(mask2prefix "${new_subnet_mask:-255.255.255.255}")
+        [ "${pfx:-0}" -gt 0 ] 2>/dev/null || pfx=32
+        ip addr replace "${new_ip_address}/${pfx}" dev "${interface}" 2>/dev/null || true
+        ip link set "${interface}" up 2>/dev/null || true
+        command -v arping >/dev/null 2>&1 && \
+            arping -U -c 2 -I "${interface}" "${new_ip_address}" >/dev/null 2>&1 || true
+        log "${reason} ${interface} -> ${new_ip_address}/${pfx}"
+        ;;
+    EXPIRE|FAIL|RELEASE|STOP)
+        [ -n "${interface:-}" ] && ip addr flush dev "${interface}" 2>/dev/null || true
+        log "${reason} ${interface} address flushed"
+        ;;
+    *)
+        ;;
+esac
+exit 0

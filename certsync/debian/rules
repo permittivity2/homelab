@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	install -D -m 755 script/homelab-certsync            debian/homelab-certsync/usr/bin/homelab-certsync
+	install -D -m 644 lib/Homelab/CertSync/Util.pm       debian/homelab-certsync/usr/share/homelab-certsync/lib/Homelab/CertSync/Util.pm
+	install -D -m 644 config/certsync.example.yml        debian/homelab-certsync/usr/share/homelab-certsync/config/certsync.example.yml
+	install -D -m 644 services/certsync.yml              debian/homelab-certsync/usr/share/homelab-certsync/services/certsync.yml
+	install -D -m 644 systemd/homelab-certsync.service   debian/homelab-certsync/lib/systemd/system/homelab-certsync.service
+	install -D -m 644 systemd/homelab-certsync.timer     debian/homelab-certsync/lib/systemd/system/homelab-certsync.timer
+
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start

@@ -1,0 +1,24 @@
+homelab-certsync (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 11:32:45 -0500
+
+homelab-certsync (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 11:27:53 -0500
+
+homelab-certsync (0.1.0) unstable; urgency=medium
+
+  * Initial release. Consumer half of the fleet certificate pipeline: fetches
+    this host's certificates from homelab-api's certificate store, decrypts
+    them locally with the shared KEK, validates (not expired, chain is a real
+    chain, key matches cert, hashes match what was published), installs
+    atomically and reloads the service -- only when the bytes actually
+    changed. Runs at boot ordered BEFORE nginx/postfix/dovecot so a
+    long-powered-off standby never serves a stale certificate, and hourly
+    after that. Fail-safe: an unreachable API can never block a service start.
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 11:40:00 -0500

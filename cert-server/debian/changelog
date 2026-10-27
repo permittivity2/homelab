@@ -1,0 +1,24 @@
+homelab-cert-server (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 11:27:56 -0500
+
+homelab-cert-server (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 11:22:51 -0500
+
+homelab-cert-server (0.1.0) unstable; urgency=medium
+
+  * Initial release. Dedicated fleet certificate issuer: certbot DNS-01 via
+    homelab-api's narrow system_agent-gated _acme-challenge endpoint (so this
+    host is never public-facing and cannot edit arbitrary DNS), plus
+    homelab-cert-publish, which envelope-encrypts each renewed lineage and
+    posts it to the certificate store. Publishing runs from certbot's
+    deploy-hook AND from a timer that also drains a local spool -- certbot
+    only WARNS on a failed hook, so without the timer an API blip during
+    renewal would silently lose the publish for ~60 days.
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 11:30:00 -0500

@@ -1,0 +1,6 @@
+name: cert-server
+package: homelab-cert-server
+kind: tls-issuance
+check:
+  systemd_unit: homelab-cert-server.timer
+description: "Certificate issuance: renews the fleet's TLS certificates via DNS-01 and publishes them to the certificate store for every consumer to pull. Replaces per-edge certbot so renewal no longer depends on which edge node is powered on."

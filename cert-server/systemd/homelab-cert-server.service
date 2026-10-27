@@ -1,0 +1,14 @@
+[Unit]
+Description=Homelab cert server: issue/renew configured certificates via DNS-01 and publish them
+Documentation=file:///usr/share/doc/homelab-cert-server/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root: certbot needs /etc/letsencrypt, and the publish step reads the
+# homelab-agent credential (homelab:homelab 0600).
+ExecStart=/usr/bin/homelab-cert-issue
+# Drain any spooled publishes even if issuance itself did nothing.
+ExecStartPost=-/usr/bin/homelab-cert-publish --drain
+TimeoutStartSec=1800

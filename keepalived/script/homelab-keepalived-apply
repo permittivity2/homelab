@@ -13,10 +13,13 @@ use YAML::XS qw(LoadFile);
 
 # Paths are env-overridable purely so the test suite can point them at temp
 # files; in production they take their default locations.
-my $CFG   = $ENV{HOMELAB_KEEPALIVED_CFG}   // '/etc/homelab/keepalived/vrrp.yml';
-my $OUT   = $ENV{HOMELAB_KEEPALIVED_OUT}   // '/etc/keepalived/keepalived.conf';
-my $NFT   = $ENV{HOMELAB_KEEPALIVED_NFT}   // '/etc/nftables.d/15-homelab-vrrp.nft';
-my $CHECK = $ENV{HOMELAB_KEEPALIVED_CHECK} // '/usr/bin/homelab-keepalived-check';
+my $CFG    = $ENV{HOMELAB_KEEPALIVED_CFG}    // '/etc/homelab/keepalived/vrrp.yml';
+my $OUT    = $ENV{HOMELAB_KEEPALIVED_OUT}    // '/etc/keepalived/keepalived.conf';
+my $NFT    = $ENV{HOMELAB_KEEPALIVED_NFT}    // '/etc/nftables.d/15-homelab-vrrp.nft';
+my $CHECK  = $ENV{HOMELAB_KEEPALIVED_CHECK}  // '/usr/bin/homelab-keepalived-check';
+my $NOTIFY = $ENV{HOMELAB_KEEPALIVED_NOTIFY} // '/usr/bin/homelab-keepalived-notify';
+# Spec file consumed by the notify hook for macvlan+reservation-MAC+DHCP VIPs.
+my $DVIPS  = $ENV{HOMELAB_KEEPALIVED_DHCP_VIPS} // '/etc/homelab/keepalived/dhcp-vips.conf';
 
 die "homelab-keepalived-apply: no $CFG -- nothing to apply\n" unless -f $CFG;
 my $c = eval { LoadFile($CFG) } or die "homelab-keepalived-apply: cannot parse $CFG: $@\n";
@@ -56,24 +59,85 @@ if (defined $c->{vips}) {
     }
 } elsif (defined $c->{vip} && $c->{vip} ne '' && defined $c->{vip_interface} && $c->{vip_interface} ne '') {
     push @vips, { address => $c->{vip}, interface => $c->{vip_interface} };
-} else {
-    die "homelab-keepalived-apply: vrrp.yml needs either 'vips:' (list of address+interface)"
-      . " or both 'vip:' and 'vip_interface:'\n";
 }
+
+# --- notify-managed public VIPs (macvlan + reservation MAC + DHCP) --------
+# Each entry describes a VIP that cannot be a plain keepalived
+# virtual_ipaddress because it must present a SPECIFIC foreign MAC (the AT&T
+# per-IP DHCP-reservation MAC) on the public L2 and take its address via
+# DHCP. keepalived only elects; the notify hook builds/tears the macvlan and
+# runs dhclient. Fields: name (the macvlan devname), parent (public-L2
+# interface to parent it on), mac (reservation MAC), mode (dhcp|static+dhcp),
+# and address (required for a static+dhcp mode).
+my @dvips;
+if (defined $c->{dhcp_vips}) {
+    die "homelab-keepalived-apply: vrrp.yml 'dhcp_vips' must be a non-empty list\n"
+        unless ref $c->{dhcp_vips} eq 'ARRAY' && @{ $c->{dhcp_vips} };
+    for my $v (@{ $c->{dhcp_vips} }) {
+        die "homelab-keepalived-apply: each 'dhcp_vips' entry needs 'name:', 'parent:' and 'mac:'\n"
+            unless ref $v eq 'HASH'
+                && defined $v->{name}   && $v->{name}   ne ''
+                && defined $v->{parent} && $v->{parent} ne ''
+                && defined $v->{mac}    && $v->{mac}    ne '';
+        my $mode = $v->{mode} // 'dhcp';
+        die "homelab-keepalived-apply: dhcp_vips '$v->{name}' mode must be dhcp|static+dhcp\n"
+            unless $mode =~ /^(?:dhcp|static\+dhcp|static)$/;
+        die "homelab-keepalived-apply: dhcp_vips '$v->{name}' mode '$mode' needs an 'address:'\n"
+            if $mode ne 'dhcp' && !(defined $v->{address} && $v->{address} ne '');
+        die "homelab-keepalived-apply: dhcp_vips '$v->{name}' has an invalid devname"
+          . " (letters/digits/_/- only, <=15 chars)\n"
+            unless $v->{name} =~ /^[A-Za-z0-9_-]{1,15}$/;
+        push @dvips, {
+            name    => $v->{name},
+            parent  => $v->{parent},
+            mac     => $v->{mac},
+            mode    => $mode,
+            address => (defined $v->{address} && $v->{address} ne '' ? $v->{address} : '-'),
+        };
+    }
+}
+
+die "homelab-keepalived-apply: vrrp.yml needs at least one VIP -- a 'vips:' list"
+  . " (or 'vip:'+'vip_interface:') for keepalived-managed VIPs, and/or a"
+  . " 'dhcp_vips:' list for macvlan+DHCP VIPs\n"
+    unless @vips || @dvips;
 
 my $state   = $c->{state}      // 'BACKUP';
 my $advert  = $c->{advert_int} // 1;
 my $auth    = substr(($c->{auth_pass} // 'hlvrrp'), 0, 8);  # keepalived PASS auth: max 8 chars
 my $gw      = $c->{default_route_via};
 # Which interface the master-only default route is installed on. Explicit
-# `default_route_interface:` wins; otherwise the first VIP's interface.
-my $gw_if   = $c->{default_route_interface} // $vips[0]{interface};
+# `default_route_interface:` wins; otherwise the first keepalived VIP's
+# interface (falling back to the first notify VIP's parent if there are no
+# keepalived-managed VIPs at all).
+my $gw_if   = $c->{default_route_interface}
+            // ($vips[0] ? $vips[0]{interface} : undef)
+            // ($dvips[0] ? $dvips[0]{parent} : undef);
 my @track   = grep { defined && /\S/ } @{ $c->{track_services} || [] };
 my $weight  = $c->{track_weight} // -60;
 
 # --- render keepalived.conf ----------------------------------------------
 my $peerblock = join("\n", map { "        $_" } @peers);
 my $vipblock  = join("\n", map { "        $_->{address} dev $_->{interface}" } @vips);
+
+# virtual_ipaddress block: keepalived-managed VIPs only. Omitted entirely
+# when every VIP is notify-managed (keepalived rejects an empty block).
+my $vip_section = @vips ? "    virtual_ipaddress {\n$vipblock\n    }\n" : '';
+
+# notify hooks: only emitted when there are macvlan+DHCP VIPs for the hook to
+# manage. The explicit state arg is ours; keepalived appends its own
+# (name/state/priority) args, which the hook ignores.
+my $notifyblock = '';
+if (@dvips) {
+    # notify_stop ensures a graceful keepalived stop also tears the macvlans
+    # down (a crash is covered separately by the ExecStopPost systemd drop-in).
+    $notifyblock = <<"EON";
+    notify_master "$NOTIFY master"
+    notify_backup "$NOTIFY backup"
+    notify_fault  "$NOTIFY fault"
+    notify_stop   "$NOTIFY backup"
+EON
+}
 
 my ($trackscript, $trackref) = ('', '');
 if (@track) {
@@ -121,11 +185,17 @@ $peerblock
         auth_type PASS
         auth_pass $auth
     }
-    virtual_ipaddress {
-$vipblock
-    }
-$vroutes$trackref}
+$vip_section$notifyblock$vroutes$trackref}
 EOC
+
+# Capture the OUTGOING config (if any) before we overwrite it, so we can tell
+# whether this apply is a STRUCTURAL change (instance count, vMAC usage, or
+# notify-hook presence) -- those cannot be applied with a keepalived reload
+# (SIGHUP won't delete a removed instance's vmac interfaces, and a stay-master
+# reload won't re-fire notify_master to (re)build notify VIPs). Such a change
+# needs a full restart.
+my $old_conf = '';
+if (-f $OUT) { open my $of, '<', $OUT; local $/; $old_conf = <$of>; close $of; }
 
 # --- write to a temp file, validate, then install atomically --------------
 my $tmp = "$OUT.new.$$";
@@ -151,6 +221,31 @@ rename $tmp, $OUT or die "homelab-keepalived-apply: cannot install $OUT: $!\n";
 chmod 0644, $OUT;
 print "homelab-keepalived: wrote $OUT\n";
 
+# --- notify-VIP spec file (consumed by homelab-keepalived-notify) ---------
+# One line per macvlan+DHCP VIP: "name parent mac mode address". Rewritten
+# (or removed) every apply so it never drifts from keepalived.conf.
+if (@dvips) {
+    my $spec = "# Managed by homelab-keepalived -- regenerated from $CFG.\n"
+             . "# Fields: name parent mac mode address  (consumed by $NOTIFY)\n";
+    $spec .= join('', map {
+        "$_->{name} $_->{parent} $_->{mac} $_->{mode} $_->{address}\n"
+    } @dvips);
+    my $stmp = "$DVIPS.new.$$";
+    if (open my $sf, '>', $stmp) {
+        print $sf $spec;
+        close $sf;
+        chmod 0644, $stmp;
+        rename $stmp, $DVIPS
+            or warn "homelab-keepalived: WARNING cannot install $DVIPS: $!\n";
+        print "homelab-keepalived: wrote $DVIPS (" . scalar(@dvips) . " notify VIP(s))\n";
+    } else {
+        warn "homelab-keepalived: WARNING cannot write $DVIPS: $!\n";
+    }
+} else {
+    # no notify VIPs -> make sure a stale spec file can't resurrect old VIPs
+    unlink $DVIPS if -f $DVIPS;
+}
+
 # --- VRRP firewall drop-in (IP proto 112 to/from peers) -------------------
 # Both input and output are opened only to the configured peers (+ self).
 # Output is included only when this host actually has a drop-policy output
@@ -168,6 +263,18 @@ if (-d '/etc/nftables.d') {
     $body .= "add rule inet filter output ip protocol vrrp ip daddr { $peerset } accept comment \"homelab-vrrp-out\"\n"
         if $have_out;
 
+    # DHCP (bootps/bootpc) for notify-managed macvlan VIPs. dhclient's initial
+    # DISCOVER goes via a raw packet socket (below netfilter), but unicast
+    # RENEW/REBIND traffic rides the IP stack, so on a drop-policy host it must
+    # be opened or the lease silently fails to renew.
+    if (@dvips) {
+        # DHCP client: it RECEIVES on bootpc (68) and SENDS to bootps (67).
+        # Scope each direction to just the needed port rather than both.
+        $body .= "add rule inet filter input udp dport 68 accept comment \"homelab-vrrp-dhcp-in\"\n";
+        $body .= "add rule inet filter output udp dport 67 accept comment \"homelab-vrrp-dhcp-out\"\n"
+            if $have_out;
+    }
+
     if (open my $nf, '>', $NFT) {
         print $nf $body;
         close $nf;
@@ -176,9 +283,12 @@ if (-d '/etc/nftables.d') {
         if (system('sh', '-c', 'nft list chain inet filter input >/dev/null 2>&1') == 0) {
             # drop any prior rules carrying our comments, then re-apply (no flush)
             _nft_delete_by_comment('input',  'homelab-vrrp-allow');
-            _nft_delete_by_comment('output', 'homelab-vrrp-out') if $have_out;
+            _nft_delete_by_comment('output', 'homelab-vrrp-out')      if $have_out;
+            _nft_delete_by_comment('input',  'homelab-vrrp-dhcp-in');
+            _nft_delete_by_comment('output', 'homelab-vrrp-dhcp-out') if $have_out;
             if (system("nft -f $NFT 2>/dev/null") == 0) {
                 print "homelab-keepalived: VRRP firewall opened to { $peerset }"
+                    . (@dvips ? " + DHCP 67/68" : "")
                     . ($have_out ? " (input+output)\n" : " (input)\n");
             } else {
                 warn "homelab-keepalived: WARNING could not apply $NFT live -- effective next nftables reload/boot.\n";
@@ -191,11 +301,32 @@ if (-d '/etc/nftables.d') {
     }
 }
 
-# --- reload / start keepalived -------------------------------------------
+# --- decide reload vs restart --------------------------------------------
+# A reload is fine for value changes (priority, peers, a VIP address). A
+# STRUCTURAL change must restart: compare instance count, use_vmac usage, and
+# notify-hook presence between the old and new configs.
+my $need_restart = 0;
+if ($old_conf ne '') {
+    my $old_inst = () = ($old_conf =~ /^\s*vrrp_instance\s+\S+/mg);
+    my $new_inst = () = ($conf     =~ /^\s*vrrp_instance\s+\S+/mg);
+    my $old_vmac = ($old_conf =~ /use_vmac/)  ? 1 : 0;
+    my $new_vmac = ($conf     =~ /use_vmac/)  ? 1 : 0;
+    my $old_noti = ($old_conf =~ /notify_/)   ? 1 : 0;
+    my $new_noti = ($conf     =~ /notify_/)   ? 1 : 0;
+    $need_restart = 1
+        if $old_inst != $new_inst || $old_vmac != $new_vmac || $old_noti != $new_noti;
+}
+
+# --- reload / start / restart keepalived ---------------------------------
 system(qw(systemctl enable keepalived)) ;
 if (system(qw(systemctl is-active --quiet keepalived)) == 0) {
-    system(qw(systemctl reload keepalived));
-    print "homelab-keepalived: reloaded keepalived\n";
+    if ($need_restart) {
+        system(qw(systemctl restart keepalived));
+        print "homelab-keepalived: RESTARTED keepalived (structural config change)\n";
+    } else {
+        system(qw(systemctl reload keepalived));
+        print "homelab-keepalived: reloaded keepalived\n";
+    }
 } else {
     if (system(qw(systemctl start keepalived)) == 0) {
         print "homelab-keepalived: started keepalived\n";

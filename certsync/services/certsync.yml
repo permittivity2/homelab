@@ -1,0 +1,6 @@
+name: certsync
+package: homelab-certsync
+kind: tls-distribution
+check:
+  systemd_unit: homelab-certsync.timer
+description: "Certificate distribution: pulls this host's TLS certificates from the fleet certificate store, decrypts them locally, installs them atomically and reloads the consuming service. Runs at boot before the service starts, and hourly."

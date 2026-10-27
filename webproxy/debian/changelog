@@ -1,3 +1,15 @@
+homelab-webproxy (0.1.12) unstable; urgency=medium
+
+  * Release v0.1.12
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 12:01:31 -0500
+
+homelab-webproxy (0.1.11) unstable; urgency=medium
+
+  * Release v0.1.11
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 12:00:15 -0500
+
 homelab-webproxy (0.1.10) unstable; urgency=medium
 
   * Release v0.1.10

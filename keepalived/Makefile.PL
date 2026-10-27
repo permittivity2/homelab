@@ -10,7 +10,7 @@ use ExtUtils::MakeMaker;
 # debian/rules' override_dh_install.
 WriteMakefile(
     NAME         => 'Homelab::Keepalived',
-    VERSION      => '0.1.0',
+    VERSION      => '0.1.3',
     ABSTRACT     => 'VRRP virtual-IP failover (keepalived) for the homelab-* edge',
     AUTHOR       => 'Jeff Gardner <mailmasker-api01@forge.name>',
     LICENSE      => 'agpl_3',

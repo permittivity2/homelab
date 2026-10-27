@@ -1,0 +1,126 @@
+#!/bin/sh
+# homelab-keepalived-notify <master|backup|fault>
+#
+# keepalived state-transition hook for "notify-managed" public VIPs -- the
+# ones that must live on a macvlan carrying a SPECIFIC (AT&T reservation)
+# MAC and take their address via DHCP, which keepalived's own
+# virtual_ipaddress mechanism cannot do (it would present the host NIC's MAC
+# or a VRRP 00:00:5e:00:01:xx vMAC that the upstream pfSense/CARP rejects).
+#
+# On MASTER: for each VIP in the spec file, (idempotently) create a macvlan
+# on its parent interface carrying the reservation MAC, bring it up, set a
+# LOOSE rp_filter on it (edge egress is asymmetric -- inbound lands here, the
+# reply leaves via the egress interface -- so a strict rp_filter would DROP
+# the inbound SYN on arrival), and start a renewing dhclient on it (with our
+# minimal lease script + minimal client conf, so the AT&T lease supplies ONLY
+# the address -- never a default route that would hijack the edge's egress,
+# never a resolv.conf rewrite). In static+dhcp mode the static address is
+# assigned immediately for instant failover, with DHCP running alongside to
+# (re)register the reservation MAC with the gateway.
+#
+# A redundant re-notify (keepalived re-fires notify_master on a reload while
+# the node stays master) is a NO-OP when the interface is already correctly
+# owned -- it must NOT release + reacquire, which would flush the live VIP.
+#
+# On BACKUP/FAULT/STOP: release the DHCP lease (best-effort, TIMEBOXED -- a
+# clean DHCPRELEASE from the reserved MAC is nice but must never be allowed to
+# stall) and then DELETE the macvlan. The teardown is the mandatory part: it
+# removes the reservation MAC+IP from this node so two nodes never present the
+# same MAC on the public L2. (Also wired to keepalived notify_stop AND a
+# systemd ExecStopPost drop-in, so a graceful stop OR a crash both tear down.)
+#
+# Spec file (written by homelab-keepalived-apply), one VIP per line:
+#     name parent mac mode address
+# e.g. pub66 eth7 bc:24:11:73:51:b4 static+dhcp 23.116.91.66/29
+set -u
+
+STATE="${1:-}"
+SPEC="${HOMELAB_KEEPALIVED_DHCP_VIPS:-/etc/homelab/keepalived/dhcp-vips.conf}"
+DHSCRIPT="${HOMELAB_KEEPALIVED_DHCLIENT_SCRIPT:-/usr/bin/homelab-keepalived-dhclient-script}"
+DHCONF="${HOMELAB_KEEPALIVED_DHCLIENT_CONF:-/etc/dhcp/homelab-keepalived-vip.conf}"
+# Lease/pid under the paths the stock isc-dhcp-client AppArmor profile already
+# allows (/var/lib/dhcp, /run/dhclient*.pid), so a confined dhclient still works.
+RUNDIR="${HOMELAB_KEEPALIVED_RUNDIR:-/run}"
+LEASEDIR="${HOMELAB_KEEPALIVED_LEASEDIR:-/var/lib/dhcp}"
+
+log() { logger -t homelab-keepalived-notify "$@" 2>/dev/null || true; }
+
+[ -f "$SPEC" ] || exit 0
+
+case "$STATE" in
+    master|MASTER)              action=up   ;;
+    backup|BACKUP|fault|FAULT)  action=down ;;
+    *)                          exit 0      ;;
+esac
+
+mkdir -p "$RUNDIR" "$LEASEDIR" 2>/dev/null || true
+
+while read -r name parent mac mode address; do
+    [ -n "${name:-}" ] || continue
+    case "$name" in \#*) continue ;; esac
+    mode="${mode:-dhcp}"
+    pid="$RUNDIR/dhclient-$name.pid"
+    lease="$LEASEDIR/dhclient-$name.leases"
+    cf=""; [ -f "$DHCONF" ] && cf="-cf $DHCONF"
+
+    if [ "$action" = up ]; then
+        # idempotent macvlan carrying the reservation MAC
+        if ! ip link show "$name" >/dev/null 2>&1; then
+            ip link add "$name" link "$parent" address "$mac" type macvlan mode bridge \
+                || { log "MASTER: FAILED to create macvlan $name on $parent ($mac)"; continue; }
+        fi
+        ip link set dev "$name" address "$mac" 2>/dev/null || true
+        ip link set "$name" up 2>/dev/null || true
+        # loose reverse-path filter on the VIP iface (asymmetric edge egress)
+        sysctl -qw "net.ipv4.conf.$name.rp_filter=2" 2>/dev/null || true
+
+        # NO-OP re-notify guard: if a live dhclient already owns this iface AND
+        # it carries an address, a repeat notify_master (e.g. a reload) must
+        # not release+reacquire -- that would flush the live public VIP.
+        if [ -f "$pid" ] && kill -0 "$(cat "$pid" 2>/dev/null)" 2>/dev/null \
+             && ip -4 addr show dev "$name" 2>/dev/null | grep -q 'inet '; then
+            log "MASTER: $name already owned (live dhclient + address); re-notify no-op"
+            continue
+        fi
+
+        # static+dhcp / static: assign the static address up front for instant
+        # failover (DHCP still runs alongside to register the reservation MAC).
+        case "$mode" in
+            static+dhcp|static)
+                if [ -n "${address:-}" ] && [ "$address" != "-" ]; then
+                    ip addr replace "$address" dev "$name" 2>/dev/null || true
+                    command -v arping >/dev/null 2>&1 && \
+                        arping -U -c 2 -I "$name" "${address%%/*}" >/dev/null 2>&1 || true
+                fi
+                ;;
+        esac
+
+        # Clear any stale dhclient WITHOUT -r: a RELEASE would run the lease
+        # script's flush and wipe the address we may have just set. Just kill it.
+        if [ -f "$pid" ]; then
+            p=$(cat "$pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null || true
+            rm -f "$pid"
+        fi
+        pkill -f "dhclient.* $name\$" 2>/dev/null || true
+
+        if dhclient -4 $cf -sf "$DHSCRIPT" -nw -pf "$pid" -lf "$lease" "$name" >/dev/null 2>&1; then
+            log "MASTER: $name up on $mac ($mode); dhclient launched"
+        else
+            log "MASTER: $name up on $mac ($mode); dhclient exec failed"
+        fi
+    else
+        # best-effort TIMEBOXED release, then MANDATORY teardown
+        if [ -f "$pid" ]; then
+            timeout 3 dhclient -4 $cf -sf "$DHSCRIPT" -r -pf "$pid" -lf "$lease" "$name" >/dev/null 2>&1 || true
+            p=$(cat "$pid" 2>/dev/null); [ -n "$p" ] && kill "$p" 2>/dev/null || true
+            rm -f "$pid"
+        fi
+        pkill -f "dhclient.* $name\$" 2>/dev/null || true
+        ip addr flush dev "$name" 2>/dev/null || true
+        if ip link del "$name" 2>/dev/null; then
+            log "BACKUP/FAULT: $name torn down (macvlan removed)"
+        fi
+    fi
+done < "$SPEC"
+
+exit 0

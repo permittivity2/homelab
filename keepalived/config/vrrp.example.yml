@@ -25,17 +25,42 @@ peers:                         # the OTHER node(s)' IP on their vrrp_interface
   - 10.50.2.77
 auth_pass: hlvrrp              # shared secret (<=8 chars), identical on all peers
 
-# The floating public VIP(s) and which interface each lives on. Use the
-# list form for one-public-IP-per-interface -- all VIPs float together in
-# this single VRRP instance, so whichever node is master owns every one:
+# There are TWO kinds of floating VIP, and a node may use either or both.
+# Whichever node is master owns every VIP listed here; on failover they all
+# move together with this single VRRP instance.
+#
+# 1) keepalived-managed VIPs (`vips:`) -- plain `virtual_ipaddress` entries.
+#    keepalived adds the address to the given interface (using that
+#    interface's own MAC) and sends a gratuitous ARP. Use this for internal
+#    VIPs and for public VIPs where the host NIC's MAC is acceptable
+#    upstream.
 vips:
-  - address: 23.116.91.66/24   # e.g. web + mail
-    interface: eth7
-  - address: 23.116.91.68/24   # e.g. DNS
-    interface: eth6
+  - address: 10.50.2.140/22    # e.g. an internal service-plane VIP
+    interface: eth4
 # Single-VIP shorthand (original form, still supported):
 #   vip: 23.116.91.67/24
 #   vip_interface: eth5
+#
+# 2) notify-managed VIPs (`dhcp_vips:`) -- for a public IP that must present
+#    a SPECIFIC MAC on the wire (an AT&T per-IP DHCP-reservation MAC) and/or
+#    take its address via DHCP. keepalived cannot do this with
+#    virtual_ipaddress (it would use the NIC's MAC, or a VRRP
+#    00:00:5e:00:01:xx vMAC that pfSense/CARP rejects). Instead the
+#    homelab-keepalived-notify hook builds a macvlan on `parent` carrying
+#    `mac`, then runs dhclient on it (minimal lease script: address only, no
+#    default route, no DNS). mode: dhcp = address comes purely from the
+#    lease; static+dhcp = assign `address` immediately (instant failover)
+#    AND run DHCP alongside to re-register the reservation MAC.
+# dhcp_vips:
+#   - name: pub66              # macvlan devname (<=15 chars)
+#     parent: eth7             # public-L2 interface to parent the macvlan on
+#     mac: bc:24:11:73:51:b4   # AT&T reservation MAC for this public IP
+#     mode: dhcp               # dhcp | static+dhcp
+#   - name: pub68
+#     parent: eth6
+#     mac: bc:24:11:8f:08:b4
+#     mode: dhcp
+#     # address: 23.116.91.68/24   # required only for a static+dhcp mode
 
 # OPTIONAL master-only default route via the public gateway, installed on
 # default_route_interface (or the first vip's interface if unset). Backups
