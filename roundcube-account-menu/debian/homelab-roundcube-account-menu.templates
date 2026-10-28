@@ -11,3 +11,14 @@ Description: Public URL of the self-service account app (myaccount.<domain>):
  prompt appears. Leave the default unless this fleet serves the account
  app under a different hostname (e.g. the test environment's
  myaccount.test.mailmasker.org).
+
+Template: homelab-roundcube-account-menu/logo_url
+Type: string
+Default: https://static.mailmasker.org/theme/v1/logo.svg
+Description: URL of the brand logo to show above Roundcube's task rail:
+ Written into config.inc.php's $config['skin_logo'], which elastic
+ honours with no skin-template edit. Serving it from the shared asset
+ host (static.mailmasker.org) rather than copying a file into the skin
+ means a rebrand changes one file and every app -- webmail included --
+ picks it up, with no package rebuild. Set to the empty string to leave
+ Roundcube's own logo alone.

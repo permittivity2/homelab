@@ -91,3 +91,40 @@
 #account-menu ul.menu.listing li a.account-signout {
     border-top: 1px solid rgba(128, 128, 128, 0.25);
 }
+
+/* ---- Logo as a second dropdown trigger --------------------------- */
+
+/* The logo is wrapped in a real <button> (see the JS for why it cannot be
+ * an <a>), so it needs the button chrome stripped back to nothing: the
+ * logo itself IS the control. Sized to fill the header so the whole
+ * top-left area is the hit target, not just the glyph. */
+#layout-menu .popover-header .account-logo-btn {
+    /* Flex, not block: .popover-header centres its content with
+     * line-height, which a block button does not inherit usefully -- the
+     * logo would sit on the text baseline instead of centred. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    color: inherit;
+}
+
+/* Keyboard users need to see where they are. Inset so the ring is not
+ * clipped by the header's own overflow. */
+#layout-menu .popover-header .account-logo-btn:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: -3px;
+}
+
+/* Elastic sizes the logo via `.popover-header img`, which still matches
+ * through the button (descendant selector, so the max-height/max-width
+ * rules keep applying) -- it just needs to stop being inline. */
+#layout-menu .popover-header .account-logo-btn img {
+    display: block;
+}

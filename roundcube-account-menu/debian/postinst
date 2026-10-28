@@ -41,6 +41,15 @@ case "$1" in
         # Strip any trailing slash -- the plugin appends paths/#fragments.
         MYACCOUNT_URL="$(printf '%s' "$MYACCOUNT_URL" | sed 's#/*$##')"
 
+        # RET is cleared FIRST on purpose: debconf leaves the PREVIOUS
+        # question's answer in $RET when a db_get fails, so a missing
+        # logo_url question would silently make skin_logo the myaccount URL
+        # read just above. Empty means "leave Roundcube's own logo alone"
+        # (the -n guard further down), which is the safe failure.
+        RET=""
+        db_get homelab-roundcube-account-menu/logo_url || true
+        LOGO_URL="$RET"
+
         # Mandatory symlink, not a copy -- Roundcube's plugin loader only
         # resolves against /var/lib/roundcube/plugins/, not the $SHARE_DIR
         # this package's files live under. Linking rather than copying
@@ -100,6 +109,33 @@ case "$1" in
             exit 0
         fi
 
+        # Brand logo above the task rail. $config['skin_logo'] is a
+        # supported core option (rcmail_output_html::get_template_logo) --
+        # NOT a skin edit -- so a Roundcube upgrade cannot undo it. An
+        # absolute URL is fine: the <img src> is emitted verbatim, and
+        # pointing it at the shared asset host means a rebrand needs no
+        # rebuild of this package. Same idempotent replace-or-append as
+        # account_menu_url above.
+        if [ -n "$LOGO_URL" ]; then
+            if grep -q "skin_logo" "$RC_CONFIG"; then
+                sed -i "s#\$config\['skin_logo'\] = '[^']*';#\$config['skin_logo'] = '$LOGO_URL';#" "$RC_CONFIG"
+            else
+                {
+                    echo ""
+                    echo "// Added by homelab-roundcube-account-menu's postinst -- do not hand-edit,"
+                    echo "// use dpkg-reconfigure homelab-roundcube-account-menu instead."
+                    echo "\$config['skin_logo'] = '$LOGO_URL';"
+                } >> "$RC_CONFIG"
+            fi
+
+            if ! php -l "$RC_CONFIG" >/dev/null 2>&1; then
+                echo "  ERROR: $RC_CONFIG failed php -l after setting skin_logo -- restoring the backup."
+                cp "$BACKUP" "$RC_CONFIG"
+                db_stop
+                exit 0
+            fi
+        fi
+
         PHP_VERSION="$(ls /etc/php/ 2>/dev/null | sort -V | tail -1)"
         if [ -n "$PHP_VERSION" ]; then
             systemctl restart "php$PHP_VERSION-fpm" \
@@ -114,6 +150,9 @@ case "$1" in
         echo "homelab-roundcube-account-menu configured."
         echo "plugin:  $RC_PLUGIN_DIR -> $OWN_PLUGIN_DIR"
         echo "config:  $RC_CONFIG (account_menu_url = $MYACCOUNT_URL)"
+        if [ -n "$LOGO_URL" ]; then
+            echo "logo:    $LOGO_URL (\$config['skin_logo'])"
+        fi
         echo ""
         ;;
 

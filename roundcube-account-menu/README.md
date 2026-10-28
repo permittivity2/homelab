@@ -28,6 +28,12 @@ of the rail. Clicking it opens a native dropdown with:
   `rcmail_oauth.php` patch) — so signing out of webmail signs out of the
   SSO session, not just the local Roundcube one.
 
+**The brand logo above the rail is a second trigger for the same menu.**
+One menu, two openers — duplicating the markup would duplicate its ids.
+The logo also becomes the Silver Linings logo, served from the shared
+asset host so a rebrand changes one file and every app (webmail
+included) follows with no package rebuild.
+
 It holds **no credential** and **no database role** of its own.
 
 ## How it attaches (elastic specifics)
@@ -49,18 +55,36 @@ template edits**:
   sits — so the JS relocation of the trigger is safe and the popover is
   never re-initialised (which would double-bind it).
 
+- The **logo** lives in elastic's skin *template*, so `add_button()`
+  cannot reach it from PHP. The plugin JS wraps it and calls
+  `UI.popup_init()` — elastic's own public API (`ui.js` exports it so
+  framed/mobile callers can re-init a popup) — which means the logo gets
+  the identical popover, outside-click close, Esc handling and aria
+  wiring as every other elastic dropdown, with no handler of our own.
+  The wrapper is a `<button>`, **never an `<a>`**: elastic's
+  `layout.less` hides anchors inside `.popover-header` on anything wider
+  than a phone (`a { display: none !important; }`), so an anchor wrapper
+  would make the logo vanish on every desktop.
+- The logo itself is set via `$config['skin_logo']`, a supported core
+  option (`rcmail_output_html::get_template_logo`) — again not a skin
+  edit, so a Roundcube upgrade cannot undo it.
+
 The avatar is a CSS circle and the dropdown icons are inline SVG
 data-URIs, so nothing depends on elastic's icon webfont.
 
 ## Config
 
-One debconf value, written to `config.inc.php`:
+Two debconf values, written to `config.inc.php`:
 
 - `homelab-roundcube-account-menu/myaccount_url` →
   `$config['account_menu_url']` (default
   `https://myaccount.mailmasker.org`). The public, browser-reachable
   vhost of the account app. Set it to the test host
   (`https://myaccount.test.mailmasker.org`) in the test environment.
+- `homelab-roundcube-account-menu/logo_url` → `$config['skin_logo']`
+  (default `https://static.mailmasker.org/theme/v1/logo.svg`, the same
+  asset `homelab-webtheme` serves to drive and myaccount). Set it empty
+  to leave Roundcube's own logo alone.
 
 ## Install / upgrade safety
 
