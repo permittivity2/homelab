@@ -43,14 +43,23 @@ class invite_sender extends rcube_plugin
      * there is no second place to remember to bump.
      *
      * src_uri vs uri: about.php prefers src_uri and falls back to uri, so
-     * the Source column shows src_uri. That one points at the git remote
-     * ON PURPOSE and should not be changed to the project site: this plugin
-     * is AGPL, and AGPL-3 section 13 requires offering the CORRESPONDING
-     * SOURCE to anyone using it over a network. projects.thedude.vip serves
-     * the built packages and project pages, not source, so it would not
-     * satisfy that -- it is the project homepage (uri) instead. The GitHub
-     * repo is public; if it ever stops being, this link has to move to
-     * wherever the source actually is, not just be dropped.
+     * the Source column shows src_uri.
+     *
+     * It points at projects.thedude.vip, and that satisfies AGPL-3 section
+     * 13's requirement to offer the CORRESPONDING SOURCE to anyone using
+     * this over a network -- for two reasons, both of which have to stay
+     * true or this link has to move:
+     *
+     *   1. These programs are Perl and PHP. Nothing is compiled, so the
+     *      .deb in that site's APT repository literally CONTAINS the
+     *      source, byte for byte as it is executed. The packages are the
+     *      corresponding source, not merely built from it.
+     *   2. That site carries a licensing section naming AGPL-3.0-or-later
+     *      and linking the full repository.
+     *
+     * If the APT repo ever ships something compiled, or that page loses its
+     * licensing section, this must point somewhere that genuinely offers
+     * source again.
      *
      * AGPL-3.0+, not GPL-3: that is what this repo's LICENSE file and every
      * package's debian/copyright already say. The "+"-suffixed spelling is
@@ -67,7 +76,7 @@ class invite_sender extends rcube_plugin
             'version'     => '__PLUGIN_VERSION__',
             'license'     => 'AGPL-3.0+',
             'uri'         => 'https://projects.thedude.vip',
-            'src_uri'     => 'https://github.com/permittivity2/homelab',
+            'src_uri'     => 'https://projects.thedude.vip',
             'description' => 'Send and revoke account invitations from Settings.',
         ];
     }
