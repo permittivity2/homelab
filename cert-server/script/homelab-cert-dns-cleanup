@@ -18,7 +18,12 @@ my $domain = $ENV{CERTBOT_DOMAIN} or exit 0;
 my $ok = eval {
     my $cfg   = load_config();
     my $token = api_token();
-    my $zone  = zone_for($cfg, $token, $domain) or die "no managed zone for '$domain'\n";
+    # NOT `my $zone = ... or die`: that parses as `(my $zone = ...) or die`
+    # and warns "Possible precedence issue with control flow operator" on
+    # every single challenge, which is noise in the middle of real certbot
+    # output. Same result, said plainly.
+    my $zone  = zone_for($cfg, $token, $domain);
+    die "no managed zone for '$domain'\n" unless $zone;
     my $res   = api_request($cfg, $token, 'DELETE', "/api/v1/domains/$zone/acme-challenge",
         { name => "_acme-challenge.$domain" });
     die(($res->{error} // 'unknown error') . "\n") unless $res && $res->{ok};

@@ -10,6 +10,7 @@ Package: homelab-sso
 Architecture: all
 Depends: perl (>= 5.36),
          homelab-common,
+         homelab-webtheme,
          libmojolicious-perl,
          libyaml-libyaml-perl,
          libmojo-pg-perl,

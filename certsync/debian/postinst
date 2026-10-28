@@ -28,6 +28,15 @@ case "$1" in
         else
             chmod 0600 "$CONFIG"
             systemctl daemon-reload >/dev/null 2>&1 || true
+            # STOP it once, unconditionally, before enabling. Versions <= 0.1.1
+            # shipped Type=oneshot + RemainAfterExit=yes, so the unit sits
+            # "active (exited)" forever -- and daemon-reload does NOT retract
+            # that state from an already-running instance. Starting an
+            # already-active oneshot is a NO-OP, so every timer firing would
+            # silently do nothing and the dead-timer fix would LOOK applied
+            # while the service still never ran. One stop clears it; a oneshot
+            # with no RemainAfterExit returns to inactive on its own after this.
+            systemctl stop homelab-certsync.service >/dev/null 2>&1 || true
             systemctl enable homelab-certsync.service >/dev/null 2>&1 || true
             systemctl enable --now homelab-certsync.timer >/dev/null 2>&1 \
                 || echo "  WARNING could not enable homelab-certsync.timer"

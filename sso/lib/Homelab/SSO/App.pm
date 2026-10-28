@@ -22,6 +22,22 @@ sub startup ($self) {
     my $config = load_config('HOMELAB_SSO_CONFIG', '/etc/homelab/sso/config.yml');
     $self->config($config);
 
+    # Shared web chrome (homelab-webtheme). SSO uses the shared THEME and
+    # FOOTER but deliberately not the shared HEADER: nobody is signed in on an
+    # auth page, so a top bar would render an empty account cluster. The logo
+    # in layouts/auth carries the identity instead.
+    #
+    # app_name is left empty ON PURPOSE. The shared footer reads
+    # "<app_name> is a product of Silver Linings, LLC", and this app's name
+    # is a verb -- "Sign in is a product of..." reads as a bug. Empty makes the
+    # partial fall back to "MailMasker", which is what a visitor here is
+    # actually signing in to.
+    $self->plugin('Homelab::WebTheme' => {
+        app_name   => '',
+        menu_links => [],
+        ($config->{web_theme}{base_url} ? (theme_base => $config->{web_theme}{base_url}) : ()),
+    });
+
     my $srv = $config->{server} // {};
     $self->config(hypnotoad => {
         listen   => [$srv->{listen} // 'http://127.0.0.1:2502'],
