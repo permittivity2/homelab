@@ -58,6 +58,12 @@ sub startup ($self) {
         signout_url => '/logout',
         ($config->{web_theme}{base_url} ? (theme_base => $config->{web_theme}{base_url}) : ()),
         user_email  => sub ($c) { $c->stash('email') // '' },
+        # No "Manage your account" entry -- this IS that page, and a menu
+        # item linking to the page you are already on is just noise.
+        menu_links  => [
+            { href => 'https://mail.mailmasker.org/',  label => 'Email' },
+            { href => 'https://drive.mailmasker.org/', label => 'Drive' },
+        ],
     });
 
     my $srv = $config->{server} // {};

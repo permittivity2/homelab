@@ -1,0 +1,28 @@
+Source: homelab-webtheme
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-webtheme
+Architecture: all
+Depends: ${misc:Depends}, ${perl:Depends}, perl (>= 5.36), libmojolicious-perl
+Description: Shared header, footer and theme for the homelab web apps
+ Gives every homelab Mojolicious app the same chrome -- the Silver Linings
+ logo top-left opening an account dropdown, a shared footer, and one
+ stylesheet -- so the apps read as one product rather than several that
+ happen to share a domain, and so a new app inherits the look instead of
+ re-deciding it.
+ .
+ Adopting it is one line: load the Homelab::WebTheme plugin, then include the
+ homelab/head, homelab/header and homelab/footer partials from a layout.
+ .
+ The stylesheet is NOT shipped here. It is served from
+ static.mailmasker.org/theme/v1/, so a visual change restyles every app with
+ no rebuild and no redeploy. Only the markup ships in this package, because
+ the header is server-rendered (it shows the signed-in address, and rendering
+ it client-side would mean an API round trip and a flash of missing header).
+ Styling is therefore instant; changing the header's STRUCTURE needs a package
+ bump. That split is deliberate.

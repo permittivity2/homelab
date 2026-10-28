@@ -1,3 +1,9 @@
+homelab-accountmanage (0.1.32) unstable; urgency=medium
+
+  * Release v0.1.32
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 19:25:04 -0500
+
 homelab-accountmanage (0.1.31) unstable; urgency=medium
 
   * Release v0.1.31

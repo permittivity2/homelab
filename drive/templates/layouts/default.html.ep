@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+%# Shared chrome: theme.css / shell.js / fonts / favicon all come from
+%# static.mailmasker.org via homelab-webtheme, so a restyle lands on drive,
+%# myaccount and every future app at once with no rebuild. Only the rules
+%# BELOW are drive's own.
+%= include 'homelab/head'
+<title><%= title %></title>
+<style>
+  /* --- Drive-specific components. Dark-only, on the shared Silver Linings
+     palette: the old OS-preference dark override block is GONE -- its values
+     are now the base values, so the app no longer flips between two looks
+     depending on the viewer's system theme setting. (Asserted in
+     t/chrome.t, which greps the rendered page for that at-rule.) --- */
+
+  /* Bytes / human-readable size switch. Lives in the toolbar row rather than
+     the top bar now: the top bar is shared across apps, and a drive-only
+     view preference does not belong in shared chrome. */
+  .size-toggle { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--app-xs); color: var(--text-muted); cursor: pointer; user-select: none; margin-left: auto; }
+  .size-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .size-toggle .switch { position: relative; width: 32px; height: 17px; background: var(--surface-hover); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); flex-shrink: 0; transition: background-color var(--transition-fast); }
+  .size-toggle .switch::before {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px;
+    background: var(--silver-dim); border-radius: 50%; transition: transform var(--transition-fast), background-color var(--transition-fast);
+  }
+  .size-toggle input:checked + .switch { background: var(--accent-steel); border-color: var(--accent-steel); }
+  .size-toggle input:checked + .switch::before { transform: translateX(14px); background: var(--silver-bright); }
+  .size-toggle input:focus-visible + .switch { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+  nav.breadcrumb {
+    display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+    padding: var(--space-3) var(--space-6); font-size: var(--app-base);
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  nav.breadcrumb a { color: var(--text-secondary); text-decoration: none; }
+  nav.breadcrumb a:hover { color: var(--silver-bright); text-decoration: underline; }
+  nav.breadcrumb .sep { color: var(--text-muted); }
+
+  /* Folder drawer toggle + backdrop -- inert on desktop (see the
+     max-width media query below for the actual mobile behavior), kept
+     out of layout entirely rather than just visually hidden so there's
+     no chance of an invisible-but-clickable element on wide screens. */
+  .sidebar-toggle { display: none; }
+  #sidebar-backdrop { display: none; }
+
+  .layout { display: flex; align-items: flex-start; gap: var(--space-6); padding: var(--space-6); }
+  aside {
+    width: 240px; flex-shrink: 0; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: var(--space-4);
+  }
+  aside h2 { font-size: var(--app-xs); text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--text-muted); margin: 0 0 var(--space-3); font-weight: var(--weight-medium); }
+  .folder-list { list-style: none; margin: 0 0 var(--space-4); padding: 0; }
+  .folder-list li {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: var(--space-2); border-radius: var(--radius-md); border: 1px dashed transparent;
+  }
+  .folder-list li:hover { background: var(--surface-hover); }
+  .folder-list li.drag-over { background: rgba(74,93,110,0.30); border-color: var(--silver-medium); }
+  .folder-list a { color: var(--text-primary); text-decoration: none; flex: 1; display: flex; align-items: center; gap: var(--space-1); }
+  .folder-list a:hover { color: var(--silver-bright); }
+  .folder-list form { margin: 0; }
+  .icon-btn { background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: var(--app-sm); padding: 0.15rem 0.3rem; }
+  .icon-btn:hover { color: var(--error); }
+  .empty-hint { color: var(--text-muted); font-size: var(--app-sm); padding: 0.2rem var(--space-2); }
+
+  form.new-folder { display: flex; gap: var(--space-1); }
+  form.new-folder input[type=text] {
+    flex: 1; min-width: 0; padding: var(--space-2); font-size: var(--app-sm);
+    background: var(--black-secondary); color: var(--text-primary);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  }
+  form.new-folder button {
+    padding: var(--space-2) var(--space-3); border: 1px solid var(--accent-steel); border-radius: var(--radius-md);
+    background: var(--accent-steel); color: var(--silver-bright);
+    cursor: pointer; font-size: var(--app-sm);
+  }
+  form.new-folder button:hover { background: #5a7183; }
+  .trash-link {
+    display: inline-flex; align-items: center; gap: var(--space-1); margin-top: var(--space-4);
+    color: var(--text-muted); text-decoration: none; font-size: var(--app-base);
+  }
+  .trash-link:hover { color: var(--silver-bright); text-decoration: underline; }
+
+  main {
+    flex: 1; min-width: 0; position: relative; border-radius: var(--radius-md);
+    border: 2px dashed transparent; transition: background-color var(--transition-fast), border-color var(--transition-fast);
+  }
+  main.drag-over { background: rgba(74,93,110,0.22); border-color: var(--silver-medium); }
+  .drop-hint {
+    display: none; position: sticky; top: 0; z-index: var(--z-base); text-align: center;
+    padding: var(--space-3); margin-bottom: var(--space-4); border-radius: var(--radius-md);
+    background: var(--accent-steel); color: var(--silver-bright); font-size: var(--app-sm); font-weight: var(--weight-semibold);
+  }
+  main.drag-over .drop-hint { display: block; }
+  .upload-progress {
+    display: none; align-items: center; gap: var(--space-2); background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-6); font-size: var(--app-sm); color: var(--text-secondary);
+  }
+  .upload-progress.active { display: flex; }
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid var(--border-strong); border-top-color: var(--silver-bright);
+    border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .error-banner {
+    background: rgba(216,92,92,0.10); border: 1px solid rgba(216,92,92,0.35); color: var(--error);
+    padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); margin-bottom: var(--space-4); font-size: var(--app-base);
+  }
+
+  .upload-bar {
+    display: flex; align-items: center; gap: var(--space-2); background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-6);
+  }
+  .upload-bar input[type=file] { font-size: var(--app-sm); color: var(--text-secondary); min-width: 0; }
+  .upload-bar button {
+    padding: var(--space-2) var(--space-4); border: 1px solid var(--success); border-radius: var(--radius-md);
+    background: var(--success); color: var(--black-primary); font-weight: var(--weight-medium);
+    cursor: pointer; font-size: var(--app-base);
+  }
+  .upload-bar button:hover { background: #6fb18e; border-color: #6fb18e; }
+  .upload-bar button:disabled { background: var(--surface-hover); border-color: var(--border-strong); color: var(--text-muted); cursor: default; }
+  .upload-status { font-size: var(--app-sm); color: var(--text-muted); }
+  .drop-tip { font-size: var(--app-xs); color: var(--text-muted); margin-left: auto; }
+
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+  th, td { text-align: left; padding: var(--space-3) var(--space-4); font-size: var(--app-base); border-bottom: 1px solid var(--border); }
+  th { color: var(--text-muted); font-weight: var(--weight-medium); font-size: var(--app-xs); text-transform: uppercase; letter-spacing: var(--tracking-wide); background: var(--black-secondary); }
+  th[data-sort] { cursor: pointer; user-select: none; white-space: nowrap; }
+  th[data-sort]:hover { color: var(--silver-bright); }
+  th[data-sort]::after { content: ''; display: inline-block; width: 0.9em; }
+  th.sort-asc::after { content: '▲'; font-size: 0.7em; }
+  th.sort-desc::after { content: '▼'; font-size: 0.7em; }
+  tbody tr:hover { background: var(--surface-hover); }
+  tbody tr:last-child td { border-bottom: none; }
+  td a { color: var(--text-primary); text-decoration: none; }
+  td a:hover { color: var(--silver-bright); text-decoration: underline; }
+  .file-actions button {
+    background: none; border: 1px solid var(--border-strong); border-radius: var(--radius-md); padding: 0.25rem var(--space-2);
+    cursor: pointer; font-size: var(--app-xs); color: var(--text-secondary);
+  }
+  .file-actions button:hover { color: var(--error); border-color: var(--error); }
+  .empty-state { padding: var(--space-8); text-align: center; color: var(--text-muted); font-size: var(--app-base); }
+
+  /* ── Bulk select: delete + zip download ── */
+  .select-checkbox { width: 17px; height: 17px; cursor: pointer; accent-color: var(--accent-steel); vertical-align: middle; }
+  .folder-list li .select-checkbox { margin-right: var(--space-2); }
+  th.select-col, td.select-col { width: 2rem; text-align: center; padding-right: 0; }
+
+  .bulk-toolbar {
+    display: none; align-items: center; gap: var(--space-3); background: var(--surface-raised); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-6); font-size: var(--app-sm); color: var(--text-primary);
+  }
+  .bulk-toolbar.active { display: flex; flex-wrap: wrap; }
+  .bulk-toolbar .count { font-weight: var(--weight-semibold); }
+  .bulk-toolbar button { padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: var(--radius-md); cursor: pointer; font-size: var(--app-sm); }
+  .bulk-toolbar .btn-zip { background: var(--accent-steel); border-color: var(--accent-steel); color: var(--silver-bright); }
+  .bulk-toolbar .btn-zip:hover { background: #5a7183; }
+  /* Combine is outlined rather than a second filled colour: three filled
+     buttons side by side made the toolbar read as a traffic light. */
+  .bulk-toolbar .btn-combine { background: none; border-color: var(--silver-dim); color: var(--silver-bright); }
+  .bulk-toolbar .btn-combine:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--silver-medium); }
+  .bulk-toolbar .btn-combine:disabled { border-color: var(--border); color: var(--text-muted); cursor: default; }
+  .bulk-toolbar .btn-delete { background: var(--error); border-color: var(--error); color: var(--black-primary); font-weight: var(--weight-medium); }
+  .bulk-toolbar .btn-delete:hover { background: #e07070; }
+  .bulk-toolbar .btn-clear { background: none; border-color: var(--border-strong); color: var(--text-secondary); }
+  .bulk-toolbar .btn-clear:hover { color: var(--text-primary); border-color: var(--silver-dim); }
+  .bulk-toolbar .zip-status { display: flex; align-items: center; gap: var(--space-1); }
+  .bulk-toolbar .zip-status a { color: var(--success); font-weight: var(--weight-semibold); text-decoration: none; }
+  .bulk-toolbar .zip-status a:hover { text-decoration: underline; }
+  .bulk-toolbar .zip-status .zip-error { color: var(--error); }
+
+  .file-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: var(--radius-sm); vertical-align: middle; margin-right: var(--space-2); cursor: pointer; }
+
+  /* ── Image lightbox / slideshow ──
+     Deliberately NOT tokenised: a photo viewer wants a true black surround
+     and pure-white controls regardless of the app palette, so the image is
+     the only thing with colour on screen. */
+  .lightbox { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; align-items: center; justify-content: center; }
+  .lightbox.hidden { display: none !important; }
+  .lightbox-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.9); }
+  .lightbox-content { position: relative; z-index: 1; max-width: 92vw; max-height: 92vh; display: flex; align-items: center; justify-content: center; }
+  .lightbox-image { max-width: 92vw; max-height: 92vh; object-fit: contain; display: block; }
+
+  .lightbox-nav {
+    position: absolute; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,.4); color: #fff;
+    border: none; font-size: 32px; line-height: 1; width: 48px; height: 48px; border-radius: 50%;
+    cursor: pointer; opacity: 0; transition: opacity 0.15s;
+  }
+  .lightbox-content:hover .lightbox-nav, .lightbox-content.controls-visible .lightbox-nav { opacity: 1; }
+  .lightbox-prev { left: 12px; }
+  .lightbox-next { right: 12px; }
+  .lightbox-nav.hidden { display: none; }
+  .lightbox-nav:disabled { opacity: 0; pointer-events: none; }
+
+  .lightbox-controls {
+    position: absolute; bottom: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: linear-gradient(transparent, rgba(0,0,0,.7)); opacity: 0; transition: opacity 0.15s;
+  }
+  .lightbox-content:hover .lightbox-controls, .lightbox-content.controls-visible .lightbox-controls { opacity: 1; }
+  .lightbox-controls button, .lightbox-btn { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; padding: 4px 6px; }
+  .lightbox-controls button:hover, .lightbox-btn:hover { color: #ccc; }
+  .lightbox-controls button:disabled { color: #666; cursor: default; }
+  .lightbox-speed { display: flex; gap: 2px; }
+  .lightbox-speed button { font-size: 12px; padding: 2px 6px; border: 1px solid rgba(255,255,255,.4); border-radius: 4px; color: #fff; }
+  .lightbox-speed button.active { background: rgba(255,255,255,.25); }
+
+  .lightbox-info {
+    position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between;
+    padding: 10px 14px; background: linear-gradient(rgba(0,0,0,.7), transparent); color: #fff; font-size: 13px;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .lightbox-content:hover .lightbox-info, .lightbox-content.controls-visible .lightbox-info { opacity: 1; }
+
+  /* ── Trash view ── */
+  .trash-head { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-6); border-bottom: 1px solid var(--border); background: var(--surface); }
+  .trash-head h1 { font-size: var(--app-lg); font-weight: var(--weight-light); margin: 0; }
+  .trash-head .back { color: var(--text-secondary); text-decoration: none; font-size: var(--app-base); }
+  .trash-head .back:hover { color: var(--silver-bright); text-decoration: underline; }
+  .trash-head .spacer { flex: 1; }
+  .trash-main { padding: var(--space-6); max-width: 1000px; margin: 0 auto; }
+  .trash-main .note { color: var(--text-muted); font-size: var(--app-sm); margin: 0 0 var(--space-4); line-height: var(--leading-normal); }
+  .empty-btn { padding: var(--space-2) var(--space-4); border: 1px solid var(--error); border-radius: var(--radius-md); background: var(--error); color: var(--black-primary); font-weight: var(--weight-medium); cursor: pointer; font-size: var(--app-base); }
+  .empty-btn:hover:not(:disabled) { background: #e07070; }
+  .empty-btn:disabled { background: var(--surface-hover); border-color: var(--border-strong); color: var(--text-muted); cursor: default; }
+  .kind, .deleted-at { color: var(--text-muted); }
+  .deleted-at { white-space: nowrap; }
+  .row-actions { white-space: nowrap; text-align: right; }
+  .row-actions button { border: 1px solid transparent; border-radius: var(--radius-md); padding: 0.3rem var(--space-2); cursor: pointer; font-size: var(--app-xs); margin-left: 0.35rem; }
+  .btn-restore { background: var(--success); border-color: var(--success); color: var(--black-primary); font-weight: var(--weight-medium); }
+  .btn-restore:hover { background: #6fb18e; }
+  .btn-purge { background: none; color: var(--error); border-color: rgba(216,92,92,0.45); }
+  .btn-purge:hover { background: rgba(216,92,92,0.12); }
+  .overflow { overflow-x: auto; }
+
+  /* ── Mobile (phone/small-tablet) layout ──
+     Single breakpoint, CSS-only -- no server-side device detection like
+     the old homelab-drive-web-ui had (see DEVELOPMENT.md there); this
+     app has no per-request UA branching at all, and a pure media query
+     gets the same visual result without adding any. Three structural
+     changes: the folder sidebar becomes a slide-in drawer instead of a
+     permanent column (there's no room for both it and the file list
+     side by side), the file table scrolls horizontally in its own
+     container instead of blowing out the whole page's width (keeps
+     every column, including sorting, working exactly as on desktop --
+     no parallel mobile-only sort UI needed), and interactive elements
+     get bumped to a real touch target size (~44px, the standard
+     minimum) since a mouse-era 0.85rem icon button is genuinely hard to
+     tap accurately. */
+  @media (max-width: 720px) {
+    nav.breadcrumb { padding: var(--space-2) var(--space-4); }
+    /* "Bytes"/"Human Readable" text labels are the widest thing in the
+       toolbar row -- the switch itself (plus its title= tooltip) is
+       enough once space is tight. */
+    .size-toggle span { display: none; }
+
+    .layout { padding: var(--space-3); gap: var(--space-3); }
+
+    .sidebar-toggle {
+      display: inline-flex; align-items: center; gap: 0.35rem; background: var(--surface); border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); font-size: var(--app-sm); color: var(--text-primary); cursor: pointer;
+      min-height: 44px;
+    }
+    aside {
+      position: fixed; top: 0; left: 0; bottom: 0; width: 82vw; max-width: 300px; z-index: var(--z-overlay);
+      margin: 0; border-radius: 0; overflow-y: auto;
+      transform: translateX(-100%); transition: transform 0.2s ease;
+    }
+    aside.open { transform: translateX(0); box-shadow: 2px 0 16px rgba(0,0,0,.6); }
+    #sidebar-backdrop.open {
+      display: block; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 290;
+    }
+    .folder-list li { padding: var(--space-3) var(--space-2); }
+    .icon-btn { min-width: 40px; min-height: 40px; font-size: 1.05rem; }
+    form.new-folder { flex-wrap: wrap; }
+    form.new-folder input[type=text] { flex: 1 1 100%; }
+    form.new-folder button { flex: 1 1 100%; min-height: 44px; }
+
+    .upload-bar { flex-wrap: wrap; }
+    .upload-bar input[type=file] { flex: 1 1 100%; }
+    .upload-bar button { min-height: 44px; }
+    /* Drag-and-drop doesn't exist on touch -- the hint pointing at a
+       gesture that can't happen here is just noise; the plain
+       <input type=file> above it still works fine (opens the OS file
+       picker/camera on tap). */
+    .drop-tip { display: none; }
+
+    /* The table itself is untouched (same markup, same sort JS) -- it
+       just scrolls sideways inside this wrapper instead of forcing the
+       whole page wider than the viewport. */
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    #files-table { min-width: 560px; }
+    .file-actions button { min-height: 40px; padding: var(--space-2) var(--space-3); }
+
+    .select-checkbox { width: 20px; height: 20px; }
+    .bulk-toolbar button { min-height: 40px; }
+
+    .lightbox-controls button, .lightbox-btn { font-size: 22px; padding: 8px 10px; }
+    .lightbox-nav { width: 42px; height: 42px; font-size: 26px; }
+
+    .trash-main { padding: var(--space-3); }
+  }
+</style>
+</head>
+<body class="app">
+%= include 'homelab/header'
+<%= content %>
+%= include 'homelab/footer'
+</body>
+</html>

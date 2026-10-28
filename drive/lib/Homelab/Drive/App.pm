@@ -91,9 +91,31 @@ sub startup ($self) {
     # Trash only).
     $self->trash_retention_days($config->{trash}{retention_days} // 30);
     $self->public_base_url($config->{public_base_url} // die "config: public_base_url is required\n");
-    # Where the top-right profile button's "Account Management" link points
-    # (homelab-accountmanage). Configurable; sensible fleet default.
-    $self->account_manage_url($config->{account_manage_url} // 'https://myaccount.test.mailmasker.org');
+    # Where the account dropdown's "Manage your account" link points
+    # (homelab-accountmanage). Configurable; the default is the PRODUCTION
+    # host -- it used to be myaccount.test.mailmasker.org, which meant every
+    # prod install that did not set this key (none of them do) pointed users
+    # at the test fleet.
+    $self->account_manage_url($config->{account_manage_url} // 'https://myaccount.mailmasker.org');
+
+    # Shared web chrome (homelab-webtheme): Silver Linings top bar, account
+    # dropdown, footer, and theme.css/shell.js from static.mailmasker.org.
+    #
+    # user_email is a CODEREF reading the `email` stash rather than a stash
+    # value of its own: the login page renders with no signed-in address at
+    # all, and a raw stash scalar would make the shared header explode there.
+    # menu_links drops "Drive" (we ARE drive) and uses the configured account
+    # URL instead of the package default.
+    $self->plugin('Homelab::WebTheme' => {
+        app_name    => 'Drive',
+        signout_url => '/logout',
+        ($config->{web_theme}{base_url} ? (theme_base => $config->{web_theme}{base_url}) : ()),
+        user_email  => sub ($c) { $c->stash('email') // '' },
+        menu_links  => [
+            { href => $self->account_manage_url, label => 'Manage your account' },
+            { href => 'https://mail.mailmasker.org/', label => 'Email' },
+        ],
+    });
 
     my $sso = $config->{sso} // die "config: sso.* is required (see config/drive.example.yml)\n";
     $self->sso_base($sso->{base_url} // die "config: sso.base_url is required\n");

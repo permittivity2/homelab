@@ -1,0 +1,25 @@
+homelab-webtheme (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 19:23:10 -0500
+
+homelab-webtheme (0.1.0) unstable; urgency=medium
+
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 19:06:21 -0500
+
+homelab-webtheme (0.1.0) unstable; urgency=medium
+
+  * Initial release. Shared web chrome for the homelab Mojolicious apps:
+    the Homelab::WebTheme plugin plus homelab/{head,header,footer} partials.
+    The header carries the Silver Linings logo and the account dropdown,
+    using the .profile/.avatar/.menu vocabulary accountmanage and drive had
+    already converged on independently, so adopting it is a style swap rather
+    than a markup rewrite. Everything the partials need is exposed as a
+    HELPER rather than a stash value, so a partial can never be read before
+    it is populated and can never explode on a page that did not think about
+    it (drive's login page is exactly that case).
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 19:10:00 -0500

@@ -1,0 +1,57 @@
+%# Shared application top bar: Silver Linings logo (links home) + the account
+%# dropdown. Identical in every app so the fleet reads as one product.
+%#
+%# Class names deliberately match what homelab-accountmanage and homelab-drive
+%# had ALREADY converged on independently (.profile / .profile-btn / .avatar /
+%# .menu / .menu-item), so adopting this is a style swap, not a markup rewrite.
+%#
+%# $user_email comes from the `homelab_user_email` helper the consuming app
+%# installs -- NOT from a raw stash value. A raw stash scalar breaks on any
+%# template that forgets to pass it (drive's login page did exactly that);
+%# a helper gives the partial a dependable contract.
+% my $email = homelab_user_email();
+% my $app   = homelab_app_name();
+% my $links = homelab_nav_links();
+<header class="topbar">
+  <div class="topbar__brand">
+    <a href="/" aria-label="Home"><img class="topbar__logo" src="<%= theme_base %>/logo.svg" alt="Silver Linings"></a>
+    % if (length $app) {
+      <span class="topbar__app"><%= $app %></span>
+    % }
+  </div>
+  <div class="topbar__spacer"></div>
+  <div class="topbar__actions">
+    % for my $l (@$links) {
+      <a class="btn btn-ghost btn-sm" href="<%= $l->{href} %>"><%= $l->{label} %></a>
+    % }
+    % if (length $email) {
+      <div class="profile">
+        <button class="profile-btn" type="button" data-menu="homelab-account-menu"
+                aria-expanded="false" aria-haspopup="true"
+                title="Account: <%= $email %>">
+          <span class="avatar" aria-hidden="true"><%= uc(substr($email, 0, 1)) %></span>
+          <span class="who"><%= $email %></span>
+          <span class="caret" aria-hidden="true"></span>
+        </button>
+        <div class="menu" id="homelab-account-menu" role="menu">
+          <div class="menu-head">
+            <div class="menu-email"><%= $email %></div>
+            <div class="menu-sub">Signed in</div>
+          </div>
+          % for my $m (@{ homelab_menu_links() }) {
+            <a class="menu-item" role="menuitem" href="<%= $m->{href} %>"><%= $m->{label} %></a>
+          % }
+          % if (@{ homelab_menu_links() }) {
+            <div class="menu-sep"></div>
+          % }
+          %# POST, not a link: a GET sign-out is prefetchable and can be
+          %# triggered cross-site. Both existing apps already POST to /logout,
+          %# which chains through homelab-sso's single-logout.
+          <form method="post" action="<%= homelab_signout_url() %>">
+            <button type="submit" class="menu-item danger" role="menuitem">Sign out</button>
+          </form>
+        </div>
+      </div>
+    % }
+  </div>
+</header>

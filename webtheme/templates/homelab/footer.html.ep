@@ -1,0 +1,6 @@
+%# Shared application footer.
+<footer class="appfoot">
+  <%= homelab_app_name() || 'MailMasker' %> is a product of
+  <a href="https://silverlinings.llc/">Silver Linings,&nbsp;LLC</a>.
+</footer>
+<script src="<%= theme_base %>/shell.js" defer></script>

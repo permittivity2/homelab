@@ -1,0 +1,17 @@
+%# Shared <head> assets for every homelab web app.
+%#
+%# Loads the theme from static.mailmasker.org so a styling change restyles
+%# every app with NO app rebuild -- that is the entire point of centralising.
+%# The version lives in the PATH (/theme/v1/), so the end state is to serve it
+%# immutable and bump to v2 on a change; while the look is still moving the
+%# vhost sends a short max-age instead.
+%#
+%# Fonts are linked here with preconnect rather than @import-ed inside the
+%# stylesheet: as an @import they cost three chained blocking round trips.
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="<%= theme_base %>/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap">
+<link rel="stylesheet" href="<%= theme_base %>/theme.css">

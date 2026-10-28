@@ -50,6 +50,12 @@ ok($app->renderer->helpers->{theme_base},        'theme_base helper installed');
 ok($app->renderer->helpers->{homelab_user_email},'homelab_user_email helper installed');
 is($app->build_controller->homelab_app_name, 'My Account', 'app_name reaches the partials');
 
+# The dropdown must not offer "Manage your account" from inside My Account.
+my $links = $app->build_controller->homelab_menu_links;
+is(scalar(@$links), 2, 'two cross-app links');
+unlike(join(' ', map { "$_->{label} $_->{href}" } @$links), qr/myaccount|Manage your account/,
+    'no menu entry pointing at the page you are already on');
+
 # A DATA-section template plus a test-only route: the layout must be exercised
 # through a REAL template file, because Mojolicious skips layout inheritance
 # entirely for `inline` templates (Renderer.pm: `&& !defined $inline`) -- an
