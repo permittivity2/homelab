@@ -80,13 +80,29 @@ like($live, qr/expires_at IS NULL OR s\.expires_at > NOW\(\)/, 'expired shares a
 like($live, qr/f\.deleted_at IS NULL/,              'a trashed FILE kills its share');
 like($live, qr/d\.deleted_at IS NULL/,              'a trashed FOLDER kills its share');
 
-# --- a file inside a shared folder must be re-checked against that folder ---
-# Without the folder_id in this WHERE, any file id could be fetched through
-# any folder token, turning one shared folder into a key to the whole drive.
+# --- folder shares are RECURSIVE, and the subtree is a CLOSED set ---
+# Recursive because that is what sharing a folder means everywhere else;
+# the first cut listed only the top level, which protected nothing and
+# silently hid content the owner believed they had shared.
+my ($tree) = $src =~ /(sub _share_tree_sql .*?\n\})/s;
+ok($tree, 'found the share-subtree CTE');
+like($tree, qr/WITH RECURSIVE/,                  'the subtree is computed recursively');
+like($tree, qr/JOIN share_tree t ON f\.parent_folder_id = t\.id/, 'it walks parent -> child');
+# In the RECURSIVE step, so trashing an intermediate folder prunes its whole
+# subtree instead of leaving orphans reachable.
+my ($recur) = $tree =~ /UNION ALL(.*)\z/s;
+like($recur, qr/deleted_at IS NULL/,             'a trashed folder prunes everything beneath it');
+
 my ($inf) = $src =~ /(sub _file_in_shared_folder .*?\n\})/s;
 ok($inf, 'found _file_in_shared_folder');
-like($inf, qr/WHERE id = \? AND folder_id = \?/, 'the file is scoped to the shared folder');
+like($inf, qr/folder_id IN \(SELECT id FROM share_tree\)/,
+    'a file must live somewhere INSIDE the shared subtree');
 like($inf, qr/deleted_at IS NULL/,               'and must not be trashed');
+
+my ($fis) = $src =~ /(sub _folder_in_share .*?\n\})/s;
+ok($fis, 'found _folder_in_share');
+like($fis, qr/SELECT id, name, parent_folder_id FROM share_tree WHERE id = \?/,
+    'browsing is confined to the shared subtree');
 
 # --- revoke is owner-scoped in the WHERE, not checked afterwards ---
 my ($rev) = $src =~ /(sub revoke_share .*?\n\})/s;
@@ -116,7 +132,10 @@ ok(-f "templates/$_.html.ep", "template $_ ships") for qw(share_gone share_file 
         'drive.folders' => [qw(id user_email name parent_folder_id deleted_at)],
     );
     my ($pub) = $src =~ /(sub public_share .*?\n\})/s;
-    my ($sel) = $pub =~ /SELECT\s+(.*?)\s+FROM drive\.files/s;
+    # (?!FROM) stops the capture crossing an earlier SELECT: public_share
+    # now queries drive.folders BEFORE drive.files, and a plain .*? happily
+    # spanned both and "found" a folders column in the files list.
+    my ($sel) = $pub =~ /SELECT\s+((?:(?!FROM)[\s\S])*?)\s+FROM drive\.files/;
     ok($sel, 'found the folder-listing SELECT');
     for my $col (map { s/\s//gr } split /,/, ($sel // '')) {
         next unless $col =~ /\A\w+\z/;

@@ -204,6 +204,7 @@ sub startup ($self) {
     # no `under` guard (every handler authenticates itself), so "public" here
     # simply means not calling _current_email. Nothing to exempt.
     $r->get('/s/:token')                      ->to('drive#public_share');
+    $r->get('/s/:token/f/:fid')               ->to('drive#public_share');
     $r->get('/s/:token/download')             ->to('drive#public_download');
     $r->get('/s/:token/thumbnail')            ->to('drive#public_thumbnail');
     $r->get('/s/:token/files/:fid/download')  ->to('drive#public_folder_file');
@@ -2117,17 +2118,79 @@ sub public_share ($c) {
         return $c->render(template => 'share_file', share => $sh,
             is_image => (($sh->{mime_type} // '') =~ m{^image/} ? 1 : 0));
     }
-    # A folder share lists the folder's own files -- NOT its subfolders.
-    # Recursing would silently widen what the owner shared, and they chose
-    # one folder. Subfolders can be shared on their own.
+    # A folder share is RECURSIVE: the whole subtree, not just the top
+    # level. That is what every other drive product does and what people
+    # mean by "I shared that folder" -- the first cut listed only the
+    # folder's own files, which did not protect anything, it just silently
+    # hid content the owner believed they had shared.
+    #
+    # Browsing is one folder at a time rather than one giant flat list, so a
+    # deep share stays navigable. $fid is the folder being viewed; absent
+    # means the share's own root.
+    my $fid = $c->param('fid');
+    my $here = defined $fid && length $fid
+        ? _folder_in_share($c, $sh, $fid)
+        : $c->app->pg->db->query(
+            'SELECT id, name, parent_folder_id FROM drive.folders WHERE id = ? AND deleted_at IS NULL',
+            $sh->{folder_id})->hash;
+    # A folder id outside the shared subtree is a 404, exactly like a bad
+    # token -- see _folder_in_share.
+    return $c->render(template => 'share_gone', status => 404) unless $here;
+
     # uploaded_at, NOT created_at -- drive.files uses the former. Guessing
     # the latter is what made the folder landing page 500 on first deploy.
     my $files = $c->app->pg->db->query(
         q{SELECT id, filename, size_bytes, mime_type, uploaded_at
             FROM drive.files
            WHERE folder_id = ? AND deleted_at IS NULL
-           ORDER BY filename}, $sh->{folder_id})->hashes->to_array;
-    return $c->render(template => 'share_folder', share => $sh, files => $files);
+           ORDER BY filename}, $here->{id})->hashes->to_array;
+    my $subfolders = $c->app->pg->db->query(
+        q{SELECT id, name FROM drive.folders
+           WHERE parent_folder_id = ? AND deleted_at IS NULL
+           ORDER BY name}, $here->{id})->hashes->to_array;
+
+    # Trail back to the share's root, so a visitor can climb out of a
+    # subfolder. It stops AT the shared folder and never above it -- the
+    # share's root is the visitor's whole world.
+    my @trail;
+    my $walk = $here;
+    while ($walk && $walk->{id} != $sh->{folder_id}) {
+        unshift @trail, { id => $walk->{id}, name => $walk->{name} };
+        last unless defined $walk->{parent_folder_id};
+        $walk = $c->app->pg->db->query(
+            'SELECT id, name, parent_folder_id FROM drive.folders WHERE id = ? AND deleted_at IS NULL',
+            $walk->{parent_folder_id})->hash;
+    }
+
+    return $c->render(template => 'share_folder', share => $sh, files => $files,
+        subfolders => $subfolders, here => $here, trail => \@trail);
+}
+
+# Every descendant of the shared folder, including itself. ONE recursive CTE
+# used by every folder-share lookup, so "what is inside this share" is
+# decided in exactly one place.
+#
+# The deleted_at filter is in the RECURSIVE step on purpose: trashing an
+# intermediate folder prunes its whole subtree from the share, rather than
+# leaving its children reachable through a parent that no longer exists.
+sub _share_tree_sql { return q{
+    WITH RECURSIVE share_tree AS (
+        SELECT id, name, parent_folder_id FROM drive.folders
+         WHERE id = ? AND deleted_at IS NULL
+        UNION ALL
+        SELECT f.id, f.name, f.parent_folder_id FROM drive.folders f
+          JOIN share_tree t ON f.parent_folder_id = t.id
+         WHERE f.deleted_at IS NULL
+    )}; }
+
+# Is this folder inside the shared subtree? Anything else is refused --
+# without this, a folder id from elsewhere in the owner's drive could be
+# browsed through someone else's share token.
+sub _folder_in_share ($c, $sh, $fid) {
+    return undef unless $sh && $sh->{folder_id} && defined $fid && $fid =~ /\A\d+\z/;
+    return $c->app->pg->db->query(
+        _share_tree_sql() . q{ SELECT id, name, parent_folder_id FROM share_tree WHERE id = ?},
+        $sh->{folder_id}, $fid)->hash;
 }
 
 # The file behind a single-file share.
@@ -2154,10 +2217,17 @@ sub public_thumbnail ($c) {
 # a key to the whole drive.
 sub _file_in_shared_folder ($c, $sh, $fid) {
     return undef unless $sh && $sh->{folder_id} && defined $fid && $fid =~ /\A\d+\z/;
+    # IN the shared subtree, not just the top folder -- a recursive share
+    # has to serve files from subfolders too. Still a closed set: the file's
+    # folder must be a descendant of the shared folder, so a file id from
+    # elsewhere in the owner's drive is refused exactly as before.
     return $c->app->pg->db->query(
-        q{SELECT id, filename, uuid, mime_type FROM drive.files
-           WHERE id = ? AND folder_id = ? AND deleted_at IS NULL},
-        $fid, $sh->{folder_id})->hash;
+        _share_tree_sql() . q{
+            SELECT f.id, f.filename, f.uuid, f.mime_type
+              FROM drive.files f
+             WHERE f.id = ? AND f.deleted_at IS NULL
+               AND f.folder_id IN (SELECT id FROM share_tree)},
+        $sh->{folder_id}, $fid)->hash;
 }
 
 sub public_folder_file ($c) {

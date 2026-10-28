@@ -1,23 +1,44 @@
 % layout 'default';
-% title ($share->{folder_name} // 'Shared folder') . ' — Drive';
+% title ($here->{name} // $share->{folder_name} // 'Shared folder') . ' — Drive';
 <div class="layout" style="justify-content:center;">
   <main style="max-width:52em;">
     <p class="muted" style="margin:0 0 var(--space-2);">
       <%= $share->{owner_email} %> shared a folder with you
     </p>
-    <h1 style="font-size:var(--app-xl);font-weight:var(--weight-light);margin:0 0 var(--space-4);">
-      📁 <%= $share->{folder_name} %>
-    </h1>
-    % if (!@$files) {
+
+    %# Trail back to the share's root only. A visitor can climb out of a
+    %# subfolder but never above the folder that was shared -- that is their
+    %# whole world here.
+    <nav class="breadcrumb" style="padding-left:0;padding-right:0;background:none;border:0;">
+      <a href="/s/<%= $share->{token} %>">📁 <%= $share->{folder_name} %></a>
+      % for my $t (@$trail) {
+        <span class="sep">/</span>
+        % if ($t->{id} == $here->{id}) {
+          <span><%= $t->{name} %></span>
+        % } else {
+          <a href="/s/<%= $share->{token} %>/f/<%= $t->{id} %>"><%= $t->{name} %></a>
+        % }
+      % }
+    </nav>
+
+    % if (!@$subfolders && !@$files) {
       <p class="muted">This folder is empty.</p>
     % } else {
-      %# The folder's OWN files only -- subfolders are not followed. Recursing
-      %# would silently widen what was shared; a subfolder can be shared on
-      %# its own if that is what is wanted.
       <div class="table-scroll">
         <table>
           <thead><tr><th></th><th>Name</th><th>Size</th><th></th></tr></thead>
           <tbody>
+          %# Folders first, then files -- same ordering the signed-in view uses.
+          % for my $d (@$subfolders) {
+            <tr>
+              <td style="width:52px;">📁</td>
+              <td><a href="/s/<%= $share->{token} %>/f/<%= $d->{id} %>"><%= $d->{name} %></a></td>
+              <td class="muted">&mdash;</td>
+              <td class="file-actions">
+                <a class="btn btn-secondary" href="/s/<%= $share->{token} %>/f/<%= $d->{id} %>">Open</a>
+              </td>
+            </tr>
+          % }
           % for my $f (@$files) {
             <tr>
               <td style="width:52px;">
