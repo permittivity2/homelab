@@ -36,6 +36,41 @@
  */
 class homelab_account_menu extends rcube_plugin
 {
+    /**
+     * Metadata for Settings -> About -> Installed plugins.
+     *
+     * Roundcube tries a static info() FIRST and only falls back to a
+     * composer.json -- and that fallback looks under
+     * INSTALL_PATH/plugins/<name>/composer.json, which on Debian never
+     * matches these plugins: they are symlinked into
+     * /var/lib/roundcube/plugins/ and INSTALL_PATH is /usr/share/roundcube.
+     * So info() is not merely the tidier option here, it is the one that
+     * works. Without it the About dialog showed "--" for version and a blank
+     * licence.
+     *
+     * The version string is substituted at BUILD time from debian/changelog
+     * (see debian/rules), so it always matches the installed package and
+     * there is no second place to remember to bump.
+     *
+     * AGPL-3.0+, not GPL-3: that is what this repo's LICENSE file and every
+     * package's debian/copyright already say. The "+"-suffixed spelling is
+     * deliberate -- it is a key in rcube_plugin_api's own $license_uris map,
+     * so the About dialog renders it as a link, whereas the SPDX spelling
+     * "AGPL-3.0-or-later" used in debian/copyright is not and would render
+     * as plain text.
+     */
+    public static function info()
+    {
+        return [
+            'name'        => 'homelab_account_menu',
+            'vendor'      => 'silverlinings',
+            'version'     => '__PLUGIN_VERSION__',
+            'license'     => 'AGPL-3.0+',
+            'uri'         => 'https://github.com/permittivity2/homelab',
+            'description' => 'Account dropdown behind the brand logo, matching the other homelab web apps.',
+        ];
+    }
+
     // Empty task: the rail is app-wide chrome, so this must load on
     // every task (mail/contacts/settings), not just one.
     public $task = '';

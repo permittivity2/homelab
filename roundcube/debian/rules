@@ -30,6 +30,14 @@ override_dh_install:
 		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/localization/en_US.inc
 	install -D -m 644 services/roundcube.yml \
 		debian/homelab-roundcube/usr/share/homelab-roundcube/services/roundcube.yml
+	# Stamp the plugin's own version into its static info(), which is
+	# what Settings -> About reads. Taken from debian/changelog so it
+	# always matches the installed package and there is no second
+	# place to bump. Fails the build loudly if the placeholder is
+	# ever renamed or lost rather than silently shipping "--".
+	grep -q __PLUGIN_VERSION__ debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/recipient_blocking.php
+	sed -i "s/__PLUGIN_VERSION__/$$(dpkg-parsechangelog -S Version)/" \
+		debian/homelab-roundcube/usr/share/roundcube/plugins/recipient_blocking/recipient_blocking.php
 
 override_dh_auto_build:
 	# Nothing to compile

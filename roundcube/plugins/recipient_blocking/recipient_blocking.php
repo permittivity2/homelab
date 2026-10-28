@@ -36,6 +36,41 @@
  */
 class recipient_blocking extends rcube_plugin
 {
+    /**
+     * Metadata for Settings -> About -> Installed plugins.
+     *
+     * Roundcube tries a static info() FIRST and only falls back to a
+     * composer.json -- and that fallback looks under
+     * INSTALL_PATH/plugins/<name>/composer.json, which on Debian never
+     * matches these plugins: they are symlinked into
+     * /var/lib/roundcube/plugins/ and INSTALL_PATH is /usr/share/roundcube.
+     * So info() is not merely the tidier option here, it is the one that
+     * works. Without it the About dialog showed "--" for version and a blank
+     * licence.
+     *
+     * The version string is substituted at BUILD time from debian/changelog
+     * (see debian/rules), so it always matches the installed package and
+     * there is no second place to remember to bump.
+     *
+     * AGPL-3.0+, not GPL-3: that is what this repo's LICENSE file and every
+     * package's debian/copyright already say. The "+"-suffixed spelling is
+     * deliberate -- it is a key in rcube_plugin_api's own $license_uris map,
+     * so the About dialog renders it as a link, whereas the SPDX spelling
+     * "AGPL-3.0-or-later" used in debian/copyright is not and would render
+     * as plain text.
+     */
+    public static function info()
+    {
+        return [
+            'name'        => 'recipient_blocking',
+            'vendor'      => 'silverlinings',
+            'version'     => '__PLUGIN_VERSION__',
+            'license'     => 'AGPL-3.0+',
+            'uri'         => 'https://github.com/permittivity2/homelab',
+            'description' => 'Block delivery to one of your own addresses, from the message view or Settings.',
+        ];
+    }
+
     // Empty -- always active, every task, including tasks this plugin
     // knows nothing about (e.g. login, before auth). Needed because the
     // taskbar icon (added unconditionally below) has to render no

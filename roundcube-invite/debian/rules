@@ -11,3 +11,14 @@
 	dh $@
 
 override_dh_auto_test:
+
+# Stamp the plugin's own version into its static info(), which is what
+# Settings -> About reads. Taken from debian/changelog so it always matches
+# the installed package and there is no second place to bump. The grep fails
+# the build loudly if the placeholder is ever renamed or lost, rather than
+# silently shipping "--" again.
+override_dh_install:
+	dh_install
+	grep -q __PLUGIN_VERSION__ debian/homelab-roundcube-invite/usr/share/homelab-roundcube-invite/plugins/invite_sender/invite_sender.php
+	sed -i "s/__PLUGIN_VERSION__/$$(dpkg-parsechangelog -S Version)/" \
+		debian/homelab-roundcube-invite/usr/share/homelab-roundcube-invite/plugins/invite_sender/invite_sender.php
