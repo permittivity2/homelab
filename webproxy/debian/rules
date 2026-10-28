@@ -11,6 +11,8 @@ override_dh_install:
 		debian/homelab-webproxy/usr/share/homelab-webproxy/config/vhost.conf.template
 	install -D -m 644 config/sites.example.yml \
 		debian/homelab-webproxy/usr/share/homelab-webproxy/config/sites.example.yml
+	install -D -m 644 nginx/00-catchall.conf \
+		debian/homelab-webproxy/usr/share/homelab-webproxy/nginx/00-catchall.conf
 	install -D -m 644 systemd/homelab-webproxy-pull.service \
 		debian/homelab-webproxy/lib/systemd/system/homelab-webproxy-pull.service
 	install -D -m 644 systemd/homelab-webproxy-pull.timer \

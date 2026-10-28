@@ -20,6 +20,51 @@ case "$1" in
                 || echo "  WARNING: homelab-webproxy-apply-sites reported a problem — see output above."
         fi
 
+        # --- catch-all for names this edge has no vhost for -------------
+        # Installed here rather than hand-placed so all three edge nodes get
+        # it from apt (only one is ever powered on at a time) and a freshly
+        # cloned standby gets it too. See nginx/00-catchall.conf for what it
+        # fixes and why.
+        CATCHALL_SRC="$SHARE_DIR/nginx/00-catchall.conf"
+        CATCHALL_DST=/etc/nginx/conf.d/00-catchall.conf
+        STOCK_DEFAULT=/etc/nginx/sites-enabled/default
+        if [ -f "$CATCHALL_SRC" ] && [ -d /etc/nginx/conf.d ]; then
+            install -m 644 "$CATCHALL_SRC" "$CATCHALL_DST"
+
+            # Ubuntu's stock `default` site claims `listen 80 default_server`,
+            # so BOTH cannot be enabled -- nginx refuses to start with "a
+            # duplicate default server". Disabling the stock one is also the
+            # point: it is what served the "Welcome to nginx!" page. Its only
+            # other content is a certbot-added :443 block for
+            # smtp/imap.mailmasker.org serving that SAME welcome page (imap.
+            # does not even resolve), so nothing of value is lost. If an
+            # autoconfig endpoint is ever wanted on those names it belongs in
+            # sites.yml like every other vhost.
+            if [ -e "$STOCK_DEFAULT" ]; then
+                mv "$STOCK_DEFAULT" /etc/nginx/sites-available/.default.disabled-by-homelab-webproxy 2>/dev/null \
+                    || rm -f "$STOCK_DEFAULT"
+                echo "  disabled nginx's stock 'default' site (it claimed :80 default_server)"
+            fi
+
+            # Validate before reloading. A broken config here would take down
+            # EVERY vhost on the only powered-on edge, so roll back rather
+            # than reload on failure. ssl_reject_handshake needs nginx
+            # >= 1.19.4; an older nginx fails `nginx -t` here and gets the
+            # rollback, not an outage.
+            if nginx -t >/dev/null 2>&1; then
+                systemctl reload nginx >/dev/null 2>&1 \
+                    || echo "  WARNING: nginx reload failed -- run 'systemctl status nginx'."
+                echo "  catch-all active: unknown Host -> 404, unknown SNI -> rejected handshake"
+            else
+                echo "  ERROR: nginx -t failed with the catch-all in place -- rolling it back."
+                rm -f "$CATCHALL_DST"
+                if [ -f /etc/nginx/sites-available/.default.disabled-by-homelab-webproxy ]; then
+                    mv /etc/nginx/sites-available/.default.disabled-by-homelab-webproxy "$STOCK_DEFAULT"
+                fi
+                nginx -t 2>&1 | tail -3
+            fi
+        fi
+
         # Pull-model refresh timer: re-run apply-sites so any 'discover:'
         # site (e.g. the roundcube pool) tracks the live fleet. No-op unless
         # a site uses discover: + top-level api_base is set.
