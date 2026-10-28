@@ -75,6 +75,24 @@ case "$1" in
         # -- PowerDNS's own default is to not expect/honor a PROXY
         # protocol header from anyone, i.e. today's existing behavior.
         [ -n "$PROXY_PROTOCOL_FROM" ] && echo "proxy-protocol-from=$PROXY_PROTOCOL_FROM" >> "$MARKER"
+
+        # SOA template for NEWLY created zones. PowerDNS's own built-in
+        # default is literally:
+        #
+        #   a.misconfigured.dns.server.invalid hostmaster.@ 0 10800 3600 604800 3600
+        #
+        # so every zone created without an explicit SOA advertises, to the
+        # whole internet, a primary nameserver named "misconfigured" under
+        # the reserved .invalid TLD -- which can never resolve. Found live
+        # 2026-10-27 on all 17 fleet zones; they were corrected in place,
+        # and this stops the next one being born the same way.
+        #
+        # `@` is PowerDNS's own substitution for the zone name, so this is
+        # per-domain automatically: a new example.org gets
+        # ns1.example.org / hostmaster20261027.example.org, matching the
+        # ns1./ns2. NS records the fleet already uses. The serial field is
+        # 0 because SOA-EDIT-API=DEFAULT replaces it on first write.
+        echo "default-soa-content=ns1.@ hostmaster20261027.@ 0 10800 3600 604800 3600" >> "$MARKER"
         chmod 640 "$MARKER"
         chgrp pdns "$MARKER" 2>/dev/null || true
         echo "  wrote $MARKER (role: $ROLE)"
