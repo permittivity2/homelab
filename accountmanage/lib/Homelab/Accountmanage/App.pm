@@ -43,6 +43,23 @@ sub startup ($self) {
     my $config = load_config('HOMELAB_ACCOUNTMANAGE_CONFIG', '/etc/homelab/accountmanage/config.yml');
     $self->config($config);
 
+    # Shared web chrome (homelab-webtheme): the Silver Linings top bar, the
+    # account dropdown, the footer, and theme.css/shell.js loaded from
+    # static.mailmasker.org. Registering the plugin is all that is needed --
+    # it appends its own template path and installs the helpers the shared
+    # partials read, so `%= include 'homelab/header'` just works.
+    #
+    # user_email is a CODEREF, not a stash value: the dashboard renders with
+    # `email => ...` while the login page has no signed-in address at all.
+    # The resolver lets the shared header render the account menu on the one
+    # and silently omit it on the other, with no per-template bookkeeping.
+    $self->plugin('Homelab::WebTheme' => {
+        app_name    => 'My Account',
+        signout_url => '/logout',
+        ($config->{web_theme}{base_url} ? (theme_base => $config->{web_theme}{base_url}) : ()),
+        user_email  => sub ($c) { $c->stash('email') // '' },
+    });
+
     my $srv = $config->{server} // {};
     $self->config(hypnotoad => {
         listen   => [$srv->{listen} // 'http://127.0.0.1:2503'],

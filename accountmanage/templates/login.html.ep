@@ -1,28 +1,44 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+%# Shared theme, but NOT the shared header: there is no signed-in user here,
+%# so a top bar would render an empty account cluster. A centred auth card is
+%# the right chrome for this one page -- the logo carries the identity.
+%= include 'homelab/head'
   <title>Sign in — My Account</title>
   <style>
-    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #f6f7f9; color: #1a1a1a;
-           display: flex; min-height: 100vh; align-items: center; justify-content: center; padding: 1rem; }
-    .box { background: #fff; border: 1px solid #e3e5e9; border-radius: 12px; padding: 2rem; max-width: 380px; width: 100%; text-align: center; box-shadow: 0 8px 24px rgba(0,0,0,.06); }
-    h1 { font-size: 1.2rem; margin: 0 0 0.5rem; }
-    p { color: #6b7280; font-size: 0.92rem; margin: 0 0 1.25rem; }
-    .err { color: #d1453b; font-size: 0.9rem; margin-bottom: 1rem; }
-    .btn { display: inline-block; background: #3562d4; color: #fff; text-decoration: none; padding: 0.6rem 1.2rem; border-radius: 8px; font-size: 0.95rem; }
-    .btn:hover { background: #2a4fb0; }
+    body {
+      margin: 0; display: flex; min-height: 100vh;
+      align-items: center; justify-content: center; padding: var(--space-4);
+      background: var(--black-primary);
+    }
+    .box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-md); padding: var(--space-8) var(--space-6);
+      max-width: 380px; width: 100%; text-align: center; box-shadow: var(--shadow-lg);
+    }
+    .box img { height: 32px; width: auto; margin-bottom: var(--space-6); }
+    .box h1 { font-size: var(--app-lg); font-weight: var(--weight-light); letter-spacing: var(--tracking-tight); margin: 0 0 var(--space-2); }
+    .box p { color: var(--text-muted); font-size: var(--app-base); margin: 0 0 var(--space-6); line-height: var(--leading-normal); }
+    .err {
+      color: var(--error); font-size: var(--app-base); margin-bottom: var(--space-4);
+      padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
+      background: rgba(216,92,92,0.10); border: 1px solid rgba(216,92,92,0.35);
+    }
+    .foot { margin-top: var(--space-6); font-size: var(--app-xs); color: var(--text-muted); }
+    .foot a { color: var(--silver-dim); }
   </style>
 </head>
 <body>
   <div class="box">
-    <h1>🔐 My Account</h1>
+    <img src="<%= theme_base %>/logo.svg" alt="Silver Linings">
+    <h1>My Account</h1>
 % if (my $error = stash 'error') {
     <div class="err"><%= $error %></div>
 % }
-    <p>Manage your homelab account — profile, sessions, storage, and more.</p>
-    <a class="btn" href="/login">Sign in with Homelab SSO</a>
+    <p>Manage your account — profile, sessions, storage, and more.</p>
+    <a class="btn btn-primary" href="/login">Sign in with Homelab SSO</a>
+    <div class="foot">A product of <a href="https://silverlinings.llc/">Silver Linings,&nbsp;LLC</a>.</div>
   </div>
 </body>
 </html>

@@ -1,72 +1,52 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+%# Shared chrome: theme.css + fonts + favicon all come from
+%# static.mailmasker.org via homelab-webtheme, so a restyle needs no rebuild
+%# of this package. Only the APP-SPECIFIC rules below live here.
+%= include 'homelab/head'
   <title><%= title %></title>
   <style>
-    /* --- Shared homelab visual language (kept intentionally simple so it
-       ports cleanly to the other apps' top bars). --- */
+    /* --- Bridge from this app's original token names onto the shared theme's.
+       Only the four that are still REFERENCED are kept: the inline JS below
+       writes style="color:var(--danger)" into markup it builds, and the panel
+       partials use --muted/--ok/--text, so renaming them would mean editing
+       ~60 call sites in JavaScript strings for no gain. Everything else now
+       uses the theme's own token names directly. --border is deliberately NOT
+       redefined here -- the theme already owns it. --- */
     :root {
-      --bg: #f6f7f9; --card: #ffffff; --border: #e3e5e9;
-      --text: #1a1a1a; --muted: #6b7280;
-      --accent: #3562d4; --accent-hover: #2a4fb0;
-      --danger: #d1453b; --ok: #1f9d55;
-      --radius: 10px;
+      --text:   var(--text-primary);
+      --muted:  var(--text-muted);
+      --danger: var(--error);
+      --ok:     var(--success);
+      /* Wider than the theme's 1200px default: the Administration pane holds
+         fleet tables and the topology map, which were on a 1400px main before
+         and get cramped at 1200. Set as a token so .container just follows. */
+      --container-max-width: 1400px;
     }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--bg); }
 
-    /* Top bar with the Google-style profile button on the right. */
-    .topbar {
-      display: flex; align-items: center; gap: 1rem;
-      padding: 0.7rem 1.25rem; background: var(--card); border-bottom: 1px solid var(--border);
-      position: sticky; top: 0; z-index: 20;
-    }
-    .brand { font-weight: 700; font-size: 1.05rem; display: flex; align-items: center; gap: 0.45rem; }
-    .topbar .spacer { flex: 1; }
-    .profile { position: relative; }
-    .profile-btn {
-      display: flex; align-items: center; gap: 0.5rem; cursor: pointer;
-      background: none; border: 1px solid transparent; border-radius: 999px; padding: 0.25rem 0.5rem 0.25rem 0.3rem;
-      font: inherit; color: var(--text);
-    }
-    .profile-btn:hover { background: #eef1f6; }
-    .avatar {
-      width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff;
-      display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.95rem; flex: none;
-    }
-    .profile-btn .who { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
-    .profile-btn .caret { color: var(--muted); font-size: 0.7rem; }
-    .menu {
-      display: none; position: absolute; right: 0; top: calc(100% + 0.4rem);
-      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-      box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 220px; overflow: hidden;
-    }
-    .menu.open { display: block; }
-    .menu-email { padding: 0.7rem 0.9rem; color: var(--muted); font-size: 0.82rem; border-bottom: 1px solid var(--border); word-break: break-all; }
-    .menu form { margin: 0; }
-    .menu-item {
-      display: block; width: 100%; text-align: left; background: none; border: none; cursor: pointer;
-      padding: 0.7rem 0.9rem; font: inherit; color: var(--text); text-decoration: none;
-    }
-    .menu-item:hover { background: #f0f2f5; }
-    .menu-item.danger { color: var(--danger); }
-
-    main { max-width: 1400px; margin: 0 auto; padding: 1.5rem 2rem 3rem; }
-    h1.page { font-size: 1.4rem; margin: 0.2rem 0 1.25rem; }
+    h1.page { font-size: var(--app-xl); font-weight: var(--weight-light); letter-spacing: var(--tracking-tight); margin: 0 0 var(--space-6); }
 
     /* Two-pane settings layout: options on the left, selected section on
-       the right. Sections are all present; JS toggles which is visible. */
-    .layout { display: grid; grid-template-columns: 220px 1fr; gap: 1.5rem; align-items: start; }
-    .sidenav { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 0.15rem; }
+       the right. Sections are all present; JS toggles which is visible.
+       A grid rather than the theme's flex .app__body because the sidenav here
+       scrolls with the page content, sticky under the top bar. */
+    .layout { display: grid; grid-template-columns: var(--sidenav-width) 1fr; gap: var(--space-6); align-items: start; }
+    .sidenav { position: sticky; top: calc(var(--topbar-height) + var(--space-4)); border-right: none; padding: 0; }
+    /* The nav buttons carry no class of their own (JS toggles .active on
+       them), so the theme's .sidenav__item look is applied by element here
+       instead of rewriting the markup + the toggle. */
     .sidenav button {
-      display: flex; align-items: center; gap: 0.55rem; text-align: left; width: 100%;
-      background: none; border: none; border-radius: 8px; padding: 0.6rem 0.75rem; font: inherit; font-size: 0.92rem;
-      color: var(--text); cursor: pointer;
+      display: flex; align-items: center; gap: var(--space-3);
+      width: 100%; text-align: left;
+      background: none; border: none; cursor: pointer;
+      padding: var(--space-2) var(--space-3);
+      border-radius: var(--radius-md);
+      color: var(--text-secondary); font: inherit; font-size: var(--app-base);
+      transition: background var(--transition-fast), color var(--transition-fast);
     }
-    .sidenav button:hover { background: #eef1f6; }
-    .sidenav button.active { background: #e7edfb; color: var(--accent); font-weight: 600; }
+    .sidenav button:hover { background: var(--surface-hover); color: var(--text-primary); }
+    .sidenav button.active { background: var(--surface); color: var(--silver-bright); font-weight: var(--weight-medium); box-shadow: inset 2px 0 0 var(--silver-medium); }
     .sidenav .ico { width: 1.2rem; text-align: center; }
     .section { display: none; }
     .section.active { display: block; }
@@ -76,10 +56,10 @@
        admin cards. A small JS block (below) toggles .admin-panel like the
        left nav toggles .section; the flash lives ABOVE the tabs so a
        post-action redirect's success/error message is visible on any tab. */
-    .admin-tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--border); margin: 0.2rem 0 1.1rem; flex-wrap: wrap; }
-    .admin-tabs button { background: none; border: none; border-bottom: 2px solid transparent; padding: 0.5rem 0.85rem; font: inherit; font-size: 0.9rem; color: var(--muted); cursor: pointer; }
+    .admin-tabs { display: flex; gap: var(--space-1); border-bottom: 1px solid var(--border); margin: 0.2rem 0 var(--space-6); flex-wrap: wrap; }
+    .admin-tabs button { background: none; border: none; border-bottom: 2px solid transparent; padding: var(--space-2) var(--space-3); font: inherit; font-size: var(--app-base); color: var(--muted); cursor: pointer; }
     .admin-tabs button:hover { color: var(--text); }
-    .admin-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+    .admin-tabs button.active { color: var(--silver-bright); border-bottom-color: var(--silver-medium); font-weight: var(--weight-medium); }
     .admin-panel { display: none; }
     .admin-panel.active { display: block; }
 
@@ -87,191 +67,166 @@
        input. Used for the quota-form email fields and inline in the Users
        card so we never render thousands of rows up front. */
     .ta-results {
-      position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: 15;
-      background: var(--card); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0,0,0,.1); max-height: 260px; overflow-y: auto; display: none;
+      position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: var(--z-dropdown);
+      background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+      box-shadow: var(--shadow-md); max-height: 260px; overflow-y: auto; display: none;
     }
     .ta-results.open { display: block; }
-    .ta-item { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.5rem 0.7rem; cursor: pointer; font-size: 0.88rem; }
-    .ta-item:hover { background: #eef1f6; }
-    .ta-item .st { font-size: 0.75rem; color: var(--muted); flex: none; }
-    .ta-empty { padding: 0.5rem 0.7rem; color: var(--muted); font-size: 0.85rem; }
+    .ta-item { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-3); cursor: pointer; font-size: var(--app-base); }
+    .ta-item:hover { background: var(--surface-hover); }
+    .ta-item .st { font-size: var(--app-xs); color: var(--muted); flex: none; }
+    .ta-empty { padding: var(--space-2) var(--space-3); color: var(--muted); font-size: var(--app-sm); }
 
     /* Live "currently using X of Y" preview under a quota form's user field,
        with a below-usage warning when the entered limit is under it. */
-    .usage-note { font-size: 0.82rem; color: var(--muted); margin: -0.4rem 0 0.7rem; min-height: 1em; }
-    .usage-note .warn-below { color: var(--danger); font-weight: 600; }
+    .usage-note { font-size: var(--app-sm); color: var(--muted); margin: -0.4rem 0 var(--space-3); min-height: 1em; }
+    .usage-note .warn-below { color: var(--danger); font-weight: var(--weight-semibold); }
 
-    /* Forms */
-    .field { margin-bottom: 0.8rem; }
-    .field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
-    .field input { width: 100%; max-width: 360px; padding: 0.5rem 0.6rem; border: 1px solid #d5d8dd; border-radius: 7px; font: inherit; }
-    .btn-primary { background: var(--accent); color: #fff; }
-    .btn-primary:hover { background: var(--accent-hover); }
-    .flash { padding: 0.55rem 0.8rem; border-radius: 8px; font-size: 0.88rem; margin-bottom: 0.9rem; }
-    .flash.ok  { background: #e6f6ec; color: #1f7a44; border: 1px solid #bfe6cd; }
-    .flash.err { background: #fdecea; color: #b13228; border: 1px solid #f2c3bd; }
+    /* Forms. The theme ships .form-input etc., but this app's markup uses
+       bare <input> inside .field -- styled by element so the markup stays. */
+    .field { margin-bottom: var(--space-3); }
+    .field label { display: block; font-size: var(--app-sm); color: var(--muted); margin-bottom: var(--space-1); }
+    .field input, .field select {
+      width: 100%; max-width: 360px; padding: var(--space-2) var(--space-3);
+      background: var(--black-secondary); color: var(--text-primary);
+      border: 1px solid var(--border-strong); border-radius: var(--radius-md); font: inherit;
+    }
+    .field input:hover, .field select:hover { border-color: var(--silver-dim); }
+
+    /* Flashes. The theme's .banner is the same idea; these keep the app's
+       own .flash.ok / .flash.err contract that the Perl side emits. */
+    .flash { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); font-size: var(--app-base); margin-bottom: var(--space-4); border: 1px solid; }
+    .flash.ok  { background: rgba(92,158,124,0.10); color: var(--success); border-color: rgba(92,158,124,0.35); }
+    .flash.err { background: rgba(216,92,92,0.10);  color: var(--error);   border-color: rgba(216,92,92,0.35); }
 
     /* Quota bar */
-    .quota-bar { height: 10px; background: #eef1f6; border-radius: 999px; overflow: hidden; margin: 0.35rem 0 0.2rem; }
-    .quota-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
-    .quota-bar > span.warn { background: #d99b1c; }
+    .quota-bar { height: 8px; background: var(--surface-hover); border-radius: var(--radius-pill); overflow: hidden; margin: var(--space-1) 0 0.2rem; }
+    .quota-bar > span { display: block; height: 100%; background: var(--silver-medium); border-radius: var(--radius-pill); }
+    .quota-bar > span.warn { background: var(--warning); }
     .quota-bar > span.full { background: var(--danger); }
 
     /* Fleet topology (admin) */
-    .topo-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
-    .topo-controls { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-    .topo-controls select { font: inherit; font-size: 0.85rem; padding: 0.3rem 0.4rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
-    .topo-legend { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: var(--muted); }
-    .topo-legend .lg { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-    .lg-up { background: #1f9d55; } .lg-down { background: #d1453b; } .lg-unmon { background: #9aa3af; }
-    .topo-body { display: flex; gap: 0.8rem; margin-top: 0.8rem; }
+    .topo-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+    .topo-controls { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+    .topo-controls select { font: inherit; font-size: var(--app-sm); padding: 0.3rem 0.4rem; border-radius: var(--radius-md); border: 1px solid var(--border-strong); background: var(--black-secondary); color: var(--text); }
+    .topo-legend { display: inline-flex; align-items: center; gap: 0.3rem; font-size: var(--app-xs); color: var(--muted); }
+    .topo-legend .lg { width: 12px; height: 12px; border-radius: var(--radius-sm); display: inline-block; }
+    .lg-up { background: var(--success); } .lg-down { background: var(--error); } .lg-unmon { background: var(--text-muted); }
+    .topo-body { display: flex; gap: var(--space-3); margin-top: var(--space-3); }
     /* Inline: grow to the viewport height (was a fixed 580px) so the map has
        real room on a desktop; Fullscreen (below) gives it the whole screen. */
-    #cy { flex: 1; height: calc(100vh - 320px); min-height: 540px; min-width: 0; background: #fbfcfe; border: 1px solid var(--border); border-radius: 8px; }
-    .topo-detail { width: 300px; flex: none; border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; overflow: auto; height: calc(100vh - 320px); min-height: 540px; background: var(--card); font-size: 0.86rem; }
-    .topo-desktop-note { font-size: 0.76rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+    #cy { flex: 1; height: calc(100vh - 320px); min-height: 540px; min-width: 0; background: var(--black-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); }
+    .topo-detail { width: 300px; flex: none; border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); overflow: auto; height: calc(100vh - 320px); min-height: 540px; background: var(--surface); font-size: var(--app-base); }
+    .topo-desktop-note { font-size: var(--app-xs); color: var(--muted); display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
     /* Fullscreen: the topology takes over the whole viewport for the biggest,
-       most-readable canvas -- it escapes the admin pane's 1400px max-width. */
-    .topo-card.topo-full { position: fixed; inset: 0; z-index: 250; margin: 0; max-width: none; width: auto; border-radius: 0; overflow: auto; box-shadow: none; }
+       most-readable canvas -- it escapes the admin pane's max-width. */
+    .topo-card.topo-full { position: fixed; inset: 0; z-index: var(--z-overlay); margin: 0; max-width: none; width: auto; border-radius: 0; overflow: auto; box-shadow: none; background: var(--black-primary); }
     .topo-card.topo-full #cy, .topo-card.topo-full .topo-detail { height: calc(100vh - 118px); min-height: 0; }
     .topo-card.topo-full .topo-detail { width: 340px; }
     /* A network graph is unusable on a phone -- show a clear "use a desktop"
        message instead of a cramped, unreadable canvas. */
     .topo-mobile-only { display: none; }
-    .topo-detail h3 { margin: 0 0 0.2rem; font-size: 1rem; word-break: break-all; }
-    .topo-detail dl { margin: 0.4rem 0 0; }
-    .topo-detail dt { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; margin-top: 0.55rem; }
+    .topo-detail h3 { margin: 0 0 0.2rem; font-size: var(--app-md); word-break: break-all; }
+    .topo-detail dl { margin: var(--space-1) 0 0; }
+    .topo-detail dt { color: var(--muted); font-size: var(--app-xs); text-transform: uppercase; letter-spacing: var(--tracking-wide); margin-top: var(--space-2); }
     .topo-detail dd { margin: 0.1rem 0 0; word-break: break-all; }
-    .topo-detail .soon { margin-top: 0.9rem; padding: 0.6rem; border: 1px dashed var(--border); border-radius: 6px; color: var(--muted); font-size: 0.8rem; }
-    .topo-detail .st-pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
-    .st-pill.up { background: #e6f6ec; color: #1f7a44; } .st-pill.down { background: #fdecea; color: #b13228; } .st-pill.unmon { background: #eef1f6; color: #6b7280; }
-    #topo-tooltip { position: fixed; z-index: 300; pointer-events: none; background: #1a1a1a; color: #fff; padding: 0.4rem 0.55rem; border-radius: 6px; font-size: 0.78rem; max-width: 300px; box-shadow: 0 4px 14px rgba(0,0,0,0.25); display: none; line-height: 1.35; }
+    .topo-detail .soon { margin-top: var(--space-3); padding: var(--space-2); border: 1px dashed var(--border-strong); border-radius: var(--radius-md); color: var(--muted); font-size: var(--app-sm); }
+    .topo-detail .st-pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: var(--radius-pill); font-size: var(--app-xs); font-weight: var(--weight-semibold); }
+    .st-pill.up { background: rgba(92,158,124,0.15); color: var(--success); }
+    .st-pill.down { background: rgba(216,92,92,0.15); color: var(--error); }
+    .st-pill.unmon { background: var(--surface-hover); color: var(--text-muted); }
+    #topo-tooltip { position: fixed; z-index: var(--z-toast); pointer-events: none; background: var(--black-tertiary); border: 1px solid var(--border-strong); color: var(--silver-bright); padding: var(--space-2); border-radius: var(--radius-md); font-size: var(--app-xs); max-width: 300px; box-shadow: var(--shadow-md); display: none; line-height: 1.35; }
 
     /* Services (admin) -- a service -> hosts accordion over the fleet data */
-    .svc-toolbar { display: flex; gap: 0.6rem; align-items: center; margin: 0.2rem 0 0.9rem; flex-wrap: wrap; }
-    .svc-toolbar input { flex: 1; min-width: 180px; font: inherit; font-size: 0.9rem; padding: 0.45rem 0.6rem; border-radius: 7px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
-    .svc-item { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem; overflow: hidden; }
-    .svc-row { width: 100%; display: flex; align-items: center; gap: 0.7rem; padding: 0.65rem 0.85rem; background: var(--card); border: none; cursor: pointer; font: inherit; color: var(--text); text-align: left; }
-    .svc-row:hover { background: var(--hover, rgba(127,127,127,0.06)); }
-    .svc-row .svc-caret { color: var(--muted); transition: transform .12s; flex: none; }
+    .svc-toolbar { display: flex; gap: var(--space-2); align-items: center; margin: 0.2rem 0 var(--space-4); flex-wrap: wrap; }
+    .svc-toolbar input { flex: 1; min-width: 180px; font: inherit; font-size: var(--app-base); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); border: 1px solid var(--border-strong); background: var(--black-secondary); color: var(--text); }
+    .svc-item { border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: var(--space-2); overflow: hidden; }
+    .svc-row { width: 100%; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); background: var(--surface); border: none; cursor: pointer; font: inherit; color: var(--text); text-align: left; }
+    .svc-row:hover { background: var(--surface-hover); }
+    .svc-row .svc-caret { color: var(--muted); transition: transform var(--transition-fast); flex: none; }
     .svc-row[aria-expanded="true"] .svc-caret { transform: rotate(90deg); }
-    .svc-name { font-weight: 600; }
-    .svc-badge { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.03em; color: #fff; padding: 0.05rem 0.4rem; border-radius: 999px; flex: none; }
-    .svc-meta { margin-left: auto; color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
-    .svc-meta .dn { color: var(--danger); font-weight: 600; }
-    .svc-detail { border-top: 1px solid var(--border); padding: 0.4rem 0.85rem 0.7rem; background: var(--bg, transparent); }
+    .svc-name { font-weight: var(--weight-medium); }
+    .svc-badge { font-size: var(--app-xs); text-transform: uppercase; letter-spacing: var(--tracking-wide); color: #fff; padding: 0.05rem 0.4rem; border-radius: var(--radius-pill); flex: none; }
+    .svc-meta { margin-left: auto; color: var(--muted); font-size: var(--app-sm); white-space: nowrap; }
+    .svc-meta .dn { color: var(--danger); font-weight: var(--weight-semibold); }
+    .svc-detail { border-top: 1px solid var(--border); padding: var(--space-1) var(--space-3) var(--space-3); background: var(--black-secondary); }
     .svc-detail table { width: 100%; }
     .svc-hdot.up { color: var(--ok); } .svc-hdot.down { color: var(--danger); } .svc-hdot.unmon { color: var(--muted); }
+
+    /* Cards. The theme ships .panel; this app's markup is .card throughout,
+       so .card is given the same look rather than rewriting every template. */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-4) var(--space-6); margin-bottom: var(--space-4); }
+    .card h2 { font-size: var(--app-md); font-weight: var(--weight-medium); margin: 0 0 var(--space-4); display: flex; align-items: center; gap: var(--space-2); }
+    .card h2 .hint { font-weight: var(--weight-normal); color: var(--muted); font-size: var(--app-sm); }
+    /* The theme's .kv is a narrower two-column grid; this app's labels are
+       longer ("Storage used by Drive"), hence the wider first column. */
+    .kv { display: grid; grid-template-columns: 170px 1fr; gap: var(--space-1) var(--space-4); font-size: var(--app-base); }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; }
+    .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: var(--radius-pill); font-size: var(--app-xs); background: var(--surface-hover); color: var(--text-secondary); margin-right: 0.3rem; }
+    .badge.admin { background: rgba(74,93,110,0.35); color: var(--silver-bright); }
+    table.sessions { width: 100%; border-collapse: collapse; font-size: var(--app-base); }
+    table.sessions th, table.sessions td { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); vertical-align: top; }
+    table.sessions th { color: var(--muted); font-weight: var(--weight-semibold); }
+    table.sessions tr:last-child td { border-bottom: none; }
+    .this-session { color: var(--ok); font-weight: var(--weight-semibold); font-size: var(--app-xs); }
+    .btn-row { margin-top: var(--space-3); display: flex; gap: var(--space-2); flex-wrap: wrap; }
+    /* .btn / .btn-primary / .btn-danger come from the theme. .btn-secondary is
+       this app's name for the theme's plain .btn, kept so existing markup and
+       the inline JS that emits it keep working. */
+    .btn-secondary { background: var(--surface-hover); color: var(--text-primary); border: 1px solid var(--border-strong); }
+    .btn-secondary:hover { background: var(--black-tertiary); border-color: var(--silver-dim); }
+    .muted { color: var(--muted); }
+    .soon { color: var(--muted); font-size: var(--app-sm); font-style: italic; }
+
+    /* Metrics (role-gated panel) */
+    .metrics-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: var(--space-2); margin: 0.3rem 0 var(--space-4); }
+    .mcard { background: var(--black-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); text-align: center; }
+    .mcard .mval { font-size: var(--app-xl); font-weight: var(--weight-light); line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .mcard .mlabel { font-size: var(--app-xs); color: var(--muted); margin-top: 0.2rem; text-transform: uppercase; letter-spacing: var(--tracking-wide); }
+    .mcard.ok-v .mval { color: var(--success); }
+    .mcard.warn .mval { color: var(--warning); }
+    .mcard.crit .mval { color: var(--error); }
+    .metrics-down { background: rgba(216,92,92,0.10); border: 1px solid rgba(216,92,92,0.35); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); margin-bottom: var(--space-3); font-size: var(--app-sm); }
+    .metrics-hosts-wrap { overflow-x: auto; }
+    .metrics-hosts { width: 100%; border-collapse: collapse; font-size: var(--app-sm); }
+    .metrics-hosts th, .metrics-hosts td { text-align: left; padding: 0.3rem var(--space-2); border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .metrics-hosts th:not(:first-child), .metrics-hosts td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+    .metrics-hosts td.warm { color: var(--warning); }
+    .metrics-hosts td.hot { color: var(--error); font-weight: var(--weight-semibold); }
+    .metrics-grafana { margin-top: var(--space-6); }
+    .metrics-grafana-head { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-1); }
+    .metrics-grafana-head .hint { color: var(--muted); font-size: var(--app-xs); }
+    .metrics-grafana-head a { margin-left: auto; font-size: var(--app-sm); }
+    .grafana-frame { width: 100%; height: 420px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--black-secondary); }
+
     @media (max-width: 900px) {
       /* Desktop/laptop-only feature: hide the interactive graph + its
          controls on small screens and show the guidance message instead. */
       .topo-body, .topo-controls { display: none; }
-      .topo-mobile-only { display: block; text-align: center; padding: 1.6rem 1.1rem; border: 1px dashed var(--border); border-radius: 10px; color: var(--muted); margin-top: 0.8rem; background: var(--card); }
-      .topo-mobile-only .big { font-size: 2rem; line-height: 1; margin: 0 0 0.5rem; }
+      .topo-mobile-only { display: block; text-align: center; padding: var(--space-6) var(--space-4); border: 1px dashed var(--border-strong); border-radius: var(--radius-md); color: var(--muted); margin-top: var(--space-3); background: var(--surface); }
+      .topo-mobile-only .big { font-size: 2rem; line-height: 1; margin: 0 0 var(--space-2); }
       .topo-mobile-only strong { color: var(--text); }
     }
-
     @media (max-width: 720px) {
-      .layout { grid-template-columns: 1fr; gap: 0.75rem; }
-      .sidenav { position: static; flex-direction: row; overflow-x: auto; gap: 0.3rem; padding-bottom: 0.25rem; border-bottom: 1px solid var(--border); }
+      .layout { grid-template-columns: 1fr; gap: var(--space-3); }
+      .sidenav { position: static; flex-direction: row; overflow-x: auto; gap: 0.3rem; padding-bottom: var(--space-1); border-bottom: 1px solid var(--border); }
       .sidenav button { white-space: nowrap; }
-      .sidenav .label { font-size: 0.85rem; }
-    }
-
-    .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.1rem 1.2rem; margin-bottom: 1.1rem; }
-    .card h2 { font-size: 1rem; margin: 0 0 0.9rem; display: flex; align-items: center; gap: 0.5rem; }
-    .card h2 .hint { font-weight: 400; color: var(--muted); font-size: 0.82rem; }
-
-    .kv { display: grid; grid-template-columns: 170px 1fr; gap: 0.4rem 1rem; font-size: 0.92rem; }
-    .kv dt { color: var(--muted); }
-    .kv dd { margin: 0; }
-
-    .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.78rem; background: #eef1f6; color: #33415c; margin-right: 0.3rem; }
-    .badge.admin { background: #efe3ff; color: #5b2ea6; }
-
-    table.sessions { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-    table.sessions th, table.sessions td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #eef0f3; vertical-align: top; }
-    table.sessions th { color: var(--muted); font-weight: 600; }
-    table.sessions tr:last-child td { border-bottom: none; }
-    .this-session { color: var(--ok); font-weight: 600; font-size: 0.8rem; }
-
-    .btn { display: inline-block; border: none; border-radius: 7px; padding: 0.4rem 0.75rem; font: inherit; font-size: 0.85rem; cursor: pointer; text-decoration: none; }
-    .btn-secondary { background: #eef1f6; color: var(--text); }
-    .btn-secondary:hover { background: #e2e7ef; }
-    .btn-danger { background: none; color: var(--danger); border: 1px solid #e6b8b4; }
-    .btn-danger:hover { background: #fdecea; }
-    .btn-row { margin-top: 0.9rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
-
-    /* Usage bar (no quota limit yet -> shown as a plain used figure). */
-    .usage-line { display: flex; justify-content: space-between; font-size: 0.92rem; margin-bottom: 0.3rem; }
-    .usage-line .amt { font-weight: 600; }
-    .muted { color: var(--muted); }
-    .soon { color: var(--muted); font-size: 0.85rem; font-style: italic; }
-
-    @media (max-width: 640px) {
-      main { padding: 1rem 0.85rem 2.5rem; }
-      .kv { grid-template-columns: 1fr; gap: 0.15rem; }
-      .kv dt { margin-top: 0.5rem; }
-      .profile-btn .who { display: none; }          /* avatar only on small screens */
-      table.sessions thead { display: none; }
-      table.sessions td { display: block; border: none; padding: 0.15rem 0; }
-      table.sessions tr { display: block; border-bottom: 1px solid #eef0f3; padding: 0.6rem 0; }
+      .sidenav .label { font-size: var(--app-sm); }
       .btn { min-height: 40px; display: inline-flex; align-items: center; }
     }
-
-    /* --- Metrics tab --- */
-    .metrics-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 0.6rem; margin: 0.3rem 0 1rem; }
-    .mcard { background: var(--panel, rgba(127,127,127,0.06)); border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem 0.8rem; text-align: center; }
-    .mcard .mval { font-size: 1.5rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
-    .mcard .mlabel { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
-    .mcard.ok-v .mval { color: #1f9d55; }
-    .mcard.warn .mval { color: #c77400; }
-    .mcard.crit .mval { color: #c0392b; }
-    .metrics-down { background: rgba(192,57,43,0.08); border: 1px solid rgba(192,57,43,0.35); border-radius: 8px; padding: 0.5rem 0.7rem; margin-bottom: 0.8rem; font-size: 0.85rem; }
-    .metrics-hosts-wrap { overflow-x: auto; }
-    .metrics-hosts { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    .metrics-hosts th, .metrics-hosts td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
-    .metrics-hosts th:not(:first-child), .metrics-hosts td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
-    .metrics-hosts td.warm { color: #c77400; }
-    .metrics-hosts td.hot { color: #c0392b; font-weight: 600; }
-    .metrics-grafana { margin-top: 1.3rem; }
-    .metrics-grafana-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
-    .metrics-grafana-head .hint { color: var(--muted); font-size: 0.8rem; }
-    .metrics-grafana-head a { margin-left: auto; font-size: 0.85rem; }
-    .grafana-frame { width: 100%; height: 78vh; min-height: 520px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
   </style>
 </head>
-<body>
-  <header class="topbar">
-    <div class="brand">🔐 My Account</div>
-    <div class="spacer"></div>
-    <div class="profile" id="profile">
-      <button class="profile-btn" id="profile-btn" aria-haspopup="true" aria-expanded="false">
-        <span class="avatar"><%= uc(substr(($email // '?'), 0, 1)) %></span>
-        <span class="who"><%= $email %></span>
-        <span class="caret">▾</span>
-      </button>
-      <div class="menu" id="profile-menu" role="menu">
-        <div class="menu-email"><%= $email %></div>
-        <form method="post" action="/logout"><button type="submit" class="menu-item danger">Sign out</button></form>
-      </div>
-    </div>
-  </header>
-  <main><%= content %></main>
+<body class="app">
+%= include 'homelab/header'
+  <main class="app__main">
+    <div class="container"><%= content %></div>
+  </main>
+%= include 'homelab/footer'
   <script>
-    (function () {
-      var btn = document.getElementById('profile-btn');
-      var menu = document.getElementById('profile-menu');
-      if (!btn || !menu) return;
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        var open = menu.classList.toggle('open');
-        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      });
-      document.addEventListener('click', function () { menu.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); });
-      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { menu.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); } });
-    })();
+    /* NOTE: the account-dropdown handler that used to live here is GONE on
+       purpose -- shell.js from static.mailmasker.org now drives the shared
+       header's [data-menu] button (outside-click, Esc, aria-expanded). */
 
     // Left-nav section switching: nav buttons carry data-section; show the
     // matching .section and hide the rest. Honors a #hash on load (so a
@@ -1251,7 +1206,7 @@
               'border-width': 3, 'border-color': function (e) { return HEALTH_BORDER[e.data('health')] || '#c2c8d0'; },
               'border-style': function (e) { return e.data('health') === 'unmon' ? 'dashed' : 'solid'; },
             } },
-            { selector: 'node:selected', style: { 'border-width': 5, 'border-color': '#1a1a1a' } },
+            { selector: 'node:selected', style: { 'border-width': 5, 'border-color': '#e8e8e8' } },
             { selector: 'edge', style: {
               'width': 2, 'curve-style': 'bezier', 'target-arrow-shape': 'triangle',
               'line-color': function (e) { return EDGE_COLOR[e.data('kind')] || '#8a93a3'; },
