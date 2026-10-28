@@ -10,8 +10,43 @@
 # Postfix expects ('@forge.name' or 'sales@forge.name'), no app-side
 # wildcard logic needed. See ../../domain-admin/README.md and this
 # package's own README.md "Multi-domain send-as" section.
+#
+# A REAL MAILBOX MUST ALWAYS BEAT THE CATCH-ALL. That is what the second
+# arm of the UNION is for, and it is not optional tidiness -- without it
+# the catch-all silently steals mail from every mailbox at the domain.
+#
+# Why it happens: Postfix consults virtual_alias_maps BEFORE
+# virtual_mailbox_maps, and its own fallback turns a miss on
+# 'user@domain' into a lookup of '@domain'. So a '@domain' catch-all row
+# rewrites EVERY address at that domain -- including addresses that have
+# their own mailbox, which never gets consulted. Found live 2026-10-27:
+# a brand-new dmarc-reports@mailmasker.org mailbox had its first probe
+# logged as `to=<permittivity@mailmasker.org>
+# orig_to=<dmarc-reports@mailmasker.org>`, and johnboy@mailmasker.org --
+# an existing, active account -- had been quietly diverted the same way.
+# RCPT TO answers 250 either way, which is why it goes unnoticed.
+#
+# The previous remedy was a per-mailbox IDENTITY alias row (X -> X).
+# That works but is bookkeeping nobody remembers: it is exactly what was
+# missing for johnboy. This query makes it structural instead --
+# "<username>@<domain> always goes to <username>" holds for every
+# mailbox, with no row to forget.
+#
+# The arms, in order:
+#   1. an EXPLICIT alias wins, so deliberate forwards still work;
+#   2. otherwise, if the address IS an active mailbox, map it to itself,
+#      so Postfix stops before reaching the '@domain' catch-all;
+#   3. otherwise return nothing, and the catch-all applies -- which is
+#      what a catch-all is actually for.
+# The NOT EXISTS in arm 2 keeps arms 1 and 2 mutually exclusive: two
+# rows would make Postfix deliver to both destinations.
+#
+# NOTE this needs SELECT on api.users(email, active). The runtime role
+# already has it at COLUMN level for virtual_mailbox_maps, which is why
+# `has_table_privilege(role,'api.users','SELECT')` reports false while
+# the lookup works -- don't "fix" that by widening the grant.
 hosts = __DB_HOST__:__DB_PORT__
 user = __DB_USER__
 password = __DB_PASS__
 dbname = __DB_NAME__
-query = SELECT destination FROM domainadmin.mail_aliases WHERE source_pattern='%s' AND active = true
+query = SELECT destination FROM domainadmin.mail_aliases WHERE source_pattern='%s' AND active = true UNION ALL SELECT u.email FROM api.users u WHERE u.email='%s' AND u.active = true AND NOT EXISTS (SELECT 1 FROM domainadmin.mail_aliases a WHERE a.source_pattern='%s' AND a.active = true)

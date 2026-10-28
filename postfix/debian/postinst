@@ -323,6 +323,45 @@ case "$1" in
             chgrp postfix "$ALIAS_MAPS_CF" 2>/dev/null || true
             echo "  wrote $ALIAS_MAPS_CF"
         fi
+        # The create block above is `[ ! -f ... ]`, so an UPGRADE never
+        # refreshes an existing file -- which means a corrected query would
+        # ship in the template and never reach a running host. Canonicalise
+        # just the query line here, taking it FROM the shipped template so
+        # there is exactly one source of truth and the two cannot drift.
+        # Credentials in the live file are left untouched.
+        #
+        # This is how the "a real mailbox always beats the catch-all" fix
+        # reaches hosts installed before it existed. See the long note in
+        # config/pgsql-virtual-alias-maps.cf.template.
+        ALIAS_TEMPLATE="$SHARE_DIR/config/pgsql-virtual-alias-maps.cf.template"
+        if [ -f "$ALIAS_MAPS_CF" ] && [ -f "$ALIAS_TEMPLATE" ]; then
+            WANT_QUERY="$(grep '^query = ' "$ALIAS_TEMPLATE" 2>/dev/null || true)"
+            HAVE_QUERY="$(grep '^query = ' "$ALIAS_MAPS_CF" 2>/dev/null || true)"
+            if [ -n "$WANT_QUERY" ] && [ "$WANT_QUERY" != "$HAVE_QUERY" ]; then
+                cp -a "$ALIAS_MAPS_CF" "$ALIAS_MAPS_CF.pre-upgrade"
+                awk -v want="$WANT_QUERY" '/^query = /{print want; next} {print}' \
+                    "$ALIAS_MAPS_CF.pre-upgrade" > "$ALIAS_MAPS_CF"
+                # Validate the new SQL against the real database before
+                # leaving it in place: a syntax error or a missing grant here
+                # would break alias resolution for EVERY domain.
+                #
+                # Checking STDERR, not the exit status: `postmap -q` exits 1
+                # both for "key not found" (the expected result here) and for
+                # a failed query, so the exit code cannot tell them apart. A
+                # working query on a key that cannot exist prints nothing; a
+                # broken one prints a warning/fatal.
+                PROBE_ERR="$(postmap -q "probe-$$@invalid.invalid" "pgsql:$ALIAS_MAPS_CF" 2>&1 >/dev/null || true)"
+                if [ -z "$PROBE_ERR" ]; then
+                    echo "  updated the virtual_alias_maps query (a real mailbox now always beats the catch-all)"
+                    rm -f "$ALIAS_MAPS_CF.pre-upgrade"
+                else
+                    echo "  ERROR: the new virtual_alias_maps query failed against the database -- rolling back."
+                    echo "         $PROBE_ERR"
+                    cat "$ALIAS_MAPS_CF.pre-upgrade" > "$ALIAS_MAPS_CF"
+                    rm -f "$ALIAS_MAPS_CF.pre-upgrade"
+                fi
+            fi
+        fi
         if [ -f "$ALIAS_MAPS_CF" ]; then
             postconf -e "virtual_alias_maps = proxy:pgsql:$ALIAS_MAPS_CF"
             echo "  virtual_alias_maps now backed by a live domainadmin.mail_aliases lookup"
