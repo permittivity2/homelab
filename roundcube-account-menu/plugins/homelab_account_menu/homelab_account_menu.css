@@ -1,66 +1,14 @@
 /*
- * Styling for the account-menu rail button + its dropdown.
+ * Styling for the account dropdown and for the logo that opens it.
  *
- * The rail icon is rendered through the button's :before pseudo-element --
- * the SAME slot every elastic rail icon uses (class selector, Elastic's
- * 'Icons' webfont for the fallback glyph) -- so it stacks above the
- * "Account" label exactly like Mail/Contacts/Settings, rather than sitting
- * beside it. The plugin JS swaps the glyph for a Gmail-style circular
- * initial avatar by setting a data-initial attribute the CSS reads via
- * content: attr().
+ * Until 0.1.10 the bulk of this file styled a circular avatar button in
+ * elastic's task rail, rendered through the button's :before pseudo-element
+ * so it stacked above an "Account" label like the other rail icons. That
+ * button is gone (the logo is the only trigger now) and so are its rules --
+ * including a fight with elastic's own `#taskmenu a:before` width at narrow
+ * breakpoints that needed aspect-ratio + !important to keep the avatar from
+ * becoming an oval. None of that is load-bearing any more.
  */
-
-/* Fallback glyph: fa-user-circle, shown until the JS sets the initial
- * (or if the JS doesn't run). Same font/weight recipient_blocking uses. */
-.menu a.button-account:before {
-    font-family: 'Icons';
-    font-weight: 900;
-    font-style: normal;
-    font-size: 1.25em;
-    content: "\f2bd";
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-}
-
-/* Once the JS has the initial: render the same :before as a circular
- * initial avatar. Because it IS the icon slot, it keeps elastic's own
- * icon-above-label stacking. */
-/* High-specificity (#taskmenu prefix) + aspect-ratio + !important so a TRUE
- * CIRCLE is forced regardless of elastic's own #taskmenu a:before width
- * rules at narrow breakpoints -- that's an ID selector, which outranks a
- * plain class selector, so at <=480px it was imposing its own width (1.2em)
- * while our height stayed 1.5rem => a wide oval. Monochrome to match the
- * other rail icons: a thin circle OUTLINE + the initial in the icon colour
- * (currentColor = #fff), no fill. display:flex is block-level so it still
- * takes its own line and "Account" stacks beneath. The WIDTH is fixed and
- * the HEIGHT is DERIVED from it via aspect-ratio, so nothing can set a
- * mismatched height and re-oval it. */
-#taskmenu a.button-account.has-account-avatar:before,
-.menu a.button-account.has-account-avatar:before {
-    content: attr(data-initial);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-sizing: border-box;
-    width: 1.5rem !important;
-    height: auto !important;
-    aspect-ratio: 1 / 1 !important;
-    flex: 0 0 auto;
-    min-width: 0;
-    padding: 0 !important;
-    margin: 0 auto !important;
-    float: none !important;
-    border: 1.5px solid currentColor;
-    border-radius: 50%;
-    background: transparent;
-    color: inherit;
-    font-family: inherit;
-    font-weight: 600;
-    font-size: 0.8rem;
-    line-height: 1;
-    text-transform: uppercase;
-    -webkit-font-smoothing: antialiased;
-}
 
 /* ---- Account dropdown -------------------------------------------- */
 

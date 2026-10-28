@@ -1,58 +1,35 @@
 /**
  * homelab_account_menu plugin JS.
  *
- * One cosmetic job: turn the rail button's icon into a Gmail-style
- * circular avatar with the signed-in address's initial. We do this by
- * setting a `data-initial` attribute + a class on the button; the CSS
- * then renders the initial THROUGH the button's :before pseudo-element --
- * the same slot every other elastic rail icon uses -- so the avatar
- * stacks above the "Account" label exactly like the other buttons,
- * instead of sitting beside it.
+ * ONE job: make the brand logo above elastic's task rail (top-left) open
+ * the account dropdown.
  *
- * Purely progressive: if this doesn't run, the CSS :before shows a plain
- * fa-user-circle glyph and the dropdown still works (elastic's own
- * dropdowns_init() wires the data-popup trigger to #account-menu).
- */
-rcmail.addEventListener('init', function () {
-    var $btn = $('#accountmenulink');
-    if (!$btn.length) {
-        return;
-    }
-
-    $btn.addClass('has-account-avatar')
-        .attr('data-initial', (rcmail.env.account_menu_initial || '?') + '');
-
-    if (rcmail.env.account_menu_email) {
-        $btn.attr('title', rcmail.env.account_menu_email);
-    }
-});
-
-/**
- * Second trigger for the SAME dropdown: the brand logo above the task
- * rail (top-left). One menu, two openers -- the user asked for the logo
- * to behave like the Account rail button, and duplicating the menu would
- * duplicate its ids.
+ * There used to be a second trigger -- a circular avatar button in the
+ * task rail, labelled "Account" -- and this file's main job was painting
+ * its initial. That button is GONE as of 0.1.10: the logo does the same
+ * thing in the place people now expect to find it (every other homelab
+ * app puts the account menu behind the top-left brand), and two openers
+ * for one menu was one too many.
  *
  * The logo lives in elastic's own skin TEMPLATE
- * (templates/includes/menu.html), so add_button() cannot attach to it
- * from PHP and this package's whole design rule is to make no core skin
- * edits -- so it is wired here, the same way the avatar above is.
+ * (templates/includes/menu.html), so add_button() cannot reach it from
+ * PHP -- and this package's design rule is to make NO core skin edits, so
+ * a Roundcube upgrade cannot break it. Hence wiring it from here.
+ *
  * UI.popup_init() is elastic's public API (ui.js exports it precisely so
- * framed/mobile callers can re-init a popup), which means the logo gets
- * the identical Bootstrap popover, outside-click close, Esc handling and
- * aria wiring as every other elastic dropdown, with no handler of our own.
+ * framed/mobile callers can re-init a popup), which gets the logo the
+ * identical Bootstrap popover, outside-click close, Esc handling and aria
+ * wiring as every other elastic dropdown, with no handler of our own.
  */
 rcmail.addEventListener('init', function () {
     var $logo = $('#logo');
 
-    // Gate on the rail button, not on the task name: if #accountmenulink
-    // is absent there is no rendered account menu to open (the login page
-    // has a logo but no task rail), and wiring the logo there would pop an
-    // empty menu.
-    if (!$logo.length || !$('#accountmenulink').length) {
-        return;
-    }
-    if (!window.UI || typeof UI.popup_init !== 'function') {
+    // Gate on the MENU, not on the old rail button. This used to read
+    // `if (!$('#accountmenulink').length) return;` -- which was correct
+    // while the rail button existed and would have silently disabled the
+    // logo the moment it was removed. What the logo actually needs is
+    // something to open.
+    if (!$logo.length || !$('#account-menu').length) {
         return;
     }
 
@@ -61,11 +38,35 @@ rcmail.addEventListener('init', function () {
     // ("a { display: none !important; }"), so an anchor wrapper would make
     // the logo vanish on every desktop. A button keeps it clickable AND
     // keyboard-reachable without tripping that rule.
-    $logo.wrap($('<button type="button" class="account-logo-btn">').attr({
+    var $btn = $('<button type="button" class="account-logo-btn">').attr({
         'data-popup': 'account-menu',
         'aria-label': rcmail.gettext('homelab_account_menu.account'),
         title: rcmail.env.account_menu_email || ''
-    }));
+    });
+    $logo.wrap($btn);
+    $btn = $logo.parent();
 
-    UI.popup_init($logo.parent().get(0));
+    var wired = false;
+    if (window.UI && typeof UI.popup_init === 'function') {
+        try {
+            UI.popup_init($btn.get(0));
+            wired = true;
+        } catch (e) {
+            wired = false;
+        }
+    }
+
+    // Fallback, only installed if elastic's own machinery was unavailable.
+    //
+    // Deliberately NOT a second dropdown implementation. #account-menu is a
+    // Bootstrap popover SOURCE, not a CSS-toggled panel -- showing it by
+    // hand would mean owning positioning too, and a half-placed menu is
+    // worse than no menu. Since the account menu is now the only way to
+    // reach the account app from webmail, degrade instead to the single most
+    // useful thing it offers: just go there.
+    if (!wired && rcmail.env.account_menu_url) {
+        $btn.on('click', function () {
+            window.location.href = rcmail.env.account_menu_url + '/';
+        });
+    }
 });

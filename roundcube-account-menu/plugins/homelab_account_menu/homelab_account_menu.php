@@ -2,16 +2,21 @@
 
 /**
  * homelab_account_menu -- a persistent "account menu" for the webmail
- * UI, modelled on the top-right profile dropdown the other homelab web
- * apps (drive, myaccount, ...) already show, adapted to Roundcube's
- * stock elastic skin. Adds a circular avatar button to the elastic task
- * rail -- relocated (by the plugin's own JS) down next to the existing
- * Logout button, elastic's own "account area" at the bottom of the rail
- * -- that opens a native Bootstrap popover listing: the signed-in
- * address, a "Manage your account" link to the self-service account app
+ * UI, modelled on the account dropdown the other homelab web apps
+ * (drive, myaccount, ...) already show, adapted to Roundcube's stock
+ * elastic skin. The trigger is the brand LOGO above the task rail
+ * (top-left), which is where every other app in the fleet puts it; it
+ * opens a native Bootstrap popover listing: the signed-in address, a
+ * "Manage your account" link to the self-service account app
  * (myaccount.<domain> = homelab-accountmanage, which auto-logs-in via
  * the shared SSO session), a couple of deep links (security, sessions),
  * and "Sign out".
+ *
+ * Until 0.1.10 there was ALSO a circular avatar button in the task rail
+ * labelled "Account". It was added first, before the logo could be
+ * wired, and is gone now: two openers for one menu was one too many, and
+ * the logo is where people look. The rail keeps elastic's own stock
+ * Logout button, so signing out never depended on any of this.
  *
  * Holds NO credential of its own. The address is Roundcube's own session
  * value ($_SESSION['username'], i.e. the IMAP login = the mailbox
@@ -22,13 +27,12 @@
  * homelab-roundcube's rcmail_oauth.php patch). Same minimal trust
  * boundary it takes to render any other skin element.
  *
- * Attaches entirely through the supported plugin API -- add_button()
- * into elastic's 'taskbar' container, add_footer() for the popover
- * markup, and elastic's own data-popup auto-wiring -- with NO core skin
- * or template edits. The 'data-popup' attribute survives button()'s
- * attribute allow-list because html::attrib_string always passes data-*
- * through; elastic's dropdowns_init() then wires the popover at DOM
- * ready. See this package's README for the full elastic specifics.
+ * Attaches with NO core skin or template edits, so a Roundcube upgrade
+ * cannot break it: add_footer() emits the popover markup, and the plugin
+ * JS wraps the skin's own #logo and calls elastic's public
+ * UI.popup_init() on it. See this package's README for the full elastic
+ * specifics -- including why that wrapper must be a <button> and not an
+ * <a>.
  */
 class homelab_account_menu extends rcube_plugin
 {
@@ -57,33 +61,15 @@ class homelab_account_menu extends rcube_plugin
                 ? $_SESSION['username']
                 : (string) $this->rc->get_user_name();
 
-            // Expose the address + its initial to the plugin JS (which
-            // paints the circular avatar and relocates the button).
+            // The address is read client-side for the logo trigger's
+            // title/aria-label. account_menu_initial is gone with the rail
+            // avatar it used to paint.
             $this->rc->output->set_env('account_menu_email', $email);
-            $this->rc->output->set_env('account_menu_initial', $this->initial_of($email));
-
-            // Pure popup opener: 'name' (not 'command') so core attaches
-            // no task-switching onclick, exactly like elastic's own
-            // markmenulink/folderactions triggers. 'data-popup' is passed
-            // straight through by html::attrib_string (data-* bypass
-            // button()'s allow-list); elastic auto-wires it to the
-            // #account-menu div below. data-popup-pos=right because the
-            // rail is on the left edge.
-            $this->add_button([
-                'type'           => 'link',
-                'name'           => 'accountmenu',
-                'id'             => 'accountmenulink',
-                'class'          => 'button-account',
-                // Plugin button labels MUST be namespaced with the plugin
-                // id, else Roundcube looks them up in core and renders the
-                // raw "[account]" key (same convention recipient_blocking
-                // uses for its own taskbar label).
-                'label'          => 'homelab_account_menu.account',
-                'title'          => 'homelab_account_menu.account',
-                'innerclass'     => 'inner',
-                'data-popup'     => 'account-menu',
-                'data-popup-pos' => 'right',
-            ], 'taskbar');
+            // Exposed for the JS fallback: if elastic's popover machinery is
+            // ever unavailable, clicking the logo navigates here instead of
+            // doing nothing. See the plugin JS.
+            $this->rc->output->set_env('account_menu_url',
+                rtrim((string) $this->rc->config->get('account_menu_url', ''), '/'));
 
             $this->include_script('homelab_account_menu.js');
             $this->add_hook('render_page', [$this, 'render_page']);

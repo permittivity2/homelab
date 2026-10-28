@@ -10,10 +10,9 @@ isn't present yet.
 
 ## What it adds
 
-A circular avatar button (the signed-in address's initial) in Roundcube's
-left task rail — relocated by the plugin's own JS down next to the
-existing **Logout**, which is elastic's own "account area" at the bottom
-of the rail. Clicking it opens a native dropdown with:
+The brand **logo** above Roundcube's left task rail (top-left) opens a
+native dropdown — the same place every other app in the fleet puts the
+account menu. It contains:
 
 - **Signed in as** `<the mailbox address>` (read from Roundcube's own
   session — `$_SESSION['username']`, the IMAP login).
@@ -28,11 +27,15 @@ of the rail. Clicking it opens a native dropdown with:
   `rcmail_oauth.php` patch) — so signing out of webmail signs out of the
   SSO session, not just the local Roundcube one.
 
-**The brand logo above the rail is a second trigger for the same menu.**
-One menu, two openers — duplicating the markup would duplicate its ids.
-The logo also becomes the Silver Linings logo, served from the shared
-asset host so a rebrand changes one file and every app (webmail
-included) follows with no package rebuild.
+The logo itself is the Silver Linings logo, served from the shared asset
+host so a rebrand changes one file and every app (webmail included)
+follows with no package rebuild.
+
+**Until 0.1.10 there was also a circular avatar button in the task rail,
+labelled "Account".** It came first, before the logo could be wired, and
+is gone now: two openers for one menu was one too many, and the logo is
+where people look. The rail keeps elastic's own stock **Logout**, so
+signing out never depended on any of this.
 
 It holds **no credential** and **no database role** of its own.
 
@@ -43,17 +46,13 @@ left task rail (`skins/elastic/templates/includes/menu.html`). The plugin
 attaches entirely through the supported plugin API — **no core skin or
 template edits**:
 
-- `add_button([... 'data-popup' => 'account-menu' ...], 'taskbar')` puts
-  the trigger in elastic's `taskbar` container. The `data-popup`
-  attribute survives `button()`'s attribute allow-list because
-  `html::attrib_string` always passes `data-*`/`aria-*` through.
 - `$rcmail->output->add_footer(...)` emits the `<div id="account-menu"
   class="popupmenu">…` markup (top-level window only — gated off the
   framed message-preview request so the id isn't duplicated).
-- elastic's own `dropdowns_init()` → `popup_init()` wires the Bootstrap
-  popover at DOM ready, by selecting `[data-popup]` wherever the node
-  sits — so the JS relocation of the trigger is safe and the popover is
-  never re-initialised (which would double-bind it).
+- elastic's `dropdowns_init()` scans `[data-popup]` at DOM ready, which is
+  BEFORE the plugin JS creates the logo's wrapper — which is exactly why
+  the logo is wired with an explicit `UI.popup_init()` call rather than
+  relying on that scan.
 
 - The **logo** lives in elastic's skin *template*, so `add_button()`
   cannot reach it from PHP. The plugin JS wraps it and calls
@@ -69,8 +68,16 @@ template edits**:
   option (`rcmail_output_html::get_template_logo`) — again not a skin
   edit, so a Roundcube upgrade cannot undo it.
 
-The avatar is a CSS circle and the dropdown icons are inline SVG
-data-URIs, so nothing depends on elastic's icon webfont.
+The dropdown icons are inline SVG data-URIs, so nothing depends on
+elastic's icon webfont.
+
+**If you ever remove or rename the logo trigger, re-check the gate in the
+plugin JS.** It reads `if (!$logo.length || !$('#account-menu').length)`.
+It used to gate on the rail button instead, which meant removing that
+button would have silently disabled the logo too — the dropdown would
+have had no opener at all, with nothing logged. There is also a fallback:
+if elastic's popover machinery is unavailable, clicking the logo
+navigates to the account app rather than doing nothing.
 
 ## Config
 
