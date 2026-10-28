@@ -13,10 +13,45 @@ use lib 'lib';
 my $t = Test::Mojo->new('Homelab::API::App');
 
 my $suffix = time . '-' . $$;
+
+# CLEAN UP AFTER OURSELVES. This test registers real accounts -- one of
+# them granted site_admin below -- with passwords hardcoded in this file,
+# in whatever database HOMELAB_API_CONFIG points at. That config is now
+# routinely the PRODUCTION one (it is the only place a full fleet DB
+# exists), so without this a single run leaves usable site_admin
+# credentials behind, and every re-run leaves more. Found the hard way:
+# five runs had left 25 live accounts, 5 of them site_admin.
+#
+# Deactivate + strip roles + revoke sessions rather than DELETE: the rows
+# are referenced by api.sessions, api.refresh_tokens and the audit trail,
+# so deleting them means either cascading or a FK error, and the audit
+# record of what the test did is worth keeping. Deactivated with no roles
+# and no live session, the account cannot log in or be used for anything.
+#
+# END, not a normal teardown line: it must run even when a test dies
+# partway through -- that is exactly when credentials get orphaned.
+my @created;
+END {
+    return unless @created && $t && eval { $t->app->pg };
+    my $db = eval { $t->app->pg->db } or return;
+    for my $addr (@created) {
+        eval {
+            my $u = $db->query('SELECT id FROM api.users WHERE email = ?', $addr)->hash or return;
+            $db->query(q{UPDATE api.refresh_tokens SET revoked = TRUE
+                         WHERE id IN (SELECT refresh_token_id FROM api.sessions WHERE user_id = ?)}, $u->{id});
+            $db->query('UPDATE api.sessions SET revoked = TRUE WHERE user_id = ?', $u->{id});
+            $db->query('DELETE FROM api.user_roles WHERE user_id = ?', $u->{id});
+            $db->query('UPDATE api.users SET active = FALSE WHERE id = ?', $u->{id});
+        };
+    }
+    diag(sprintf('cleaned up %d test account(s)', scalar @created));
+}
+
 my ($email, $password)       = ("sess-$suffix\@test.mailmasker.org", 'SessTest1Aa!!');
 my ($other_email, $other_pw) = ("sess-other-$suffix\@test.mailmasker.org", 'SessOther1Aa!!');
 my ($admin_email, $admin_pw) = ("sess-admin-$suffix\@test.mailmasker.org", 'SessAdmin1Aa!!');
 
+push @created, $email, $other_email, $admin_email;
 $t->post_ok('/api/v1/auth/register', json => { email => $email, password => $password })->status_is(201);
 $t->post_ok('/api/v1/auth/register', json => { email => $other_email, password => $other_pw })->status_is(201);
 $t->post_ok('/api/v1/auth/register', json => { email => $admin_email, password => $admin_pw })->status_is(201);
@@ -177,6 +212,7 @@ ok(!(grep { $_->{current} } @$admin_view), 'none of THOSE rows are marked curren
 # --- ?except_current=true: revoke every other session, keep this one ---
 {
     my $marker_email = "sess-bulk-$suffix\@test.mailmasker.org";
+    push @created, $marker_email;
     $t->post_ok('/api/v1/auth/register', json => { email => $marker_email, password => 'BulkTest1Aa!!' })->status_is(201);
     $t->post_ok('/api/v1/auth/login', json => { email => $marker_email, password => 'BulkTest1Aa!!' })->status_is(200);
     my $first_jwt = $t->tx->res->json('/token');
@@ -195,9 +231,50 @@ ok(!(grep { $_->{current} } @$admin_view), 'none of THOSE rows are marked curren
       ->status_is(200, 'the CURRENT session survives its own bulk-revoke-others call');
 }
 
-# --- Missing except_current=true on the bulk route is a clean 400, not
-# an accidental full-account wipe ---
+# --- ?except_current=false: revoke EVERYTHING, including this token.
+# This is what makes single-logout work: homelab-sso gives every relying
+# party its OWN independently issued token pair, so a logout that revoked
+# only the IdP session's refresh token left drive/webmail/myaccount fully
+# usable. Three sessions here stand in for three apps. ---
+{
+    my $all_email = "sess-all-$suffix\@test.mailmasker.org";
+    push @created, $all_email;
+    $t->post_ok('/api/v1/auth/register', json => { email => $all_email, password => 'AllTest1Aa!!' })->status_is(201);
+    my @jwts;
+    for (1 .. 3) {
+        $t->post_ok('/api/v1/auth/login', json => { email => $all_email, password => 'AllTest1Aa!!' })->status_is(200);
+        push @jwts, $t->tx->res->json('/token');
+    }
+
+    $t->get_ok('/api/v1/auth/sessions' => { Authorization => "Bearer $jwts[2]" })->status_is(200);
+    is(scalar(@{ $t->tx->res->json }), 3, 'sanity: three live sessions, one per "app"');
+
+    $t->delete_ok('/api/v1/auth/sessions?except_current=false' => { Authorization => "Bearer $jwts[2]" })
+      ->status_is(200)->json_is('/revoked', 3, 'all three sessions revoked, the caller\'s own included');
+
+    # Every one of them, not just the two others.
+    for my $i (0 .. 2) {
+        $t->get_ok('/api/v1/auth/introspect' => { Authorization => "Bearer $jwts[$i]" })
+          ->status_is(401, "session $i is dead after a revoke-all");
+    }
+
+    # Idempotent: a second logout (double-click, or two apps each fanning
+    # out) must not error, just report nothing left to revoke. It needs a
+    # live token to authenticate with, so log in once more.
+    $t->post_ok('/api/v1/auth/login', json => { email => $all_email, password => 'AllTest1Aa!!' })->status_is(200);
+    my $fresh = $t->tx->res->json('/token');
+    $t->delete_ok('/api/v1/auth/sessions?except_current=false' => { Authorization => "Bearer $fresh" })
+      ->status_is(200)->json_is('/revoked', 1, 'only the one live session was left to revoke');
+    $t->delete_ok('/api/v1/auth/sessions?except_current=false' => { Authorization => "Bearer $fresh" })
+      ->status_is(401, 'a second revoke-all with the now-dead token is a clean 401, not a 500');
+}
+
+# --- except_current must be explicit. The two behaviours differ by
+# exactly "does this also end the session you are holding", so an omitted
+# or garbage value is a 400 rather than either default. ---
 $t->delete_ok('/api/v1/auth/sessions' => { Authorization => "Bearer $admin_jwt" })
-  ->status_is(400, 'DELETE /auth/sessions with no except_current=true param is rejected, not treated as "revoke everything"');
+  ->status_is(400, 'DELETE /auth/sessions with no except_current param is rejected, not treated as "revoke everything"');
+$t->delete_ok('/api/v1/auth/sessions?except_current=yes' => { Authorization => "Bearer $admin_jwt" })
+  ->status_is(400, 'a non-true/false except_current is rejected rather than coerced');
 
 done_testing;

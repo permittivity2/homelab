@@ -4,7 +4,7 @@ use Mojo::UserAgent;
 use Mojo::URL;
 use Exporter 'import';
 
-our @EXPORT_OK = qw(introspect login refresh revoke issue);
+our @EXPORT_OK = qw(introspect login refresh revoke revoke_all issue);
 
 # Verifies a bearer JWT against homelab-api's /api/v1/auth/introspect —
 # the one place identity actually lives (see CLAUDE.md). Every feature
@@ -113,6 +113,41 @@ sub revoke {
     my $err = $tx->error;
     return 0 if $err && !$err->{code};
     return $tx->result->code == 200 ? 1 : 0;
+}
+
+# Revokes EVERY live session belonging to the caller of $jwt, including
+# the session $jwt itself names. This is what makes signing out of one
+# app sign you out of all of them.
+#
+# WHY A SEPARATE CALL FROM revoke(): homelab-sso hands each relying party
+# its OWN independently issued access+refresh pair (see issue() below --
+# that was deliberate, so one app's token expiring cannot log you out of
+# another). The flip side is that revoking the IdP session's refresh
+# token touches exactly one of those pairs. Before this existed, signing
+# out of myaccount left drive and webmail fully usable until their own
+# tokens aged out.
+#
+# Needs a BEARER token, not a refresh token: the endpoint is the same
+# self-scoped bulk-revoke the Sessions panel already uses, so the
+# authority model is unchanged -- you may end your own sessions, nobody
+# else's.
+#
+# Returns a hashref ({revoked => N}) on success and undef on any failure,
+# so a caller can log the count. Best-effort like revoke(): a logout must
+# clear the local session whether or not this call got through. Note N
+# can legitimately be 0, which is why this is not a 1/0 return.
+sub revoke_all {
+    my ($jwt, %opts) = @_;
+    my $api_base = $opts{api_base} // die "revoke_all(): api_base required\n";
+
+    my $tx = $UA->delete("$api_base/api/v1/auth/sessions?except_current=false",
+        { Authorization => "Bearer $jwt" });
+    my $err = $tx->error;
+    return undef if $err && !$err->{code};
+    my $res = $tx->result;
+    return undef unless $res->code == 200;
+    my $body = eval { $res->json } // {};
+    return { revoked => $body->{revoked} // 0 };
 }
 
 # Mints a FRESH, independent access+refresh token pair for an

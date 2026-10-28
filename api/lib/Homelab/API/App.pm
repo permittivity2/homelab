@@ -1902,22 +1902,52 @@ sub _sessions_revoke ($self, $c) {
     return $c->render(json => { ok => \1 });
 }
 
-# DELETE /api/v1/auth/sessions?except_current=true -- "log out
-# everywhere else." Always scoped to the CALLER's own account (no
-# ?user= support -- a site_admin wanting to kill a different user's
-# other sessions can already do that one at a time via _sessions_revoke,
-# which is the safer, auditable primitive; a bulk "nuke everyone else's
-# sessions" admin action isn't something this was asked for).
+# DELETE /api/v1/auth/sessions?except_current=true|false -- bulk session
+# revocation, always scoped to the CALLER's own account (no ?user=
+# support -- a site_admin wanting to kill a different user's sessions can
+# already do that one at a time via _sessions_revoke, which is the safer,
+# auditable primitive; a bulk "nuke everyone else's sessions" admin
+# action isn't something this was asked for).
+#
+#   except_current=true  -- "log out everywhere else", what the Sessions
+#                           panel's "Sign out other devices" button does.
+#   except_current=false -- "log out EVERYWHERE", including the token
+#                           making this very call. This is what makes
+#                           single-logout actually work: homelab-sso hands
+#                           every relying party its OWN independently
+#                           issued token pair (see AuthClient::issue), so
+#                           revoking just the IdP session's refresh token
+#                           left drive/webmail/myaccount fully usable
+#                           until their own tokens expired -- signing out
+#                           of one app did not sign you out of the others.
+#
+# The parameter stays MANDATORY and explicit. A caller that forgets it
+# still gets a 400 rather than a default, because the two behaviours
+# differ by exactly "does this also end the session you are holding" --
+# too consequential to infer from an omission.
 sub _sessions_revoke_others ($self, $c) {
     my ($caller, $jti) = $self->_authenticate($c) or return;
-    return $c->render(json => { error => 'except_current=true is required' }, status => 400)
-        unless ($c->param('except_current') // '') eq 'true';
+    my $except = $c->param('except_current') // '';
+    return $c->render(json => { error => 'except_current=true or except_current=false is required' }, status => 400)
+        unless $except eq 'true' || $except eq 'false';
+    my $keep_current = $except eq 'true';
 
-    my $rows = $self->pg->db->query(
-        q{SELECT jti, refresh_token_id FROM api.sessions
-          WHERE user_id = ? AND revoked = FALSE AND jti != ?},
-        $caller->{id}, $jti,
-    )->hashes->to_array;
+    # Two spelled-out queries rather than one with a nullable
+    # placeholder: `AND (? IS NULL OR jti != ?)` looks tidier but
+    # Postgres cannot infer a bare parameter's type on the left of
+    # IS NULL and fails the whole statement with "could not determine
+    # data type of parameter $1" -- a 500, caught by t/sessions.t.
+    my $rows = $keep_current
+        ? $self->pg->db->query(
+              q{SELECT jti, refresh_token_id FROM api.sessions
+                WHERE user_id = ? AND revoked = FALSE AND jti != ?},
+              $caller->{id}, $jti,
+          )->hashes->to_array
+        : $self->pg->db->query(
+              q{SELECT jti, refresh_token_id FROM api.sessions
+                WHERE user_id = ? AND revoked = FALSE},
+              $caller->{id},
+          )->hashes->to_array;
     for my $row (@$rows) {
         $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE jti = ?', $row->{jti});
         $self->pg->db->query('UPDATE api.refresh_tokens SET revoked = TRUE WHERE id = ?', $row->{refresh_token_id})

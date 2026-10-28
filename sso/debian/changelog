@@ -1,3 +1,9 @@
+homelab-sso (0.1.17) unstable; urgency=medium
+
+  * Release v0.1.17
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 20:14:10 -0500
+
 homelab-sso (0.1.16) unstable; urgency=medium
 
   * Release v0.1.16

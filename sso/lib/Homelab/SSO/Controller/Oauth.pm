@@ -4,7 +4,7 @@ use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::URL;
 use Mojo::Util qw(secure_compare);
 
-use Homelab::Common::AuthClient qw(login introspect refresh revoke issue);
+use Homelab::Common::AuthClient qw(login introspect refresh revoke revoke_all issue);
 use Homelab::Common::Registry qw(system_agent_token);
 
 # One-time authorization codes live in Postgres (sso.oauth_codes), not
@@ -338,9 +338,42 @@ sub userinfo ($c) {
 # actively notify -- no per-client backchannel-logout-uri list, no
 # cross-app cookie.
 sub logout ($c) {
-    if (my $refresh_token = $c->session('refresh_token')) {
-        eval { revoke($refresh_token, api_base => $c->app->api_base) };
+    # Revoke EVERY session this user holds, not just the IdP's own.
+    #
+    # This used to call revoke() on this session's refresh token alone,
+    # which was the bug: _rp_tokens hands each relying party its OWN
+    # independently issued token pair (deliberately -- see
+    # AuthClient::issue), so one revoke killed exactly one of them.
+    # Signing out of myaccount redirected here, this ran, and
+    # drive.mailmasker.org and webmail stayed fully usable until their
+    # own tokens aged out. Reported 2026-10-27.
+    #
+    # The comment at the top of this file is still right about the
+    # mechanism -- no cross-app cookie, every relying party re-verifies
+    # via introspect() and homelab-api can kill a jti immediately -- it
+    # just needed to revoke ALL the user's jtis rather than one.
+    my $fanned_out;
+    if (my $jwt = $c->session('jwt')) {
+        my $res = eval { revoke_all($jwt, api_base => $c->app->api_base) };
+        if ($res) {
+            $fanned_out = 1;
+            $c->app->log->info(
+                sprintf('logout: revoked %d session(s) for %s', $res->{revoked}, $c->session('email') // '?'));
+        }
     }
+
+    # Fallback for the cases the fan-out cannot cover: no JWT in this
+    # session (expired IdP session, or a client hitting /logout directly),
+    # or homelab-api unreachable. Kills at least this session's own
+    # refresh token, which is all logout ever did before -- so a failure
+    # here degrades to the old behaviour instead of to nothing.
+    unless ($fanned_out) {
+        if (my $refresh_token = $c->session('refresh_token')) {
+            eval { revoke($refresh_token, api_base => $c->app->api_base) };
+            $c->app->log->info('logout: fan-out unavailable, revoked this session only');
+        }
+    }
+
     $c->session(expires => 1);
 
     my $redirect_uri = $c->param('redirect_uri');

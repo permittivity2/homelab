@@ -214,7 +214,7 @@ use Mojo::Base 'Mojolicious::Controller', -signatures;
 
 use Mojo::URL;
 use Mojo::UserAgent;
-use Homelab::Common::AuthClient qw(introspect);
+use Homelab::Common::AuthClient qw(introspect revoke_all);
 use Homelab::Common::SSOClient qw(exchange_code);
 
 # Server-to-server client for calling homelab-api with the logged-in
@@ -434,6 +434,24 @@ sub oauth_callback ($c) {
 }
 
 sub logout ($c) {
+    # Revoke every session this user holds BEFORE clearing our cookie and
+    # handing off to the IdP. homelab-sso's /logout fans out too, so this
+    # is belt-and-braces -- but it is the half that still works when the
+    # IdP session cookie is already gone (expired, or cleared by browser
+    # privacy settings), in which case SSO has no token to fan out with
+    # and would silently revoke nothing.
+    #
+    # Deliberately NOT via _current_auth: that would introspect first,
+    # costing a second round trip to learn something revoke_all's own
+    # 401 already tells us. A dead token here simply means there was
+    # nothing left to revoke.
+    #
+    # Best-effort: logout must clear the local session and redirect
+    # whether or not homelab-api answered.
+    if (my $jwt = $c->session('token')) {
+        my $res = eval { revoke_all($jwt, api_base => $c->app->api_base) };
+        $c->app->log->info(sprintf('logout: revoked %d session(s)', $res->{revoked})) if $res;
+    }
     $c->session(expires => 1);
     my $post_logout_uri = Mojo::URL->new($c->app->sso_redirect_uri)->path('/login');
     my $url = Mojo::URL->new($c->app->sso_base . '/logout')->query(redirect_uri => $post_logout_uri);
