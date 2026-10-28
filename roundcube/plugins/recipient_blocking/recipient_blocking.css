@@ -68,3 +68,21 @@
 #settings-menu li > a.blockedaddresses:before {
     content: "\f05e";
 }
+
+/* ---- make the plugin page actually scroll ------------------------
+ * elastic's `#layout > div > .scroller { flex: 1 }` gives the wrapper its
+ * HEIGHT, but the only rule granting it OVERFLOW is
+ * `#layout-content.only > .scroller { overflow: auto }` -- and plugin.html
+ * renders its pane as `<div id="layout-content" class="selected">`, never
+ * `.only`. So a bare .scroller on a plugin page stretches to fill, and its
+ * content is then clipped by #layout's own `overflow: hidden` with NO
+ * scrollbar at all. That is the bug; wrapping in .scroller alone does not
+ * fix it (confirmed the hard way on 2026-10-28, with 1617 rows).
+ *
+ * min-height: 0 is required, not decorative: a flex item defaults to
+ * min-height:auto, which refuses to shrink below its content and so
+ * defeats overflow entirely. */
+#layout-content > .plugin-page-scroller {
+    overflow-y: auto;
+    min-height: 0;
+}

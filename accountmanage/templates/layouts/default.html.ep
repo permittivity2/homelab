@@ -182,6 +182,10 @@
        now, and two nested borders read as a mistake. */
     .scrollbox table.sessions { border: 0; }
     /* Keep the header row visible while the body scrolls. */
+    /* Sortable headers. Only the ones that sort get the pointer -- the
+       empty action column must not look clickable. */
+    .scrollbox table.sessions thead th.ms-sort { cursor: pointer; user-select: none; }
+    .scrollbox table.sessions thead th.ms-sort:hover { color: var(--silver-bright); }
     .scrollbox table.sessions thead th {
       position: sticky; top: 0; z-index: 1;
       background: var(--black-secondary);
@@ -592,23 +596,83 @@
           post('/mail/block-link', { enabled: this.checked ? '1' : '' }).then(function (r) { st.textContent = r.ok ? 'Saved.' : ('Failed: ' + ((r.body && r.body.error) || '')); });
         });
 
-        var blocked = d.blocked || [];
+        // Normalised once here so the filter/sort/render path below never has
+        // to care that the API may hand back either plain strings or full
+        // rows. `created_at` is a real column on domainadmin.recipient_access
+        // and /recipient-access/mine does SELECT *, so the date is already in
+        // the payload -- it just was not being shown.
+        var blocked = (d.blocked || []).map(function (x) {
+          if (typeof x === 'string') { return { addr: x, at: '' }; }
+          return { addr: x.recipient || x.address || '', at: x.created_at || '' };
+        });
         var bel = document.getElementById('ms-blocked');
-        // Tell the reader how many are in there. Without this the scrollbox
-        // hides the size of the list -- you cannot tell 12 from 300.
         var bcount = document.getElementById('ms-blocked-count');
-        if (bcount) { bcount.textContent = blocked.length ? '(' + blocked.length + ')' : ''; }
-        bel.classList.toggle('has-rows', blocked.length > 0);
-        if (!blocked.length) { bel.innerHTML = '<p class="muted">You haven\'t blocked any addresses.</p>'; }
-        else {
-          bel.innerHTML = '<table class="sessions"><thead><tr><th>Address</th><th></th></tr></thead><tbody>' + blocked.map(function (x) {
-            var r = (typeof x === 'string') ? x : (x.recipient || x.address || '');
-            return '<tr><td>' + hlEsc(r) + '</td><td><button type="button" class="btn btn-secondary ms-unblock" data-r="' + hlEsc(r) + '">Unblock</button></td></tr>';
-          }).join('') + '</tbody></table>';
+        var bfilter = document.getElementById('ms-blocked-filter');
+        // Sort state lives out here so a re-render (after an unblock, or a
+        // keystroke) keeps whatever ordering the user chose.
+        var bsort = { key: 'addr', dir: 1 };
+
+        // Trim the stored timestamp to minutes rather than reformatting it.
+        // The value carries its own offset ("2026-10-24 11:43:19.669515-05");
+        // re-interpreting that client-side is how timezone bugs get made, and
+        // nothing here needs more precision than the minute.
+        function bdate(v) { return v ? String(v).slice(0, 16) : ''; }
+
+        function renderBlocked() {
+          var q = (bfilter && bfilter.value || '').trim().toLowerCase();
+          // 3-character minimum: below that the filter is noise, and on a
+          // 1600-row list every keystroke would rebuild the whole table.
+          var rows = (q.length >= 3)
+            ? blocked.filter(function (r) { return r.addr.toLowerCase().indexOf(q) !== -1; })
+            : blocked.slice();
+          rows.sort(function (a, b) {
+            var x = (a[bsort.key] || ''), y = (b[bsort.key] || '');
+            // Dates are stored "YYYY-MM-DD HH:MM:SS...", which compares
+            // correctly as a string, so one comparator covers both columns.
+            return x < y ? -bsort.dir : (x > y ? bsort.dir : 0);
+          });
+
+          if (bcount) {
+            bcount.textContent = !blocked.length ? ''
+              : (rows.length === blocked.length ? '(' + blocked.length + ')'
+                                                : '(' + rows.length + ' of ' + blocked.length + ')');
+          }
+          bel.classList.toggle('has-rows', rows.length > 0);
+
+          if (!blocked.length) { bel.innerHTML = '<p class="muted">You haven\'t blocked any addresses.</p>'; return; }
+          if (!rows.length) { bel.innerHTML = '<p class="muted">No blocked address matches that filter.</p>'; return; }
+
+          var arrow = function (k) { return bsort.key === k ? (bsort.dir === 1 ? ' \u25b2' : ' \u25bc') : ''; };
+          bel.innerHTML = '<table class="sessions"><thead><tr>'
+            + '<th class="ms-sort" data-k="addr" title="Sort by address">Address' + arrow('addr') + '</th>'
+            + '<th class="ms-sort" data-k="at" title="Sort by date blocked">Blocked' + arrow('at') + '</th>'
+            + '<th></th></tr></thead><tbody>'
+            + rows.map(function (r) {
+                return '<tr><td>' + hlEsc(r.addr) + '</td>'
+                     + '<td class="muted">' + hlEsc(bdate(r.at)) + '</td>'
+                     + '<td><button type="button" class="btn btn-secondary ms-unblock" data-r="' + hlEsc(r.addr) + '">Unblock</button></td></tr>';
+              }).join('')
+            + '</tbody></table>';
+
           Array.prototype.forEach.call(bel.querySelectorAll('.ms-unblock'), function (btn) {
             btn.addEventListener('click', function () { post('/mail/unblock', { recipient: btn.dataset.r }).then(reload); });
           });
+          Array.prototype.forEach.call(bel.querySelectorAll('.ms-sort'), function (th) {
+            th.addEventListener('click', function () {
+              var k = th.dataset.k;
+              // Same column toggles direction; a different column starts
+              // ascending, which is what every table everywhere does.
+              if (bsort.key === k) { bsort.dir = -bsort.dir; } else { bsort.key = k; bsort.dir = 1; }
+              renderBlocked();
+            });
+          });
         }
+
+        if (bfilter && !bfilter.dataset.wired) {
+          bfilter.dataset.wired = '1';
+          bfilter.addEventListener('input', renderBlocked);
+        }
+        renderBlocked();
       }
       var blockBtn = document.getElementById('ms-block-btn');
       if (blockBtn) blockBtn.addEventListener('click', function () {

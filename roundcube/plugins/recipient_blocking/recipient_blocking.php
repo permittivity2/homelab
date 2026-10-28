@@ -634,7 +634,7 @@ class recipient_blocking extends rcube_plugin
             //
             // The search form above stays OUTSIDE the scroller on purpose,
             // so it does not scroll away while you page through results.
-            $out .= html::div('scroller', $table->show($attrib));
+            $out .= html::div('scroller plugin-page-scroller', $table->show($attrib));
         }
 
         return $out;

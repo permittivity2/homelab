@@ -388,7 +388,7 @@ class invite_sender extends rcube_plugin
             // template. #layout is `overflow: hidden`, so a list longer than
             // the pane is clipped with no scrollbar. The send form above
             // stays outside it deliberately.
-            $out .= html::div('scroller', $table->show($attrib));
+            $out .= html::div('scroller plugin-page-scroller', $table->show($attrib));
         }
 
         return $out;
