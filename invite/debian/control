@@ -10,6 +10,7 @@ Package: homelab-invite
 Architecture: all
 Depends: perl (>= 5.36),
          homelab-common (>= 0.1.23),
+         homelab-webtheme,
          libmojolicious-perl,
          libyaml-libyaml-perl,
          libmojo-pg-perl,

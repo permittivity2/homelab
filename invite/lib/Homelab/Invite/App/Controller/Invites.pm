@@ -1,7 +1,6 @@
 package Homelab::Invite::App::Controller::Invites;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::UserAgent;
-use Mojo::Util qw(xml_escape);
 use Homelab::Invite::Mailer qw(send_mail);
 use Homelab::Common::AuditClient qw(enqueue);
 use Homelab::Common::Registry qw(system_agent_token lookup);
@@ -259,22 +258,29 @@ sub consume ($c) {
     return $c->render(json => { ok => \1 });
 }
 
-# GET /invite/:token -- public, unauthenticated. Renders a minimal,
-# self-contained HTML page (no templates/ directory -- see README.md's
-# "Why inline HTML" note: this is the only page any homelab-* backend
-# service has ever needed to render, and a whole templating layer for
-# one page is more machinery than the task warrants). Every dynamic
-# value is xml_escape()'d before interpolation -- the recipient email
-# and the sender's optional free-text message are both real,
-# attacker-influenceable strings (message is set by whoever sent the
-# invite, not necessarily trustworthy).
+# GET /invite/:token -- public, unauthenticated. Renders the invite
+# acceptance page from templates/accept.html.ep.
+#
+# This USED to be inline qq{} HTML with no templates/ directory at all, on
+# the reasoning that a templating layer for one page was more machinery
+# than the task warranted (the old "Why inline HTML" note in README.md).
+# That held until the fleet grew a shared visual language: with the chrome
+# living in homelab-webtheme's partials, "no templates" meant this was the
+# one page a real user sees that could not have it, and it stayed on the
+# old light palette after everything else moved. Reversed 2026-10-27.
+#
+# Escaping is now the renderer's job rather than hand-rolled xml_escape per
+# field, which matters here: the recipient email and the sender's optional
+# free-text message are both attacker-influenceable (the message is written
+# by whoever sent the invite, not necessarily someone trustworthy).
 sub show ($c) {
     my $token = $c->stash('token');
     my $ip = $c->tx->remote_address // 'unknown';
 
     if (_rate_limited($c, $ip)) {
         _log_attempt($c, $ip, $token, 'rate_limited');
-        return $c->render(text => _page('Too many attempts', 'Too many attempts from this address. Try again later.'),
+        return $c->render(template => 'notice', heading => 'Too many attempts',
+            body => 'Too many attempts from this address. Try again later.',
             format => 'html', status => 429);
     }
 
@@ -284,7 +290,8 @@ sub show ($c) {
     )->hash;
     unless ($row) {
         _log_attempt($c, $ip, $token, 'invalid_token');
-        return $c->render(text => _page('Invalid invite', 'This invite link is not valid.'), format => 'html', status => 404);
+        return $c->render(template => 'notice', heading => 'Invalid invite',
+            body => 'This invite link is not valid.', format => 'html', status => 404);
     }
     if ($row->{is_expired}) {
         $c->app->pg->db->query(q{UPDATE invite.invites SET status = 'expired' WHERE id = ?}, $row->{id});
@@ -292,7 +299,8 @@ sub show ($c) {
     }
     if ($row->{status} ne 'pending') {
         _log_attempt($c, $ip, $token, $row->{status} eq 'expired' ? 'expired' : 'already_used');
-        return $c->render(text => _page('Invite no longer valid', 'This invite has already been used, been revoked, or expired.'),
+        return $c->render(template => 'notice', heading => 'Invite no longer valid',
+            body => 'This invite has already been used, been revoked, or expired.',
             format => 'html', status => 410);
     }
 
@@ -304,128 +312,24 @@ sub show ($c) {
     my $domain_error = _recipient_domain_error($c, $row->{recipient_email});
     if ($domain_error) {
         _log_attempt($c, $ip, $token, 'domain_rejected');
-        return $c->render(text => _page('Invite cannot be used', $domain_error), format => 'html', status => 403);
+        return $c->render(template => 'notice', heading => 'Invite cannot be used',
+            body => $domain_error, format => 'html', status => 403);
     }
 
     _log_attempt($c, $ip, $token, 'success');
-    my $recipient  = xml_escape($row->{recipient_email});
-    my $recip_attr = xml_escape($row->{recipient_email});
-    my $message    = $row->{message} ? '<p class="msg">"' . xml_escape($row->{message}) . '"</p>' : '';
-    my $token_html = xml_escape($token);
-    my $domain     = xml_escape(_account_domain($c));
-    return $c->render(format => 'html', text => qq{<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>You're invited</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:30em;margin:3em auto;padding:0 1em;color:#1a1a1a}
-label{display:block;font-weight:600;font-size:.9em;margin:1em 0 .25em}
-input{width:100%;padding:.55em .7em;border:1px solid #d5d8dd;border-radius:6px;box-sizing:border-box;font-size:1em}
-.uname-row{display:flex;align-items:stretch}
-.uname-row input{border-top-right-radius:0;border-bottom-right-radius:0}
-.uname-suffix{display:flex;align-items:center;padding:0 .7em;border:1px solid #d5d8dd;border-left:0;border-top-right-radius:6px;border-bottom-right-radius:6px;background:#f5f6f8;color:#6b7280;white-space:nowrap}
-button{margin-top:1.4em;padding:.65em 1.2em;border:0;border-radius:6px;background:#3562d4;color:#fff;font-size:1em;font-weight:600;cursor:pointer}
-button:hover{background:#2a4fb0}
-.chip{display:inline-block;margin:.25em .35em .25em 0;padding:.3em .7em;border:1px solid #3562d4;border-radius:14px;background:#eef2fd;color:#2a4fb0;cursor:pointer;font-size:.85em}
-.hint{font-size:.8em;color:#6b7280;margin:.25em 0 0}
-.msg{font-style:italic;color:#555}.err{color:#b00;margin-top:1em}.ok{color:#1a7f37}</style></head>
-<body>
-<h1>You're invited</h1>
-$message
-<p>Create your account. Pick a username &mdash; your login will be that name at <strong>$domain</strong>.</p>
-<label for="username">Username</label>
-<div class="uname-row">
-  <input type="text" id="username" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="yourname" autofocus>
-  <span class="uname-suffix">\@$domain</span>
-</div>
-<div id="ustatus" class="hint"></div>
-<label for="pw">Password</label>
-<input type="password" id="pw" placeholder="At least 8 characters">
-<label for="pw2">Confirm password</label>
-<input type="password" id="pw2" placeholder="Re-enter your password">
-<label for="recovery">Recovery email (optional)</label>
-<input type="email" id="recovery" value="$recip_attr">
-<p class="hint">If you ever forget your password, we'll email a reset link here. Pre-filled with the address your invite was sent to &mdash; edit or clear it as you like.</p>
-<button id="go">Create account</button>
-<p id="err" class="err"></p>
-<script>
-var TOKEN = '$token_html';
-var DOMAIN = '$domain';
-var ustatus = document.getElementById('ustatus');
-var errEl = document.getElementById('err');
-var unameEl = document.getElementById('username');
-
-async function postJSON(path, data) {
-    var r = await fetch(path, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    });
-    var j = {};
-    try { j = await r.json(); } catch (e) {}
-    return { ok: r.ok, status: r.status, body: j };
-}
-
-function renderSuggestions(list) {
-    ustatus.innerHTML = '';
-    if (!list || !list.length) return;
-    var span = document.createElement('span');
-    span.textContent = 'Try: ';
-    ustatus.appendChild(span);
-    list.forEach(function (name) {
-        var chip = document.createElement('span');
-        chip.className = 'chip';
-        chip.textContent = name;
-        chip.onclick = function () {
-            unameEl.value = name;
-            ustatus.innerHTML = '';
-            checkUsername();
-        };
-        ustatus.appendChild(chip);
-    });
-}
-
-async function checkUsername() {
-    var u = unameEl.value.trim();
-    ustatus.className = 'hint';
-    ustatus.textContent = '';
-    if (!u) return;
-    var res = await postJSON('/invite/' + TOKEN + '/username', { username: u });
-    if (!res.ok) { return; }
-    var b = res.body;
-    if (b.invalid) { ustatus.className = 'hint err'; ustatus.textContent = b.error || 'Invalid username.'; return; }
-    if (b.available) { ustatus.className = 'hint ok'; ustatus.textContent = u.toLowerCase() + '\@' + DOMAIN + ' is available.'; return; }
-    ustatus.className = 'hint';
-    renderSuggestions(b.suggestions);
-}
-
-unameEl.addEventListener('blur', checkUsername);
-
-document.getElementById('go').onclick = async function () {
-    errEl.textContent = '';
-    var username = unameEl.value.trim();
-    var pw = document.getElementById('pw').value;
-    var pw2 = document.getElementById('pw2').value;
-    var recovery = document.getElementById('recovery').value.trim();
-    if (!username) { errEl.textContent = 'Please choose a username.'; return; }
-    if (pw.length < 8) { errEl.textContent = 'Password must be at least 8 characters.'; return; }
-    if (pw !== pw2) { errEl.textContent = 'The two passwords do not match.'; return; }
-
-    var res = await postJSON('/invite/' + TOKEN + '/accept', {
-        username: username, password: pw, password_confirm: pw2, recovery_email: recovery
-    });
-    if (res.ok && res.body.ok) {
-        document.body.innerHTML = '<h1>Account created</h1><p>Your login is <strong>' +
-            (res.body.email || (username.toLowerCase() + '\@' + DOMAIN)) +
-            '</strong>. You can now log in.</p>';
-        return;
-    }
-    if (res.body.suggestions) {
-        errEl.textContent = 'That username is no longer available &mdash; try one of these:';
-        renderSuggestions(res.body.suggestions);
-        return;
-    }
-    errEl.textContent = res.body.error || 'Something went wrong.';
-};
-</script>
-</body></html>});
+    # The page itself is templates/accept.html.ep now. It used to be ~110
+    # lines of qq{}-interpolated HTML+CSS+JS right here, which is why this
+    # was the last page in the fleet still on the old light palette -- there
+    # was no template for the shared chrome to wrap. Escaping is the
+    # renderer's job now rather than hand-rolled xml_escape per field.
+    return $c->render(
+        template        => 'accept',
+        recipient_email => $row->{recipient_email},
+        message         => $row->{message},
+        token           => $token,
+        domain          => _account_domain($c),
+        login_url       => $c->app->invite_config->{login_url} // 'https://myaccount.mailmasker.org/',
+    );
 }
 
 # POST /invite/:token/username {username} -- public. Live availability
@@ -642,12 +546,5 @@ sub _log_attempt ($c, $ip, $token, $outcome) {
     );
 }
 
-sub _page ($title, $body) {
-    my $t = xml_escape($title);
-    my $b = xml_escape($body);
-    return qq{<!DOCTYPE html><html><head><meta charset="utf-8"><title>$t</title></head>
-<body style="font-family:sans-serif;max-width:32em;margin:4em auto;padding:0 1em">
-<h1>$t</h1><p>$b</p></body></html>};
-}
 
 1;

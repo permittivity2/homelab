@@ -133,11 +133,18 @@ noted):
   calls on the same token: exactly one succeeds, confirmed in `t/basic.t`.
 
 `/invite` (public, no auth, fronted by the `invite.<domain>` vhost):
-- `GET /:token` — renders the acceptance page (inline HTML, no
-  `templates/` directory — this is the only page any homelab-* backend
-  has ever needed to render, and a templating layer for one page is more
-  machinery than the task warrants). Every dynamic value is
-  `Mojo::Util::xml_escape`'d before interpolation.
+- `GET /:token` — renders the acceptance page from
+  `templates/accept.html.ep`, on the shared chrome from `homelab-webtheme`
+  (theme/logo/footer; no top bar — whoever opens an invite link has no
+  account yet). Escaping is the renderer's job, which matters because the
+  recipient address and the sender's free-text message are both
+  attacker-influenceable.
+  This was inline `qq{}` HTML with no `templates/` directory until
+  2026-10-27, on the reasoning that a templating layer for one page was
+  more machinery than it was worth. That stopped being true once the fleet
+  had a shared visual language: "no templates" meant this was the one page
+  a real user sees that could not pick it up, and it was left behind on the
+  old palette.
 - `POST /:token/accept {password}` — never accepts an email field; the
   account created is always the invite's own `recipient_email`, resolved
   server-side, never client-suppliable. Calls homelab-api's own

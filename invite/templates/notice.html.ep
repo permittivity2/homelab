@@ -1,0 +1,7 @@
+% layout 'invite';
+% title $heading;
+%# The expired / already-used / rate-limited / wrong-domain states. Was a
+%# bare qq{} page with inline styles; it is on the shared theme now so a
+%# refused invite does not look like a different product.
+<h1><%= $heading %></h1>
+<p><%= $body %></p>

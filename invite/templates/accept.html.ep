@@ -1,0 +1,121 @@
+% layout 'invite';
+% title "You're invited";
+<h1>You're invited</h1>
+% if (length($message // '')) {
+<p class="msg">"<%= $message %>"</p>
+% }
+<p>Create your account. Pick a username &mdash; your login will be that name at <strong><%= $domain %></strong>.</p>
+<label for="username">Username</label>
+<div class="uname-row">
+  <input type="text" id="username" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="yourname" autofocus>
+  <span class="uname-suffix">@<%= $domain %></span>
+</div>
+<div id="ustatus" class="hint"></div>
+<label for="pw">Password</label>
+<input type="password" id="pw" placeholder="At least 8 characters" autocomplete="new-password">
+<label for="pw2">Confirm password</label>
+<input type="password" id="pw2" placeholder="Re-enter your password" autocomplete="new-password">
+<label for="recovery">Recovery email (optional)</label>
+<input type="email" id="recovery" value="<%= $recipient_email %>" autocomplete="email">
+<p class="hint">If you ever forget your password, we'll email a reset link here. Pre-filled with the address your invite was sent to &mdash; edit or clear it as you like.</p>
+<button id="go">Create account</button>
+<p id="err" class="err"></p>
+<script>
+var TOKEN = <%== Mojo::JSON::to_json($token) %>;
+var DOMAIN = <%== Mojo::JSON::to_json($domain) %>;
+var ustatus = document.getElementById('ustatus');
+var errEl = document.getElementById('err');
+var unameEl = document.getElementById('username');
+
+async function postJSON(path, data) {
+    var r = await fetch(path, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    });
+    var j = {};
+    try { j = await r.json(); } catch (e) {}
+    return { ok: r.ok, status: r.status, body: j };
+}
+
+function renderSuggestions(list) {
+    ustatus.innerHTML = '';
+    if (!list || !list.length) return;
+    var span = document.createElement('span');
+    span.textContent = 'Try: ';
+    ustatus.appendChild(span);
+    list.forEach(function (name) {
+        var chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = name;
+        chip.onclick = function () {
+            unameEl.value = name;
+            ustatus.innerHTML = '';
+            checkUsername();
+        };
+        ustatus.appendChild(chip);
+    });
+}
+
+async function checkUsername() {
+    var u = unameEl.value.trim();
+    ustatus.className = 'hint';
+    ustatus.textContent = '';
+    if (!u) return;
+    var res = await postJSON('/invite/' + TOKEN + '/username', { username: u });
+    if (!res.ok) { return; }
+    var b = res.body;
+    if (b.invalid) { ustatus.className = 'hint err'; ustatus.textContent = b.error || 'Invalid username.'; return; }
+    if (b.available) { ustatus.className = 'hint ok'; ustatus.textContent = u.toLowerCase() + '@' + DOMAIN + ' is available.'; return; }
+    ustatus.className = 'hint';
+    renderSuggestions(b.suggestions);
+}
+
+unameEl.addEventListener('blur', checkUsername);
+
+document.getElementById('go').onclick = async function () {
+    errEl.textContent = '';
+    var username = unameEl.value.trim();
+    var pw = document.getElementById('pw').value;
+    var pw2 = document.getElementById('pw2').value;
+    var recovery = document.getElementById('recovery').value.trim();
+    if (!username) { errEl.textContent = 'Please choose a username.'; return; }
+    if (pw.length < 8) { errEl.textContent = 'Password must be at least 8 characters.'; return; }
+    if (pw !== pw2) { errEl.textContent = 'The two passwords do not match.'; return; }
+
+    var res = await postJSON('/invite/' + TOKEN + '/accept', {
+        username: username, password: pw, password_confirm: pw2, recovery_email: recovery
+    });
+    if (res.ok && res.body.ok) {
+        // Replace only the CARD BODY. This used to overwrite document.body,
+        // which threw away the page's own chrome (and now the shared logo and
+        // footer with it) at the single most reassuring moment in the flow.
+        var login = res.body.email || (username.toLowerCase() + '@' + DOMAIN);
+        var h = document.createElement('h1');
+        h.textContent = 'Account created';
+        var p = document.createElement('p');
+        p.appendChild(document.createTextNode('Your login is '));
+        var strong = document.createElement('strong');
+        strong.textContent = login;
+        p.appendChild(strong);
+        p.appendChild(document.createTextNode('. You can now sign in.'));
+        var a = document.createElement('a');
+        a.className = 'btn btn-primary';
+        a.href = '<%= $login_url %>';
+        a.textContent = 'Sign in';
+        var body = document.getElementById('card-body');
+        body.innerHTML = '';
+        body.appendChild(h);
+        body.appendChild(p);
+        body.appendChild(a);
+        return;
+    }
+    if (res.body.suggestions) {
+        // textContent, not innerHTML: this string used to be assigned with
+        // an &mdash; entity through innerHTML, which only worked by accident.
+        errEl.textContent = 'That username is no longer available — try one of these:';
+        renderSuggestions(res.body.suggestions);
+        return;
+    }
+    errEl.textContent = res.body.error || 'Something went wrong.';
+};
+</script>

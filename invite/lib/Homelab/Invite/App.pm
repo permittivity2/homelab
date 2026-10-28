@@ -14,8 +14,27 @@ has 'invite_config';
 has 'mailer_config';
 
 sub startup ($self) {
+    # Templates land at /usr/share/homelab-invite/templates, not next to the
+    # /usr/bin entrypoint -- same HOMELAB_*_HOME convention as every other
+    # homelab-* Mojolicious app. This package had NO templates at all until
+    # 2026-10-27; the invite-acceptance page was built with qq{} in the
+    # controller, which is why it was the last page still on the old palette.
+    my $home = $ENV{HOMELAB_INVITE_HOME} // '/usr/share/homelab-invite';
+    $self->renderer->paths([("$home/templates"), @{ $self->renderer->paths }]);
+
     my $config = load_config('HOMELAB_INVITE_CONFIG', '/etc/homelab/invite/config.yml');
     $self->config($config);
+
+    # Shared web chrome (homelab-webtheme): theme.css/shell.js/logo from
+    # static.mailmasker.org, plus the shared footer. NOT the shared header --
+    # whoever opens an invite link does not have an account yet, so an account
+    # dropdown would be nonsense. app_name is '' so the footer reads
+    # "MailMasker is a product of ...", which is what they are being invited to.
+    $self->plugin('Homelab::WebTheme' => {
+        app_name   => '',
+        menu_links => [],
+        ($config->{web_theme}{base_url} ? (theme_base => $config->{web_theme}{base_url}) : ()),
+    });
 
     my $srv = $config->{server} // {};
     $self->config(hypnotoad => {

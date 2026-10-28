@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+%# Shared chrome from homelab-webtheme: theme.css / fonts / favicon come from
+%# static.mailmasker.org, so this page restyles with the rest of the fleet and
+%# needs no rebuild for a colour change.
+%#
+%# Shared THEME and FOOTER but NOT the shared HEADER. This page is seen by
+%# someone who does not have an account yet -- a top bar with an account
+%# dropdown would be nonsense here. The logo carries the identity, same
+%# treatment the sso/drive/myaccount sign-in pages get.
+%#
+%# These templates replace HTML that used to be built with qq{} inside the
+%# controller, which is why this package had no templates dir at all until
+%# 2026-10-27.
+%= include 'homelab/head'
+<title><%= title %></title>
+<style>
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: var(--space-6);
+    padding: var(--space-4); background: var(--black-primary);
+  }
+  .card {
+    width: 100%; max-width: 30em; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg); padding: var(--space-8) var(--space-6);
+  }
+  .brand { text-align: center; margin-bottom: var(--space-6); }
+  .brand img { height: 30px; width: auto; }
+  h1 {
+    font-size: var(--app-xl); font-weight: var(--weight-light);
+    letter-spacing: var(--tracking-tight); margin: 0 0 var(--space-4);
+  }
+  p { font-size: var(--app-base); color: var(--text-secondary); line-height: var(--leading-normal); }
+
+  label {
+    display: block; font-weight: var(--weight-medium); font-size: var(--app-sm);
+    color: var(--text-secondary); margin: var(--space-4) 0 var(--space-1);
+  }
+  input {
+    width: 100%; padding: var(--space-2) var(--space-3); box-sizing: border-box;
+    background: var(--black-secondary); color: var(--text-primary);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+    font: inherit; font-size: var(--app-base);
+  }
+  input::placeholder { color: var(--text-muted); }
+  input:hover { border-color: var(--silver-dim); }
+  /* Pointer focus gets the same visible ring as keyboard focus -- on a form
+     where you are typing a password twice, you should always be able to see
+     which field you are in. */
+  input:focus { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-color: var(--silver-medium); }
+
+  /* The username field and its fixed "@domain" suffix read as one control. */
+  .uname-row { display: flex; align-items: stretch; }
+  .uname-row input { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .uname-suffix {
+    display: flex; align-items: center; padding: 0 var(--space-3);
+    border: 1px solid var(--border-strong); border-left: 0;
+    border-top-right-radius: var(--radius-md); border-bottom-right-radius: var(--radius-md);
+    background: var(--surface-hover); color: var(--text-muted); white-space: nowrap;
+    font-size: var(--app-base);
+  }
+
+  button {
+    margin-top: var(--space-6); padding: var(--space-3) var(--space-6);
+    border: 1px solid var(--silver-bright); border-radius: var(--radius-md);
+    background: var(--silver-bright); color: var(--black-primary);
+    font: inherit; font-size: var(--app-base); font-weight: var(--weight-medium);
+    cursor: pointer; transition: background var(--transition-fast);
+  }
+  button:hover { background: #ffffff; }
+
+  /* Suggested-username chips. */
+  .chip {
+    display: inline-block; margin: var(--space-1) var(--space-1) var(--space-1) 0;
+    padding: 0.3em 0.7em; border: 1px solid var(--silver-dim);
+    border-radius: var(--radius-pill); background: var(--surface-hover);
+    color: var(--silver-bright); cursor: pointer; font-size: var(--app-sm);
+  }
+  .chip:hover { border-color: var(--silver-medium); background: var(--black-tertiary); }
+
+  .hint { font-size: var(--app-xs); color: var(--text-muted); margin: var(--space-1) 0 0; }
+  .msg {
+    font-style: italic; color: var(--text-secondary);
+    border-left: 2px solid var(--border-strong); padding-left: var(--space-3); margin: 0 0 var(--space-4);
+  }
+  .err { color: var(--error); margin-top: var(--space-4); }
+  .ok  { color: var(--success); }
+  .appfoot { border: 0; padding: 0; text-align: center; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <img src="<%= theme_base %>/logo.svg" alt="Silver Linings">
+  </div>
+  %# Replaced wholesale by the acceptance page's JS on success, so the card
+  %# chrome and the footer below survive it -- the old code overwrote
+  %# document.body and took the whole page's styling with it.
+  <div id="card-body"><%= content %></div>
+</div>
+%= include 'homelab/footer'
+</body>
+</html>

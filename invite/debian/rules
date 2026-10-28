@@ -19,3 +19,5 @@ override_dh_install:
 		debian/homelab-invite/usr/share/homelab-invite/services/invite.yml
 	find migrations -type f -exec install -D -m 644 {} \
 		debian/homelab-invite/usr/share/homelab-invite/{} \;
+	find templates -type f -exec install -D -m 644 {} \
+		debian/homelab-invite/usr/share/homelab-invite/{} \;
