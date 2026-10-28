@@ -21,9 +21,14 @@ unless ($ENV{HOMELAB_DRIVE_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::Drive::App');
 
 my $email    = 'e2e-drive-bulk-' . time . '-' . $$ . '@test.mailmasker.org';
+# Registered below -- tracked for clean-up (common/t/lib/TestAccounts.pm).
+track_account(undef, $email);
 my $password = 'DriveBulkTest1Aa!!';
 {
     my $api_base = $t->app->api_base;
@@ -176,6 +181,8 @@ my $img_id         = upload_text("jpgbytes $$\n", 'img.jpg', $photos2024_id);
 
 {
     my $other_email    = 'e2e-drive-bulk-other-' . time . '-' . $$ . '@test.mailmasker.org';
+    # Registered below -- tracked for clean-up (common/t/lib/TestAccounts.pm).
+    track_account(undef, $other_email);
     my $other_password = 'DriveBulkOtherTest1Aa!!';
     my $api_base = $t->app->api_base;
     my $ua = Mojo::UserAgent->new;

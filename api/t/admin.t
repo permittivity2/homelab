@@ -10,11 +10,18 @@ unless ($ENV{HOMELAB_API_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::API::App');
 
 my $suffix = time . '-' . $$;
 my ($admin_email, $admin_password) = ("admin-$suffix\@test.mailmasker.org", 'AdminTest1Aa!!');
 my ($plain_email, $plain_password) = ("plain-$suffix\@test.mailmasker.org", 'PlainTest1Aa!!');
+# Registered into whatever HOMELAB_API_CONFIG points at -- routinely
+# PRODUCTION. Tracked so the shared END block neutralises it even if
+# this test dies partway through. See t/lib/TestAccounts.pm.
+track_account($t->app, $admin_email, $plain_email);
 
 $t->post_ok('/api/v1/auth/register', json => { email => $admin_email, password => $admin_password })->status_is(201);
 $t->post_ok('/api/v1/auth/register', json => { email => $plain_email, password => $plain_password })->status_is(201);

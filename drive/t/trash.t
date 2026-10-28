@@ -16,6 +16,9 @@ unless ($ENV{HOMELAB_DRIVE_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::Drive::App');
 
 my $nth = 0;
@@ -36,7 +39,7 @@ sub login_jwt {
     return $tx->result->json('/token');
 }
 
-my $jwt  = login_jwt('e2e-drive-trash-' . time . "-$$" . '@test.mailmasker.org', 'DriveTrash1Aa!!');
+my $jwt  = login_jwt(track_account(undef, 'e2e-drive-trash-' . time . "-$$" . '@test.mailmasker.org'), 'DriveTrash1Aa!!');
 my $auth = { Authorization => "Bearer $jwt" };
 
 # Helpers: is file/folder id present in the live listing / in trash?
@@ -105,7 +108,7 @@ ok(!in_trash_f($inside),'file inside the restored folder is gone from Trash');
 
 # --- ownership: another user can't see/restore/purge my trashed item --
 {
-    my $other = login_jwt('e2e-drive-trash-other-' . time . "-$$" . '@test.mailmasker.org', 'DriveTrashOther1Aa!!');
+    my $other = login_jwt(track_account(undef, 'e2e-drive-trash-other-' . time . "-$$" . '@test.mailmasker.org'), 'DriveTrashOther1Aa!!');
     my $oauth = { Authorization => "Bearer $other" };
     $t->delete_ok("/api/v1/files/$fa?soft=1" => $auth)->status_is(200);   # trash mine
     $t->post_ok("/api/v1/files/$fa/restore" => $oauth)->status_is(404);   # not theirs

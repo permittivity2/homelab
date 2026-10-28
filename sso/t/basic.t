@@ -17,6 +17,9 @@ unless ($ENV{HOMELAB_SSO_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::SSO::App');
 
 my $client_id     = 'test-client';
@@ -24,6 +27,8 @@ my $client_secret = $ENV{HOMELAB_SSO_TEST_CLIENT_SECRET} // 'test-client-secret'
 my $redirect_uri  = 'http://127.0.0.1:9999/oauth/callback';
 
 my $email    = 'e2e-sso-' . time . '-' . $$ . '@test.mailmasker.org';
+# Real account, registered below -- tracked for clean-up.
+track_account(undef, $email);
 my $password = 'E2eSsoTest1Aa';
 
 # Register the account this test logs in as, directly against

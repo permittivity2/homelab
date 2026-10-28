@@ -16,9 +16,14 @@ unless ($ENV{HOMELAB_DRIVE_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::Drive::App');
 
 my $email    = 'e2e-drive-folders-' . time . '-' . $$ . '@test.mailmasker.org';
+# Registered below -- tracked for clean-up (common/t/lib/TestAccounts.pm).
+track_account(undef, $email);
 my $password = 'DriveFoldersTest1Aa!!';
 my $jwt;
 {
@@ -84,6 +89,8 @@ $t->get_ok("/folders/$year_id" => $auth)->status_is(200)
 # --- Cross-user isolation: another account can't see or reach any of this ---
 {
     my $other_email    = 'e2e-drive-folders-other-' . time . '-' . $$ . '@test.mailmasker.org';
+    # Registered below -- tracked for clean-up (common/t/lib/TestAccounts.pm).
+    track_account(undef, $other_email);
     my $other_password = 'DriveFoldersOtherTest1Aa!!';
     my $api_base = $t->app->api_base;
     my $ua = Mojo::UserAgent->new;

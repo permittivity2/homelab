@@ -18,6 +18,9 @@ unless ($ENV{HOMELAB_DOMAIN_ADMIN_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::DomainAdmin::App');
 
 # --- Auth: every route requires a bearer token, AND (since Phase 5)
@@ -30,6 +33,8 @@ use Mojo::UserAgent;
 my $api_base = $t->app->api_base;
 my $ua       = Mojo::UserAgent->new;
 my $email    = 'e2e-domain-admin-' . time . '-' . $$ . '@test.mailmasker.org';
+# Real account, registered below -- tracked for clean-up.
+track_account(undef, $email);
 my $password = 'DomainAdminTest1Aa!!';
 $ua->post("$api_base/api/v1/auth/register" => json => { email => $email, password => $password });
 my $login_tx = $ua->post("$api_base/api/v1/auth/login" => json => { email => $email, password => $password });
@@ -336,6 +341,8 @@ ok((grep { $_->{recipient} eq $owned_address } @{ $t->tx->res->json }), '?user= 
 # --- Isolation: a second, unrelated user must never see or be able to
 # delete this user's self-service block. ---
 my $email2    = 'e2e-domain-admin-2-' . time . '-' . $$ . '@test.mailmasker.org';
+# Real account, registered below -- tracked for clean-up.
+track_account(undef, $email2);
 my $password2 = 'DomainAdminTest2Bb!!';
 $ua->post("$api_base/api/v1/auth/register" => json => { email => $email2, password => $password2 });
 my $login_tx2 = $ua->post("$api_base/api/v1/auth/login" => json => { email => $email2, password => $password2 });

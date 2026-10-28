@@ -17,6 +17,9 @@ unless ($ENV{HOMELAB_DRIVE_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::Drive::App');
 
 # Two distinct logged-in users are needed (the second is only for the
@@ -44,7 +47,7 @@ sub login_jwt {
     return $tx->result->json('/token');
 }
 
-my $jwt = login_jwt('e2e-drive-up-' . time . "-$$" . '@test.mailmasker.org', 'DriveUpTest1Aa!!');
+my $jwt = login_jwt(track_account(undef, 'e2e-drive-up-' . time . "-$$" . '@test.mailmasker.org'), 'DriveUpTest1Aa!!');
 my $auth = { Authorization => "Bearer $jwt" };
 
 # --- Auth is required on every endpoint ---
@@ -99,7 +102,7 @@ $t->patch_ok("/api/v1/uploads/$uid" => { %$auth, 'Upload-Offset' => 0, 'Content-
 
 # --- Ownership: another user cannot see/append/abort this session ---
 {
-    my $other = login_jwt('e2e-drive-up-other-' . time . "-$$" . '@test.mailmasker.org', 'DriveUpOther1Aa!!');
+    my $other = login_jwt(track_account(undef, 'e2e-drive-up-other-' . time . "-$$" . '@test.mailmasker.org'), 'DriveUpOther1Aa!!');
     my $oauth = { Authorization => "Bearer $other" };
     $t->post_ok('/api/v1/uploads' => $oauth => json => { filename => 'z.bin', total_size => 10 })->status_is(201);
     my $ouid = $t->tx->res->json('/upload_id');

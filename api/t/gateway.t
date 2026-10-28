@@ -20,9 +20,16 @@ unless ($ENV{HOMELAB_API_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::API::App');
 
 my $email    = 'e2e-api-gateway-' . time . '-' . $$ . '@test.mailmasker.org';
+# Registered into whatever HOMELAB_API_CONFIG points at -- routinely
+# PRODUCTION. Tracked so the shared END block neutralises it even if this
+# test dies partway through. See t/lib/TestAccounts.pm.
+track_account($t->app, $email);
 my $password = 'ApiGatewayTest1Aa!!';
 
 $t->post_ok('/api/v1/auth/register' => json => { email => $email, password => $password })

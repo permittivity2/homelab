@@ -4,6 +4,9 @@ use Test::More;
 use Mojo::JSON qw(decode_json);
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 use Homelab::PostfixBlockLink::Milter qw(
     is_signed_mime generate_token build_header_value
     resolve_recipient effective_setting insert_pending_link
@@ -59,6 +62,8 @@ my $db = runtime_pg(%{ $config->{database} })->db;
 
 my $domain = 'pbl-test-' . time . '-' . $$ . '.invalid';
 my $email  = "user\@$domain";
+# Real account, registered below -- tracked for clean-up.
+track_account(undef, $email);
 
 # Seed a minimal, real account + domain default directly -- this package
 # never creates accounts/domains itself (homelab-api/domain-admin own

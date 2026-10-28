@@ -13,12 +13,19 @@ unless ($ENV{HOMELAB_API_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::API::App');
 
 $t->get_ok('/health')->status_is(200)->content_is('ok');
 
 # A fresh, randomized email so repeated test runs never collide.
 my $email    = 'test-' . time . '-' . $$ . '@test.mailmasker.org';
+# Registered into whatever HOMELAB_API_CONFIG points at -- routinely
+# PRODUCTION. Tracked so the shared END block neutralises it even if this
+# test dies partway through. See t/lib/TestAccounts.pm.
+track_account($t->app, $email);
 my $password = 'correct horse battery staple';
 
 $t->post_ok('/api/v1/auth/register', json => { email => $email, password => $password })
@@ -107,6 +114,7 @@ $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $new_refresh_toke
 # least one failure of their own to this same IP's running count.
 {
     my $marker_email = 'rate-limit-test-' . time . '-' . $$ . '@test.mailmasker.org';
+    track_account($t->app, $marker_email);
     my $saw_429 = 0;
 
     for (1 .. 15) {
@@ -174,6 +182,8 @@ $t->app->pg->db->query('DELETE FROM api.service_registry WHERE feature_name = ?'
     local $t->app->config->{auth}{require_invite} = 1;
 
     my $gated_email = 'invite-gated-' . time . '-' . $$ . '@test.mailmasker.org';
+
+    track_account($t->app, $gated_email);
     $t->post_ok('/api/v1/auth/register', json => { email => $gated_email, password => $password })
       ->status_is(400, 'require_invite=true rejects registration with no invite_token at all');
 

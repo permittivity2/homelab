@@ -14,6 +14,9 @@ unless ($ENV{HOMELAB_BLOCK_LINK_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::BlockLink::App');
 
 $t->get_ok('/internal/v1/block-link/account')->status_is(401, 'no Authorization header -> 401');
@@ -23,6 +26,8 @@ my $ua       = Mojo::UserAgent->new;
 
 my $domain = 'block-link-test-' . time . '-' . $$ . '.invalid';
 my $email  = "user\@$domain";
+# Real account, registered below -- tracked for clean-up.
+track_account(undef, $email);
 my $password = 'BlockLinkTest1Aa!!';
 $ua->post("$api_base/api/v1/auth/register" => json => { email => $email, password => $password });
 my $jwt = $ua->post("$api_base/api/v1/auth/login" => json => { email => $email, password => $password })

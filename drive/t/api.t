@@ -17,9 +17,14 @@ unless ($ENV{HOMELAB_DRIVE_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::Drive::App');
 
 my $email    = 'e2e-drive-api-' . time . '-' . $$ . '@test.mailmasker.org';
+# Registered below -- tracked for clean-up (common/t/lib/TestAccounts.pm).
+track_account(undef, $email);
 my $password = 'DriveApiTest1Aa!!';
 
 # Register + log in directly against homelab-api, bypassing the SSO
@@ -81,6 +86,8 @@ $t->header_like('Content-Disposition', qr/api-roundtrip\.txt/);
 # --- Another user's token must not see or reach this file ---
 {
     my $other_email    = 'e2e-drive-api-other-' . time . '-' . $$ . '@test.mailmasker.org';
+    # Registered below -- tracked for clean-up (common/t/lib/TestAccounts.pm).
+    track_account(undef, $other_email);
     my $other_password = 'DriveApiOtherTest1Aa!!';
     my $api_base = $t->app->api_base;
     my $ua = Mojo::UserAgent->new;

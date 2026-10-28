@@ -10,48 +10,22 @@ unless ($ENV{HOMELAB_API_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::API::App');
 
 my $suffix = time . '-' . $$;
 
-# CLEAN UP AFTER OURSELVES. This test registers real accounts -- one of
-# them granted site_admin below -- with passwords hardcoded in this file,
-# in whatever database HOMELAB_API_CONFIG points at. That config is now
-# routinely the PRODUCTION one (it is the only place a full fleet DB
-# exists), so without this a single run leaves usable site_admin
-# credentials behind, and every re-run leaves more. Found the hard way:
-# five runs had left 25 live accounts, 5 of them site_admin.
-#
-# Deactivate + strip roles + revoke sessions rather than DELETE: the rows
-# are referenced by api.sessions, api.refresh_tokens and the audit trail,
-# so deleting them means either cascading or a FK error, and the audit
-# record of what the test did is worth keeping. Deactivated with no roles
-# and no live session, the account cannot log in or be used for anything.
-#
-# END, not a normal teardown line: it must run even when a test dies
-# partway through -- that is exactly when credentials get orphaned.
-my @created;
-END {
-    return unless @created && $t && eval { $t->app->pg };
-    my $db = eval { $t->app->pg->db } or return;
-    for my $addr (@created) {
-        eval {
-            my $u = $db->query('SELECT id FROM api.users WHERE email = ?', $addr)->hash or return;
-            $db->query(q{UPDATE api.refresh_tokens SET revoked = TRUE
-                         WHERE id IN (SELECT refresh_token_id FROM api.sessions WHERE user_id = ?)}, $u->{id});
-            $db->query('UPDATE api.sessions SET revoked = TRUE WHERE user_id = ?', $u->{id});
-            $db->query('DELETE FROM api.user_roles WHERE user_id = ?', $u->{id});
-            $db->query('UPDATE api.users SET active = FALSE WHERE id = ?', $u->{id});
-        };
-    }
-    diag(sprintf('cleaned up %d test account(s)', scalar @created));
-}
+# Account clean-up is shared -- see t/lib/TestAccounts.pm. This file used
+# to carry its own copy of the END block; a security clean-up is the last
+# thing that should exist in more than one implementation.
 
 my ($email, $password)       = ("sess-$suffix\@test.mailmasker.org", 'SessTest1Aa!!');
 my ($other_email, $other_pw) = ("sess-other-$suffix\@test.mailmasker.org", 'SessOther1Aa!!');
 my ($admin_email, $admin_pw) = ("sess-admin-$suffix\@test.mailmasker.org", 'SessAdmin1Aa!!');
 
-push @created, $email, $other_email, $admin_email;
+track_account($t->app, $email, $other_email, $admin_email);
 $t->post_ok('/api/v1/auth/register', json => { email => $email, password => $password })->status_is(201);
 $t->post_ok('/api/v1/auth/register', json => { email => $other_email, password => $other_pw })->status_is(201);
 $t->post_ok('/api/v1/auth/register', json => { email => $admin_email, password => $admin_pw })->status_is(201);
@@ -212,7 +186,7 @@ ok(!(grep { $_->{current} } @$admin_view), 'none of THOSE rows are marked curren
 # --- ?except_current=true: revoke every other session, keep this one ---
 {
     my $marker_email = "sess-bulk-$suffix\@test.mailmasker.org";
-    push @created, $marker_email;
+    track_account($t->app, $marker_email);
     $t->post_ok('/api/v1/auth/register', json => { email => $marker_email, password => 'BulkTest1Aa!!' })->status_is(201);
     $t->post_ok('/api/v1/auth/login', json => { email => $marker_email, password => 'BulkTest1Aa!!' })->status_is(200);
     my $first_jwt = $t->tx->res->json('/token');
@@ -238,7 +212,7 @@ ok(!(grep { $_->{current} } @$admin_view), 'none of THOSE rows are marked curren
 # usable. Three sessions here stand in for three apps. ---
 {
     my $all_email = "sess-all-$suffix\@test.mailmasker.org";
-    push @created, $all_email;
+    track_account($t->app, $all_email);
     $t->post_ok('/api/v1/auth/register', json => { email => $all_email, password => 'AllTest1Aa!!' })->status_is(201);
     my @jwts;
     for (1 .. 3) {

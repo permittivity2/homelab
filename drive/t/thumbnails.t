@@ -19,6 +19,9 @@ unless ($ENV{HOMELAB_DRIVE_TEST_EMAIL} && $ENV{HOMELAB_DRIVE_TEST_PASSWORD}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::Drive::App');
 
 my $email    = $ENV{HOMELAB_DRIVE_TEST_EMAIL};
@@ -111,6 +114,8 @@ $t->get_ok("/files/$txt_id/slideshow-image")->status_is(404);
 # (same "id belongs to someone else -> 404" contract as download()) ---
 {
     my $other_email    = 'e2e-drive-thumbs-other-' . time . '-' . $$ . '@test.mailmasker.org';
+    # Registered below -- tracked for clean-up (common/t/lib/TestAccounts.pm).
+    track_account(undef, $other_email);
     my $other_password = 'DriveThumbsOtherTest1Aa!!';
     my $api_base = $t->app->api_base;
     my $ua = Mojo::UserAgent->new;

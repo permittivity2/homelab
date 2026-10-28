@@ -13,6 +13,9 @@ unless ($ENV{HOMELAB_INVITE_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 my $t = Test::Mojo->new('Homelab::Invite::App');
 
 $t->get_ok('/internal/v1/invites')->status_is(401, 'no Authorization header -> 401');
@@ -21,6 +24,8 @@ my $api_base = $t->app->api_base;
 my $ua       = Mojo::UserAgent->new;
 
 my $sender_email    = 'e2e-invite-sender-' . time . '-' . $$ . '@test.mailmasker.org';
+# Real account, registered below -- tracked for clean-up.
+track_account(undef, $sender_email);
 my $sender_password = 'InviteSenderTest1Aa!!';
 $ua->post("$api_base/api/v1/auth/register" => json => { email => $sender_email, password => $sender_password });
 my $sender_jwt = $ua->post("$api_base/api/v1/auth/login" => json => { email => $sender_email, password => $sender_password })
@@ -54,6 +59,8 @@ $t->get_ok('/internal/v1/invites?all=true' => $sender_auth)
 # the /consume test below (that route requires system_agent, not a
 # normal user's JWT, and there's no self-service way to get one either).
 my $admin_email    = 'e2e-invite-admin-' . time . '-' . $$ . '@test.mailmasker.org';
+# Real account, registered below -- tracked for clean-up.
+track_account(undef, $admin_email);
 my $admin_password = 'InviteAdminTest1Aa!!';
 $ua->post("$api_base/api/v1/auth/register" => json => { email => $admin_email, password => $admin_password });
 my $admin_jwt = $ua->post("$api_base/api/v1/auth/login" => json => { email => $admin_email, password => $admin_password })
@@ -61,6 +68,8 @@ my $admin_jwt = $ua->post("$api_base/api/v1/auth/login" => json => { email => $a
 my $admin_auth = { Authorization => "Bearer $admin_jwt" };
 
 my $agent_email    = 'e2e-invite-agent-' . time . '-' . $$ . '@test.mailmasker.org';
+# Real account, registered below -- tracked for clean-up.
+track_account(undef, $agent_email);
 my $agent_password = 'InviteAgentTest1Aa!!';
 $ua->post("$api_base/api/v1/auth/register" => json => { email => $agent_email, password => $agent_password });
 my $agent_jwt = $ua->post("$api_base/api/v1/auth/login" => json => { email => $agent_email, password => $agent_password })

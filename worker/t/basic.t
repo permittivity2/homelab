@@ -16,6 +16,9 @@ unless ($ENV{HOMELAB_WORKER_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 use Archive::Zip;
 use File::Temp;
 use Mojo::UserAgent;
@@ -30,6 +33,8 @@ my $ua       = Mojo::UserAgent->new;
 sub _register_and_login {
     my ($label) = @_;
     my $email    = "e2e-worker-$label-" . time . '-' . $$ . '@test.mailmasker.org';
+    # Real account, registered below -- tracked for clean-up.
+    track_account(undef, $email);
     my $password = 'WorkerTest1Aa!!';
     $ua->post("$api_base/api/v1/auth/register" => json => { email => $email, password => $password });
     my $login_tx = $ua->post("$api_base/api/v1/auth/login" => json => { email => $email, password => $password });

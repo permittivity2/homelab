@@ -12,6 +12,9 @@ unless ($ENV{HOMELAB_AUDIT_CONFIG}) {
 }
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../../common/t/lib";
+use TestAccounts qw(track_account);
 use Mojo::UserAgent;
 
 # NOT a top-level `use` -- Homelab::Common::AuditClient only exists via
@@ -35,6 +38,8 @@ my $ua       = Mojo::UserAgent->new;
 sub _register_and_login {
     my ($label) = @_;
     my $email    = "e2e-audit-$label-" . time . '-' . $$ . '@test.mailmasker.org';
+    # Real account, registered below -- tracked for clean-up.
+    track_account(undef, $email);
     my $password = 'AuditTest1Aa!!';
     $ua->post("$api_base/api/v1/auth/register" => json => { email => $email, password => $password });
     my $login_tx = $ua->post("$api_base/api/v1/auth/login" => json => { email => $email, password => $password });
