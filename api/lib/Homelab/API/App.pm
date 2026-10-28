@@ -2108,12 +2108,22 @@ sub _admin_set_mail_quota ($self, $c) {
 # config block is added. See homelab-dovecot's active/passive design.
 sub _admin_dovecot_status ($self, $c) {
     $self->_require_site_admin($c) or return;
+    # Defaults match the CURRENT prod fleet. The previous ones (ct08/ct09/
+    # ct10 at 10.50.2.52-54) were pre-cutover hosts that no longer exist, and
+    # because nothing sets `dovecot:` in config.yml these defaults are what
+    # the panel actually used -- so it listed three addresses with no
+    # heartbeat row at all and reported the entire mail pool as down.
+    # Found 2026-10-28 doing the HA panel work.
+    #
+    # Active vs standby mirrors haproxy's own backend: imaps_out has .206
+    # plain and .207/.208 marked `backup`, i.e. active/passive, one host
+    # serving everything.
     my $cfg = $self->config->{dovecot} // {
-        active_address => '10.50.2.52',
+        active_address => '10.50.2.206',
         hosts => [
-            { name => 'ct08', address => '10.50.2.52' },
-            { name => 'ct09', address => '10.50.2.53' },
-            { name => 'ct10', address => '10.50.2.54' },
+            { name => 'prod-homelabvm62', address => '10.50.2.206' },
+            { name => 'prod-homelabvm63', address => '10.50.2.207' },
+            { name => 'prod-homelabvm64', address => '10.50.2.208' },
         ],
     };
     my $active = $cfg->{active_address} // '';
@@ -2176,6 +2186,11 @@ sub _admin_ha_status ($self, $c) {
             { name => 'prod-homelab10', address => '10.50.2.154' },
             { name => 'prod-homelab11', address => '10.50.2.155' },
         ],
+        edges => [
+            { name => 'prod-homelab00', address => '10.50.2.144' },
+            { name => 'prod-homelab01', address => '10.50.2.145' },
+            { name => 'prod-homelab02', address => '10.50.2.146' },
+        ],
     };
     my $rest_port = $cfg->{rest_port} // 8008;
 
@@ -2221,6 +2236,63 @@ sub _admin_ha_status ($self, $c) {
     } @{ $cfg->{nodes} // [] };
     my ($leader) = grep { ($_->{role} // '') eq 'leader' } @pg_members;
 
+    # Edges. DELIBERATELY NOT a failover cluster: exactly ONE of the three is
+    # powered on at a time and is swapped by hand, which is why this reports
+    # "powered on"/"off" rather than active/standby -- calling a node that is
+    # switched off a "standby" would imply it takes over by itself, and the
+    # whole point of that design is that nothing does.
+    #
+    # The heartbeat IS the signal here: a node that is off stops heartbeating,
+    # so `healthy` answers "is this the one currently serving" exactly. No
+    # probing needed.
+    # Falls back INDEPENDENTLY of the postgres_ha block, not as part of it.
+    # Every live config already sets `postgres_ha:` (without `edges:`), so a
+    # default nested inside that hash is never reached -- the whole hash is
+    # skipped the moment the key exists. That is exactly what happened on the
+    # first deploy of this panel: the edges table came back empty. Dovecot
+    # above gets its own `//` for the same reason.
+    my $edge_cfg = $cfg->{edges} // [
+        { name => 'prod-homelab00', address => '10.50.2.144' },
+        { name => 'prod-homelab01', address => '10.50.2.145' },
+        { name => 'prod-homelab02', address => '10.50.2.146' },
+    ];
+    my @edge_members = map {
+        my $h = $hb{ $_->{address} };
+        my $on = ($h && $h->{healthy}) ? 1 : 0;
+        +{
+            name           => $_->{name},
+            address        => $_->{address},
+            role           => ($on ? 'powered on' : 'off'),
+            state          => ($on ? 'serving' : 'powered off'),
+            healthy        => ($on ? \1 : \0),
+            last_heartbeat => ($h ? $h->{last_heartbeat} : undef),
+        };
+    } @$edge_cfg;
+    my $edges_on = grep { $_->{role} eq 'powered on' } @edge_members;
+
+    # Dovecot, from the SAME config the /admin/dovecot/status panel reads, so
+    # the two views can never disagree.
+    my $dc = $self->config->{dovecot} // {
+        active_address => '10.50.2.206',
+        hosts => [
+            { name => 'prod-homelabvm62', address => '10.50.2.206' },
+            { name => 'prod-homelabvm63', address => '10.50.2.207' },
+            { name => 'prod-homelabvm64', address => '10.50.2.208' },
+        ],
+    };
+    my @dc_members = map {
+        my $h = $hb{ $_->{address} };
+        my $is_active = ($_->{address} eq ($dc->{active_address} // ''));
+        +{
+            name           => $_->{name},
+            address        => $_->{address},
+            role           => ($is_active ? 'active' : 'standby'),
+            state          => ($h && $h->{healthy} ? 'up' : 'down'),
+            healthy        => ($h && $h->{healthy} ? \1 : \0),
+            last_heartbeat => ($h ? $h->{last_heartbeat} : undef),
+        };
+    } @{ $dc->{hosts} // [] };
+
     my @pb_members = map {
         my $h = $hb{ $_->{address} };
         +{
@@ -2252,6 +2324,30 @@ sub _admin_ha_status ($self, $c) {
                 members => \@pb_members,
                 note    => 'Every pooler fronts the database VIP, so any one keeps serving across a '
                          . 'leader failover. Liveness is the fleet agent heartbeat (:6432 manifest).',
+            },
+            {
+                name    => 'Mailbox servers (dovecot)',
+                kind    => 'dovecot',
+                leader  => (($dc->{active_address} // '') ne '' ? $dc->{active_address} : undef),
+                members => \@dc_members,
+                note    => 'Active/passive: the active host serves ALL mail paths (IMAP/IMAPS, LMTP '
+                         . 'delivery, SASL submission auth) and they fail over together via '
+                         . 'homelab-haproxy, which marks the other two `backup`. Same source as the '
+                         . 'Dovecot tab, so the two cannot disagree.',
+            },
+            {
+                name    => 'Internet-facing edges',
+                kind    => 'edges',
+                members => \@edge_members,
+                note    => 'NOT automatic failover, by design: exactly ONE edge is powered on at a '
+                         . 'time and is swapped by hand (pct shutdown one, pct start another). Both '
+                         . 'public addresses arrive by DHCP from the AT&T reservations keyed to that '
+                         . "node's eth7/eth6 MACs, so whichever node is up answers on them. "
+                         . 'keepalived was removed deliberately. '
+                         . ($edges_on == 1 ? 'Exactly one is up, which is correct.'
+                          : $edges_on == 0 ? 'NONE is up -- every public service is down.'
+                          : "$edges_on are up at once -- they will fight over the public addresses; "
+                          . 'power all but one off.'),
             },
         ],
     });

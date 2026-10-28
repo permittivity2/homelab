@@ -873,6 +873,7 @@
     // --- HA status (admin): PostgreSQL/Patroni + pgbouncer -----------
     (function () {
       var pg = document.getElementById('ha-postgres'), pb = document.getElementById('ha-pgbouncer');
+      var dc = document.getElementById('ha-dovecot'), ed = document.getElementById('ha-edges');
       if (!pg || !pb) return;
       var loaded = false;
       function health(ok) { return ok ? '<span style="color:var(--ok)">● up</span>' : '<span style="color:var(--danger)">● down</span>'; }
@@ -898,18 +899,48 @@
         pb.innerHTML = '<table class="sessions"><thead><tr><th>Node</th><th>Address</th><th>State</th><th>Health</th></tr></thead><tbody>' + rows + '</tbody></table>'
           + (comp.note ? '<p class="muted" style="font-size:0.8rem;margin:0.8rem 0 0;">' + hlEsc(comp.note) + '</p>' : '');
       }
+      // Active/standby, powered-on/off: a plain state word, not a health dot,
+      // because "standby" and "off" are correct states rather than faults.
+      function roleTag(role) {
+        if (role === 'active' || role === 'powered on') return '<span class="badge admin">' + hlEsc(role.toUpperCase()) + '</span>';
+        return '<span class="badge">' + hlEsc(role || '?') + '</span>';
+      }
+      function renderSimple(el, comp, cols) {
+        if (!el) return;
+        if (!comp) { el.innerHTML = '<p class="muted">Status unavailable.</p>'; return; }
+        var rows = (comp.members || []).map(function (m) {
+          return '<tr><td>' + hlEsc(m.name) + '</td><td class="muted">' + hlEsc(m.address) + '</td><td>' + roleTag(m.role)
+            + '</td><td class="muted">' + hlEsc(m.state || '') + '</td><td>' + health(m.healthy) + '</td></tr>';
+        }).join('');
+        el.innerHTML = '<table class="sessions"><thead><tr><th>Node</th><th>Address</th><th>' + cols
+          + '</th><th>State</th><th>Health</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          + (comp.note ? '<p class="muted" style="font-size:0.8rem;margin:0.8rem 0 0;">' + hlEsc(comp.note) + '</p>' : '');
+      }
       function load() {
         if (loaded) return; loaded = true;
         pg.innerHTML = '<p class="muted">Loading…</p>'; pb.innerHTML = '<p class="muted">Loading…</p>';
+        if (dc) dc.innerHTML = '<p class="muted">Loading…</p>';
+        if (ed) ed.innerHTML = '<p class="muted">Loading…</p>';
         fetch('/admin/ha/status', { headers: { 'Accept': 'application/json' } })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
-            if (!d || !d.components) { pg.innerHTML = '<p class="muted">Status unavailable.</p>'; pb.innerHTML = '<p class="muted">Status unavailable.</p>'; return; }
+            if (!d || !d.components) {
+              pg.innerHTML = '<p class="muted">Status unavailable.</p>'; pb.innerHTML = '<p class="muted">Status unavailable.</p>';
+              if (dc) dc.innerHTML = '<p class="muted">Status unavailable.</p>';
+              if (ed) ed.innerHTML = '<p class="muted">Status unavailable.</p>';
+              return;
+            }
             var byKind = {}; d.components.forEach(function (c) { byKind[c.kind] = c; });
             renderPatroni(byKind.patroni);
             renderPgb(byKind.pgbouncer);
+            renderSimple(dc, byKind.dovecot, 'Role');
+            renderSimple(ed, byKind.edges, 'Power');
           })
-          .catch(function () { pg.innerHTML = '<p class="muted">Status unavailable.</p>'; pb.innerHTML = '<p class="muted">Status unavailable.</p>'; });
+          .catch(function () {
+            pg.innerHTML = '<p class="muted">Status unavailable.</p>'; pb.innerHTML = '<p class="muted">Status unavailable.</p>';
+            if (dc) dc.innerHTML = '<p class="muted">Status unavailable.</p>';
+            if (ed) ed.innerHTML = '<p class="muted">Status unavailable.</p>';
+          });
       }
       var tab = document.querySelector('.admin-tabs button[data-atab="ha"]');
       if (tab) tab.addEventListener('click', load);

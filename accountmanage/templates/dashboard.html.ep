@@ -532,6 +532,14 @@
           <h2>Connection poolers <span class="hint">pgbouncer</span></h2>
           <div id="ha-pgbouncer"><p class="muted">Loading…</p></div>
         </div>
+        <div class="card">
+          <h2>Mailbox servers <span class="hint">dovecot, active/passive</span></h2>
+          <div id="ha-dovecot"><p class="muted">Loading…</p></div>
+        </div>
+        <div class="card">
+          <h2>Internet-facing edges <span class="hint">manual, one at a time</span></h2>
+          <div id="ha-edges"><p class="muted">Loading…</p></div>
+        </div>
       </div>
 
       <div class="admin-panel" data-apanel="services">
