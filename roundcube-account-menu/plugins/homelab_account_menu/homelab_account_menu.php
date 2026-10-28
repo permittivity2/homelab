@@ -52,6 +52,16 @@ class homelab_account_menu extends rcube_plugin
      * (see debian/rules), so it always matches the installed package and
      * there is no second place to remember to bump.
      *
+     * src_uri vs uri: about.php prefers src_uri and falls back to uri, so
+     * the Source column shows src_uri. That one points at the git remote
+     * ON PURPOSE and should not be changed to the project site: this plugin
+     * is AGPL, and AGPL-3 section 13 requires offering the CORRESPONDING
+     * SOURCE to anyone using it over a network. projects.thedude.vip serves
+     * the built packages and project pages, not source, so it would not
+     * satisfy that -- it is the project homepage (uri) instead. The GitHub
+     * repo is public; if it ever stops being, this link has to move to
+     * wherever the source actually is, not just be dropped.
+     *
      * AGPL-3.0+, not GPL-3: that is what this repo's LICENSE file and every
      * package's debian/copyright already say. The "+"-suffixed spelling is
      * deliberate -- it is a key in rcube_plugin_api's own $license_uris map,
@@ -66,7 +76,8 @@ class homelab_account_menu extends rcube_plugin
             'vendor'      => 'silverlinings',
             'version'     => '__PLUGIN_VERSION__',
             'license'     => 'AGPL-3.0+',
-            'uri'         => 'https://github.com/permittivity2/homelab',
+            'uri'         => 'https://projects.thedude.vip',
+            'src_uri'     => 'https://github.com/permittivity2/homelab',
             'description' => 'Account dropdown behind the brand logo, matching the other homelab web apps.',
         ];
     }
