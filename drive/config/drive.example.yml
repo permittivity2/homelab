@@ -100,3 +100,18 @@ server:
   listen: "http://0.0.0.0:2501"
   workers: 2
   pid_file: /var/lib/homelab/drive-hypnotoad.pid
+
+# Optional. Only used to NOTIFY someone when a file or folder is shared with
+# them -- sharing itself works without this, the sharer just gets "copy the
+# link and send it yourself" instead of an email going out.
+#
+# smtp_host MUST be a submission endpoint that accepts a plain connection:
+# the edge HAProxy submission frontend (the fleet's internal mail VIP), NOT a
+# postfix submission backend and NOT loopback. A backend's :587 requires a
+# PROXY header this client cannot send and answers "421 ... Server local
+# error". See Homelab::Common::Mailer for the full note.
+mailer:
+  email: noreply@mailmasker.org
+  smtp_host: 10.50.2.140
+  smtp_port: 587
+  smtp_password: YOUR_MAILER_ACCOUNT_PASSWORD_HERE

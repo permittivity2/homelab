@@ -213,6 +213,49 @@
   }
   .lightbox-content:hover .lightbox-info, .lightbox-content.controls-visible .lightbox-info { opacity: 1; }
 
+  /* ── Share dialog ── */
+  .share-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: var(--z-overlay); }
+  .share-dialog {
+    position: fixed; z-index: var(--z-modal); top: 50%; left: 50%; transform: translate(-50%,-50%);
+    width: min(92vw, 30em); background: var(--surface-raised);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg); padding: var(--space-6);
+  }
+  .share-dialog h2 { font-size: var(--app-lg); font-weight: var(--weight-light); margin: 0 0 var(--space-2); }
+  .share-dialog label { display: block; margin: var(--space-3) 0 var(--space-1); font-size: var(--app-base); }
+  .share-dialog input[type=email], .share-dialog input[type=text] {
+    width: 100%; padding: var(--space-2) var(--space-3); box-sizing: border-box;
+    background: var(--black-secondary); color: var(--text-primary);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-md); font: inherit;
+  }
+  .share-dialog .hint { font-size: var(--app-xs); color: var(--text-muted); margin: var(--space-3) 0 0; }
+  .share-actions { display: flex; gap: var(--space-2); margin-top: var(--space-6); }
+  .btn-share-go {
+    padding: var(--space-2) var(--space-4); border: 1px solid var(--silver-bright);
+    border-radius: var(--radius-md); background: var(--silver-bright); color: var(--black-primary);
+    font: inherit; font-weight: var(--weight-medium); cursor: pointer;
+  }
+  .btn-share-cancel {
+    padding: var(--space-2) var(--space-4); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md); background: none; color: var(--text-secondary);
+    font: inherit; cursor: pointer;
+  }
+  /* The link and its Copy button read as one control. */
+  .share-linkrow { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+  .share-linkrow input { flex: 1; min-width: 0; font-size: var(--app-sm); }
+  .share-error { color: var(--error); font-size: var(--app-sm); margin: var(--space-3) 0 0; min-height: 1em; }
+  #share-notice { font-size: var(--app-base); color: var(--text-secondary); margin: 0; }
+  .share-copy-field { width: 100%; min-width: 12em; font-size: var(--app-xs);
+    background: var(--black-secondary); color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.2rem 0.4rem; }
+  .file-actions .share-btn, .share-copy-btn, .share-revoke {
+    background: none; border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+    padding: 0.25rem var(--space-2); cursor: pointer; font-size: var(--app-xs);
+    color: var(--text-secondary); margin-right: 0.25rem;
+  }
+  .file-actions .share-btn:hover, .share-copy-btn:hover { color: var(--silver-bright); border-color: var(--silver-medium); }
+  .share-revoke:hover { color: var(--error); border-color: var(--error); }
+
   /* ── Trash view ── */
   .trash-head { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-6); border-bottom: 1px solid var(--border); background: var(--surface); }
   .trash-head h1 { font-size: var(--app-lg); font-weight: var(--weight-light); margin: 0; }

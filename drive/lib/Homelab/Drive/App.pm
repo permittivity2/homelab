@@ -186,6 +186,29 @@ sub startup ($self) {
     $r->post('/folders/:id/delete') ->to('drive#delete_folder');
     $r->get('/files/:id/download')->to('drive#download');
     $r->post('/files/:id/delete') ->to('drive#delete_file');
+    # --- Sharing -----------------------------------------------------
+    # A share is a file or a folder handed to ONE other account, or to
+    # anyone with the link. Both kinds get a token: the requirement is that
+    # the link can be copied again at any time, so it cannot be something
+    # only the public flavour has.
+    $r->post('/files/:id/share')          ->to('drive#create_share', target => 'file');
+    $r->post('/api/v1/files/:id/share')   ->to('drive#create_share', target => 'file');
+    $r->post('/folders/:id/share')        ->to('drive#create_share', target => 'folder');
+    $r->post('/api/v1/folders/:id/share') ->to('drive#create_share', target => 'folder');
+    $r->get('/shares')                    ->to('drive#list_shares');
+    $r->get('/api/v1/shares')             ->to('drive#api_list_shares');
+    $r->post('/shares/:id/revoke')        ->to('drive#revoke_share');
+    $r->post('/api/v1/shares/:id/revoke') ->to('drive#revoke_share');
+
+    # PUBLIC -- deliberately no auth call inside these handlers. This app has
+    # no `under` guard (every handler authenticates itself), so "public" here
+    # simply means not calling _current_email. Nothing to exempt.
+    $r->get('/s/:token')                      ->to('drive#public_share');
+    $r->get('/s/:token/download')             ->to('drive#public_download');
+    $r->get('/s/:token/thumbnail')            ->to('drive#public_thumbnail');
+    $r->get('/s/:token/files/:fid/download')  ->to('drive#public_folder_file');
+    $r->get('/s/:token/files/:fid/thumbnail') ->to('drive#public_folder_thumb');
+
     $r->get('/files/:id/thumbnail')      ->to('drive#thumbnail');
     $r->get('/files/:id/slideshow-image')->to('drive#slideshow_image');
 
@@ -798,6 +821,7 @@ my $WORKER_UA = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 18
 # render_later + get_p would remove even that; this is the cheap, big
 # improvement.)
 my $WORKER_STATUS_UA = Mojo::UserAgent->new(connect_timeout => 3, request_timeout => 5);
+use Homelab::Common::Mailer qw(send_mail);
 
 my $MAGIC = File::LibMagic->new;
 
@@ -1832,6 +1856,342 @@ sub api_delete_folder ($c) {
     my ($deleted) = _delete_folder($c, $email, $c->param('id'), $soft);
     return $c->render(json => { error => 'not found' }, status => 404) unless $deleted;
     return $c->render(json => { ok => \1, trashed => ($soft ? \1 : \0) });
+}
+
+# --- Sharing ---------------------------------------------------------
+#
+# One table, drive.shares, covers both kinds: shared_with_email IS NULL
+# means public. See migrations/011-shares.sql for why.
+
+# 32 bytes of real entropy, hex-encoded. NOT sha256(rand()) -- the
+# pre-cutover implementation did that, and rand() is seeded from a small,
+# partly-guessable space, so a share token was far weaker than its 64
+# characters suggested. These tokens are the ONLY thing protecting a public
+# share.
+sub _share_token {
+    open(my $fh, '<:raw', '/dev/urandom') or die "cannot read /dev/urandom: $!\n";
+    read($fh, my $bytes, 32) == 32 or die "short read from /dev/urandom\n";
+    close $fh;
+    return unpack 'H*', $bytes;
+}
+
+sub _share_url ($c, $token) {
+    my $base = $c->app->public_base_url // '';
+    $base =~ s{/\z}{};
+    return "$base/s/$token";
+}
+
+# Resolve a token to a LIVE share. Everything that can make a share dead is
+# checked in one place so no caller can forget one:
+#   - revoked by the owner
+#   - past its expiry
+#   - the file/folder was trashed (deleted_at) -- without this a public link
+#     keeps serving a file the owner believes they deleted, which is a leak,
+#     not a cosmetic bug
+# Returns undef for all of them, so a dead share is indistinguishable from a
+# wrong token to whoever is holding it.
+sub _live_share ($c, $token) {
+    return undef unless defined $token && $token =~ /\A[0-9a-f]{64}\z/;
+    my $sh = $c->app->pg->db->query(
+        q{SELECT s.*, f.filename, f.uuid AS file_uuid, f.mime_type, f.size_bytes,
+                 d.name AS folder_name
+            FROM drive.shares s
+            LEFT JOIN drive.files   f ON f.id = s.file_id
+            LEFT JOIN drive.folders d ON d.id = s.folder_id
+           WHERE s.token = ?
+             AND s.revoked_at IS NULL
+             AND (s.expires_at IS NULL OR s.expires_at > NOW())
+             AND (s.file_id   IS NULL OR f.deleted_at IS NULL)
+             AND (s.folder_id IS NULL OR d.deleted_at IS NULL)},
+        $token,
+    )->hash;
+    return $sh;
+}
+
+# Access accounting is best-effort and deliberately NOT part of the serving
+# path's success: a failed counter update must never turn a working download
+# into an error.
+sub _note_share_access ($c, $id) {
+    eval {
+        $c->app->pg->db->query(
+            'UPDATE drive.shares SET accessed_at = NOW(), access_count = access_count + 1 WHERE id = ?', $id);
+    };
+    return;
+}
+
+# POST /files/:id/share | /folders/:id/share
+# body: shared_with (optional -- omit for a public link), expires_days (optional)
+sub create_share ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $target = $c->stash('target');
+    my $id     = $c->param('id');
+    my $row = $target eq 'file'
+        ? $c->app->pg->db->query(
+            'SELECT id, filename AS label FROM drive.files WHERE id = ? AND user_email = ? AND deleted_at IS NULL', $id, $email)->hash
+        : $c->app->pg->db->query(
+            'SELECT id, name AS label FROM drive.folders WHERE id = ? AND user_email = ? AND deleted_at IS NULL', $id, $email)->hash;
+    # Someone else's id is a 404, not a 403 -- same reasoning as download():
+    # a 403 would confirm the id exists.
+    return $c->render(json => { error => 'not found' }, status => 404) unless $row;
+
+    my $with = _trim_addr($c->param('shared_with') // '');
+    return $c->render(json => { error => 'You cannot share with yourself.' }, status => 400)
+        if length $with && lc($with) eq lc($email);
+
+    my $days = $c->param('expires_days');
+    my $expires = ($days && $days =~ /\A\d{1,4}\z/ && $days > 0) ? $days : undef;
+
+    # The recipient check is NOT a gate. The share and its token are created
+    # either way, and an unknown address only means we could not NOTIFY them.
+    # Failing the whole call would throw away a perfectly good link over a
+    # typo; failing SILENTLY would be worse still -- the sharer would believe
+    # it had been delivered. So: always create, then report honestly.
+    #
+    # Nor is this hidden to avoid account enumeration. This is an invite-only
+    # system and the sharer is an authenticated member who already had to know
+    # the address to type it; silence would buy almost no privacy and cost a
+    # lot of usability.
+    my $recipient_exists = 0;
+    if (length $with) {
+        $recipient_exists = _share_recipient_exists($c, $with) ? 1 : 0;
+    }
+
+    my $token = _share_token();
+    my $sh = $c->app->pg->db->query(
+        q{INSERT INTO drive.shares (token, owner_email, file_id, folder_id, shared_with_email, expires_at)
+          VALUES (?, ?, ?, ?, ?, CASE WHEN ?::int IS NULL THEN NULL ELSE NOW() + (?::int * INTERVAL '1 day') END)
+          RETURNING id, token, created_at, expires_at},
+        $token, $email,
+        ($target eq 'file'   ? $row->{id} : undef),
+        ($target eq 'folder' ? $row->{id} : undef),
+        (length $with ? $with : undef),
+        $expires, $expires,
+    )->hash;
+
+    my $url = _share_url($c, $sh->{token});
+    my %out = (ok => \1, id => $sh->{id}, token => $sh->{token}, url => $url,
+               target => $target, label => $row->{label},
+               shared_with => (length $with ? $with : undef),
+               public => (length $with ? \0 : \1));
+
+    if (length $with) {
+        if (!$recipient_exists) {
+            $out{emailed} = \0;
+            $out{notice}  = "Share created, but there is no account for $with, so nothing was emailed. "
+                          . 'Copy the link and send it yourself.';
+        }
+        else {
+            my $sent = _send_share_email($c, $email, $with, $row->{label}, $target, $url);
+            $out{emailed} = $sent ? \1 : \0;
+            $out{notice}  = $sent
+                ? "Shared with $with and emailed them the link."
+                : "Share created and $with has access, but the notification email could not be sent. "
+                . 'Copy the link and send it yourself.';
+        }
+    }
+    else {
+        $out{notice} = 'Public link created. Anyone with the link can open it.';
+    }
+    return $c->render(json => \%out, status => 201);
+}
+
+sub _trim_addr ($v) { $v //= ''; $v =~ s/\A\s+|\s+\z//g; return $v; }
+
+# Does this address have an account? Asked of homelab-api, which owns
+# api.users -- drive has no users table and its DB role has no business
+# reading another schema's.
+sub _share_recipient_exists ($c, $addr) {
+    return 0 unless $addr =~ /\A[^@\s]+\@[^@\s]+\.[^@\s]+\z/;
+    my (undef, $jwt) = _current_auth($c);
+    return 0 unless $jwt;
+    my $tx = eval {
+        $WORKER_STATUS_UA->get($c->app->api_base . '/api/v1/mail/recipient-exists?email=' . Mojo::Util::url_escape($addr)
+            => { Authorization => "Bearer $jwt" });
+    };
+    return 0 unless $tx && $tx->res->code && $tx->res->code == 200;
+    my $j = eval { $tx->res->json } // {};
+    return $j->{exists} ? 1 : 0;
+}
+
+sub _send_share_email ($c, $from_user, $to, $label, $target, $url) {
+    my $m = $c->app->config->{mailer} // {};
+    # Mail is OPTIONAL here by design: a drive install with no mailer
+    # configured still shares correctly, it just cannot notify. The caller
+    # turns a false return into "copy the link and send it yourself".
+    return 0 unless ($m->{email} // '') ne '' && ($m->{smtp_host} // '') ne '';
+    my $what = $target eq 'folder' ? 'a folder' : 'a file';
+    my $ok = eval {
+        send_mail(
+            smtp_host => $m->{smtp_host}, smtp_port => $m->{smtp_port} // 587,
+            from_email => $m->{email}, from_password => $m->{smtp_password},
+            to => $to,
+            subject => "$from_user shared $what with you",
+            body => "$from_user has shared $what with you on Drive.\n\n"
+                  . "  $label\n\n$url\n\n"
+                  . "You will need to sign in with your own account to open it.\n",
+        );
+        1;
+    };
+    $c->app->log->warn("drive: share notification to $to failed: $@") if !$ok;
+    return $ok ? 1 : 0;
+}
+
+# GET /shares and the JSON twin -- what I have shared, and what has been
+# shared with me. Both in one payload: they are two halves of one question.
+sub _shares_for ($c, $email) {
+    my $mine = $c->app->pg->db->query(
+        q{SELECT s.id, s.token, s.shared_with_email, s.created_at, s.expires_at,
+                 s.access_count, s.accessed_at,
+                 COALESCE(f.filename, d.name) AS label,
+                 CASE WHEN s.file_id IS NOT NULL THEN 'file' ELSE 'folder' END AS target
+            FROM drive.shares s
+            LEFT JOIN drive.files   f ON f.id = s.file_id
+            LEFT JOIN drive.folders d ON d.id = s.folder_id
+           WHERE s.owner_email = ? AND s.revoked_at IS NULL
+             AND (s.file_id   IS NULL OR f.deleted_at IS NULL)
+             AND (s.folder_id IS NULL OR d.deleted_at IS NULL)
+           ORDER BY s.created_at DESC}, $email)->hashes->to_array;
+    my $with_me = $c->app->pg->db->query(
+        q{SELECT s.id, s.token, s.owner_email, s.created_at, s.expires_at,
+                 COALESCE(f.filename, d.name) AS label,
+                 CASE WHEN s.file_id IS NOT NULL THEN 'file' ELSE 'folder' END AS target
+            FROM drive.shares s
+            LEFT JOIN drive.files   f ON f.id = s.file_id
+            LEFT JOIN drive.folders d ON d.id = s.folder_id
+           WHERE LOWER(s.shared_with_email) = LOWER(?) AND s.revoked_at IS NULL
+             AND (s.expires_at IS NULL OR s.expires_at > NOW())
+             AND (s.file_id   IS NULL OR f.deleted_at IS NULL)
+             AND (s.folder_id IS NULL OR d.deleted_at IS NULL)
+           ORDER BY s.created_at DESC}, $email)->hashes->to_array;
+    $_->{url} = _share_url($c, $_->{token}) for @$mine, @$with_me;
+    return { shared_by_me => $mine, shared_with_me => $with_me };
+}
+
+sub list_shares ($c) {
+    my $email = _current_email($c);
+    return $c->redirect_to('/login') unless $email;
+    my $d = _shares_for($c, $email);
+    return $c->render(template => 'shares', email => $email,
+        shared_by_me => $d->{shared_by_me}, shared_with_me => $d->{shared_with_me});
+}
+
+sub api_list_shares ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+    return $c->render(json => _shares_for($c, $email));
+}
+
+sub revoke_share ($c) {
+    my $email = _current_email($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+    # Scoped to the owner in the WHERE itself, not checked afterwards, so this
+    # can only ever revoke a share the caller actually owns.
+    my $r = $c->app->pg->db->query(
+        'UPDATE drive.shares SET revoked_at = NOW() WHERE id = ? AND owner_email = ? AND revoked_at IS NULL RETURNING id',
+        $c->param('id'), $email)->hash;
+    return $c->render(json => { error => 'not found' }, status => 404) unless $r;
+    return $c->render(json => { ok => \1, id => $r->{id} });
+}
+
+
+# --- Public share endpoints ------------------------------------------
+#
+# These take NO authentication: the token IS the credential. Every one of
+# them therefore resolves through _live_share(), which is the single place
+# that enforces revoked / expired / trashed. Adding a new public endpoint
+# that queries drive.shares directly would bypass all three at once -- do
+# not do that.
+#
+# A dead share and a wrong token both render the same "not available" page,
+# on purpose: whoever holds a revoked link should not be able to tell that
+# it was ever real.
+
+sub public_share ($c) {
+    my $sh = _live_share($c, $c->stash('token'));
+    return $c->render(template => 'share_gone', status => 404) unless $sh;
+    _note_share_access($c, $sh->{id});
+
+    if ($sh->{file_id}) {
+        return $c->render(template => 'share_file', share => $sh,
+            is_image => (($sh->{mime_type} // '') =~ m{^image/} ? 1 : 0));
+    }
+    # A folder share lists the folder's own files -- NOT its subfolders.
+    # Recursing would silently widen what the owner shared, and they chose
+    # one folder. Subfolders can be shared on their own.
+    # uploaded_at, NOT created_at -- drive.files uses the former. Guessing
+    # the latter is what made the folder landing page 500 on first deploy.
+    my $files = $c->app->pg->db->query(
+        q{SELECT id, filename, size_bytes, mime_type, uploaded_at
+            FROM drive.files
+           WHERE folder_id = ? AND deleted_at IS NULL
+           ORDER BY filename}, $sh->{folder_id})->hashes->to_array;
+    return $c->render(template => 'share_folder', share => $sh, files => $files);
+}
+
+# The file behind a single-file share.
+sub public_download ($c) {
+    my $sh = _live_share($c, $c->stash('token'));
+    return $c->render(text => 'not available', status => 404) unless $sh && $sh->{file_id};
+    my $path = $c->app->storage_path . '/' . $sh->{file_uuid};
+    return $c->render(text => 'not available', status => 404) unless -f $path;
+    _note_share_access($c, $sh->{id});
+    $c->res->headers->content_type($sh->{mime_type} || 'application/octet-stream');
+    $c->res->headers->content_disposition(qq{attachment; filename="} . basename($sh->{filename}) . qq{"});
+    return $c->reply->file($path);
+}
+
+sub public_thumbnail ($c) {
+    my $sh = _live_share($c, $c->stash('token'));
+    return $c->render(text => '', status => 404) unless $sh && $sh->{file_id};
+    return _serve_share_derivative($c, $sh->{file_uuid});
+}
+
+# A file INSIDE a shared folder. The file id comes from the URL, so it must
+# be re-checked against the shared folder -- otherwise any id could be
+# fetched through any folder token, which would turn one shared folder into
+# a key to the whole drive.
+sub _file_in_shared_folder ($c, $sh, $fid) {
+    return undef unless $sh && $sh->{folder_id} && defined $fid && $fid =~ /\A\d+\z/;
+    return $c->app->pg->db->query(
+        q{SELECT id, filename, uuid, mime_type FROM drive.files
+           WHERE id = ? AND folder_id = ? AND deleted_at IS NULL},
+        $fid, $sh->{folder_id})->hash;
+}
+
+sub public_folder_file ($c) {
+    my $sh = _live_share($c, $c->stash('token'));
+    my $f  = _file_in_shared_folder($c, $sh, $c->param('fid'));
+    return $c->render(text => 'not available', status => 404) unless $f;
+    my $path = $c->app->storage_path . '/' . $f->{uuid};
+    return $c->render(text => 'not available', status => 404) unless -f $path;
+    _note_share_access($c, $sh->{id});
+    $c->res->headers->content_type($f->{mime_type} || 'application/octet-stream');
+    $c->res->headers->content_disposition(qq{attachment; filename="} . basename($f->{filename}) . qq{"});
+    return $c->reply->file($path);
+}
+
+sub public_folder_thumb ($c) {
+    my $sh = _live_share($c, $c->stash('token'));
+    my $f  = _file_in_shared_folder($c, $sh, $c->param('fid'));
+    return $c->render(text => '', status => 404) unless $f;
+    return _serve_share_derivative($c, $f->{uuid});
+}
+
+# Thumbnails are served inline and never as an attachment; a missing
+# derivative is an expected 404 (non-image, or uploaded before derivatives
+# existed), which both callers handle with an onerror fallback.
+sub _serve_share_derivative ($c, $uuid) {
+    # ".thumbnails", with the leading dot -- that is the on-disk convention
+    # _serve_derivative() and _generate_image_derivatives() already use.
+    # Guessing "thumbnails" here would 404 every share thumbnail silently,
+    # since a missing derivative is an EXPECTED 404 and the page falls back
+    # without complaining.
+    my $path = $c->app->storage_path . "/.thumbnails/$uuid.jpg";
+    return $c->render(text => '', status => 404) unless -f $path;
+    $c->res->headers->content_type('image/jpeg');
+    return $c->reply->file($path);
 }
 
 sub download ($c) {

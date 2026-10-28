@@ -1,0 +1,13 @@
+% layout 'default';
+% title 'Link not available — Drive';
+%# A revoked, expired, trashed-target and simply-wrong token ALL land here,
+%# with the same wording. That is deliberate: whoever holds a dead link
+%# should not be able to learn that it was ever a real one.
+<div class="layout" style="justify-content:center;">
+  <main style="max-width:34em;">
+    <h1 style="font-size:var(--app-xl);font-weight:var(--weight-light);margin:0 0 var(--space-4);">Link not available</h1>
+    <p>This link is not valid. It may have been turned off by the person who
+       shared it, or it may have expired.</p>
+    <p class="muted">If you were expecting something here, ask them for a new link.</p>
+  </main>
+</div>

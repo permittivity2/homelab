@@ -1,0 +1,21 @@
+% layout 'default';
+% title $share->{filename} . ' — shared on Drive';
+<div class="layout" style="justify-content:center;">
+  <main style="max-width:40em;">
+    <p class="muted" style="margin:0 0 var(--space-2);">
+      <%= $share->{owner_email} %> shared a file with you
+    </p>
+    <h1 style="font-size:var(--app-xl);font-weight:var(--weight-light);margin:0 0 var(--space-4);word-break:break-all;">
+      <%= $share->{filename} %>
+    </h1>
+    % if ($is_image) {
+      %# Dead-ends harmlessly when the file has no derivative -- a missing
+      %# thumbnail is an expected 404 here, not an error.
+      <img src="/s/<%= $share->{token} %>/thumbnail" alt=""
+           style="max-width:100%;border:1px solid var(--border);border-radius:var(--radius-md);margin-bottom:var(--space-4);"
+           onerror="this.style.display='none'">
+    % }
+    <p class="muted"><%= $share->{size_bytes} // 0 %> bytes · <%= $share->{mime_type} || 'unknown type' %></p>
+    <p><a class="btn btn-primary" href="/s/<%= $share->{token} %>/download">Download</a></p>
+  </main>
+</div>

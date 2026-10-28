@@ -1,0 +1,88 @@
+% layout 'default';
+% title 'Shared — Homelab Drive';
+<nav class="breadcrumb">
+  <a href="/">Home</a><span class="sep">/</span><span>Shared</span>
+</nav>
+
+<div class="layout">
+  <main style="min-width:0;">
+    <h2 style="font-size:var(--app-lg);font-weight:var(--weight-light);margin:0 0 var(--space-3);">
+      Shared by me <span class="muted" style="font-size:var(--app-sm);">(<%= scalar @$shared_by_me %>)</span>
+    </h2>
+    % if (!@$shared_by_me) {
+      <p class="muted">You haven't shared anything yet.</p>
+    % } else {
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Item</th><th>Shared with</th><th>Link</th><th>Opened</th><th></th></tr></thead>
+          <tbody>
+          % for my $s (@$shared_by_me) {
+            <tr>
+              <td><%= $s->{target} eq 'folder' ? '📁' : '' %> <%= $s->{label} %></td>
+              <td class="muted">
+                %# NULL recipient is what makes a share public -- say so in
+                %# words rather than leaving the cell blank.
+                % if (defined $s->{shared_with_email}) {
+                  <%= $s->{shared_with_email} %>
+                % } else {
+                  Anyone with the link
+                % }
+              </td>
+              <td><input type="text" class="share-copy-field" readonly value="<%= $s->{url} %>"></td>
+              <td class="muted"><%= $s->{access_count} // 0 %>&times;</td>
+              <td class="file-actions">
+                <button type="button" class="share-copy-btn" data-url="<%= $s->{url} %>">Copy</button>
+                <button type="button" class="share-revoke" data-id="<%= $s->{id} %>" data-label="<%= $s->{label} %>">Revoke</button>
+              </td>
+            </tr>
+          % }
+          </tbody>
+        </table>
+      </div>
+    % }
+
+    <h2 style="font-size:var(--app-lg);font-weight:var(--weight-light);margin:var(--space-8) 0 var(--space-3);">
+      Shared with me <span class="muted" style="font-size:var(--app-sm);">(<%= scalar @$shared_with_me %>)</span>
+    </h2>
+    % if (!@$shared_with_me) {
+      <p class="muted">Nothing has been shared with you.</p>
+    % } else {
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Item</th><th>From</th><th></th></tr></thead>
+          <tbody>
+          % for my $s (@$shared_with_me) {
+            <tr>
+              <td><%= $s->{target} eq 'folder' ? '📁' : '' %> <%= $s->{label} %></td>
+              <td class="muted"><%= $s->{owner_email} %></td>
+              <td class="file-actions"><a class="btn btn-secondary" href="<%= $s->{url} %>">Open</a></td>
+            </tr>
+          % }
+          </tbody>
+        </table>
+      </div>
+    % }
+  </main>
+</div>
+
+<script>
+(function () {
+  document.querySelectorAll('.share-copy-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var f = b.closest('tr').querySelector('.share-copy-field');
+      f.select();
+      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+      if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(b.dataset.url).then(done, function () { document.execCommand('copy'); done(); }); }
+      else { document.execCommand('copy'); done(); }
+    });
+  });
+  document.querySelectorAll('.share-revoke').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      if (!confirm('Turn off the link for "' + b.dataset.label + '"? Anyone holding it will lose access.')) return;
+      b.disabled = true;
+      var r = await fetch('/shares/' + b.dataset.id + '/revoke', { method: 'POST', credentials: 'same-origin' });
+      if (r.ok) { location.reload(); } else { alert('Could not revoke that share.'); b.disabled = false; }
+    });
+  });
+})();
+</script>

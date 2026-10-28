@@ -1,0 +1,41 @@
+% layout 'default';
+% title ($share->{folder_name} // 'Shared folder') . ' — Drive';
+<div class="layout" style="justify-content:center;">
+  <main style="max-width:52em;">
+    <p class="muted" style="margin:0 0 var(--space-2);">
+      <%= $share->{owner_email} %> shared a folder with you
+    </p>
+    <h1 style="font-size:var(--app-xl);font-weight:var(--weight-light);margin:0 0 var(--space-4);">
+      📁 <%= $share->{folder_name} %>
+    </h1>
+    % if (!@$files) {
+      <p class="muted">This folder is empty.</p>
+    % } else {
+      %# The folder's OWN files only -- subfolders are not followed. Recursing
+      %# would silently widen what was shared; a subfolder can be shared on
+      %# its own if that is what is wanted.
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th></th><th>Name</th><th>Size</th><th></th></tr></thead>
+          <tbody>
+          % for my $f (@$files) {
+            <tr>
+              <td style="width:52px;">
+                % if (($f->{mime_type} // '') =~ m{^image/}) {
+                  <img class="file-thumb" src="/s/<%= $share->{token} %>/files/<%= $f->{id} %>/thumbnail"
+                       alt="" onerror="this.style.display='none'">
+                % }
+              </td>
+              <td><%= $f->{filename} %></td>
+              <td class="muted"><%= $f->{size_bytes} // 0 %></td>
+              <td class="file-actions">
+                <a class="btn btn-secondary" href="/s/<%= $share->{token} %>/files/<%= $f->{id} %>/download">Download</a>
+              </td>
+            </tr>
+          % }
+          </tbody>
+        </table>
+      </div>
+    % }
+  </main>
+</div>

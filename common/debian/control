@@ -16,6 +16,8 @@ Depends: perl (>= 5.36),
          libdbd-pg-perl,
          libminion-perl,
          libcryptx-perl,
+         libnet-smtp-ssl-perl,
+         libauthen-sasl-perl,
          postgresql-client
 Breaks: homelab-database (<< 0.1.1), homelab-pgbouncer (<< 0.1.1)
 Replaces: homelab-database (<< 0.1.1), homelab-pgbouncer (<< 0.1.1)

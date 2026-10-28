@@ -29,6 +29,8 @@
       <li data-folder-id="<%= $f->{id} %>">
         <input type="checkbox" class="select-checkbox" data-kind="folder" data-id="<%= $f->{id} %>" data-name="<%= $f->{name} %>" aria-label="Select <%= $f->{name} %>">
         <a href="/folders/<%= $f->{id} %>">📁 <%= $f->{name} %></a>
+        <button type="button" class="icon-btn share-btn" title="Share folder"
+                data-kind="folders" data-id="<%= $f->{id} %>" data-name="<%= $f->{name} %>">🔗</button>
         <form method="post" action="/folders/<%= $f->{id} %>/delete"
               onsubmit="return confirm('Move \'<%= $f->{name} %>\' and everything inside it to Trash?')">
           <button type="submit" class="icon-btn" title="Delete folder">✕</button>
@@ -41,6 +43,7 @@
       <input type="text" name="name" placeholder="New folder" required maxlength="255">
       <button type="submit">+</button>
     </form>
+    <a class="trash-link" href="/shares">🔗 Shared</a>
     <a class="trash-link" href="/trash">🗑 Trash</a>
   </aside>
 
@@ -107,6 +110,8 @@
         <td><%= $f->{mime_type} %></td>
         <td><%= $f->{uploaded_at_display} %></td>
         <td class="file-actions">
+          <button type="button" class="share-btn" data-kind="files"
+                  data-id="<%= $f->{id} %>" data-name="<%= $f->{filename} %>">Share</button>
           <form method="post" action="/files/<%= $f->{id} %>/delete"
                 onsubmit="return confirm('Move <%= $f->{filename} %> to Trash?')">
             <button type="submit">Delete</button>
@@ -144,6 +149,38 @@
       <span id="lightbox-caption"></span>
     </div>
   </div>
+</div>
+
+<!-- Share dialog. One dialog reused for files and folders -- the only
+     difference is which endpoint it posts to, carried on the trigger. -->
+<div id="share-backdrop" class="share-backdrop" hidden></div>
+<div id="share-dialog" class="share-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
+  <h2 id="share-dialog-title">Share</h2>
+  <p class="muted" id="share-what"></p>
+
+  <div id="share-choose">
+    <label><input type="radio" name="share-mode" value="user" checked> Share with someone</label>
+    <input type="email" id="share-email" placeholder="their@address" autocomplete="off">
+    <label><input type="radio" name="share-mode" value="public"> Anyone with the link</label>
+    <p class="hint">A link is created either way, and you can copy it again later from
+       <a href="/shares">Shared</a>.</p>
+    <div class="share-actions">
+      <button type="button" id="share-create" class="btn-share-go">Create link</button>
+      <button type="button" id="share-cancel" class="btn-share-cancel">Cancel</button>
+    </div>
+  </div>
+
+  <div id="share-result" hidden>
+    <p id="share-notice"></p>
+    <div class="share-linkrow">
+      <input type="text" id="share-link" readonly>
+      <button type="button" id="share-copy" class="btn-share-go">Copy</button>
+    </div>
+    <div class="share-actions">
+      <button type="button" id="share-done" class="btn-share-cancel">Done</button>
+    </div>
+  </div>
+  <p id="share-error" class="share-error"></p>
 </div>
 
 <script>
@@ -1056,5 +1093,82 @@ var Selection = (function () {
   if (clearBtn) clearBtn.addEventListener('click', clear);
 
   return { clear: clear };
+})();
+</script>
+
+<script>
+// --- Sharing -------------------------------------------------------
+// One dialog, two targets. The trigger carries data-kind (files|folders),
+// so this never has to know which list it was opened from.
+(function () {
+  var dlg = document.getElementById('share-dialog');
+  var backdrop = document.getElementById('share-backdrop');
+  if (!dlg) return;
+  var choose = document.getElementById('share-choose');
+  var result = document.getElementById('share-result');
+  var what = document.getElementById('share-what');
+  var emailEl = document.getElementById('share-email');
+  var linkEl = document.getElementById('share-link');
+  var noticeEl = document.getElementById('share-notice');
+  var errEl = document.getElementById('share-error');
+  var current = null;
+
+  function open(kind, id, name) {
+    current = { kind: kind, id: id };
+    what.textContent = (kind === 'folders' ? 'Folder: ' : 'File: ') + name;
+    choose.hidden = false; result.hidden = true;
+    errEl.textContent = ''; emailEl.value = '';
+    dlg.querySelector('input[value="user"]').checked = true;
+    dlg.hidden = false; backdrop.hidden = false;
+    emailEl.focus();
+  }
+  function close() { dlg.hidden = true; backdrop.hidden = true; current = null; }
+
+  document.querySelectorAll('.share-btn').forEach(function (b) {
+    b.addEventListener('click', function () { open(b.dataset.kind, b.dataset.id, b.dataset.name); });
+  });
+  document.getElementById('share-cancel').addEventListener('click', close);
+  document.getElementById('share-done').addEventListener('click', close);
+  backdrop.addEventListener('click', close);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !dlg.hidden) close(); });
+
+  document.getElementById('share-create').addEventListener('click', async function () {
+    if (!current) return;
+    errEl.textContent = '';
+    var mode = dlg.querySelector('input[name="share-mode"]:checked').value;
+    var body = new URLSearchParams();
+    if (mode === 'user') {
+      var addr = emailEl.value.trim();
+      if (addr.indexOf('@') < 0) { errEl.textContent = 'Enter an email address, or choose "Anyone with the link".'; return; }
+      body.set('shared_with', addr);
+    }
+    var btn = this; btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      var r = await fetch('/' + current.kind + '/' + current.id + '/share', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body
+      });
+      var j = await r.json();
+      if (!r.ok) { errEl.textContent = j.error || 'Could not create the share.'; return; }
+      // The link is shown whatever happened to the notification email --
+      // a share whose email failed is still a usable share, and hiding the
+      // link would throw that away.
+      linkEl.value = j.url;
+      noticeEl.textContent = j.notice || '';
+      choose.hidden = true; result.hidden = false;
+      linkEl.select();
+    } catch (e) {
+      errEl.textContent = 'Could not create the share.';
+    } finally { btn.disabled = false; btn.textContent = 'Create link'; }
+  });
+
+  document.getElementById('share-copy').addEventListener('click', function () {
+    linkEl.select();
+    // navigator.clipboard needs a secure context; execCommand is the
+    // fallback and still works everywhere this app is served.
+    var done = function () { var b = document.getElementById('share-copy'); b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(linkEl.value).then(done, function () { document.execCommand('copy'); done(); }); }
+    else { document.execCommand('copy'); done(); }
+  });
 })();
 </script>
