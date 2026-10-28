@@ -88,10 +88,19 @@ Description: System mailbox identity this service sends mail as:
 
 Template: homelab-invite/mailer_smtp_host
 Type: string
-Default: 127.0.0.1
+Default: 10.50.2.140
 Description: SMTP submission host for the mailer identity above:
- 127.0.0.1 only if homelab-postfix runs on this same host; otherwise
- that host's real reachable address.
+ Must be a submission endpoint that accepts a plain (non-PROXY-protocol)
+ connection -- i.e. the edge HAProxy submission frontend, NOT a postfix
+ submission backend directly and NOT loopback. The backends' :587 requires
+ a PROXY-protocol header (smtpd_upstream_proxy_protocol=haproxy) that this
+ app's direct SMTP client cannot send, so pointing at a backend address
+ makes every invite fail with "421 4.3.0 <host> Server local error" and the
+ UI just looks like nothing happened. Found live 2026-10-27: this was set
+ to a backend (10.50.2.183) and had been silently failing. homelab-sso's
+ own template already carried this warning; this one did not.
+ The default is the fleet's internal mail VIP, which each edge node holds
+ on eth4 and so survives an edge swap.
 
 Template: homelab-invite/mailer_smtp_port
 Type: string

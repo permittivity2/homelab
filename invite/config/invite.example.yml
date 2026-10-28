@@ -58,7 +58,13 @@ invite:
 # an unauthenticated local relay).
 mailer:
   email: invites@test.mailmasker.org
-  smtp_host: 127.0.0.1
+  # MUST be a submission endpoint that accepts a plain connection -- the
+  # edge HAProxy submission frontend (the fleet's internal mail VIP), NOT a
+  # postfix submission backend and NOT loopback. The backends require a
+  # PROXY-protocol header this app's direct SMTP client cannot send; point
+  # at one and every invite fails with "421 ... Server local error" while
+  # the UI shows nothing at all. See the debconf template for the full note.
+  smtp_host: 10.50.2.140
   smtp_port: 587
   smtp_password: YOUR_MAILER_ACCOUNT_PASSWORD_HERE
 

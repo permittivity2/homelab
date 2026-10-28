@@ -29,13 +29,25 @@ sub _quota_for ($c, $sender_email) {
 }
 
 # POST /internal/v1/invites {recipient_email, message?, channel?}
-# channel defaults to 'cli': this service sends the email itself in
-# that case (see Homelab::Invite::Mailer). channel='roundcube_plugin'
-# skips that -- the caller (the Roundcube add-on) sends it itself via
-# $RCMAIL->deliver_message() as the real logged-in sender, which is
-# both simpler (no new mail code there) and more deliverable (DKIM-
-# aligned to the sender's own domain). Either way the token/quota/
-# dedup logic below is identical and lives in exactly one place.
+#
+# `channel` records WHERE the invite came from, and decides who sends the
+# email. Exactly one channel opts out of us sending it:
+# 'roundcube_plugin', where the caller (the Roundcube add-on) sends it
+# itself via $RCMAIL->deliver_message() as the real logged-in sender --
+# simpler there (no new mail code) and more deliverable (DKIM-aligned to
+# the sender's own domain). Every other channel -- 'cli' (the default),
+# 'web' (myaccount) -- means WE send it.
+#
+# The send test below is therefore `ne 'roundcube_plugin'`, not
+# `eq 'cli'`. That polarity is deliberate: a channel added later and
+# missed here then still gets its email sent, rather than silently
+# getting none. 'web' was exactly that case -- homelab-accountmanage has
+# no mailer of its own and sent channel='web', which this validation
+# rejected with a 400 before any mail was attempted, so the Send-invite
+# button in myaccount did nothing at all. Found live 2026-10-27.
+#
+# Either way the token/quota/dedup logic below is identical and lives in
+# exactly one place.
 sub create ($c) {
     my $email = $c->authenticated_email_any or return;
     my $body = $c->req->json // {};
@@ -43,8 +55,9 @@ sub create ($c) {
     my $channel   = $body->{channel} // 'cli';
     return $c->render(json => { error => 'recipient_email is required' }, status => 400)
         unless $recipient && $recipient =~ /^[^@\s]+\@[^@\s]+\.[^@\s]+$/;
-    return $c->render(json => { error => "channel must be 'cli' or 'roundcube_plugin'" }, status => 400)
-        unless $channel eq 'cli' || $channel eq 'roundcube_plugin';
+    my %CHANNELS = map { $_ => 1 } qw(cli web roundcube_plugin);
+    return $c->render(json => { error => "channel must be one of: " . join(', ', sort keys %CHANNELS) }, status => 400)
+        unless $CHANNELS{$channel};
 
     my $quota = _quota_for($c, $email);
     my $pending_count = $c->app->pg->db->query(
@@ -94,7 +107,7 @@ sub create ($c) {
         user_agent => $c->req->headers->user_agent, detail => { recipient_email => $recipient, channel => $channel },
     );
 
-    if ($channel eq 'cli') {
+    if ($channel ne 'roundcube_plugin') {
         my $mcfg = $c->app->mailer_config;
         eval {
             send_mail(

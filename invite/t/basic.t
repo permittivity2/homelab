@@ -125,4 +125,34 @@ $t->delete_ok("/internal/v1/invites/$revocable->{id}" => $sender_auth)
 $t->delete_ok("/internal/v1/invites/$revocable->{id}" => $sender_auth)
     ->status_is(404, 'revoking an already-revoked (no longer pending) invite is a clean 404, not a silent no-op success');
 
+# --- channel ----------------------------------------------------------
+# channel='web' is what homelab-accountmanage sends. It used to be
+# REJECTED here with a 400 before any mail was attempted, so the Send
+# invite button in myaccount silently did nothing at all. Found live
+# 2026-10-27; this is the regression guard.
+{
+    my $bogus = 'e2e-invite-chan-' . time . '-' . $$ . '@test.mailmasker.org';
+    $t->post_ok('/internal/v1/invites' => $sender_auth => json => { recipient_email => $bogus, channel => 'nope' })
+      ->status_is(400, 'an unknown channel is still rejected')
+      ->json_like('/error', qr/\bweb\b/, "the rejection names 'web' as valid -- i.e. it is in the allowed set");
+
+    # NOTE this one DOES send a real email (that is the point: 'web' means
+    # this service sends it), to a synthetic address at a domain the fleet
+    # owns. A send failure still yields 201 with a `warning`, so this
+    # asserts acceptance and processing either way -- which is exactly the
+    # 400-before-any-mail regression we are guarding.
+    my $web_recipient = 'e2e-invite-web-' . time . '-' . $$ . '@test.mailmasker.org';
+    my $web = $t->post_ok('/internal/v1/invites' => $sender_auth => json => { recipient_email => $web_recipient, channel => 'web' })
+      ->status_is(201, "channel='web' is accepted (myaccount's Send invite)")
+      ->json_has('/url')
+      ->tx->res->json;
+    is($web->{channel}, 'web', 'the row records where the invite came from');
+    # The send branch is `ne roundcube_plugin`, not `eq cli`, so a channel
+    # added later and missed still gets its email sent rather than silently
+    # getting none. If that polarity ever flips back, 'web' stops mailing
+    # and this is the only thing that would notice.
+    ok(!exists $web->{warning} || $web->{warning} =~ /could not be sent/,
+        "a 'web' invite either mailed or said plainly that it could not");
+}
+
 done_testing;
