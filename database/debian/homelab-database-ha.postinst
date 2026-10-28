@@ -5,6 +5,14 @@ set -e
 
 case "$1" in
     configure)
+        # Capture $2 (the previously-configured version) NOW: the `set --`
+        # further down replaces the positional parameters with the bootstrap's
+        # own argv, after which "$2" is --members' VALUE, not the old version.
+        # Reading it late made the upgrade check always true, which skipped the
+        # bootstrap even on a first install -- caught on a real upgrade, where
+        # the skip message printed the members string where a version belonged.
+        OLDVER="$2"
+
         db_get homelab-database-ha/members || true;              MEMBERS="$RET"
         db_get homelab-database-ha/this_node || true;            THIS="${RET:-$(hostname -s)}"
         db_get homelab-database-ha/vip || true;                  VIP="$RET"
@@ -38,6 +46,21 @@ case "$1" in
                --replication-password "$REPLPW" --app-network "$APPNET" --yes
         [ -n "$VIP" ] && set -- "$@" --vip "$VIP"
         [ "$WIPE" = "true" ] && set -- "$@" --wipe-existing-cluster
+
+        # $2 is the previously-configured version: non-empty means this is an
+        # UPGRADE, not a first install, so the member is already bootstrapped
+        # and re-running the bootstrap can only do harm -- it wipes etcd's DCS
+        # state, and with wipe_existing=true drops the live data directory.
+        # Found 2026-10-28: all three production database nodes still had
+        # wipe_existing=true left over from their greenfield install, so a
+        # routine `apt upgrade` here would have destroyed the cluster.
+        if [ -n "$OLDVER" ]; then
+            echo "homelab-database-ha: upgrade from $OLDVER -- not re-running the HA bootstrap."
+            echo "  (an already-bootstrapped member needs none; run"
+            echo "   'dpkg-reconfigure homelab-database-ha' deliberately if you must)"
+            db_stop 2>/dev/null || true
+            exit 0
+        fi
 
         echo "homelab-database-ha: bootstrapping HA member '$THIS' ($NMEM-node cluster)..."
         if homelab-database-ha-bootstrap "$@"; then

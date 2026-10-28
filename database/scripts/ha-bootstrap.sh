@@ -61,6 +61,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --namespace) NAMESPACE="$2"; shift 2;;
   --vrid) VRID="$2"; shift 2;;
   --wipe-existing-cluster) WIPE_EXISTING="yes"; shift;;
+  --rebootstrap-live-cluster) ALLOW_REBOOTSTRAP="yes"; shift;;
   --yes|-y) ASSUME_YES="yes"; shift;;
   -h|--help) usage; exit 0;;
   *) echo "unknown arg: $1" >&2; usage; exit 2;;
@@ -101,6 +102,28 @@ if [ -n "$VIP" ]; then
   [ -n "$VIP_IFACE" ] || VIP_IFACE="$(ip -4 -o addr show | awk -v ip="$THIS_IP" '$4 ~ ip"/"{print $2; exit}')"
   [ -n "$VIP_MASK" ]  || VIP_MASK="$(ip -4 -o addr show | awk -v ip="$THIS_IP" '$4 ~ ip"/"{split($4,a,"/"); print a[2]; exit}')"
   [ -n "$VIP_IFACE" ] || die "could not detect VIP interface; pass --vip-iface"
+fi
+
+# ---- refuse to re-bootstrap a LIVE cluster -------------------------------
+# This script is destructive by nature: further down it unconditionally does
+# `rm -rf /var/lib/etcd/...` (the DCS holding cluster membership and the
+# leader key) and, with --wipe-existing-cluster, `pg_dropcluster` on the data
+# directory. Correct for a first bootstrap; catastrophic on a running one.
+#
+# It needs this guard because debian/homelab-database-ha.postinst calls it on
+# EVERY `configure` -- which includes every routine upgrade -- and the three
+# production nodes were found (2026-10-28) still carrying
+# `wipe_existing: true` in debconf from their original greenfield install.
+# A plain `apt upgrade homelab-database-ha` on a database node would
+# therefore have wiped etcd and dropped the live PostgreSQL cluster. Nothing
+# in the path warned, and nothing reset the flag after bootstrap succeeded.
+if [ "$ALLOW_REBOOTSTRAP" != "yes" ] && systemctl is-active --quiet patroni 2>/dev/null; then
+  echo "homelab-database-ha: patroni is already running on $THIS_NODE -- refusing to re-bootstrap."
+  echo "  A bootstrap would destroy etcd's DCS state and (with --wipe-existing-cluster)"
+  echo "  drop the PostgreSQL data directory. Nothing to do on a bootstrapped node."
+  echo "  Check the cluster with: patronictl -c /etc/patroni/config.yml list"
+  echo "  To rebuild deliberately, stop patroni first, or pass --rebootstrap-live-cluster."
+  exit 0
 fi
 
 echo "homelab-database HA bootstrap on $THIS_NODE ($THIS_IP)"
