@@ -58,6 +58,13 @@ class invite_sender extends rcube_plugin
         if ($this->rc->action === 'plugin.sendinvite') {
             $this->register_handler('plugin.body', [$this, 'sendinvite_body']);
         }
+        // This plugin shipped no stylesheet at all until 2026-10-27; it needs
+        // one purely to give its Settings-sidebar entry a real icon instead
+        // of elastic's generic plugin gear. Unconditional, like
+        // recipient_blocking's: a stylesheet loaded only on this plugin's own
+        // action leaves the icon wrong on every other Settings page, which is
+        // the bug that plugin's own comment documents.
+        $this->include_stylesheet('invite_sender.css');
         $this->include_script('invite_sender.js');
         $this->rc->output->add_label('invite_sender.sending', 'invite_sender.revoking');
     }
@@ -145,11 +152,17 @@ class invite_sender extends rcube_plugin
 
     public function settings_actions($args)
     {
+        // Labels MUST be namespaced with the plugin id. Unqualified,
+        // Roundcube looks the key up in CORE's label set, misses, and renders
+        // the raw "[sendinvite]" in the Settings sidebar -- which it did until
+        // 2026-10-27, even though the label existed in
+        // localization/en_US.inc. Same trap recipient_blocking and
+        // homelab_account_menu both hit.
         $args['actions'][] = [
             'action' => 'plugin.sendinvite',
             'type'   => 'link',
-            'label'  => 'sendinvite',
-            'title'  => 'sendinvite',
+            'label'  => 'invite_sender.sendinvite',
+            'title'  => 'invite_sender.sendinvite',
             'class'  => 'sendinvite',
         ];
         return $args;
@@ -368,7 +381,14 @@ class invite_sender extends rcube_plugin
             $out .= html::div('boxinformation', $this->gettext('noinvites'));
         }
         else {
-            $out .= $table->show($attrib);
+            // WRAPPED IN .scroller for the same reason recipient_blocking's
+            // list is: elastic's plugin.html (which this page borrows via the
+            // shared plugin.body object) renders its body straight into
+            // #layout-content with NO scroller, unlike every stock content
+            // template. #layout is `overflow: hidden`, so a list longer than
+            // the pane is clipped with no scrollbar. The send form above
+            // stays outside it deliberately.
+            $out .= html::div('scroller', $table->show($attrib));
         }
 
         return $out;

@@ -548,11 +548,17 @@ class recipient_blocking extends rcube_plugin
 
     public function settings_actions($args)
     {
+        // Labels MUST be namespaced with the plugin id. Unqualified,
+        // Roundcube looks the key up in CORE's label set, misses, and renders
+        // the raw "[blockedaddresses]" in the Settings sidebar -- which it did
+        // until 2026-10-27, even though the label existed right here in
+        // localization/en_US.inc. Same trap homelab_account_menu's header
+        // comment records for its own taskbar button.
         $args['actions'][] = [
             'action' => 'plugin.blockedaddresses',
             'type'   => 'link',
-            'label'  => 'blockedaddresses',
-            'title'  => 'blockedaddresses',
+            'label'  => 'recipient_blocking.blockedaddresses',
+            'title'  => 'recipient_blocking.blockedaddresses',
             'class'  => 'blockedaddresses',
         ];
         return $args;
@@ -613,7 +619,22 @@ class recipient_blocking extends rcube_plugin
             $out .= html::div('boxinformation', $this->gettext('noblockedaddresses'));
         }
         else {
-            $out .= $table->show($attrib);
+            // WRAPPED IN .scroller, and that is load-bearing. elastic's
+            // #layout is `overflow: hidden; display: flex; height: 100%`, and
+            // the rule that makes a content pane scrollable is
+            // `& > div > .scroller { flex: 1 }` (styles/layout.less). Every
+            // stock content template therefore wraps its body in
+            // <div class="scroller"> -- identities.html, folders.html,
+            // addressbook.html and compose.html all do. elastic's
+            // plugin.html does NOT: it renders
+            // <roundcube:object name="plugin.body" /> straight into
+            // #layout-content. So before this, a list longer than the pane
+            // was simply CLIPPED -- no scrollbar, no way to reach the rest.
+            // Reported 2026-10-27 on both this page's entry points.
+            //
+            // The search form above stays OUTSIDE the scroller on purpose,
+            // so it does not scroll away while you page through results.
+            $out .= html::div('scroller', $table->show($attrib));
         }
 
         return $out;

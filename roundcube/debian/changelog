@@ -1,3 +1,9 @@
+homelab-roundcube (0.1.22) unstable; urgency=medium
+
+  * Release v0.1.22
+
+ -- Gardner <gardner@homelab>  Tue, 27 Oct 2026 22:46:51 -0500
+
 homelab-roundcube (0.1.21) unstable; urgency=medium
 
   * Release v0.1.21

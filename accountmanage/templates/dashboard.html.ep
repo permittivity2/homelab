@@ -174,8 +174,12 @@
         <div id="ms-blocklink"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
-        <h2>Blocked addresses <span class="hint">reject all mail to one of your own addresses</span></h2>
-        <div id="ms-blocked"><p class="muted">Loading…</p></div>
+        <h2>Blocked addresses <span id="ms-blocked-count" class="hint"></span> <span class="hint">reject all mail to one of your own addresses</span></h2>
+        %# .scrollbox caps the height and scrolls. Without it this list grew
+        %# the Mail pane without limit -- past ~10-15 entries everything below
+        %# it (the block form, and the whole rest of the pane) got pushed off
+        %# the screen.
+        <div id="ms-blocked" class="scrollbox"><p class="muted">Loading…</p></div>
         <div class="field" style="margin-top:0.8rem;"><label>Block mail to one of your addresses</label><input type="email" id="ms-block-input" autocomplete="off" placeholder="you@your-domain"></div>
         <button type="button" class="btn btn-danger" id="ms-block-btn">Block address</button>
         <div id="ms-block-status" class="usage-note"></div>

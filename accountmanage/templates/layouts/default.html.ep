@@ -165,6 +165,28 @@
     .kv dd { margin: 0; }
     .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: var(--radius-pill); font-size: var(--app-xs); background: var(--surface-hover); color: var(--text-secondary); margin-right: 0.3rem; }
     .badge.admin { background: rgba(74,93,110,0.35); color: var(--silver-bright); }
+    /* A capped, scrolling container for a list that has no natural upper
+       bound. The blocked-addresses list is the case this was added for: it
+       renders one row per address with nothing limiting it, so past roughly
+       10-15 entries it pushed the rest of the Mail pane off the screen.
+       max-height is in rem so it tracks the user's font size rather than
+       assuming a viewport. */
+    .scrollbox { max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; }
+    /* Only frame it once there are real rows. `:not(:empty)` does NOT work
+       here -- the container always holds something (the loading text, or the
+       "none blocked" message), so it would always draw and an empty list
+       would look like a sunken panel. The JS sets .has-rows instead. */
+    .scrollbox.has-rows { border: 1px solid var(--border); border-radius: var(--radius-md); }
+    .scrollbox > p.muted { margin: 0; padding: var(--space-3); }
+    /* The table inside loses its own border: the scrollbox owns the frame
+       now, and two nested borders read as a mistake. */
+    .scrollbox table.sessions { border: 0; }
+    /* Keep the header row visible while the body scrolls. */
+    .scrollbox table.sessions thead th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--black-secondary);
+    }
+
     table.sessions { width: 100%; border-collapse: collapse; font-size: var(--app-base); }
     table.sessions th, table.sessions td { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); vertical-align: top; }
     table.sessions th { color: var(--muted); font-weight: var(--weight-semibold); }
@@ -572,9 +594,14 @@
 
         var blocked = d.blocked || [];
         var bel = document.getElementById('ms-blocked');
+        // Tell the reader how many are in there. Without this the scrollbox
+        // hides the size of the list -- you cannot tell 12 from 300.
+        var bcount = document.getElementById('ms-blocked-count');
+        if (bcount) { bcount.textContent = blocked.length ? '(' + blocked.length + ')' : ''; }
+        bel.classList.toggle('has-rows', blocked.length > 0);
         if (!blocked.length) { bel.innerHTML = '<p class="muted">You haven\'t blocked any addresses.</p>'; }
         else {
-          bel.innerHTML = '<table class="sessions"><tbody>' + blocked.map(function (x) {
+          bel.innerHTML = '<table class="sessions"><thead><tr><th>Address</th><th></th></tr></thead><tbody>' + blocked.map(function (x) {
             var r = (typeof x === 'string') ? x : (x.recipient || x.address || '');
             return '<tr><td>' + hlEsc(r) + '</td><td><button type="button" class="btn btn-secondary ms-unblock" data-r="' + hlEsc(r) + '">Unblock</button></td></tr>';
           }).join('') + '</tbody></table>';

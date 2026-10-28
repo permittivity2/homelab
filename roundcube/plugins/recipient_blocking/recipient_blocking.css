@@ -54,3 +54,17 @@
 .menu a.button-blockedaddresses:before {
     content: "\f05e";
 }
+
+/* ---- Settings-sidebar icon ---------------------------------------
+ * elastic puts `settings-default-icon` on #settings-menu
+ * (templates/includes/settings-menu.html) and defines it as
+ * `.settings-default-icon { li > a:before { content: @fa-var-cog } }`
+ * (styles/styles.less) -- a deliberate generic GEAR for any entry a plugin
+ * adds. Overriding it needs more specificity than that class selector, which
+ * the #settings-menu id gives comfortably.
+ *
+ * Same glyph as this plugin's own task-rail button above (\f05e, the
+ * ban/slash-circle), so the one feature looks the same in both places. */
+#settings-menu li > a.blockedaddresses:before {
+    content: "\f05e";
+}

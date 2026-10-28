@@ -1,0 +1,18 @@
+/*
+ * Settings-sidebar icon for the "Send Invite" entry.
+ *
+ * elastic puts `settings-default-icon` on #settings-menu
+ * (templates/includes/settings-menu.html) and defines it as
+ * `.settings-default-icon { li > a:before { content: @fa-var-cog } }`
+ * (styles/styles.less) -- a deliberate generic GEAR for any entry a plugin
+ * adds to Settings. Overriding it needs more specificity than that class
+ * selector, which the #settings-menu id gives comfortably.
+ *
+ * \f0e0 is the envelope, which is what this page does: it sends an invite.
+ * Font family/weight are inherited from elastic's own `.listing.iconized
+ * li > a:before` rule, same as every other entry in that menu -- setting
+ * them again here would be redundant and would risk drifting from the skin.
+ */
+#settings-menu li > a.sendinvite:before {
+    content: "\f0e0";
+}
