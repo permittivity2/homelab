@@ -1,7 +1,7 @@
 package Homelab::Invite::App::Controller::Invites;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::UserAgent;
-use Homelab::Invite::Mailer qw(send_mail);
+use Homelab::Common::Mailer qw(send_mail);
 use Homelab::Common::AuditClient qw(enqueue);
 use Homelab::Common::Registry qw(system_agent_token lookup);
 
