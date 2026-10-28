@@ -2,12 +2,25 @@
 Description=Periodic TLS certificate refresh from the fleet certificate store
 
 [Timer]
-# The boot run is handled by the service's own WantedBy=multi-user.target +
-# Before= ordering, so this timer is purely the steady-state safety net for a
-# renewal that lands while the host is already up.
+# Retry the boot run. The real boot run comes from the service's own
+# WantedBy=multi-user.target + Before= ordering; this catches the case where
+# that run happened before the network was actually usable.
 OnBootSec=10min
-OnUnitActiveSec=1h
+
+# OnCalendar, NOT OnUnitActiveSec. This is load-bearing and was a live bug:
+# with OnUnitActiveSec=1h and a service that was Type=oneshot +
+# RemainAfterExit=yes, the service never became inactive, so systemd never
+# re-armed the timer -- `systemctl show` reported
+# NextElapseUSecMonotonic=infinity and `Trigger: n/a`, i.e. after the single
+# boot run it would NEVER fire again. On a host that stays up for months that
+# silently defeats the entire point of this package: a renewal published to the
+# store would never be picked up, and the certificate would expire in service.
+# OnCalendar is absolute, so it re-arms regardless of the triggered unit's
+# state (RemainAfterExit has also been dropped from the service).
+OnCalendar=hourly
 RandomizedDelaySec=5min
+# Catch up after a host has been powered off past a scheduled window -- which
+# is the normal condition for a standby edge.
 Persistent=true
 
 [Install]

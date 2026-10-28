@@ -14,7 +14,11 @@ Before=nginx.service postfix.service dovecot.service
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
+# NO RemainAfterExit=yes. It bought nothing here (Before= ordering is satisfied
+# when a oneshot EXITS, not when it stays "active") and it broke the timer: a
+# unit that never goes inactive never lets an OnUnitActiveSec timer re-arm, so
+# this ran once at boot and then never again. See the long note in
+# homelab-certsync.timer.
 ExecStart=/usr/bin/homelab-certsync
 # Bounded, and the script itself always exits 0: an unreachable API must never
 # prevent nginx/postfix/dovecot from starting. Serving the certificate already

@@ -31,6 +31,12 @@ case "$1" in
             systemctl enable homelab-certsync.service >/dev/null 2>&1 || true
             systemctl enable --now homelab-certsync.timer >/dev/null 2>&1 \
                 || echo "  WARNING could not enable homelab-certsync.timer"
+            # RESTART, not just enable --now: `enable --now` is a no-op on an
+            # already-running timer, so a changed schedule in the shipped
+            # .timer would not take effect until the next reboot. That is how
+            # a dead timer (OnUnitActiveSec against a RemainAfterExit service,
+            # fixed in 0.1.2) would have survived its own fix.
+            systemctl restart homelab-certsync.timer >/dev/null 2>&1 || true
             # Pull once NOW so installing the package converges the host
             # immediately rather than at the next timer tick.
             /usr/bin/homelab-certsync || true
