@@ -4,6 +4,7 @@
 # to date, and verify it.
 #
 #   ./edge-rotate.sh 01              # swap to 01, update it, verify it
+#   ./edge-rotate.sh 01 --os-updates # ...and apply the OS updates too, + reboot
 #   ./edge-rotate.sh 00 --no-updates # swap back, verify only
 #   ./edge-rotate.sh 01 --dry-run    # say what it would do
 #
@@ -40,13 +41,14 @@
 # ============================================================================
 set -uo pipefail
 
-TARGET=""; DRY=0; UPDATES=1
+TARGET=""; DRY=0; UPDATES=1; OS_UPDATES=0
 for a in "$@"; do
     case "$a" in
         --dry-run)    DRY=1 ;;
         --no-updates) UPDATES=0 ;;
+        --os-updates) OS_UPDATES=1 ;;
         00|01|02|0|1|2) TARGET=$(printf '%02d' "$((10#$a))") ;;
-        *) echo "unknown argument '$a' (usage: edge-rotate.sh <00|01|02> [--no-updates] [--dry-run])"; exit 1 ;;
+        *) echo "unknown argument '$a' (usage: edge-rotate.sh <00|01|02> [--os-updates] [--no-updates] [--dry-run])"; exit 1 ;;
     esac
 done
 [ -z "$TARGET" ] && { echo "which edge? (00, 01 or 02)"; exit 1; }
@@ -62,6 +64,10 @@ bad(){ echo "  ${R}FAIL${O} $*"; }
 warn(){ echo "  ${Y}warn${O} $*"; }
 step(){ echo; echo "=== $* ==="; }
 pve(){ ssh -o ConnectTimeout=10 "$PVE" "$@"; }
+# Run a command INSIDE the container via the hypervisor. Needed because the OS
+# upgrade restarts openssh-server, so anything that polls over ssh loses the
+# connection at exactly the moment it matters and reports a false failure.
+cexec(){ ssh -o ConnectTimeout=10 "$PVE" "sudo pct exec $CTID -- sh -c '$1'" 2>/dev/null; }
 
 step "current edge state"
 EDGES=$(pve "sudo pct list" 2>/dev/null | awk '$1 ~ /^(400|401|402)$/ {print $1" "$2}')
@@ -236,11 +242,112 @@ if [ "$UPDATES" = 1 ]; then
     sleep 5
     ssh -o ConnectTimeout=8 "$MGMT" 'sudo journalctl -u homelab-certsync -n 6 --no-pager 2>/dev/null | tail -5' | sed 's/^/    /'
 
-    step "pending OS updates (reported, NOT applied)"
-    echo "  A kernel or libc upgrade on the live internet edge is its own"
-    echo "  decision with its own reboot, so this only counts them."
-    ssh -o ConnectTimeout=8 "$MGMT" 'apt list --upgradable 2>/dev/null | grep -c upgradable || true' \
-      | sed 's/^/    other upgradable packages: /'
+    if [ "$OS_UPDATES" = 0 ]; then
+        step "pending OS updates (reported, NOT applied)"
+        echo "  Pass --os-updates to apply them. Left alone by default because a"
+        echo "  systemd or libc upgrade on the live internet edge wants a decision."
+        ssh -o ConnectTimeout=8 "$MGMT" 'apt list --upgradable 2>/dev/null | grep -c upgradable || true' \
+          | sed 's/^/    other upgradable packages: /'
+    else
+        step "OS updates -- applying"
+        PENDING=$(ssh -o ConnectTimeout=8 "$MGMT" 'apt list --upgradable 2>/dev/null | grep -c upgradable || true')
+        echo "  $PENDING package(s) pending. Two things make this safe to run here:"
+        echo "   * --force-confold keeps every existing config file. The edge's nginx,"
+        echo "     haproxy and postfix configs are hand/tool-managed, and a conffile"
+        echo "     prompt would otherwise either hang the run or overwrite them."
+        echo "   * it runs DETACHED under systemd-run, not in this ssh session. The"
+        echo "     set includes openssh-server, and a dropped connection part-way"
+        echo "     through dpkg leaves broken packages behind."
+
+        PAYLOAD=$(base64 -w0 <<'UPGRADE'
+#!/bin/bash
+# The shebang is load-bearing: systemd execs this file directly, so without it
+# the unit dies instantly with "Exec format error" (203/EXEC) and the log it was
+# told to write stays empty -- which looks exactly like a silent failure.
+set -e
+apt-get update -qq
+# Download first: this part touches nothing, so the node keeps serving while it
+# runs and the install window stays as short as it can be.
+DEBIAN_FRONTEND=noninteractive apt-get -y -qq -d full-upgrade
+DEBIAN_FRONTEND=noninteractive apt-get -y     -o Dpkg::Options::=--force-confdef     -o Dpkg::Options::=--force-confold     full-upgrade
+UPGRADE
+)
+        ssh -o ConnectTimeout=10 "$MGMT" "
+            printf '%s' '$PAYLOAD' | base64 -d | sudo tee /run/edge-os-upgrade.sh >/dev/null
+            sudo chmod +x /run/edge-os-upgrade.sh
+            sudo rm -f /var/log/edge-os-upgrade.log
+            sudo systemctl reset-failed edge-os-upgrade 2>/dev/null || true
+            sudo systemd-run --unit=edge-os-upgrade --no-block --property=Type=oneshot \
+                --property=StandardOutput=file:/var/log/edge-os-upgrade.log \
+                --property=StandardError=append:/var/log/edge-os-upgrade.log \
+                /run/edge-os-upgrade.sh" >/dev/null 2>&1 \
+            || warn "the launch command returned non-zero -- checking whether the unit started anyway"
+        sleep 5
+        case "$(cexec 'systemctl is-active edge-os-upgrade')" in
+            activating|active) ok "upgrade running, detached" ;;
+            *) bad "the upgrade unit is not running -- see 'journalctl -u edge-os-upgrade' on the node" ;;
+        esac
+
+        echo -n "  upgrading (sshd will restart part-way through; polling via the hypervisor)"
+        for i in $(seq 1 120); do   # up to 20 minutes
+            st=$(cexec 'systemctl is-active edge-os-upgrade')
+            [ "$st" = "activating" ] || [ "$st" = "active" ] || break
+            echo -n "."
+            sleep 10
+        done
+        echo
+        RESULT=$(cexec 'systemctl show edge-os-upgrade -p Result --value')
+        LEFT=$(cexec 'apt list --upgradable 2>/dev/null | grep -c upgradable')
+        case "$RESULT" in
+            success) ok "upgrade finished cleanly (was $PENDING pending, now $LEFT)" ;;
+            "")      warn "could not read the unit result (was $PENDING pending, now $LEFT)" ;;
+            *)       bad "upgrade result: $RESULT (was $PENDING pending, now $LEFT)" ;;
+        esac
+        echo "  tail of /var/log/edge-os-upgrade.log:"
+        cexec 'tail -5 /var/log/edge-os-upgrade.log' | sed 's/^/    /'
+        AUDIT=$(cexec 'dpkg --audit')
+        if [ -z "$AUDIT" ]; then ok "dpkg --audit is clean -- no half-configured packages"
+        else bad "dpkg --audit reports problems:"; printf '%s\n' "$AUDIT" | head -10 | sed 's/^/      /'; fi
+
+        # Also wait for sshd to come back, since everything after this needs it.
+        for i in $(seq 1 24); do
+            timeout 4 bash -c "echo > /dev/tcp/$MGMT/22" 2>/dev/null && break
+            sleep 5
+        done
+        timeout 4 bash -c "echo > /dev/tcp/$MGMT/22" 2>/dev/null \
+            && ok "sshd is back after its own upgrade" || bad "sshd did not come back"
+
+        FAILED=$(cexec 'systemctl --failed --no-legend --no-pager')
+        if [ -n "$FAILED" ]; then
+            warn "unit(s) in a failed state after the upgrade:"
+            printf '%s\n' "$FAILED" | sed 's/^/      /'
+            echo "      ${D}(netplan-configure is pre-existing on these nodes: udevadm cannot"
+            echo "       reload in an unprivileged container and /etc/netplan is empty)${O}"
+        else
+            ok "no unit left in a failed state"
+        fi
+
+        if cexec 'test -f /var/run/reboot-required && echo yes' | grep -q yes; then
+            step "reboot required -- taking it now, while this node is the one being worked on"
+            echo "  A container reboot is quick, but public web and mail are down for it."
+            pve "sudo pct reboot $CTID" >/dev/null 2>&1 || true
+            sleep 10
+            for i in $(seq 1 36); do
+                timeout 4 bash -c "echo > /dev/tcp/$MGMT/22" 2>/dev/null && break
+                sleep 5
+            done
+            timeout 4 bash -c "echo > /dev/tcp/$MGMT/22" 2>/dev/null \
+                && ok "back on :22" || bad "did NOT come back on :22 after the reboot"
+            for i in $(seq 1 24); do
+                PUB=$(ssh -o ConnectTimeout=6 "$MGMT" 'ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | grep -E "^23\." | paste -sd, -' 2>/dev/null)
+                [ -n "$PUB" ] && break
+                sleep 5
+            done
+            [ -n "${PUB:-}" ] && ok "public address(es) back: $PUB" || warn "no 23.x address yet"
+        else
+            ok "no reboot required"
+        fi
+    fi
 fi
 
 # ------------------------------------------------------------------ verify
