@@ -9,11 +9,13 @@ Homepage: https://github.com/permittivity2/homelab
 Package: homelab-accountmanage
 Architecture: all
 Depends: perl (>= 5.36),
-         homelab-common,
+         homelab-common (>= 0.1.33),
          homelab-webtheme,
          libmojolicious-perl,
          libyaml-libyaml-perl,
-         adduser
+         libtext-qrcode-perl,
+         adduser,
+         openssl
 Recommends: homelab-api, homelab-sso, homelab-agent
 Description: Account self-service + administration web UI for the homelab-* ecosystem
  A thin BFF Mojolicious app served at myaccount.<domain>: browsers talk

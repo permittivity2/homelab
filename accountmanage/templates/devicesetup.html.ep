@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+%# Standalone, no dashboard chrome: whoever opens this scanned a QR code
+%# with a phone and is NOT signed in here. A top bar with account actions
+%# would be a row of dead ends.
+%= include 'homelab/head'
+  <title>Mail setup</title>
+  <style>
+    body {
+      margin: 0; display: flex; min-height: 100vh; align-items: center;
+      justify-content: center; padding: var(--space-4); background: var(--black-primary);
+    }
+    .box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-md); padding: var(--space-8) var(--space-6);
+      max-width: 34em; width: 100%; box-shadow: var(--shadow-lg);
+    }
+    .box img.logo { height: 30px; width: auto; display: block; margin: 0 auto var(--space-6); }
+    h1 { font-size: var(--app-xl); font-weight: var(--weight-light); letter-spacing: var(--tracking-tight); margin: 0 0 var(--space-3); }
+    p { color: var(--text-secondary); font-size: var(--app-base); line-height: var(--leading-normal); }
+    .addr {
+      display: inline-block; font-family: var(--font-mono, monospace);
+      background: var(--black-secondary); border: 1px solid var(--border);
+      border-radius: var(--radius-md); padding: 0.15em 0.5em; color: var(--text-primary);
+    }
+    .btn-big {
+      display: block; text-align: center; margin: var(--space-5) 0 var(--space-2);
+      padding: var(--space-4) var(--space-6); border: 1px solid var(--silver-bright);
+      border-radius: var(--radius-md); background: var(--silver-bright);
+      color: var(--black-primary); font-size: var(--app-lg); font-weight: var(--weight-medium);
+      text-decoration: none;
+    }
+    .btn-big:hover { background: #fff; }
+    ol.steps { padding-left: 1.3em; }
+    ol.steps li { font-size: var(--app-sm); color: var(--text-secondary); margin: var(--space-1) 0; }
+    .warn {
+      border-left: 3px solid var(--warning, #e0a030); padding: var(--space-2) var(--space-3);
+      background: var(--black-secondary); border-radius: var(--radius-sm);
+      font-size: var(--app-sm); color: var(--text-secondary); margin: var(--space-4) 0;
+    }
+    table.settings { width: 100%; border-collapse: collapse; margin-top: var(--space-3); }
+    table.settings th, table.settings td {
+      text-align: left; padding: var(--space-2) var(--space-2); font-size: var(--app-sm);
+      border-bottom: 1px solid var(--border); vertical-align: top;
+    }
+    table.settings th { color: var(--text-muted); font-weight: var(--weight-normal); white-space: nowrap; }
+    table.settings td { color: var(--text-primary); font-family: var(--font-mono, monospace); }
+    table.settings td .note { font-family: inherit; color: var(--text-muted); display: block; font-size: var(--app-xs); }
+    details { margin-top: var(--space-6); border-top: 1px solid var(--border); padding-top: var(--space-4); }
+    summary { cursor: pointer; color: var(--silver-bright); font-size: var(--app-base); }
+    .hint { font-size: var(--app-xs); color: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <img class="logo" src="<%= theme_base %>/logo.svg" alt="Silver Linings">
+% if ($expired) {
+    %# One message for every failure -- lapsed, mistyped, mangled by
+    %# whatever forwarded it. The next step is the same in all of them.
+    <h1>Setup link expired</h1>
+    <p>These links last only a few minutes. Sign in on your computer, open
+       <strong>Mail setup</strong>, and scan the code again.</p>
+    <a class="btn-big" href="/">Sign in</a>
+% } else {
+    <h1>Set up your mail</h1>
+    <p>Add <span class="addr"><%= $email %></span> to the Mail app on this device.</p>
+%   if ($hints->{needs_safari}) {
+    <div class="warn">
+      <strong>Open this page in Safari first.</strong> iPhone and iPad will only
+      install a mail profile that was downloaded in Safari. In any other browser
+      the file downloads and then cannot be opened.
+    </div>
+%   }
+    <a class="btn-big" href="<%= $profile_url %>">Add to <%= $hints->{is_mac} ? 'this Mac' : 'this iPhone' %></a>
+    <ol class="steps">
+      <li>Tap the button. Your device will say a profile was downloaded.</li>
+%   if ($hints->{is_mac}) {
+      <li>Open <strong>System Settings &rarr; General &rarr; Device Management</strong> and install it.</li>
+%   } else {
+      <li>Open <strong>Settings</strong>. &ldquo;Profile Downloaded&rdquo; appears near the top &mdash; tap it, then <strong>Install</strong>.</li>
+%   }
+      <li>Enter your mailbox password when asked.</li>
+    </ol>
+    <p class="hint">The profile sets up the servers, ports and encryption. It does not
+       contain your password &mdash; your device asks you for that and stores it itself.</p>
+
+    <details<%= $hints->{is_apple} ? '' : ' open' %>>
+      <summary>Android, Thunderbird, Outlook and everything else</summary>
+      <p class="hint">Choose &ldquo;IMAP&rdquo; (not POP), then enter:</p>
+      <table class="settings">
+%   for my $row (@$manual_rows) {
+        <tr>
+          <th><%= $row->[0] %></th>
+          <td><%= $row->[1] %><% if (length($row->[2] // '')) { %><span class="note"><%= $row->[2] %></span><% } %></td>
+        </tr>
+%   }
+      </table>
+    </details>
+% }
+  </div>
+</body>
+</html>

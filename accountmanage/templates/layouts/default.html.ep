@@ -171,6 +171,26 @@
        10-15 entries it pushed the rest of the Mail pane off the screen.
        max-height is in rem so it tracks the user's font size rather than
        assuming a viewport. */
+    /* --- Mail setup panel. The button column and the QR column sit side
+       by side on a desktop and stack on a phone, where the QR is useless
+       anyway (you are already holding the device). --- */
+    .devices-grid { display: flex; gap: var(--space-6); align-items: flex-start; flex-wrap: wrap; }
+    .devices-grid > div:first-child { flex: 1 1 18rem; min-width: 16rem; }
+    .qr-box { flex: 0 0 auto; text-align: center; }
+    /* White plate behind the code: this page is dark, and a QR code without
+       a light quiet zone around it scans badly or not at all. */
+    .qr-box img { background: #fff; padding: var(--space-3); border-radius: var(--radius-md); display: block; }
+    @media (max-width: 42rem) { .qr-box { display: none; } }
+
+    table.settings-table { width: 100%; border-collapse: collapse; }
+    table.settings-table th, table.settings-table td {
+      text-align: left; padding: var(--space-2) var(--space-2);
+      font-size: var(--app-sm); border-bottom: 1px solid var(--border); vertical-align: top;
+    }
+    table.settings-table th { color: var(--muted); font-weight: var(--weight-normal); white-space: nowrap; }
+    table.settings-table td { color: var(--text); font-family: var(--font-mono, monospace); word-break: break-all; }
+    table.settings-table td .note { font-family: inherit; color: var(--muted); display: block; font-size: var(--app-xs); }
+
     .scrollbox { max-height: 22rem; overflow-y: auto; overscroll-behavior: contain; }
     /* Only frame it once there are real rows. `:not(:empty)` does NOT work
        here -- the container always holds something (the loading text, or the

@@ -1,0 +1,119 @@
+% layout 'invite';
+% title 'Set up your mail';
+%#
+%# The device-setup page. Reached from the account-created screen, from
+%# both post-signup emails, and by scanning the QR code below from another
+%# screen. Everything on it is available whatever device is reading --
+%# the User-Agent only decides what comes FIRST, so a wrong guess costs a
+%# scroll rather than a dead end.
+<style>
+  /* Wider than the invite form this layout was built for: the settings
+     table below has two columns of real content and wraps badly at 30em. */
+  .card { max-width: 40em; }
+  .addr {
+    display: inline-block; font-family: var(--font-mono, monospace);
+    background: var(--black-secondary); border: 1px solid var(--border);
+    border-radius: var(--radius-md); padding: 0.15em 0.5em; color: var(--text-primary);
+  }
+  .btn-big {
+    display: block; width: 100%; box-sizing: border-box; text-align: center;
+    margin: var(--space-5) 0 var(--space-2); padding: var(--space-4) var(--space-6);
+    border: 1px solid var(--silver-bright); border-radius: var(--radius-md);
+    background: var(--silver-bright); color: var(--black-primary);
+    font-size: var(--app-lg); font-weight: var(--weight-medium);
+    text-decoration: none; cursor: pointer;
+  }
+  .btn-big:hover { background: #ffffff; }
+  .steps { margin: var(--space-3) 0 0; padding-left: 1.3em; }
+  .steps li { font-size: var(--app-sm); color: var(--text-secondary); margin: var(--space-1) 0; }
+  /* The code is drawn with a white background on purpose -- a QR against
+     a dark surface is the classic reason a scan that looks fine never
+     fires. The padding keeps the quiet zone clear of the card edge. */
+  .qr-wrap { text-align: center; margin: var(--space-5) 0 var(--space-2); }
+  .qr-wrap img {
+    width: 220px; height: 220px; background: #fff;
+    padding: var(--space-3); border-radius: var(--radius-md);
+  }
+  .warn {
+    border-left: 3px solid var(--warning, #e0a030); padding: var(--space-2) var(--space-3);
+    background: var(--black-secondary); border-radius: var(--radius-sm);
+    font-size: var(--app-sm); color: var(--text-secondary); margin: var(--space-4) 0;
+  }
+  table.settings { width: 100%; border-collapse: collapse; margin-top: var(--space-3); }
+  table.settings th, table.settings td {
+    text-align: left; padding: var(--space-2) var(--space-2); font-size: var(--app-sm);
+    border-bottom: 1px solid var(--border); vertical-align: top;
+  }
+  table.settings th { color: var(--text-muted); font-weight: var(--weight-normal); white-space: nowrap; }
+  table.settings td { color: var(--text-primary); font-family: var(--font-mono, monospace); }
+  table.settings td .note { font-family: inherit; color: var(--text-muted); display: block; font-size: var(--app-xs); }
+  details { margin-top: var(--space-6); border-top: 1px solid var(--border); padding-top: var(--space-4); }
+  summary { cursor: pointer; color: var(--silver-bright); font-size: var(--app-base); }
+  .links { margin-top: var(--space-6); font-size: var(--app-sm); }
+  .links a { color: var(--silver-bright); }
+</style>
+
+<h1>Set up your mail</h1>
+<p>Add <span class="addr"><%= $email %></span> to the Mail app on your devices.</p>
+
+% # --- Apple one-tap. Shown first on an Apple device; still offered to
+% # everyone else, because people read this page on a laptop and then walk
+% # to their phone.
+% if ($hints->{is_apple}) {
+%   if ($hints->{needs_safari}) {
+<div class="warn">
+  <strong>Open this page in Safari first.</strong>
+  iPhone and iPad will only install a mail profile that was downloaded in
+  Safari. In any other browser the file downloads and then cannot be opened.
+</div>
+%   }
+<a class="btn-big" href="<%= $profile_url %>">Add to <%= $hints->{is_mac} ? 'this Mac' : 'this iPhone' %></a>
+<ol class="steps">
+  <li>Tap the button. Your device will say a profile was downloaded.</li>
+% if ($hints->{is_mac}) {
+  <li>Open <strong>System Settings &rarr; General &rarr; Device Management</strong> and install it.</li>
+% } else {
+  <li>Open <strong>Settings</strong>. &ldquo;Profile Downloaded&rdquo; appears near the top &mdash; tap it, then <strong>Install</strong>.</li>
+% }
+  <li>Enter your mailbox password when asked. That is the password you chose for this account.</li>
+</ol>
+<p class="hint">
+  The profile sets up the servers, ports and encryption for you. It does not
+  contain your password &mdash; your device asks you for that during setup, and
+  stores it in its own keychain.
+</p>
+% }
+
+% # --- Cross-device hand-off. This is the whole reason there is a QR code:
+% # the page is open on a laptop and the mailbox has to end up on a phone.
+% if (!$hints->{is_ios}) {
+<h2 style="font-size: var(--app-lg); font-weight: var(--weight-light); margin-top: var(--space-8);">On your iPhone or iPad</h2>
+<p>Point the camera at this code, then tap the link that appears.</p>
+<div class="qr-wrap">
+  <img src="<%= $qr_url %>" alt="QR code linking to this setup page" width="220" height="220">
+</div>
+<p class="hint" style="text-align:center; word-break: break-all;">
+  Or open <%= $self_url %>
+</p>
+% }
+
+% # --- Everything that is not an Apple device. Collapsed where the one-tap
+% # path applies, open where it does not, because on Android this table IS
+% # the instructions.
+<details<%= $hints->{is_apple} ? '' : ' open' %>>
+  <summary>Android, Thunderbird, Outlook and everything else</summary>
+  <p class="hint">Choose &ldquo;IMAP&rdquo; (not POP) when your mail app asks, then enter:</p>
+  <table class="settings">
+% for my $row (@$manual_rows) {
+    <tr>
+      <th><%= $row->[0] %></th>
+      <td><%= $row->[1] %><% if (length($row->[2] // '')) { %><span class="note"><%= $row->[2] %></span><% } %></td>
+    </tr>
+% }
+  </table>
+</details>
+
+<p class="links">
+  Prefer the browser? Read your mail at <a href="<%= $webmail_url %>"><%= $webmail_url %></a>.
+  <br>Manage your account at <a href="<%= $myaccount_url %>"><%= $myaccount_url %></a>.
+</p>

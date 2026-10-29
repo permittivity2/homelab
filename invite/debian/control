@@ -9,12 +9,13 @@ Homepage: https://github.com/permittivity2/homelab
 Package: homelab-invite
 Architecture: all
 Depends: perl (>= 5.36),
-         homelab-common (>= 0.1.32),
+         homelab-common (>= 0.1.33),
          homelab-webtheme,
          libmojolicious-perl,
          libyaml-libyaml-perl,
          libmojo-pg-perl,
          libio-socket-ssl-perl,
+         libtext-qrcode-perl,
          libauthen-sasl-perl,
          adduser,
          openssl,

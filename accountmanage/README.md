@@ -28,8 +28,40 @@ for a regular user and administration for a `site_admin`.
 - **Administration** (site_admin) — placeholder; user suspend/re-enable,
   storage limits, domain mail routing and DNS land in a later iteration.
 
+- **Mail setup** — every signed-in user. An Apple `.mobileconfig` download,
+  a QR code for handing the setup to a phone, and the manual IMAP/SMTP
+  table for everything that is not an Apple device. See below.
+
 Every homelab web app gets a top-right **profile button** (Google-style
 avatar + dropdown) whose "Account Management" link points here.
+
+## Mail setup, and the one place this app is not session-authenticated
+
+```
+GET /devices/apple.mobileconfig   session OR signed token
+GET /devices/setup?t=<token>      standalone page, token only
+GET /devices/qr.svg               session ONLY
+```
+
+Adding a mailbox to a phone is inherently cross-device: the panel is open
+on a laptop and the account has to end up on a handset that has never
+signed in here and never will. So the QR code carries a signed, minutes-
+long token (`Homelab::Common::SetupToken`) and the page it opens accepts
+that token in place of a session.
+
+`/devices/qr.svg` is deliberately **session-only**: it MINTS the
+capability, so letting a token reach it would let a lapsed one be traded
+for a fresh one indefinitely.
+
+What the token is worth: it names a mailbox. The profile behind it holds
+an email address and two public hostnames and **no password** (see
+`Homelab::Common::AppleProfile` for why that is non-negotiable rather than
+an omission). Secret: `device_setup.token_secret`, written by the
+postinst. Absent, the panel still shows the download button and the manual
+settings — only the cross-device QR code goes away.
+
+Settings come from `Homelab::Common::MailSetup`, shared with
+homelab-invite's own setup page, so the two cannot drift.
 
 ## Deploy
 

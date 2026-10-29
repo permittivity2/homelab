@@ -42,6 +42,31 @@ prometheus:
 grafana:
   base_url: http://10.50.2.63:3000
 
+# Device setup -- the "Mail setup" panel every signed-in user gets, and
+# the standalone page a phone lands on after scanning the QR code there.
+#
+# These are the hostnames and ports a MAIL CLIENT dials. They must be
+# publicly resolvable AND appear as a SAN on the certificate the edge
+# serves on those ports, or the phone fails the TLS name check with an
+# error the user cannot act on. Blank derives mail.<domain>/smtp.<domain>
+# from the signed-in user's own address, which is normally right.
+device_setup:
+  imap_host:
+  imap_port: 993
+  smtp_host:
+  smtp_port: 587
+  service_label: MailMasker
+  organization: Silver Linings, LLC
+  webmail_url: https://mail.mailmasker.org/
+  # Minutes a scanned QR code stays usable. Short on purpose: unlike the
+  # link in the welcome email, this one is generated while the person is
+  # looking at the screen and is meant to be used within the minute.
+  qr_ttl_minutes: 15
+  # HMAC secret for those QR links. Written by the postinst; if it is
+  # missing the panel still shows the manual settings and the download
+  # button, and only the cross-device QR code is absent.
+  token_secret: YOUR_SETUP_TOKEN_SECRET_HERE
+
 # homelab-sso: the only place a user types a password.
 sso:
   base_url: https://login.test.mailmasker.org        # BROWSER redirect target -- MUST be the public SSO vhost

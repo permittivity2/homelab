@@ -7,11 +7,14 @@ use Homelab::Common::Health qw(mount_health_route);
 use Homelab::Common::Registry qw(register_recurring);
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::Invite::App::Controller::Invites;
+use Homelab::Invite::App::Controller::Setup;
+use Homelab::Common::SetupToken qw(issue_setup_token);
 
 has 'pg';
 has 'api_base';
 has 'invite_config';
 has 'mailer_config';
+has 'device_config';
 
 sub startup ($self) {
     # Templates land at /usr/share/homelab-invite/templates, not next to the
@@ -47,6 +50,17 @@ sub startup ($self) {
     $self->api_base($config->{homelab_api}{base_url} // die "config: homelab_api.base_url is required\n");
     $self->invite_config($config->{invite} // die "config: invite.* is required (see config/invite.example.yml)\n");
     $self->mailer_config($config->{mailer} // die "config: mailer.* is required (see config/invite.example.yml)\n");
+    # Optional, unlike the three above: an install whose config predates
+    # the device-setup feature simply does not offer setup links. The
+    # postinst appends the block, but a hand-maintained config file may
+    # not have it and must not stop the service from starting.
+    $self->device_config($config->{device_setup} // {});
+    unless (($self->device_config->{token_secret} // '') =~ /^.+$/
+            && ($self->device_config->{token_secret} // '') !~ /^YOUR_/) {
+        $self->log->warn('homelab-invite: device_setup.token_secret is unset -- '
+            . 'the "add to your phone" links will not be offered '
+            . '(run dpkg-reconfigure homelab-invite, or add the key by hand)');
+    }
 
     mount_health_route($self, check => sub {
         $self->pg->db->query('SELECT 1');
@@ -71,6 +85,33 @@ sub startup ($self) {
     # unlike domain-admin's own version of this helper) -- several
     # routes below need a per-request "is this ALSO a site_admin"
     # check without a second introspect() round trip.
+    # The signed, expiring URL that lets a brand-new account be added to a
+    # phone that has never logged in. Returns undef when this install has
+    # no signing secret, which every caller treats as "do not offer the
+    # link" rather than as an error -- see Controller::Setup.
+    #
+    # The lifetime is long (30 days by default) ON PURPOSE: this link's
+    # main home is the "your account is ready" email, and people set up a
+    # new mailbox on their phone days after they read that mail, not
+    # minutes. It discloses an email address and nothing else.
+    $self->helper(setup_url_for => sub ($c, $email) {
+        my $dc     = $self->device_config;
+        my $secret = $dc->{token_secret} // '';
+        return undef unless length $secret && $secret !~ /^YOUR_/;
+        my $days = $dc->{link_ttl_days} // 30;
+        my $token = eval {
+            issue_setup_token(secret => $secret, purpose => 'mail-device-setup',
+                subject => $email, ttl => $days * 86_400);
+        };
+        unless ($token) {
+            $self->log->warn("homelab-invite: could not issue a setup token: $@");
+            return undef;
+        }
+        my $base = $config->{invite}{public_base_url} // '';
+        $base =~ s{/+$}{};
+        return "$base/setup/mail?t=$token";
+    });
+
     $self->helper(authenticated_email_any => sub ($c) {
         my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
         unless ($jwt) {
@@ -158,6 +199,14 @@ sub startup ($self) {
     # char token never contains one in practice, but costs nothing to
     # guard against the same class of bug domain-admin's :domain/
     # :recipient routes already document hitting for real. ------------
+    # --- Public, no auth, token-authorised: the device-setup pages.
+    # Registered before /invite/:token purely for readability; the
+    # prefixes do not overlap. See Controller::Setup for why these are
+    # not behind a login. --------------------------------------------
+    $r->get('/setup/mail')                       ->to('setup#page');
+    $r->get('/setup/mail/apple.mobileconfig')    ->to('setup#apple_profile');
+    $r->get('/setup/mail/qr.svg')                ->to('setup#qr');
+
     $r->get('/invite/:token' => [token => qr/[^\/]+/])           ->to('invites#show');
     $r->post('/invite/:token/username' => [token => qr/[^\/]+/])  ->to('invites#check_username');
     $r->post('/invite/:token/accept' => [token => qr/[^\/]+/])    ->to('invites#accept');

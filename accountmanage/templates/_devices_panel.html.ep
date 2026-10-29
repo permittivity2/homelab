@@ -1,0 +1,71 @@
+%# The "Mail setup" cards, shown to every signed-in user. Included from
+%# the dashboard's Devices section.
+%#
+%# Three ways to the same place, because the right one depends entirely on
+%# what the person is holding: the button (you are ON the device), the QR
+%# code (you are on a laptop and the device is in your pocket), and the
+%# settings table (your device is not an Apple one).
+<div class="card">
+  <h2>Set up Mail on a device <span class="hint">iPhone, iPad and Mac, in one tap</span></h2>
+  <p class="muted" style="font-size:0.9rem;margin:0 0 0.9rem;">
+    Installs a profile that configures the servers, ports and encryption for
+    <strong><%= $email %></strong>. It does <em>not</em> contain your password &mdash;
+    your device asks you for that during setup and keeps it in its own keychain.
+  </p>
+
+% if ($device_hints->{needs_safari}) {
+  <div class="flash err" style="margin-bottom:0.8rem;">
+    Open this page in <strong>Safari</strong> to install the profile. iPhone and iPad
+    will only install one that was downloaded in Safari itself.
+  </div>
+% }
+
+  <div class="devices-grid">
+    <div>
+      <a class="btn btn-primary" href="/devices/apple.mobileconfig" style="display:inline-block;">
+        <%= $device_hints->{is_apple} ? ($device_hints->{is_mac} ? 'Add to this Mac' : 'Add to this iPhone') : 'Download Apple profile' %>
+      </a>
+      <ol class="muted" style="font-size:0.82rem;padding-left:1.2rem;margin:0.8rem 0 0;">
+% if ($device_hints->{is_mac}) {
+        <li>Open <strong>System Settings &rarr; General &rarr; Device Management</strong>.</li>
+% } else {
+        <li>Open <strong>Settings</strong> &mdash; &ldquo;Profile Downloaded&rdquo; appears near the top.</li>
+% }
+        <li>Tap it, then <strong>Install</strong>.</li>
+        <li>Enter your mailbox password when asked.</li>
+      </ol>
+    </div>
+
+% if ($device_qr_ok) {
+    <div class="qr-box">
+      <p class="muted" style="font-size:0.82rem;margin:0 0 0.6rem;">Setting up a different phone?<br>Point its camera here.</p>
+      %# Drawn on white deliberately: the page is dark, and a QR code
+      %# without a light quiet zone around it scans badly or not at all.
+      %# onerror removes it rather than leaving a broken-image icon if
+      %# this host cannot render codes.
+      <img src="/devices/qr.svg" alt="QR code linking to the mail setup page"
+           width="170" height="170" onerror="this.closest('.qr-box').remove()">
+      <p class="muted" style="font-size:0.75rem;margin:0.5rem 0 0;">Link expires in a few minutes.</p>
+    </div>
+% }
+  </div>
+</div>
+
+<div class="card">
+  <h2>Mail app settings <span class="hint">Android, Thunderbird, Outlook, anything else</span></h2>
+  <p class="muted" style="font-size:0.9rem;margin:0 0 0.6rem;">Choose <strong>IMAP</strong>, not POP, then enter:</p>
+  <table class="settings-table">
+% for my $row (@$device_rows) {
+    <tr>
+      <th><%= $row->[0] %></th>
+      <td><%= $row->[1] %><% if (length($row->[2] // '')) { %><span class="note"><%= $row->[2] %></span><% } %></td>
+    </tr>
+% }
+  </table>
+% if ($device_settings->{webmail_url}) {
+  <p class="muted" style="font-size:0.82rem;margin:0.9rem 0 0;">
+    Or skip all of this and read your mail at
+    <a href="<%= $device_settings->{webmail_url} %>"><%= $device_settings->{webmail_url} %></a>.
+  </p>
+% }
+</div>

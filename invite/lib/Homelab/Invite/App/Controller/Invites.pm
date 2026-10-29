@@ -2,6 +2,8 @@ package Homelab::Invite::App::Controller::Invites;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::UserAgent;
 use Homelab::Common::Mailer qw(send_mail);
+use Homelab::Common::MailSetup qw(mail_settings);
+use Homelab::Invite::Welcome qw(ready_email welcome_email);
 use Homelab::Common::AuditClient qw(enqueue);
 use Homelab::Common::Registry qw(system_agent_token lookup);
 
@@ -437,21 +439,59 @@ sub accept ($c) {
         return $c->render(json => { error => $api_error }, status => $err->{code} // 502);
     }
 
-    # Welcome email to the invite's own contact address, naming the new
-    # login. Best-effort (the account already exists); failure is logged.
-    my $mcfg = $c->app->mailer_config;
-    eval {
-        send_mail(
-            smtp_host => $mcfg->{smtp_host}, smtp_port => $mcfg->{smtp_port},
-            from_email => $mcfg->{email}, from_password => $mcfg->{smtp_password},
-            to => $row->{recipient_email}, subject => 'Your account is ready',
-            body => "Your account has been created.\n\nYour login is: $account_email\n\n"
-                  . "You can now log in.",
-        );
-    };
-    $c->app->log->warn("homelab-invite: welcome email to $row->{recipient_email} failed: $@") if $@;
+    # --- post-creation mail. Two messages, deliberately, to two
+    # different places:
+    #
+    #   1. the invite's CONTACT address (a Gmail, wherever they already
+    #      read mail) -- "your account is ready", which is the only one
+    #      that existed before; and
+    #   2. the NEW MAILBOX itself -- a welcome message, so the first
+    #      thing a new user sees on opening their mail is not an empty
+    #      folder, and so the device-setup link lives somewhere they
+    #      still have in six months when they get a new phone.
+    #
+    # Both are best-effort and INDEPENDENT: the account already exists by
+    # this point, and a mail failure must not turn a successful signup
+    # into an error on screen. They are evalled separately so one failing
+    # does not swallow the other.
+    my $dc       = $c->app->device_config // {};
+    my $settings = mail_settings(email => $account_email, config => $dc);
+    my $setup_url = $c->setup_url_for($account_email);
+    my %urls = (
+        login_url   => $c->app->invite_config->{login_url} // 'https://myaccount.mailmasker.org/',
+        webmail_url => ($dc->{webmail_url} || 'https://mail.mailmasker.org/'),
+    );
 
-    return $c->render(json => { ok => \1, email => $account_email });
+    my $mcfg = $c->app->mailer_config;
+    my $send = sub ($to, $subject, $text, $html) {
+        eval {
+            send_mail(
+                smtp_host => $mcfg->{smtp_host}, smtp_port => $mcfg->{smtp_port},
+                from_email => $mcfg->{email}, from_password => $mcfg->{smtp_password},
+                to => $to, subject => $subject, body => $text, html => $html,
+            );
+            1;
+        } or $c->app->log->warn("homelab-invite: '$subject' to $to failed: $@");
+    };
+
+    $send->($row->{recipient_email}, ready_email(
+        account_email => $account_email, settings => $settings,
+        setup_url => $setup_url, %urls));
+
+    # Addressed to the account that was just created. It is a local
+    # delivery through the same authenticated submission path as any
+    # other send -- there is no special-casing for "our own domain", and
+    # there should not be.
+    $send->($account_email, welcome_email(
+        account_email => $account_email, settings => $settings,
+        setup_url => $setup_url, drive_url => ($dc->{drive_url} || 'https://drive.mailmasker.org/'),
+        %urls));
+
+    # setup_url lets the account-created screen offer the phone setup
+    # immediately, which is the moment it is most likely to be acted on.
+    # Null when this install has no signing secret -- the page just omits
+    # the offer (see App.pm's setup_url_for).
+    return $c->render(json => { ok => \1, email => $account_email, setup_url => $setup_url });
 }
 
 # --- helpers for the account-creation redesign (2026-09-27) ----------

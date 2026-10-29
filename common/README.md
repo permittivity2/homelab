@@ -52,6 +52,48 @@ architecture this implements.
   it, and relays the response back. Renders a clean 502/504 itself on a
   registry miss or unreachable backend, never a raw exception page.
 
+### Device setup
+
+Four small modules that together answer "how do I get this mailbox onto
+my phone?". They live here because **two** services answer it at two
+different moments — `homelab-invite` seconds after an account is created,
+`homelab-accountmanage` months later for the next device — and an answer
+that differed between them would create a second mail account on the
+phone rather than updating the first.
+
+- **`Homelab::Common::MailSetup`** — `mail_settings`, `manual_setup_rows`.
+  The single source of IMAP/SMTP client settings. Defaults derive
+  `mail.<domain>`/`smtp.<domain>` from the mailbox address, which is what
+  the edge certificate actually carries as SANs. Blank config keys mean
+  *derive* (YAML renders an empty key as `''`, not undef).
+- **`Homelab::Common::AppleProfile`** — `build_mail_profile`,
+  `profile_filename`. Emits an iOS/macOS `.mobileconfig`. Two properties
+  are load-bearing: identifiers and UUIDs are a pure function of the
+  address (a random UUID per request would give a user who taps "Add to
+  iPhone" twice *two* copies of the same mailbox), and **no password is
+  ever written into the file** — mail passwords are Argon2id hashes so
+  there is no plaintext to write, and a URL-fetchable file holding a
+  working credential would be an account-takeover primitive.
+- **`Homelab::Common::SetupToken`** — `issue_setup_token`,
+  `verify_setup_token`. HMAC-SHA256, expiring, purpose-scoped, stateless.
+  What lets a QR code carry its own authority to a phone that has never
+  signed in. Each issuer uses its own secret, so there is no fleet-wide
+  setup secret to distribute. Signature is checked *before* expiry, the
+  compare is constant-time, and fields are length-prefixed before signing
+  (the subject is an attacker-chosen email address, so a plain delimiter
+  would let a field boundary be shifted).
+- **`Homelab::Common::QRCode`** — `qr_svg`, `qr_available`. Renders a QR
+  code as compact SVG. `Text::QRCode` is loaded **lazily** and its absence
+  returns undef rather than dying: this package is installed on every host
+  in the fleet and only two of them render codes, so the dependency is
+  declared by those two packages, not here.
+
+`Homelab::Common::Mailer`'s `send_mail` also gained an optional `html`
+argument, making the message `multipart/alternative` with `body` as the
+text part. Both parts are base64 (SMTP caps a line at 998 octets and HTML
+routinely exceeds it). The plain-text-only path is byte-identical to what
+it emitted before.
+
 ## Bootstrap scripts
 
 Two standalone CLI tools ship here too (not in `homelab-database`/

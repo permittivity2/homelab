@@ -72,6 +72,72 @@ async function checkUsername() {
 
 unameEl.addEventListener('blur', checkUsername);
 
+// Built in JS because the whole account-created screen is: the page is
+// not re-fetched after signup, so there is no server render to put this
+// in. A User-Agent sniff decides only WHICH prompt to show -- the setup
+// page behind both links carries every option regardless, so being wrong
+// costs a tap, never a dead end.
+function addDeviceSetup(body, setupUrl) {
+    var ua = navigator.userAgent || '';
+    var isIOS = /\b(iPhone|iPad|iPod)\b/.test(ua);
+
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'margin: var(--space-6) 0; padding-top: var(--space-5);'
+        + ' border-top: 1px solid var(--border);';
+
+    var h2 = document.createElement('p');
+    h2.style.cssText = 'margin:0 0 var(--space-2); color: var(--text-primary);';
+    h2.textContent = isIOS ? 'Add it to this iPhone' : 'Get it on your phone';
+    wrap.appendChild(h2);
+
+    if (isIOS) {
+        var btn = document.createElement('a');
+        btn.className = 'btn btn-primary';
+        btn.href = setupUrl;
+        btn.textContent = 'Set up Mail';
+        btn.style.cssText = 'display:block; text-align:center; margin: var(--space-3) 0;';
+        wrap.appendChild(btn);
+        var note = document.createElement('p');
+        note.className = 'hint';
+        note.textContent = 'Sets up Mail in one tap. You will be asked for the password '
+            + 'you just chose; the setup file never contains it.';
+        wrap.appendChild(note);
+    } else {
+        var note2 = document.createElement('p');
+        note2.className = 'hint';
+        note2.style.margin = '0 0 var(--space-3)';
+        note2.textContent = 'Point your phone camera at this code.';
+        wrap.appendChild(note2);
+
+        // Derived from the setup URL rather than passed separately, so
+        // the code and the link can never point at different tokens.
+        var img = document.createElement('img');
+        img.src = setupUrl.replace('/setup/mail?', '/setup/mail/qr.svg?');
+        img.alt = 'QR code linking to the mail setup page';
+        img.width = 180; img.height = 180;
+        // White plate behind the code: it is drawn on a dark card, and a
+        // QR without a light quiet zone around it scans badly or not at all.
+        img.style.cssText = 'display:block; margin:0 auto; background:#fff;'
+            + ' padding: var(--space-3); border-radius: var(--radius-md);';
+        // If this host cannot render QR codes the endpoint 404s. Drop the
+        // image rather than leaving a broken-image icon on the one screen
+        // that is supposed to feel like everything worked.
+        img.onerror = function () { img.remove(); };
+        wrap.appendChild(img);
+
+        var alt = document.createElement('p');
+        alt.className = 'hint';
+        alt.style.cssText = 'text-align:center; margin-top: var(--space-3);';
+        var link = document.createElement('a');
+        link.href = setupUrl;
+        link.textContent = 'or open the setup page here';
+        link.style.color = 'var(--silver-bright)';
+        alt.appendChild(link);
+        wrap.appendChild(alt);
+    }
+    body.appendChild(wrap);
+}
+
 document.getElementById('go').onclick = async function () {
     errEl.textContent = '';
     var username = unameEl.value.trim();
@@ -98,14 +164,25 @@ document.getElementById('go').onclick = async function () {
         strong.textContent = login;
         p.appendChild(strong);
         p.appendChild(document.createTextNode('. You can now sign in.'));
-        var a = document.createElement('a');
-        a.className = 'btn btn-primary';
-        a.href = '<%= $login_url %>';
-        a.textContent = 'Sign in';
         var body = document.getElementById('card-body');
         body.innerHTML = '';
         body.appendChild(h);
         body.appendChild(p);
+
+        // The device-setup offer, placed BEFORE the sign-in button on
+        // purpose: this is the one moment the person is certain to be
+        // paying attention, and getting mail onto the phone is the thing
+        // that makes the account real. setup_url is null when this
+        // install has no signing secret -- then this block is simply
+        // absent and the screen is what it always was.
+        if (res.body.setup_url) {
+            addDeviceSetup(body, res.body.setup_url);
+        }
+
+        var a = document.createElement('a');
+        a.className = 'btn btn-primary';
+        a.href = '<%= $login_url %>';
+        a.textContent = 'Sign in';
         body.appendChild(a);
         return;
     }

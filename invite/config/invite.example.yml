@@ -49,6 +49,38 @@ invite:
   # which is always a real fleet domain since that mailbox lives on it.
   account_domain:
 
+# Device setup -- the "add this mailbox to my phone" flow offered on the
+# account-created page and in both post-signup emails.
+#
+# These are the hostnames and ports a MAIL CLIENT dials, which are NOT
+# the fleet-internal addresses the rest of this file is full of: they
+# must be publicly resolvable AND present as a SAN on the certificate
+# the edge serves on those ports, or the phone fails the TLS name check
+# and the user gets an error with no way to act on it. Leave them blank
+# to derive mail.<account_domain> / smtp.<account_domain>.
+device_setup:
+  imap_host:
+  imap_port: 993
+  smtp_host:
+  smtp_port: 587
+  # Shown on the iPhone install screen and as the account name in Mail.
+  service_label: MailMasker
+  organization: Silver Linings, LLC
+  # How long the setup link inside the welcome emails keeps working. It
+  # names a mailbox and nothing else (no password is ever in the profile
+  # -- see Homelab::Common::AppleProfile), so this is about limiting how
+  # long a forwarded email keeps disclosing an address, not about
+  # protecting a credential. After it lapses the same setup page is
+  # always available, signed in, from myaccount.
+  link_ttl_days: 30
+  # HMAC secret for those links. Written by the postinst on install --
+  # if it is missing or still the placeholder, the links are simply not
+  # offered (the account still works; only the convenience is absent).
+  token_secret: YOUR_SETUP_TOKEN_SECRET_HERE
+  # Where a lapsed link sends someone instead.
+  myaccount_url: https://myaccount.mailmasker.org/
+  webmail_url: https://mail.mailmasker.org/
+
 # System mailbox identity this service sends mail AS (the invite email
 # itself when sent via `homelab-cli invite send`, and the "your account
 # is ready" welcome email after a real acceptance) -- a real api.users

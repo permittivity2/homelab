@@ -32,6 +32,52 @@ case "$1" in
         chown root:homelab "$CONFIG_FILE" 2>/dev/null || true
         chmod 640 "$CONFIG_FILE" 2>/dev/null || true
 
+        # --- device setup (the "Mail setup" panel + its QR code).
+        #
+        # Runs on EVERY configure, because the branch above only seeds a
+        # config on a FIRST install -- an upgrade from a version
+        # predating this feature would otherwise have no device_setup
+        # block and the QR code would silently never appear. Both steps
+        # are guarded, so this is a no-op once it has run.
+        if ! grep -q '^device_setup:' "$CONFIG_FILE"; then
+            echo "  adding device_setup block to $CONFIG_FILE (upgrade from a pre-device-setup version)"
+            cat >> "$CONFIG_FILE" <<'EOF'
+
+# Device setup -- added automatically on upgrade. imap_host/smtp_host are
+# left blank to derive mail.<domain> / smtp.<domain> from each signed-in
+# user's own address; set them only if those are not the names the edge
+# certificate carries.
+device_setup:
+  imap_host:
+  imap_port: 993
+  smtp_host:
+  smtp_port: 587
+  service_label: MailMasker
+  organization: Silver Linings, LLC
+  webmail_url: https://mail.mailmasker.org/
+  qr_ttl_minutes: 15
+  token_secret: YOUR_SETUP_TOKEN_SECRET_HERE
+EOF
+        fi
+
+        # HMAC secret for the QR links. Generated, not prompted: it is
+        # machine-to-machine and nobody needs to know it. Hex, so it is
+        # both sed- and YAML-safe.
+        if grep -q 'YOUR_SETUP_TOKEN_SECRET_HERE' "$CONFIG_FILE"; then
+            SETUP_SECRET="$(openssl rand -hex 32 2>/dev/null)"
+            if [ -n "$SETUP_SECRET" ]; then
+                sed -i "s/YOUR_SETUP_TOKEN_SECRET_HERE/$SETUP_SECRET/" "$CONFIG_FILE"
+                echo "  generated device_setup.token_secret"
+            else
+                # Substituting an EMPTY value would leave a config that
+                # looks configured and silently is not. Leave the
+                # placeholder: the app treats it as "no secret" and the
+                # panel just omits the QR code.
+                echo "  WARNING: could not generate device_setup.token_secret (openssl unavailable);"
+                echo "           the Mail setup QR code will not be offered until one is set."
+            fi
+        fi
+
         # Metrics tab egress: open this host -> the fleet Prometheus
         # (prometheus.base_url in the config) so the metrics.view-gated
         # Metrics tab can query it. The base output chain has a drop policy.

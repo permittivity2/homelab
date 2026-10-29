@@ -26,6 +26,7 @@ has 'sso_client_id';
 has 'sso_client_secret';
 has 'sso_redirect_uri';
 has 'public_base_url';
+has 'device_config';
 
 sub startup ($self) {
     # Templates land at /usr/share/homelab-accountmanage/templates, not
@@ -82,6 +83,11 @@ sub startup ($self) {
 
     $self->api_base($config->{homelab_api}{base_url} // die "config: homelab_api.base_url is required\n");
     $self->public_base_url($config->{public_base_url} // die "config: public_base_url is required\n");
+    # Optional, like prometheus/grafana below: a config file written
+    # before this feature existed simply has no block, and the Mail
+    # setup panel falls back to showing the derived settings with no
+    # cross-device QR code. Never a reason to refuse to start.
+    $self->device_config($config->{device_setup} // {});
     # Optional: the fleet Prometheus (monitoring host) the metrics.view-gated
     # Metrics tab queries. If unset, that tab is simply never offered.
     $self->prometheus_base($config->{prometheus}{base_url} // '');
@@ -132,6 +138,14 @@ sub startup ($self) {
     $r->post('/mail/block')     ->to('account#mail_block');
     $r->post('/mail/unblock')   ->to('account#mail_unblock');
     # Invites (self-service) + account activity (self-scoped audit).
+    # Device setup. The .mobileconfig and the standalone page accept
+    # EITHER a session OR a signed token, because the device that ends
+    # up holding the mailbox is a phone that has never signed in here --
+    # see _device_token_email below.
+    $r->get('/devices/apple.mobileconfig')->to('account#device_apple_profile');
+    $r->get('/devices/setup')             ->to('account#device_setup_page');
+    $r->get('/devices/qr.svg')            ->to('account#device_qr');
+
     $r->get('/invites')        ->to('account#invites_list');
     $r->post('/invites/send')  ->to('account#invites_send');
     $r->post('/invites/revoke')->to('account#invites_revoke');
@@ -220,6 +234,10 @@ use Mojo::URL;
 use Mojo::UserAgent;
 use Homelab::Common::AuthClient qw(introspect revoke_all);
 use Homelab::Common::SSOClient qw(exchange_code);
+use Homelab::Common::AppleProfile qw(build_mail_profile profile_filename);
+use Homelab::Common::MailSetup qw(mail_settings manual_setup_rows);
+use Homelab::Common::QRCode qw(qr_svg);
+use Homelab::Common::SetupToken qw(issue_setup_token verify_setup_token);
 
 # Server-to-server client for calling homelab-api with the logged-in
 # user's bearer token. Short timeout: these are quick JSON calls behind
@@ -276,6 +294,142 @@ sub _metrics_auth ($c) {
     my $r = introspect($jwt, api_base => $c->app->api_base, capability => 'metrics.view');
     return (undef, undef) unless $r && $r->{has_capability};
     return ($email, $jwt);
+}
+
+# --- Device setup ("Mail setup" panel + the page a phone lands on) ------
+#
+# Adding a mailbox to a phone is inherently cross-device: the panel is
+# open on a laptop and the account has to end up on a handset that has
+# never signed in here and never will. So the QR code on that panel
+# carries a signed, short-lived token (Homelab::Common::SetupToken) and
+# the page it opens accepts that token in place of a session.
+#
+# What the token is worth: it names a mailbox. The page and the profile
+# behind it hold an email address and two public hostnames and no
+# password at all (see Homelab::Common::AppleProfile) -- so it is not a
+# login, cannot read mail, and lapses in minutes.
+
+sub _device_cfg ($c) { return $c->app->device_config // {} }
+
+sub _device_secret ($c) {
+    my $s = _device_cfg($c)->{token_secret};
+    return undef unless defined $s && length $s;
+    return undef if $s =~ /^YOUR_/;    # untouched placeholder from the example config
+    return $s;
+}
+
+# A signed URL for the phone, or undef when this install has no secret
+# (in which case the panel just omits the QR code).
+sub _device_setup_url ($c, $email) {
+    my $secret = _device_secret($c) or return undef;
+    my $mins   = _device_cfg($c)->{qr_ttl_minutes} || 15;
+    my $token  = eval {
+        issue_setup_token(secret => $secret, purpose => 'mail-device-setup',
+            subject => $email, ttl => $mins * 60);
+    };
+    unless ($token) {
+        $c->app->log->warn("accountmanage: could not issue a device setup token: $@");
+        return undef;
+    }
+    my $base = $c->app->public_base_url // '';
+    $base =~ s{/+$}{};
+    return "$base/devices/setup?t=$token";
+}
+
+# Who is this request for? A signed-in session, or failing that a valid
+# token. In that ORDER: the session is the stronger claim, and checking
+# it first means a signed-in user never depends on a token at all.
+sub _device_subject ($c) {
+    my ($email) = _current_auth($c);
+    return $email if $email;
+    my $secret = _device_secret($c) or return undef;
+    return verify_setup_token(secret => $secret, purpose => 'mail-device-setup',
+        token => scalar $c->param('t'));
+}
+
+sub _device_settings ($c, $email) {
+    return mail_settings(email => $email, config => _device_cfg($c));
+}
+
+# GET /devices/apple.mobileconfig -- session or token.
+sub device_apple_profile ($c) {
+    my $email = _device_subject($c);
+    unless ($email) {
+        $c->res->headers->content_type('text/plain; charset=UTF-8');
+        return $c->render(data => "Sign in to download your mail setup profile.\n", status => 401);
+    }
+    my $s = _device_settings($c, $email);
+    my $xml = build_mail_profile(
+        email        => $email,
+        imap_host    => $s->{imap_host}, imap_port => $s->{imap_port},
+        smtp_host    => $s->{smtp_host}, smtp_port => $s->{smtp_port},
+        account_label => $s->{service_label}, organization => $s->{organization},
+        display_name => $email,
+    );
+    # application/x-apple-aspen-config is what makes iOS hand the file to
+    # the profile installer rather than render it as text.
+    $c->res->headers->content_type('application/x-apple-aspen-config');
+    $c->res->headers->content_disposition(
+        'attachment; filename="' . profile_filename($email, $s->{service_label}) . '"');
+    $c->res->headers->cache_control('no-store, private');
+    return $c->render(data => $xml);
+}
+
+# GET /devices/setup?t=... -- the standalone page a scanned QR lands on.
+# Renders without the dashboard chrome: whoever opens it is not signed in
+# and a top bar offering account actions would be a dead end.
+sub device_setup_page ($c) {
+    my $email = _device_subject($c);
+    unless ($email) {
+        return $c->render(template => 'devicesetup', status => 410,
+            expired => 1, email => undef, settings => undef, manual_rows => [],
+            profile_url => '', hints => {}, format => 'html');
+    }
+    my $s = _device_settings($c, $email);
+    my $qs = $c->param('t') ? '?t=' . $c->param('t') : '';
+    return $c->render(
+        template    => 'devicesetup',
+        expired     => 0,
+        email       => $email,
+        settings    => $s,
+        manual_rows => manual_setup_rows($s),
+        profile_url => "/devices/apple.mobileconfig$qs",
+        hints       => _device_hints($c),
+    );
+}
+
+# GET /devices/qr.svg -- session only. The code it draws is the thing
+# that crosses to the phone, so this endpoint itself never needs to.
+sub device_qr ($c) {
+    my ($email) = _current_auth($c);
+    return $c->render(data => '', status => 401) unless $email;
+    my $url = _device_setup_url($c, $email);
+    # No URL means no signing secret on this install. 404 lets the
+    # panel's <img> fail quietly beside the settings that always work.
+    return $c->render(data => '', status => 404) unless $url;
+    my $svg = qr_svg($url, module => 6, title => "Mail setup for $email");
+    return $c->render(data => '', status => 404) unless $svg;
+    $c->res->headers->content_type('image/svg+xml');
+    $c->res->headers->cache_control('no-store, private');
+    return $c->render(data => $svg);
+}
+
+# Decides only what to show FIRST. Every option stays on the page, so a
+# wrong guess costs a scroll. See homelab-invite's Controller::Setup for
+# why the Safari case is called out: iOS installs a configuration profile
+# only when it was downloaded in Safari itself, and in any other iOS
+# browser the file downloads and then cannot be opened.
+sub _device_hints ($c) {
+    my $ua = $c->req->headers->user_agent // '';
+    my $ios = $ua =~ /\b(?:iPhone|iPad|iPod)\b/ ? 1 : 0;
+    my $mac = (!$ios && $ua =~ /\bMacintosh\b/) ? 1 : 0;
+    my $other_ios_browser = $ua =~ /\b(?:CriOS|FxiOS|EdgiOS|OPiOS|Chrome)\b/ ? 1 : 0;
+    return {
+        is_ios       => $ios,
+        is_mac       => $mac,
+        is_apple     => ($ios || $mac) ? 1 : 0,
+        needs_safari => ($ios && $other_ios_browser) ? 1 : 0,
+    };
 }
 
 # --- Prometheus query helpers (used by the Metrics tab's BFF) -----------
@@ -517,6 +671,8 @@ sub dashboard ($c) {
         $has_catchall = ($cr && $cr->{has_capability}) ? 1 : 0;
     }
 
+    my $device_settings = _device_settings($c, $email);
+
     return $c->render(
         template     => 'dashboard',
         email        => $email,
@@ -530,6 +686,12 @@ sub dashboard ($c) {
         has_catchall => $has_catchall,
         admin_domains => $admin_domains,
         sso_forgot_url => $c->app->sso_base . '/forgot',
+        # Mail setup panel. Derived from the signed-in address, so it is
+        # correct for every user with no per-user storage anywhere.
+        device_settings => $device_settings,
+        device_rows     => manual_setup_rows($device_settings),
+        device_qr_ok    => (_device_secret($c) ? 1 : 0),
+        device_hints    => _device_hints($c),
     );
 }
 

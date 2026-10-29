@@ -19,6 +19,7 @@
     <button type="button" data-section="security"><span class="ico">🔑</span><span class="label">Security</span></button>
     <button type="button" data-section="sessions"><span class="ico">🖥️</span><span class="label">Sessions</span></button>
     <button type="button" data-section="mailself"><span class="ico">📨</span><span class="label">Mail</span></button>
+    <button type="button" data-section="devices"><span class="ico">📱</span><span class="label">Mail setup</span></button>
     <button type="button" data-section="invites"><span class="ico">✉️</span><span class="label">Invites</span></button>
     <button type="button" data-section="activity"><span class="ico">📜</span><span class="label">Activity</span></button>
 % if ($is_admin) {
@@ -191,6 +192,12 @@
         <button type="button" class="btn btn-danger" id="ms-block-btn">Block address</button>
         <div id="ms-block-status" class="usage-note"></div>
       </div>
+    </section>
+
+    %# Every signed-in user, no capability gate: adding your own mailbox to
+    %# your own phone is the most ordinary self-service action there is.
+    <section class="section" id="devices">
+      %= include '_devices_panel'
     </section>
 
     <section class="section" id="invites">
