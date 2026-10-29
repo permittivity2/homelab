@@ -1,0 +1,17 @@
+[Unit]
+Description=Hourly DMARC aggregate report ingest
+
+[Timer]
+# OnCalendar, not OnUnitActiveSec: the latter never re-arms against a unit
+# that does not deactivate, which is the trap homelab-certsync's timer hit.
+# Hourly is well inside the reporting cadence (receivers send one report per
+# domain per day) while still surfacing a new report the same working day.
+OnCalendar=hourly
+# Every domain-admin host runs this timer against ONE shared mailbox. The
+# database claim guarantees only one actually works, but staggering means
+# five hosts are not waking simultaneously just to lose the race.
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

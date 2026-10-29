@@ -66,7 +66,10 @@ sub sources ($c) {
     my $only_failing = $c->param('failing') ? 1 : 0;
 
     my $sql = q{
-        SELECT d.source_ip::text                                      AS source_ip,
+        -- host(), not ::text: an INET holding a bare host address renders
+        -- as "23.116.91.65/32" when cast to text, and a /32 in a UI
+        -- column headed "Source IP" reads like a subnet.
+        SELECT host(d.source_ip)                                      AS source_ip,
                r.policy_domain                                        AS domain,
                COALESCE(SUM(d.message_count), 0)                      AS messages,
                COALESCE(SUM(CASE WHEN d.dkim_result = 'pass' OR d.spf_result = 'pass'
@@ -129,7 +132,7 @@ sub report ($c) {
         'SELECT * FROM domainadmin.dmarc_reports WHERE id = ?', $id)->hash;
     return $c->render(json => { error => 'report not found' }, status => 404) unless $r;
     $r->{records} = $c->app->pg->db->query(q{
-        SELECT source_ip::text AS source_ip, message_count, disposition,
+        SELECT host(source_ip) AS source_ip, message_count, disposition,
                dkim_result, spf_result, header_from, auth_results
           FROM domainadmin.dmarc_records
          WHERE report_id = ?

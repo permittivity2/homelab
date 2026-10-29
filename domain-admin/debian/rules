@@ -14,6 +14,14 @@ override_dh_auto_test:
 # already handles enable/start itself with its own sequencing.
 override_dh_installsystemd:
 	dh_installsystemd --no-enable --no-start
+#	A SECOND call is required for the DMARC ingest units. A bare
+#	dh_installsystemd only installs debian/<package>.service -- the
+#	debian/<package>.<unitname>.{service,timer} files are invisible to it
+#	without --name, so the timer shipped as "not-found" on the first
+#	deploy despite the files existing in debian/. Same family of mistake
+#	as the hand-copied unit this override was added for in the first
+#	place (see the comment above).
+	dh_installsystemd --no-enable --no-start --name=homelab-dmarc-ingest
 
 
 override_dh_install:

@@ -185,7 +185,7 @@ sub _store {
 # just wasted work.
 sub _file_away {
     my ($imap, $uid, $c) = @_;
-    my $folder = $c->{processed_folder} // 'DMARC/Processed';
+    my $folder = _processed_folder($imap, $c);
     unless ($imap->exists($folder)) {
         $imap->create($folder)
             or do { say_i "  could not create $folder: " . $imap->LastError; return };
@@ -194,4 +194,20 @@ sub _file_away {
     $imap->move($folder, $uid) or say_i "  could not move uid $uid to $folder: " . $imap->LastError;
     $imap->expunge;
     return;
+}
+
+# The configured folder is written with '/' as the hierarchy separator
+# because that reads naturally, but IMAP servers choose their own and
+# reject the wrong one outright -- this dovecot uses Maildir++ and answered
+# "Invalid mailbox name: Name must not have '/' characters", so the move
+# failed (harmlessly: the report was already stored and the ON CONFLICT key
+# makes the inevitable re-read a no-op). Ask the server what it uses rather
+# than hardcoding either character.
+sub _processed_folder {
+    my ($imap, $c) = @_;
+    my $folder = $c->{processed_folder} // 'DMARC/Processed';
+    my $sep    = eval { $imap->separator } || '.';
+    return $folder if $sep eq '/';
+    $folder =~ s{/}{$sep}g;
+    return $folder;
 }
