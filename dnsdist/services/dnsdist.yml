@@ -1,0 +1,32 @@
+---
+# Fleet service manifest for dnsdist, consumed by homelab-agent and surfaced in
+# the Services/Topology view.
+#
+# WHY THIS IS PACKAGED. It was not, until 2026-10-29. The file existed only on
+# prod-homelab00, hand-made -- so prod-homelab01 and prod-homelab02 ran dnsdist
+# while the fleet had no record that they should, and a drift check comparing
+# manifests could not see it. Every other package on these nodes (certsync,
+# haproxy, node-exporter, webproxy) ships its own manifest from the postinst;
+# dnsdist was the only one that did not. Found by diffing the three edge nodes
+# against each other during an edge rotation.
+#
+# The backend addresses below are descriptive -- the authoritative list is
+# /etc/homelab/dnsdist/backends.yml, applied by homelab-dnsdist-apply-backends.
+# If the DNS tier moves, update both.
+- check:
+    tcp_port: '53'
+  description: dnsdist DNS load-balancer, proxy-protocol to 10.50.2.147:53, 10.50.2.148:53,
+    10.50.2.149:53
+  fronts:
+  - dns@10.50.2.147:53
+  - dns@10.50.2.148:53
+  - dns@10.50.2.149:53
+  kind: dns-proxy-frontend
+  name: dnsdist-dns
+  package: homelab-dnsdist
+- check:
+    tcp_port: 8083
+  description: dnsdist built-in Prometheus webserver (:8083/metrics)
+  kind: metrics-exporter
+  name: dnsdist-metrics
+  package: homelab-dnsdist

@@ -1,3 +1,9 @@
+homelab-dnsdist (0.1.5) unstable; urgency=medium
+
+  * Release v0.1.5
+
+ -- Gardner <gardner@homelab>  Thu, 29 Oct 2026 14:40:40 -0500
+
 homelab-dnsdist (0.1.4) unstable; urgency=medium
 
   * Release v0.1.4

@@ -9,3 +9,5 @@ override_dh_install:
 	dh_install
 	install -D -m 644 config/backends.example.yml \
 		debian/homelab-dnsdist/usr/share/homelab-dnsdist/config/backends.example.yml
+	install -D -m 644 services/dnsdist.yml \
+		debian/homelab-dnsdist/usr/share/homelab-dnsdist/services/dnsdist.yml

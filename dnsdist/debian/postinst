@@ -20,6 +20,17 @@ case "$1" in
                 || echo "  WARNING: homelab-dnsdist-apply-backends reported a problem -- see output above."
         fi
 
+        # --- fleet service manifest (topology/services visibility) -------
+        # Replaced every configure, like the other packages' manifests: it is
+        # declarative, so a change reaches existing installs. Until 0.1.5 this
+        # package shipped no manifest at all, and the file existed only on the
+        # one edge node where someone had written it by hand -- so the other
+        # two ran dnsdist invisibly to the fleet.
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services 2>/dev/null || true
+        cp "$SHARE_DIR/services/dnsdist.yml" "/etc/homelab/services/dnsdist.yml"
+
         systemctl enable dnsdist >/dev/null 2>&1 || true
 
         echo ""

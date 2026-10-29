@@ -1,0 +1,7 @@
+homelab-agent 0.1.9
+homelab-certsync 0.1.4
+homelab-common 0.1.34
+homelab-dnsdist 0.1.5
+homelab-haproxy 0.1.12
+homelab-node-exporter 0.4.1
+homelab-webproxy 0.1.13
