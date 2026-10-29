@@ -117,9 +117,13 @@ done
 
 # ------------------------------------------------------------------ done
 step "versions, as deployed"
-for n in 30 31 32; do echo "  $(printf 'prod-homelab%02d' "$n") invite        $(ssh "$(ip_for "$n")" 'dpkg-query -W -f="${Version}" homelab-invite' 2>/dev/null)"; done
-for n in 27 28 29; do echo "  $(printf 'prod-homelab%02d' "$n") accountmanage $(ssh "$(ip_for "$n")" 'dpkg-query -W -f="${Version}" homelab-accountmanage' 2>/dev/null)"; done
-echo "  prod-homelab46 cert-server    $(ssh 10.20.2.190 'dpkg-query -W -f="${Version}" homelab-cert-server' 2>/dev/null)"
+# \${Version} escaped: the command is inside a double-quoted bash string,
+# so an unescaped ${Version} is expanded LOCALLY to nothing and dpkg-query
+# prints an empty line. (It did, the first time this ran.)
+ver() { ssh -o ConnectTimeout=6 "$1" "dpkg-query -W -f='\${Version}' $2" 2>/dev/null; }
+for n in 30 31 32; do echo "  $(printf 'prod-homelab%02d' "$n") invite        $(ver "$(ip_for "$n")" homelab-invite)"; done
+for n in 27 28 29; do echo "  $(printf 'prod-homelab%02d' "$n") accountmanage $(ver "$(ip_for "$n")" homelab-accountmanage)"; done
+echo "  prod-homelab46 cert-server    $(ver 10.20.2.190 homelab-cert-server)"
 
 echo
 echo "Next: tap the setup link on an iPhone and look at the install screen."
