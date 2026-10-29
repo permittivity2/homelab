@@ -21,6 +21,27 @@ manifest_dir: /etc/homelab/services
 credential_file: /etc/homelab/agent/credential.yml
 heartbeat_interval_seconds: 60
 
+# How close to expiry the access token has to be before the agent rotates its
+# credential. Default 3600 (one hour) against a 24-hour token, so roughly one
+# rotation a day.
+#
+# THIS IS A SAFETY SETTING, not a performance one. Until 0.1.9 the agent
+# rotated on EVERY heartbeat -- 1440 times a day, to renew a token with 23h59m
+# left -- and each rotation is a chance for the server to commit while the
+# response is lost, which left the host holding a revoked token and no way back
+# (it has no password). That lottery locked out 14 of 51 fleet nodes on
+# 2026-10-28/29. Lowering this towards zero reinstates that risk; raising it
+# past the token lifetime means never refreshing at all.
+#refresh_margin_seconds: 3600
+
+# Where to write node_exporter textfile metrics, so a wedged agent is VISIBLE.
+# The 14 lockouts above went unnoticed for up to 4.4 days because the unit
+# reports `active` and the token's expires_at stays in the future. Default is
+# the fleet's node_exporter textfile directory; metrics are skipped silently if
+# it is absent or unwritable, never at the cost of a heartbeat. See
+# homelab-prometheus' rules/fleet-agent.yml for the alerts built on them.
+#metrics_textfile_dir: /var/lib/prometheus/node-exporter
+
 server:
   listen: "http://0.0.0.0:2520"
   # See lib/Homelab/Agent/App.pm's own comment: every per-request check

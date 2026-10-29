@@ -153,6 +153,55 @@ caller's JWT for the worker to fetch files with — this gateway route
 exists for `homelab-cli`'s own `jobs list/show/download` commands, see
 `../worker/README.md` and `../cli/README.md`.
 
+## Refresh-token rotation, and what happens when the response is lost
+
+`POST /api/v1/auth/refresh` rotates: it revokes the presented refresh token
+and its session, then mints a new pair. That is the right property — a
+stolen, already-used refresh token is useless on the legitimate client's next
+refresh — but it had a hole that no client can close:
+
+> the server commits the rotation, and the client never learns the result.
+
+A request timeout, a reset connection, or the client being killed between the
+server's `COMMIT` and its own write to disk all land in the same place: the old
+token is revoked, the new one was never received. For a human that is one
+re-login. For **homelab-agent it was terminal** — it holds no password, only
+the token, so it retried a spent token every 60 seconds forever, silently. On
+2026-10-28/29 that locked out **14 of 51 fleet nodes**, the certificate issuer
+among them, and the oldest went unnoticed for 4.4 days. Post-cutover items 36
+and 37.
+
+Two changes, together (migration `020-refresh-token-grace.sql`):
+
+- **Rotation is atomic.** The revoke and the insert were separate
+  autocommitted statements; a crash in between left the caller with a revoked
+  token and no successor at all — the one case a grace window cannot repair,
+  because there is nothing to hand back. Now it is one transaction on one
+  connection.
+- **A consumed token has a grace window** (`jwt.refresh_grace_seconds`,
+  default 300) in which presenting it again returns **the same successor**, so
+  a client that lost the response simply retries and converges.
+
+Four things must all hold before anything is handed back, and each is a
+different way of saying *this is a lost response, not a replay*:
+
+| Condition | Why |
+|---|---|
+| the old token recorded a `successor_id` | a token revoked by **logout** records none, which is what keeps logout final |
+| `rotated_at` is inside the window | outside it, a consumed token is refused exactly as before |
+| the successor is itself live and unrevoked | if it has been rotated on in turn, the client clearly *did* receive it — so this really is a stale token |
+| its session is live with time left | the re-minted JWT uses the **same jti** and is bounded by that session's own remaining lifetime, so it cannot outlive it |
+
+The grace path **mints nothing** — no new token, no new session — so a client
+stuck retrying converges instead of generating sessions. It logs at `info`
+when it fires, because a burst of them is the signature of this API being slow
+enough to time out its own callers. The response carries `recovered: true`.
+
+What this gives up is narrow: replaying a token you stole within the last five
+minutes *and* whose rightful owner never completed the rotation. What it buys
+is that an interrupted rotation stops being a permanent lockout — which had
+already fired fourteen times.
+
 ## Testing
 
 `t/auth.t` (unit, no DB), `t/basic.t` (real Postgres, real HTTP — set

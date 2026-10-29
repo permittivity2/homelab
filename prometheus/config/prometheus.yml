@@ -13,6 +13,13 @@ global:
   external_labels:
     fleet: homelab
 
+# Alert rules. No Alertmanager on this fleet yet, so these evaluate and surface
+# in Prometheus's own Alerts page / /api/v1/rules rather than paging anyone --
+# which is still the difference between a condition being visible and a node
+# being dead for four days before anyone notices (see rules/fleet-agent.yml).
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
 scrape_configs:
   # Prometheus scraping itself.
   - job_name: prometheus

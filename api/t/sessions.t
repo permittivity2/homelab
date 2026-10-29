@@ -251,4 +251,92 @@ $t->delete_ok('/api/v1/auth/sessions' => { Authorization => "Bearer $admin_jwt" 
 $t->delete_ok('/api/v1/auth/sessions?except_current=yes' => { Authorization => "Bearer $admin_jwt" })
   ->status_is(400, 'a non-true/false except_current is rejected rather than coerced');
 
+# --- Refresh-token rotation: a LOST RESPONSE must be recoverable ---------
+#
+# The server commits a rotation and the client never learns the result (a
+# request timeout, a reset connection, a killed process). The old token is
+# revoked and the new one was never received. For a human that is one
+# re-login; for homelab-agent, which holds no password, it was PERMANENT --
+# and it locked out 14 of 51 fleet nodes on 2026-10-28/29, the certificate
+# issuer among them, unnoticed for up to 4.4 days (post-cutover items 36, 37).
+#
+# So a consumed token has a short grace window in which presenting it again
+# returns THE SAME successor. These subtests are mostly about the four ways
+# that must NOT work, because the whole risk of the change is softening
+# single-use too far.
+subtest 'a rotation whose response was lost can be retried' => sub {
+    my ($ge, $gp) = ("sess-grace-$suffix\@test.mailmasker.org", 'GraceTest1Aa!!');
+    track_account($t->app, $ge);
+    $t->post_ok('/api/v1/auth/register', json => { email => $ge, password => $gp })->status_is(201);
+    $t->post_ok('/api/v1/auth/login', json => { email => $ge, password => $gp })->status_is(200);
+    my $first = $t->tx->res->json('/refresh_token');
+
+    # The rotation the "client" is about to lose the response to.
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $first })->status_is(200);
+    my $successor = $t->tx->res->json('/refresh_token');
+    my $sess_before = $t->app->pg->db->query(
+        'SELECT count(*) AS n FROM api.sessions s JOIN api.users u ON u.id = s.user_id WHERE u.email = ?', $ge)->hash->{n};
+
+    # Retrying the consumed token hands back the SAME successor...
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $first })
+      ->status_is(200, 'the consumed token is accepted inside the grace window')
+      ->json_is('/recovered' => 1, 'and says so')
+      ->json_is('/refresh_token' => $successor, 'returning the same successor, not a new one');
+
+    # ...and mints nothing, so a client stuck retrying converges instead of
+    # generating sessions.
+    my $sess_after = $t->app->pg->db->query(
+        'SELECT count(*) AS n FROM api.sessions s JOIN api.users u ON u.id = s.user_id WHERE u.email = ?', $ge)->hash->{n};
+    is $sess_after, $sess_before, 'the grace path creates no session';
+
+    # The token it handed back is the live one and still works.
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $successor })
+      ->status_is(200, 'the recovered successor is genuinely usable');
+    my $third = $t->tx->res->json('/refresh_token');
+
+    # Now that the successor HAS been rotated on, the original is a genuinely
+    # stale token -- reuse detection has to reassert itself even though we are
+    # still inside the window.
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $first })
+      ->status_is(401, 'once the successor is itself consumed, the original is refused again');
+
+    # Outside the window: aged by hand rather than by sleeping.
+    $t->app->pg->db->query(
+        q{UPDATE api.refresh_tokens SET rotated_at = NOW() - INTERVAL '1 day' WHERE token = ?}, $successor);
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $successor })
+      ->status_is(401, 'a rotation older than the grace window is refused');
+
+    # LOGOUT MUST STAY FINAL. A token revoked by logout records no successor,
+    # which is exactly what distinguishes it from a rotation -- otherwise this
+    # change would quietly have made logging out take five minutes.
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $third })->status_is(200);
+    my $live = $t->tx->res->json('/refresh_token');
+    $t->post_ok('/api/v1/auth/logout', json => { refresh_token => $live })->status_is(200);
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $live })
+      ->status_is(401, 'a token revoked by logout is NOT recoverable, grace window or not');
+    my $succ = $t->app->pg->db->query(
+        'SELECT successor_id FROM api.refresh_tokens WHERE token = ?', $live)->hash;
+    is $succ->{successor_id}, undef, 'logout records no successor, which is what keeps it final';
+
+    # And a token nobody ever issued is still a flat refusal.
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => 'not-a-real-token-at-all' })
+      ->status_is(401, 'an unknown token is refused');
+};
+
+# --- Rotation is atomic -----------------------------------------------------
+# Before 0.1.x these were separate autocommitted statements, so a crash
+# mid-rotation could leave a revoked token with no successor at all -- the one
+# case the grace window cannot repair, because there is nothing to hand back.
+# The observable guarantee: every rotated token points at a successor that
+# really exists.
+subtest 'every rotation leaves a successor that exists' => sub {
+    my $orphans = $t->app->pg->db->query(
+        q{SELECT count(*) AS n FROM api.refresh_tokens rt
+          WHERE rt.rotated_at IS NOT NULL
+            AND (rt.successor_id IS NULL
+                 OR NOT EXISTS (SELECT 1 FROM api.refresh_tokens s WHERE s.id = rt.successor_id))},
+    )->hash->{n};
+    is $orphans, 0, 'no rotated token points at a missing successor';
+};
+
 done_testing;

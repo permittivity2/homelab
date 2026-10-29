@@ -29,6 +29,21 @@ jwt:
   algorithm: HS256
   expiry_seconds: 1800        # 30 minutes
   refresh_expiry_days: 30
+  # How long a refresh token that has ALREADY been rotated stays redeemable,
+  # returning the same successor it rotated into. Default 300.
+  #
+  # This exists because a rotation whose response is lost -- a timeout, a
+  # reset connection, a client killed between the server's commit and its own
+  # write to disk -- used to be unrecoverable: the old token was revoked and
+  # the new one never arrived. For a human that is one re-login. For
+  # homelab-agent, which holds no password, it was permanent, and it locked
+  # out 14 of 51 fleet nodes on 2026-10-28/29. See
+  # migrations/020-refresh-token-grace.sql for the full reasoning and the
+  # four conditions that must all hold before anything is handed back.
+  #
+  # Lower is stricter. 0 disables the grace path entirely and restores the
+  # old behaviour, lockouts included.
+  refresh_grace_seconds: 300
 
 auth:
   # false (default): /api/v1/auth/register works exactly as it always

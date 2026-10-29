@@ -1085,18 +1085,40 @@ sub _set_recovery_email ($self, $c) {
     return $c->render(json => { ok => \1, recovery_email => $re });
 }
 
+# A rotation the client never learned the result of used to be a permanent
+# lockout. See migrations/020-refresh-token-grace.sql for the whole argument;
+# the short version is that the server commits, the response is lost to a
+# timeout or a killed process, and the client is left holding a revoked token
+# with no way back. For a human that is one re-login. For homelab-agent, which
+# holds no password, it is terminal -- and it locked out 14 of 51 fleet nodes
+# on 2026-10-28/29, the certificate issuer among them, unnoticed for up to 4.4
+# days (post-cutover items 36, 37).
+#
+# So a consumed token now has a short grace window in which presenting it again
+# returns THE SAME successor pair. It mints nothing, it refuses once the
+# successor's own session is revoked, and outside the window it is rejected
+# exactly as before.
 sub _refresh ($self, $c) {
     my $body          = $c->req->json // {};
     my $refresh_token = $body->{refresh_token};
     return $c->render(json => { error => 'refresh_token is required' }, status => 400) unless $refresh_token;
 
+    # Deliberately NOT filtered on `revoked = FALSE` any more: a consumed token
+    # has to be recognisable here or the grace path cannot exist. Expiry is
+    # still fatal, and so is a token nobody ever issued.
     my $row = $self->pg->db->query(
-        q{SELECT rt.id, rt.user_id, u.email FROM api.refresh_tokens rt
+        q{SELECT rt.id, rt.user_id, rt.revoked, rt.successor_id,
+                 (rt.expires_at <= NOW()) AS expired, u.email
+          FROM api.refresh_tokens rt
           JOIN api.users u ON u.id = rt.user_id
-          WHERE rt.token = ? AND rt.revoked = FALSE AND rt.expires_at > NOW()},
+          WHERE rt.token = ?},
         $refresh_token,
     )->hash;
-    return $c->render(json => { error => 'invalid or expired refresh_token' }, status => 401) unless $row;
+    return $c->render(json => { error => 'invalid or expired refresh_token' }, status => 401)
+        unless $row && !$row->{expired};
+
+    # Already rotated: either hand back what it rotated into, or refuse.
+    return $self->_refresh_replay($c, $row) if $row->{revoked};
 
     # Carry the OLD session's device/IP metadata forward rather than
     # recapturing it here -- see migrations/007-session-metadata.sql.
@@ -1119,30 +1141,106 @@ sub _refresh ($self, $c) {
     # session row (not just the refresh_token) so a still-unexpired copy
     # of the previous JWT can't keep passing introspect() after its own
     # refresh_token has already been rotated away.
-    $self->pg->db->query('UPDATE api.refresh_tokens SET revoked = TRUE WHERE id = ?', $row->{id});
-    $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE refresh_token_id = ?', $row->{id});
-
+    #
+    # ALL OF IT IN ONE TRANSACTION, on ONE connection. These used to be
+    # separate autocommitted statements, which left a window where a crash
+    # mid-rotation gave the caller a revoked token and no successor at all --
+    # the single case the grace window below cannot repair, because there is
+    # nothing to hand back. Now it either all happened or none of it did.
     my $jti = generate_jti();
     my ($jwt, $expires_in) = generate_jwt($row->{email}, secret => $self->config->{jwt}{secret}, expires_in => $self->config->{jwt}{expiry_seconds}, jti => $jti);
     my $new_refresh_token = generate_refresh_token();
     my $refresh_ttl_days  = $self->config->{jwt}{refresh_expiry_days} // 30;
 
-    my $new_refresh_row = $self->pg->db->query(
+    my $db = $self->pg->db;
+    my $guard = $db->begin;
+    $db->query('UPDATE api.refresh_tokens SET revoked = TRUE WHERE id = ?', $row->{id});
+    $db->query('UPDATE api.sessions SET revoked = TRUE WHERE refresh_token_id = ?', $row->{id});
+
+    my $new_refresh_row = $db->query(
         q{INSERT INTO api.refresh_tokens (user_id, token, expires_at) VALUES (?, ?, NOW() + (? * INTERVAL '1 day')) RETURNING id},
         $row->{user_id}, $new_refresh_token, $refresh_ttl_days,
     )->hash;
-    $self->pg->db->query(
+    $db->query(
         q{INSERT INTO api.sessions (jti, user_id, refresh_token_id, expires_at, user_agent, ip_address, first_seen_at)
           VALUES (?, ?, ?, NOW() + (? * INTERVAL '1 second'), ?, ?, COALESCE(?, NOW()))},
         $jti, $row->{user_id}, $new_refresh_row->{id}, $expires_in,
         $old_session->{user_agent}, $old_session->{ip_address}, $old_session->{first_seen_at},
     );
+    # The breadcrumb the grace path reads. Written inside the same transaction
+    # as the rotation it describes, so it can never point at a successor that
+    # does not exist.
+    $db->query('UPDATE api.refresh_tokens SET successor_id = ?, rotated_at = NOW() WHERE id = ?',
+        $new_refresh_row->{id}, $row->{id});
+    $guard->commit;
 
     return $c->render(json => {
         success       => \1,
         token         => $jwt,
         refresh_token => $new_refresh_token,
         expires_in    => $expires_in,
+    });
+}
+
+# A refresh token that has already been rotated away. Either the legitimate
+# client never received the response and is retrying -- in which case handing
+# back the same successor is the whole point of this -- or it is a genuinely
+# stale/stolen token, in which case this must refuse exactly as it used to.
+#
+# Four things must all hold to hand anything back, and each one is a different
+# way of saying "this is a lost response, not a replay attack":
+#   * the old token recorded a successor (a token revoked by LOGOUT has none,
+#     which is what keeps logout final);
+#   * the rotation was recent (jwt.refresh_grace_seconds, default 300 -- long
+#     enough for a 60s-interval client to retry a couple of times, short
+#     enough that single-use still means something);
+#   * the successor is itself still live and unrevoked (if it has been rotated
+#     on in turn, the client clearly DID receive it, so this really is a stale
+#     token); and
+#   * its session is still live with time left on it, so the JWT re-minted
+#     here cannot outlive the session row it belongs to.
+#
+# Nothing is minted or revoked on this path, which is what makes a retry loop
+# converge rather than generate sessions.
+sub _refresh_replay ($self, $c, $row) {
+    my $deny = sub {
+        return $c->render(json => { error => 'invalid or expired refresh_token' }, status => 401);
+    };
+    return $deny->() unless $row->{successor_id};
+
+    my $grace = $self->config->{jwt}{refresh_grace_seconds} // 300;
+    my $hit = $self->pg->db->query(
+        q{SELECT succ.token AS refresh_token, s.jti,
+                 GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (s.expires_at - NOW()))))::int AS remaining
+          FROM api.refresh_tokens old
+          JOIN api.refresh_tokens succ ON succ.id = old.successor_id
+          JOIN api.sessions s ON s.refresh_token_id = succ.id
+          WHERE old.id = ?
+            AND old.rotated_at > NOW() - (? * INTERVAL '1 second')
+            AND succ.revoked = FALSE AND succ.expires_at > NOW()
+            AND s.revoked = FALSE},
+        $row->{id}, $grace,
+    )->hash;
+    return $deny->() unless $hit && $hit->{remaining} > 0;
+
+    # Logged at info, not debug: this means a client lost a rotation response,
+    # which is worth being able to count. A burst of these is the signature of
+    # the API being slow enough to time out its own callers.
+    $c->app->log->info("refresh: returning the existing successor to $row->{email}"
+        . " (rotation response was lost; within the ${grace}s grace window)");
+
+    # Re-minted for the SAME jti, so this adds no session, and bounded by that
+    # session's own remaining lifetime so it cannot outlive it.
+    my ($jwt) = generate_jwt($row->{email},
+        secret => $self->config->{jwt}{secret},
+        expires_in => $hit->{remaining}, jti => $hit->{jti});
+
+    return $c->render(json => {
+        success       => \1,
+        token         => $jwt,
+        refresh_token => $hit->{refresh_token},
+        expires_in    => $hit->{remaining},
+        recovered     => \1,
     });
 }
 

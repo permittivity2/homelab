@@ -1,7 +1,7 @@
 package Homelab::Agent::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
-our $VERSION = '0.1.7';
+our $VERSION = '0.1.9';
 
 use Fcntl qw(:flock O_CREAT O_RDWR);
 use Mojo::Promise;
@@ -20,6 +20,8 @@ has 'manifest_dir';
 has 'credential_file';
 has 'credential';   # in-memory {token, refresh_token, expires_at}
 has 'heartbeat_lock_fh';   # kept open for the process lifetime -- see _claim_heartbeat_duty
+has refresh_failures => sub { 0 };          # consecutive, for the metrics file
+has last_heartbeat_ok => sub { 0 };         # epoch of the last fully successful cycle
 has ua => sub { Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10) };
 # Mojo::IOLoop::Client weakens its own $self in every closure it
 # schedules (reactor timer, next_tick, io watch) -- it relies on the
@@ -144,7 +146,73 @@ sub startup ($self) {
 # rejecting into the caller's ->catch/log->warn.
 sub _heartbeat_if_owner ($self) {
     return Mojo::Promise->resolve unless $self->_try_claim_heartbeat_duty;
-    return $self->_heartbeat_once->finally(sub { $self->_release_heartbeat_duty });
+    return $self->_heartbeat_once
+        ->then(sub { $self->refresh_failures(0); return 1 })
+        ->catch(sub ($err) {
+            $self->refresh_failures($self->refresh_failures + 1);
+            die $err;    # still surfaces to the caller's ->catch/log->warn
+        })
+        ->finally(sub {
+            $self->_write_metrics;
+            $self->_release_heartbeat_duty;
+        });
+}
+
+# A WEDGED AGENT MUST NOT BE SILENT. This is the lesson of items 36/37 that no
+# amount of correctness in the rotation itself addresses: when 14 nodes locked
+# themselves out, every one of them reported `systemctl is-active` = active,
+# kept its access token's expires_at in the future, and passed
+# fleet-version-audit.sh. The oldest went unnoticed for 4.4 days, and what
+# finally found it was an unrelated feature happening to need the credential.
+#
+# node_exporter's textfile collector is already scraped on every host, so this
+# costs one small file. The alert worth building on it is simply
+#   time() - homelab_agent_heartbeat_last_success_timestamp_seconds > 600
+# which would have caught all 14 within ten minutes.
+#
+# Best-effort by design: no textfile directory, or no permission, means no
+# metrics -- never a failed heartbeat. Only the lock holder writes, so the two
+# workers cannot fight over the file.
+sub _write_metrics ($self) {
+    my $dir = $self->config->{metrics_textfile_dir}
+        // $ENV{HOMELAB_NODE_EXPORTER_TEXTFILE_DIR}
+        // '/var/lib/prometheus/node-exporter';
+    return unless -d $dir && -w $dir;
+
+    my $cred_age = (stat $self->credential_file)[9];
+    $cred_age = defined $cred_age ? time - $cred_age : -1;
+    my $expires_in = ($self->credential->{expires_at} // 0) - time;
+    my $lbl = sprintf 'host="%s"', $self->hostname;
+
+    my @l = (
+        '# HELP homelab_agent_up 1 while the agent heartbeat loop is running.',
+        '# TYPE homelab_agent_up gauge',
+        qq{homelab_agent_up{$lbl} 1},
+        '# HELP homelab_agent_heartbeat_last_success_timestamp_seconds Unix time of the last fully successful heartbeat.',
+        '# TYPE homelab_agent_heartbeat_last_success_timestamp_seconds gauge',
+        qq{homelab_agent_heartbeat_last_success_timestamp_seconds{$lbl} } . $self->last_heartbeat_ok,
+        '# HELP homelab_agent_heartbeat_failures Consecutive failed heartbeats. Non-zero and climbing means this host is losing, or has lost, its credential.',
+        '# TYPE homelab_agent_heartbeat_failures gauge',
+        qq{homelab_agent_heartbeat_failures{$lbl} } . $self->refresh_failures,
+        '# HELP homelab_agent_credential_age_seconds Age of credential.yml on disk.',
+        '# TYPE homelab_agent_credential_age_seconds gauge',
+        qq{homelab_agent_credential_age_seconds{$lbl} $cred_age},
+        '# HELP homelab_agent_credential_expires_in_seconds Seconds until this agent access token expires. Negative means expired.',
+        '# TYPE homelab_agent_credential_expires_in_seconds gauge',
+        qq{homelab_agent_credential_expires_in_seconds{$lbl} $expires_in},
+    );
+
+    my $file = "$dir/homelab_agent.prom";
+    eval {
+        open(my $fh, '>', "$file.new") or die "open: $!\n";
+        print {$fh} join("\n", @l), "\n";
+        close $fh or die "close: $!\n";
+        # node_exporter reads the whole directory on every scrape, so a
+        # half-written file would be parsed as truth. Rename is atomic.
+        rename "$file.new", $file or die "rename: $!\n";
+        1;
+    } or $self->log->debug("could not write agent metrics: $@");
+    return;
 }
 
 # Returns true iff this call just acquired the lock. LOCK_EX | LOCK_NB
@@ -227,17 +295,7 @@ sub _handle_status ($self, $c) {
 # token, not whatever its own fork-inherited memory last saw.
 sub _heartbeat_once ($self) {
     $self->credential(LoadFile($self->credential_file));
-    return $self->ua->post_p("@{[$self->api_base]}/api/v1/auth/refresh",
-        json => { refresh_token => $self->credential->{refresh_token} })
-    ->then(sub ($tx) {
-        my $body = $tx->result->json;
-        die "refresh failed: " . ($body->{error} // 'unknown error') . "\n" if $tx->result->is_error;
-        $self->credential({
-            token => $body->{token}, refresh_token => $body->{refresh_token},
-            expires_at => time + $body->{expires_in},
-        });
-        DumpFile($self->credential_file, $self->credential);
-        chmod 0600, $self->credential_file;
+    return $self->_refresh_if_needed_p->then(sub {
         return $self->_check_services_p;
     })->then(sub ($services) {
         return $self->ua->post_p("@{[$self->api_base]}/api/v1/agent/heartbeat",
@@ -250,6 +308,67 @@ sub _heartbeat_once ($self) {
     })->then(sub ($tx) {
         die "heartbeat rejected: " . ($tx->result->json->{error} // $tx->result->message) . "\n"
             if $tx->result->is_error;
+        $self->last_heartbeat_ok(time);
+        return 1;
+    });
+}
+
+# WHY THIS IS CONDITIONAL NOW, which is the whole point of 0.1.9.
+#
+# This used to rotate on EVERY cycle. The old comment called the extra round
+# trip "a non-issue", and as a cost it is -- but each rotation is also a chance
+# to lose the credential, and the access token lasts 24 hours while the cycle
+# is 60 seconds. So the agent was performing 1440 rotations a day to keep alive
+# a token with 23h59m left on it, and every one of them was an opportunity to
+# be left holding a revoked token with no way back (it has no password; see
+# api/migrations/020-refresh-token-grace.sql). It also wrote ~1440 revoked
+# session rows per host per day: ~14k per agent over ten days, ~700k across the
+# fleet, all of it garbage.
+#
+# On 2026-10-28/29 that lottery came in on 14 of 51 nodes at once, clustered
+# around package rollouts -- when the API is busiest and services are
+# restarting, which is exactly when a response gets lost. Post-cutover items
+# 36 and 37.
+#
+# Refreshing only inside a margin of actual expiry takes that from 1440 draws a
+# day to about one. Combined with the server-side grace window, a lost response
+# now costs a retry instead of the host.
+#
+# Fails SAFE: a credential with no usable expires_at (an older format, a
+# hand-edited file) refreshes, which is the previous behaviour.
+sub _refresh_if_needed_p ($self) {
+    my $margin = $self->config->{refresh_margin_seconds} // 3600;
+    my $exp    = $self->credential->{expires_at};
+    if (defined $exp && $exp =~ /^[0-9]+$/ && ($exp - time) > $margin) {
+        return Mojo::Promise->resolve(0);
+    }
+
+    return $self->ua->post_p("@{[$self->api_base]}/api/v1/auth/refresh",
+        json => { refresh_token => $self->credential->{refresh_token} })
+    ->then(sub ($tx) {
+        my $body = $tx->result->json // {};
+        die "refresh failed: " . ($body->{error} // 'unknown error') . "\n" if $tx->result->is_error;
+
+        # `recovered` means the server handed back a successor it had already
+        # minted -- i.e. a previous rotation's response never reached us and
+        # the grace window repaired it. Worth a line: before that window
+        # existed, this was the moment the host locked itself out for good.
+        $self->log->info('refresh: recovered a rotation whose response was lost')
+            if $body->{recovered};
+
+        $self->credential({
+            token => $body->{token}, refresh_token => $body->{refresh_token},
+            expires_at => time + $body->{expires_in},
+        });
+        # Written to a temp file in the same directory and renamed, so a
+        # process killed mid-write cannot leave a truncated credential where a
+        # valid one was. (A lost rotation is now recoverable; a shredded file
+        # on disk would not be.)
+        my $tmp = $self->credential_file . '.new';
+        DumpFile($tmp, $self->credential);
+        chmod 0600, $tmp;
+        rename $tmp, $self->credential_file
+            or die "could not replace @{[$self->credential_file]}: $!\n";
         return 1;
     });
 }

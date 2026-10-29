@@ -1,0 +1,67 @@
+# Alert rules for homelab-agent's own health.
+#
+# WHY THIS FILE EXISTS. On 2026-10-28/29, 14 of 51 fleet nodes locked
+# themselves out of the API while rotating their own credentials. Every one of
+# them reported `systemctl is-active homelab-agent` = active, kept an access
+# token whose expires_at was still in the future, and passed
+# fleet-version-audit.sh. The oldest had been dead for 4.4 days. What found it
+# was an unrelated feature happening to need the credential -- not monitoring.
+#
+# The rotation bug itself is fixed (api migration 020 + homelab-agent 0.1.9),
+# but "a package can be the right version and still be unable to authenticate"
+# is a permanent gap in the version audit, and this is what closes it.
+# Post-cutover items 36, 37.
+#
+# NOTE: this fleet has no Alertmanager yet, so these do not page anyone. They
+# evaluate and show up in Prometheus's own Alerts page and /api/v1/rules, which
+# is where to look -- and they are ready the day Alertmanager arrives.
+groups:
+  - name: homelab-agent
+    rules:
+      # THE ONE THAT MATTERS. A wedged agent is silent by nature, so this is
+      # keyed on the absence of success rather than on any error being
+      # reported. 10 minutes is ten missed heartbeats at the default interval.
+      - alert: HomelabAgentHeartbeatStale
+        expr: time() - homelab_agent_heartbeat_last_success_timestamp_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "homelab-agent on {{ $labels.host }} has not completed a heartbeat in over 10 minutes"
+          description: >-
+            The unit may well report `active` and the credential may look
+            unexpired; neither proves it can authenticate. Check
+            `journalctl -u homelab-agent` for "refresh failed", then repair with
+            install-orchestrators/agent-reenroll.sh --stale.
+            Anything needing a system_agent credential on this host is silently
+            failing meanwhile -- including certificate publishing if this is the
+            issuer.
+
+      # Climbing failures, caught before the 10-minute mark.
+      - alert: HomelabAgentHeartbeatFailing
+        expr: homelab_agent_heartbeat_failures > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "homelab-agent on {{ $labels.host }} has failed {{ $value }} consecutive heartbeats"
+          description: >-
+            Consecutive failures do not clear on their own if the cause is a
+            spent refresh token: the agent holds no password and cannot
+            re-login. See install-orchestrators/agent-reenroll.sh.
+
+      # The credential file is rewritten on every refresh. Since 0.1.9 refresh
+      # only happens near expiry, so this is no longer a per-minute clock --
+      # but a credential older than the access-token lifetime means rotation
+      # has stopped entirely.
+      - alert: HomelabAgentCredentialExpiring
+        expr: homelab_agent_credential_expires_in_seconds < 1800
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "homelab-agent on {{ $labels.host }} has under 30 minutes of credential left and is not renewing it"
+          description: >-
+            The agent refreshes inside a margin of expiry (default 1 hour), so
+            getting this close means the refresh itself is failing. Once it
+            expires the host is locked out and needs re-enrolling.

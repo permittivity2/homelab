@@ -41,8 +41,12 @@ EOF
         # api_base, derived from $HL_CONFIG) so added scrape-job tiers flow
         # to existing installs -- it is declarative config, not hand-edited.
         sed "s#__API_BASE__#$API_BASE#g" "$SHARE_DIR/config/pull.yml.example" > "$PULL_CONFIG"
-        chmod 755 "$PROM_DIR" "$TARGETS_DIR"
-        chmod 644 "$PROM_DIR/prometheus.yml" "$PULL_CONFIG"
+        # Alert rules are declarative and shipped, like prometheus.yml itself
+        # -- replaced every configure so a new rule reaches existing installs.
+        mkdir -p "$PROM_DIR/rules"
+        install -m 644 "$SHARE_DIR"/config/rules/*.yml "$PROM_DIR/rules/"
+        chmod 755 "$PROM_DIR" "$TARGETS_DIR" "$PROM_DIR/rules"
+        chmod 644 "$PROM_DIR/prometheus.yml" "$PULL_CONFIG" "$PROM_DIR"/rules/*.yml
 
         # --- point prometheus.service at our config ----------------------
         mkdir -p "$DROPIN_DIR"
