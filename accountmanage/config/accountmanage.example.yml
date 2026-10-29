@@ -70,6 +70,71 @@ device_setup:
   # Set a value only if you would rather they did not share -- and then
   # set the SAME value on every node in the pool.
   token_secret:
+  # How long the device-setup link inside a RESENT welcome email keeps
+  # working. Days, not minutes, unlike qr_ttl_minutes above: that link
+  # has to survive the recipient getting round to reading their mail.
+  # Same signature and same disclosure (an address and two public
+  # hostnames, never a password) -- only the bound differs.
+  link_ttl_days: 30
+  # Shown in the resent welcome email alongside webmail and this app.
+  drive_url: https://drive.mailmasker.org/
+
+# Apple configuration-profile signing (optional).
+#
+# An unsigned .mobileconfig installs perfectly well; iOS just labels it
+# "Unverified" in red on the install screen. Signing turns that green and
+# names the signer.
+#
+# The signature is made by the CERTIFICATE ISSUER, not here. That is the
+# whole point: signing locally would need a private key for a publicly
+# trusted name on this host, and the ready-made way to get one
+# (homelab-certsync) also brings `key_encryption_key` -- a fleet-wide key
+# that decrypts every certificate the fleet has, mail.<domain> included.
+# So this host sends the profile's PARAMETERS to the issuer's narrow
+# signing endpoint and gets signed bytes back; no key moves anywhere.
+#
+# Leave BLANK to serve profiles unsigned, which is what this fleet did
+# before signing existed and what it falls back to any time the issuer
+# cannot be reached. Nothing breaks either way.
+#
+#   url      the issuer's signing endpoint on the service plane
+#            (homelab-cert-server's homelab-cert-sign unit, port 2516)
+#   lineage  which certificate to sign with -- must be on that host's
+#            own allow-list in cert-sign.yml
+profile_signing:
+  url: http://10.50.2.190:2516
+  lineage: myaccount.mailmasker.org
+  # Seconds to wait on the issuer. Short on purpose: a person is waiting
+  # on this download, and the fallback is a perfectly good unsigned
+  # profile.
+  timeout_seconds: 5
+  # How long a signed profile is reused from memory, and how long a
+  # FAILURE is remembered before trying again. The second matters more:
+  # without it an unreachable issuer would add the timeout above to every
+  # single profile download.
+  cache_seconds: 900
+  retry_seconds: 60
+
+# System mailbox this app sends AS, for the site_admin "resend the
+# welcome email" action. Nothing else here sends mail, so leaving this
+# out just makes that one action report itself unavailable.
+#
+# A real api.users row created once via
+#   homelab-cli admin users create-service-account
+# authenticating over real SMTP submission like any other account -- the
+# same identity shape homelab-invite uses, and for the same reason: this
+# is not an unauthenticated local relay.
+mailer:
+  email: invites@test.mailmasker.org
+  # MUST be a submission endpoint that accepts a PLAIN connection -- the
+  # edge HAProxy submission frontend (the fleet's internal mail VIP), NOT
+  # a postfix submission backend and NOT loopback. The backends carry
+  # smtpd_upstream_proxy_protocol=haproxy, so their :587 requires a PROXY
+  # header a direct client cannot send; point at one and every send fails
+  # with "421 4.3.0 Server local error" while the UI shows nothing.
+  smtp_host: 10.50.2.140
+  smtp_port: 587
+  smtp_password: YOUR_MAILER_ACCOUNT_PASSWORD_HERE
 
 # homelab-sso: the only place a user types a password.
 sso:

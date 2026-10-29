@@ -51,6 +51,24 @@
   summary { cursor: pointer; color: var(--silver-bright); font-size: var(--app-base); }
   .links { margin-top: var(--space-6); font-size: var(--app-sm); }
   .links a { color: var(--silver-bright); }
+  /* The URL is long and has no spaces in it, so it needs break-all or it
+     pushes the card wider than the viewport on a phone. */
+  .link-row {
+    display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center;
+    justify-content: center; margin: 0 0 var(--space-2);
+  }
+  .self-link {
+    flex: 1 1 18em; min-width: 0; word-break: break-all;
+    font-family: var(--font-mono, monospace); font-size: var(--app-xs);
+    color: var(--silver-bright); text-align: center;
+  }
+  .copy-btn {
+    flex: 0 0 auto; cursor: pointer; font: inherit; font-size: var(--app-sm);
+    padding: var(--space-2) var(--space-4); border-radius: var(--radius-md);
+    border: 1px solid var(--border); background: var(--black-secondary);
+    color: var(--text-primary);
+  }
+  .copy-btn:hover { border-color: var(--silver-bright); }
 </style>
 
 <h1>Set up your mail</h1>
@@ -92,9 +110,19 @@
 <div class="qr-wrap">
   <img src="<%= $qr_url %>" alt="QR code linking to this setup page" width="220" height="220">
 </div>
-<p class="hint" style="text-align:center; word-break: break-all;">
-  Or open <%= $self_url %>
+%# The link in text as well as in the code, and clickable, because the
+%# two ways people actually get here from a laptop are "scan it" and
+%# "send it to myself". Nobody types a URL with a 100-character token in
+%# it, so Copy is the affordance that matters -- but the full URL is
+%# shown anyway: it is the only thing on the page that says out loud
+%# which site is about to be opened on the phone.
+<p class="hint" style="text-align:center; margin-bottom: var(--space-2);">
+  Can&rsquo;t scan it? Copy the link and send it to your phone.
 </p>
+<div class="link-row">
+  <a class="self-link" href="<%= $self_url %>"><%= $self_url %></a>
+  <button type="button" class="copy-btn" data-copy="<%= $self_url %>">Copy link</button>
+</div>
 % }
 
 % # --- Everything that is not an Apple device. Collapsed where the one-tap
@@ -117,3 +145,37 @@
   Prefer the browser? Read your mail at <a href="<%= $webmail_url %>"><%= $webmail_url %></a>.
   <br>Manage your account at <a href="<%= $myaccount_url %>"><%= $myaccount_url %></a>.
 </p>
+
+<script>
+  // Progressive enhancement: with no clipboard API (or permission
+  // refused) the button selects the URL instead, which leaves the user
+  // one keystroke from the same result. The link itself works either
+  // way, so this script failing entirely costs nothing.
+  (function () {
+    var btn = document.querySelector('.copy-btn');
+    var link = document.querySelector('.self-link');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var url = btn.getAttribute('data-copy') || '';
+      var done = function () {
+        btn.textContent = 'Copied';
+        setTimeout(function () { btn.textContent = 'Copy link'; }, 2000);
+      };
+      var fallback = function () {
+        if (!link) return;
+        var r = document.createRange();
+        r.selectNodeContents(link);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        btn.textContent = 'Press \u2318C / Ctrl+C';
+        setTimeout(function () { btn.textContent = 'Copy link'; }, 4000);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done, fallback);
+      } else {
+        fallback();
+      }
+    });
+  })();
+</script>

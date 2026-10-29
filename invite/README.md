@@ -264,11 +264,39 @@ with nothing on screen explaining why. Landing on a page means that case
 can be detected (`CriOS`/`FxiOS`/`EdgiOS` in the User-Agent) and said out
 loud.
 
+**The page shows the URL as well as the code**, as a real link next to a
+Copy button. The two ways people actually cross from a laptop to a phone
+are "scan it" and "send it to myself"; nobody types a URL with a
+100-character token in it, so Copy is the affordance that matters — but
+the URL is shown anyway, because it is the only thing on the page that
+says out loud which site is about to be opened on the phone.
+
+**The profile is signed by the certificate issuer, not here.** See
+`Homelab::Common::ProfileSigner`: signing locally would mean a
+publicly-trusted private key on all three of these nodes, and the
+ready-made way to deliver one also brings the fleet-wide
+`key_encryption_key`. So this service POSTs the profile's *parameters* to
+`homelab-cert-sign` on `prod-homelab46:2516` and serves what comes back.
+Configured under `profile_signing:`; blank, unreachable or failing means
+the profile is served **unsigned**, which installs exactly as well and
+only costs a red "Unverified" on the iOS install screen. No path through
+this route can fail because signing failed.
+
 Settings come from `Homelab::Common::MailSetup`, shared with
 homelab-accountmanage's own panel, so the manual table and the profile
 cannot drift. The hostnames must be on the edge certificate's SAN list —
 `mail.mailmasker.org` and `smtp.mailmasker.org` are; a reachable name
 that is not produces an unexplained "Cannot Verify Server Identity".
+
+**Where `device_setup:` is read from.** The top level of the config file,
+via the app's own `device_config` attribute — *not* `invite_config`
+(which is `$config->{invite}`). The controller read the latter until
+2026-10-29 and therefore always saw an empty hash. Nothing looked wrong,
+because every consumer carries a hardcoded fallback that happens to match
+this fleet's config; the damage would have been the setup page and the
+welcome emails quietly disagreeing the first time anyone changed a value,
+which is the exact failure `MailSetup` exists to prevent. `t/setup.t` now
+pins the configured values rather than mirroring the bug.
 
 ## CLI
 

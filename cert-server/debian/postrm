@@ -3,12 +3,18 @@ set -e
 case "$1" in
     remove|purge)
         systemctl disable --now homelab-cert-server.timer >/dev/null 2>&1 || true
+        systemctl disable --now homelab-cert-sign.service >/dev/null 2>&1 || true
         ;;
 esac
 case "$1" in
     purge)
         rm -f /etc/homelab/services/cert-server.yml
+        rm -f /etc/homelab/services/cert-sign.yml
         rm -rf /etc/homelab/cert-server
+        # Copies of real private keys. They exist nowhere else on purge
+        # (certbot's originals are under /etc/letsencrypt, untouched), so
+        # removing them is both safe and the only correct thing to do.
+        rm -rf /var/lib/homelab-cert-sign
         # The spool may hold un-published certificate material; remove it on
         # purge rather than leaving encrypted blobs lying around.
         rm -rf /var/lib/homelab/cert-publish

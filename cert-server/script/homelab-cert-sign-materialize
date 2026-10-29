@@ -1,0 +1,172 @@
+#!/usr/bin/perl
+# homelab-cert-sign-materialize -- put the signable lineages where the
+# unprivileged signing daemon can read them, and nowhere else.
+#
+# WHY THIS EXISTS AT ALL. certbot keeps private keys under
+# /etc/letsencrypt/archive at 0700 root, and resets those permissions on
+# every renewal, so "just chmod it" is a fix that silently undoes itself
+# roughly every 60 days. The alternatives are running the network-facing
+# signing daemon as root (no) or copying what it needs (this).
+#
+# Runs as root in exactly two places:
+#   * ExecStartPre= on homelab-cert-sign.service, with a '+' prefix so it
+#     escapes the unit's User=, which makes a fresh boot correct even if
+#     no renewal has happened yet; and
+#   * after a successful renewal, from homelab-cert-issue, so a rotated
+#     certificate reaches the signer without a restart (the daemon opens
+#     these files per request, and caches certificate metadata keyed by
+#     mtime, so a replaced file is picked up on the next signature).
+#
+# Exits 0 even when a lineage is missing. A partial copy is a degraded
+# signer, which /health reports and clients handle by serving unsigned
+# profiles; a non-zero exit here would instead refuse to start the daemon
+# at all, turning one missing certificate into no signing for anything.
+use strict;
+use warnings;
+use v5.36;
+use lib '/usr/share/homelab-cert-server/lib';
+use Homelab::CertServer::Signer qw(load_sign_config lineage_entries MATERIAL_DIR);
+use File::Path qw(make_path);
+use File::Spec ();
+use File::Temp ();
+
+my $LIVE_DEFAULT = '/etc/letsencrypt/live';
+my $OWNER_GROUP  = 'homelab-certsign';
+
+sub say_log (@m) { say '[cert-sign-materialize] ', join ' ', @m }
+
+my $cfg = eval { load_sign_config() };
+unless ($cfg) {
+    say_log "no usable config, nothing to do: $@";
+    exit 0;
+}
+
+my @entries = @{ lineage_entries($cfg) };
+unless (@entries) {
+    say_log 'no lineages configured for signing';
+    exit 0;
+}
+
+my $gid = getgrnam($OWNER_GROUP);
+unless (defined $gid) {
+    say_log "group $OWNER_GROUP does not exist -- is homelab-cert-server configured?";
+    exit 0;
+}
+
+my $live = $cfg->{letsencrypt_live} || $LIVE_DEFAULT;
+
+# 0750 root:homelab-certsign. The daemon's user can traverse and read;
+# nothing else can, which is the entire security property this script is
+# here to establish.
+make_path(MATERIAL_DIR, { mode => 0750 }) unless -d MATERIAL_DIR;
+chown 0, $gid, MATERIAL_DIR;
+chmod 0750, MATERIAL_DIR;
+
+my ($done, $skipped) = (0, 0);
+for my $entry (@entries) {
+    my $lineage = $entry->{name};
+    unless ($lineage =~ m{\A[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\z} && $lineage !~ /\.\./) {
+        say_log "refusing an implausible lineage name: $lineage";
+        $skipped++;
+        next;
+    }
+
+    # Two source shapes (see Homelab::CertServer::Signer::lineage_entries):
+    # a bare name is a certbot lineage on this host; a hash gives explicit
+    # paths, which is how an identity obtained from somewhere other than
+    # this host's certbot gets used.
+    my %from = $entry->{explicit}
+        ? ('cert.pem'    => $entry->{cert},
+           'chain.pem'   => $entry->{chain},
+           'privkey.pem' => $entry->{privkey})
+        : map { $_ => File::Spec->catfile($live, $lineage, $_) }
+              qw(cert.pem chain.pem privkey.pem);
+
+    my @want = qw(cert.pem chain.pem privkey.pem);
+    my @missing = grep { !(defined $from{$_} && -r $from{$_}) } @want;
+    if (@missing) {
+        say_log "$lineage: " . ($entry->{explicit}
+            ? 'configured paths are missing or unreadable ('
+            : 'not issued on this host yet (missing ')
+            . join(', ', @missing) . ')';
+        $skipped++;
+        next;
+    }
+
+    my $dst = File::Spec->catdir(MATERIAL_DIR, $lineage);
+    make_path($dst, { mode => 0750 }) unless -d $dst;
+    chown 0, $gid, $dst;
+    chmod 0750, $dst;
+
+    my $changed = 0;
+    for my $f (@want) {
+        my $from = $from{$f};
+        my $to   = File::Spec->catfile($dst, $f);
+        my $bytes = _slurp($from);
+        unless (defined $bytes && length $bytes) {
+            say_log "$lineage: could not read $from";
+            next;
+        }
+        # Compared before writing so an unchanged certificate does not
+        # churn mtimes -- the daemon's metadata cache is keyed by mtime,
+        # and pointlessly invalidating it costs a fork per request.
+        my $existing = _slurp($to);
+        next if defined $existing && $existing eq $bytes;
+
+        # Temp file in the destination directory, then rename: a reader
+        # opening cert.pem while this runs gets the old file or the new
+        # one, never a half-written one.
+        my $tmp = File::Temp->new(DIR => $dst, TEMPLATE => ".$f-XXXXXX", UNLINK => 0);
+        binmode $tmp;
+        print {$tmp} $bytes;
+        close $tmp or die 'cert-sign-materialize: cannot close ' . $tmp->filename . ": $!\n";
+        chown 0, $gid, $tmp->filename;
+        chmod 0640, $tmp->filename;
+        rename $tmp->filename, $to
+            or die "cert-sign-materialize: cannot rename into $to: $!\n";
+        $changed++;
+    }
+
+    say_log "$lineage: " . ($changed ? "updated ($changed file(s))" : 'already current');
+
+    # Said out loud once per run, because it is the single most likely
+    # reason a signed profile still installs as "Unverified" -- and a
+    # silent cosmetic failure is the kind that gets investigated twice.
+    # Not an error: whether iOS enforces this is genuinely unsettled,
+    # and signing with a serverAuth-only certificate costs nothing to
+    # try. See Homelab::CertServer::Signer::lineage_entries.
+    my $eku = _eku(File::Spec->catfile($dst, 'cert.pem'));
+    if (defined $eku && $eku !~ /E-?mail Protection/i) {
+        say_log "  NOTE $lineage has no emailProtection EKU (has: $eku)."
+              . ' Profiles will be signed; iOS may still label them Unverified.'
+              . ' If it does, name an S/MIME identity in cert-sign.yml instead.';
+    }
+    $done++;
+}
+
+say_log "materialized $done lineage(s)" . ($skipped ? ", skipped $skipped" : '');
+exit 0;
+
+# Best-effort, informational only -- a missing openssl or an odd
+# certificate just means no note is printed.
+sub _eku ($path) {
+    # List-form open, so no shell is involved and a path never needs
+    # quoting. stderr is left alone: openssl is quiet on success here,
+    # and a complaint is worth seeing in the journal.
+    open(my $fh, '-|', 'openssl', 'x509', '-noout', '-ext', 'extendedKeyUsage',
+        '-in', $path) or return undef;
+    my @out = <$fh>;
+    close $fh;
+    shift @out;    # the "X509v3 Extended Key Usage:" header line
+    my $eku = join ' ', map { s/^\s+|\s+$//gr } @out;
+    $eku =~ s/\s+/ /g;
+    return length $eku ? $eku : undef;
+}
+
+sub _slurp ($path) {
+    open(my $fh, '<:raw', $path) or return undef;
+    local $/;
+    my $c = <$fh>;
+    close $fh;
+    return $c;
+}

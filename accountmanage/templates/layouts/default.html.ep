@@ -1130,6 +1130,36 @@
         });
       });
 
+      // Resend the welcome email (+ the mail-setup link) to an existing user
+      var rw = document.getElementById('resend-welcome-form');
+      if (rw) rw.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var em = rw.user_email.value.trim(), also = rw.also_to.value.trim();
+        var out = document.getElementById('resend-welcome-result');
+        if (em.indexOf('@') < 0) { say(out, 'Enter a valid user email.', false); return; }
+        var btn = rw.querySelector('button[type=submit]');
+        btn.disabled = true;
+        say(out, 'Sending…', true);
+        var body = also ? { user_email: em, also_to: also } : { user_email: em };
+        post('/admin/welcome-email/resend', body).then(function (r) {
+          btn.disabled = false;
+          if (!r.ok) { say(out, 'Failed: ' + ((r.body && r.body.error) || 'error'), false); return; }
+          // Per-destination results, because a partial send is the
+          // interesting case: "it went to the mailbox but their Gmail
+          // bounced" is a different conversation from "nothing sent".
+          var rows = (r.body.results || []).map(function (x) {
+            var what = x.what === 'welcome' ? 'welcome, into their mailbox' : 'account-ready';
+            return '<li>' + (x.ok ? '\u2713 ' : '\u2717 ') + hlEsc(what) + ' \u2192 <strong>'
+                 + hlEsc(x.to) + '</strong>' + (x.ok ? '' : ' &mdash; ' + hlEsc(x.error || 'failed')) + '</li>';
+          }).join('');
+          out.innerHTML = '<ul style="margin:0.6rem 0 0;padding-left:1.1rem;color:'
+            + (r.body.ok ? 'var(--ok)' : 'var(--danger)') + '">' + rows + '</ul>'
+            + (r.body.setup_url ? '' : '<p class="muted" style="font-size:0.8rem;margin:0.3rem 0 0;">'
+               + 'Sent without a device-setup link &mdash; this node has no signing secret.</p>');
+          if (r.body.ok) rw.reset();
+        });
+      });
+
       // A9 -- per-user invite quota (show current on email entry, then set)
       var iq = document.getElementById('invite-quota-form');
       if (iq) {

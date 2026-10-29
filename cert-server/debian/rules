@@ -11,11 +11,18 @@ override_dh_install:
 	install -D -m 755 script/homelab-cert-publish      debian/homelab-cert-server/usr/bin/homelab-cert-publish
 	install -D -m 755 script/homelab-cert-dns-auth     debian/homelab-cert-server/usr/bin/homelab-cert-dns-auth
 	install -D -m 755 script/homelab-cert-dns-cleanup  debian/homelab-cert-server/usr/bin/homelab-cert-dns-cleanup
+	install -D -m 755 script/homelab-cert-sign-server      debian/homelab-cert-server/usr/bin/homelab-cert-sign-server
+	install -D -m 755 script/homelab-cert-sign-materialize  debian/homelab-cert-server/usr/bin/homelab-cert-sign-materialize
 	install -D -m 644 lib/Homelab/CertServer/Util.pm   debian/homelab-cert-server/usr/share/homelab-cert-server/lib/Homelab/CertServer/Util.pm
+	install -D -m 644 lib/Homelab/CertServer/Signer.pm  debian/homelab-cert-server/usr/share/homelab-cert-server/lib/Homelab/CertServer/Signer.pm
+	install -D -m 644 lib/Homelab/CertServer/SignApp.pm debian/homelab-cert-server/usr/share/homelab-cert-server/lib/Homelab/CertServer/SignApp.pm
 	install -D -m 644 config/cert-server.example.yml   debian/homelab-cert-server/usr/share/homelab-cert-server/config/cert-server.example.yml
+	install -D -m 644 config/cert-sign.example.yml     debian/homelab-cert-server/usr/share/homelab-cert-server/config/cert-sign.example.yml
 	install -D -m 644 services/cert-server.yml         debian/homelab-cert-server/usr/share/homelab-cert-server/services/cert-server.yml
+	install -D -m 644 services/cert-sign.yml           debian/homelab-cert-server/usr/share/homelab-cert-server/services/cert-sign.yml
 	install -D -m 644 systemd/homelab-cert-server.service debian/homelab-cert-server/lib/systemd/system/homelab-cert-server.service
 	install -D -m 644 systemd/homelab-cert-server.timer   debian/homelab-cert-server/lib/systemd/system/homelab-cert-server.timer
+	install -D -m 644 systemd/homelab-cert-sign.service   debian/homelab-cert-server/lib/systemd/system/homelab-cert-sign.service
 
 override_dh_installsystemd:
 	dh_installsystemd --no-enable --no-start

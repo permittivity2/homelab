@@ -27,6 +27,8 @@ has 'sso_client_secret';
 has 'sso_redirect_uri';
 has 'public_base_url';
 has 'device_config';
+has 'profile_signing';
+has 'mailer_config';
 
 sub startup ($self) {
     # Templates land at /usr/share/homelab-accountmanage/templates, not
@@ -88,6 +90,16 @@ sub startup ($self) {
     # setup panel falls back to showing the derived settings with no
     # cross-device QR code. Never a reason to refuse to start.
     $self->device_config($config->{device_setup} // {});
+    # Optional: where to have an Apple configuration profile signed (the
+    # certificate issuer's narrow signing endpoint -- see
+    # Homelab::Common::ProfileSigner). Absent or blank means profiles are
+    # served unsigned, which installs fine and just shows red
+    # "Unverified" on the iOS install screen.
+    $self->profile_signing($config->{profile_signing} // {});
+    # Optional: the system mailbox this app sends AS, for the site_admin
+    # "resend the welcome email" action. Absent means that one action is
+    # unavailable and says so; nothing else here sends mail.
+    $self->mailer_config($config->{mailer} // {});
     # Optional: the fleet Prometheus (monitoring host) the metrics.view-gated
     # Metrics tab queries. If unset, that tab is simply never offered.
     $self->prometheus_base($config->{prometheus}{base_url} // '');
@@ -145,6 +157,7 @@ sub startup ($self) {
     $r->get('/devices/apple.mobileconfig')->to('account#device_apple_profile');
     $r->get('/devices/setup')             ->to('account#device_setup_page');
     $r->get('/devices/qr.svg')            ->to('account#device_qr');
+    $r->get('/devices/setup-link')        ->to('account#device_setup_link');
 
     $r->get('/invites')        ->to('account#invites_list');
     $r->post('/invites/send')  ->to('account#invites_send');
@@ -204,6 +217,7 @@ sub startup ($self) {
     $r->get('/admin/usage')            ->to('account#admin_user_usage');
     # Service accounts, per-user invite quota, a user's sessions (site_admin).
     $r->post('/admin/users/create-service-account')->to('account#admin_create_service_account');
+    $r->post('/admin/welcome-email/resend')->to('account#admin_resend_welcome');
     $r->get('/admin/invite-quota')     ->to('account#admin_invite_quota_get');
     $r->post('/admin/invite-quota')    ->to('account#admin_invite_quota_set');
     $r->get('/admin/user-sessions')    ->to('account#admin_user_sessions');
@@ -237,6 +251,9 @@ use Homelab::Common::SSOClient qw(exchange_code);
 use Homelab::Common::AppleProfile qw(build_mail_profile profile_filename);
 use Homelab::Common::MailSetup qw(mail_settings manual_setup_rows);
 use Homelab::Common::QRCode qw(qr_svg);
+use Homelab::Common::ProfileSigner qw(sign_apple_profile);
+use Homelab::Common::Mailer qw(send_mail);
+use Homelab::Common::WelcomeMail qw(ready_email welcome_email);
 use Homelab::Common::SetupToken qw(issue_setup_token verify_setup_token);
 
 # Server-to-server client for calling homelab-api with the logged-in
@@ -343,12 +360,21 @@ sub _device_secret ($c) {
 
 # A signed URL for the phone, or undef when this install has no secret
 # (in which case the panel just omits the QR code).
-sub _device_setup_url ($c, $email) {
+#
+# Two lifetimes, deliberately, because there are two situations and they
+# are nothing alike. A QR code is generated while someone is looking at
+# the screen and is meant to be used within the minute, so minutes is
+# right and anything longer is a forwarded screenshot that still works.
+# A link in a resent welcome email has to survive the recipient getting
+# round to reading their mail, so it is measured in days. Same signature,
+# same purpose string, same disclosure (an address and two public
+# hostnames, never a password) -- only the bound differs.
+sub _device_setup_url ($c, $email, %opt) {
     my $secret = _device_secret($c) or return undef;
-    my $mins   = _device_cfg($c)->{qr_ttl_minutes} || 15;
+    my $ttl    = $opt{ttl_seconds} || (_device_cfg($c)->{qr_ttl_minutes} || 15) * 60;
     my $token  = eval {
         issue_setup_token(secret => $secret, purpose => 'mail-device-setup',
-            subject => $email, ttl => $mins * 60);
+            subject => $email, ttl => $ttl);
     };
     unless ($token) {
         $c->app->log->warn("accountmanage: could not issue a device setup token: $@");
@@ -382,20 +408,32 @@ sub device_apple_profile ($c) {
         return $c->render(data => "Sign in to download your mail setup profile.\n", status => 401);
     }
     my $s = _device_settings($c, $email);
-    my $xml = build_mail_profile(
+    # One parameter set for both paths, so the signed profile and the
+    # unsigned fallback cannot describe different mail settings.
+    my %params = (
         email        => $email,
         imap_host    => $s->{imap_host}, imap_port => $s->{imap_port},
         smtp_host    => $s->{smtp_host}, smtp_port => $s->{smtp_port},
         account_label => $s->{service_label}, organization => $s->{organization},
         display_name => $email,
     );
+    # Signed when the issuer can be reached, unsigned when it cannot.
+    # The difference is one word on the install screen, never whether
+    # the download works -- see Homelab::Common::ProfileSigner.
+    my $body = sign_apple_profile(
+        signing => $c->app->profile_signing,
+        profile => \%params,
+        log     => $c->app->log,
+    ) // build_mail_profile(%params);
     # application/x-apple-aspen-config is what makes iOS hand the file to
-    # the profile installer rather than render it as text.
+    # the profile installer rather than render it as text. It is equally
+    # correct for the signed form, which is binary PKCS#7 rather than
+    # XML: the type says what the file is for, not how it is encoded.
     $c->res->headers->content_type('application/x-apple-aspen-config');
     $c->res->headers->content_disposition(
         'attachment; filename="' . profile_filename($email, $s->{service_label}) . '"');
     $c->res->headers->cache_control('no-store, private');
-    return $c->render(data => $xml);
+    return $c->render(data => $body);
 }
 
 # GET /devices/setup?t=... -- the standalone page a scanned QR lands on.
@@ -406,10 +444,27 @@ sub device_setup_page ($c) {
     unless ($email) {
         return $c->render(template => 'devicesetup', status => 410,
             expired => 1, email => undef, settings => undef, manual_rows => [],
-            profile_url => '', hints => {}, format => 'html');
+            profile_url => '', qr_url => undef, self_url => undef,
+            hints => {}, format => 'html');
     }
     my $s = _device_settings($c, $email);
-    my $qs = $c->param('t') ? '?t=' . $c->param('t') : '';
+    my $t  = $c->param('t');
+    my $qs = $t ? '?t=' . $t : '';
+    my $hints = _device_hints($c);
+
+    # The cross-device hand-off, offered only when this page was reached
+    # by a token: that is the case where it might be open on a laptop
+    # (someone following the link in a resent welcome email) with the
+    # phone still to be set up. A signed-in visitor already has the
+    # dashboard's own Mail setup panel, which does this better.
+    my ($qr_url, $self_url);
+    if ($t && !$hints->{is_ios}) {
+        my $base = $c->app->public_base_url // '';
+        $base =~ s{/+$}{};
+        $qr_url   = "/devices/qr.svg$qs";
+        $self_url = "$base/devices/setup$qs";
+    }
+
     return $c->render(
         template    => 'devicesetup',
         expired     => 0,
@@ -417,16 +472,49 @@ sub device_setup_page ($c) {
         settings    => $s,
         manual_rows => manual_setup_rows($s),
         profile_url => "/devices/apple.mobileconfig$qs",
-        hints       => _device_hints($c),
+        qr_url      => $qr_url,
+        self_url    => $self_url,
+        hints       => $hints,
     );
 }
 
-# GET /devices/qr.svg -- session only. The code it draws is the thing
-# that crosses to the phone, so this endpoint itself never needs to.
+# GET /devices/qr.svg -- a session MINTS a code, a token only ECHOES one.
+#
+# The distinction is the whole security property here, and it is worth
+# stating plainly because the two cases look identical from outside:
+#
+#   * with a session, this issues a FRESH short-lived token and draws
+#     that. A signed-in user can always get a new code; that is the
+#     point of the panel.
+#
+#   * with only ?t=, it draws a code for THE SAME TOKEN that was
+#     presented -- re-encoding a capability the caller already holds,
+#     never granting a new one. So a lapsed link cannot buy itself a
+#     fresh lease, which it could if this minted unconditionally.
+#
+# The echo case exists because of the resent welcome email: that link is
+# opened on a laptop as often as on a phone, and a setup page with no way
+# to cross to the handset is a dead end.
 sub device_qr ($c) {
     my ($email) = _current_auth($c);
-    return $c->render(data => '', status => 401) unless $email;
-    my $url = _device_setup_url($c, $email);
+    my $url;
+
+    if ($email) {
+        $url = _device_setup_url($c, $email);
+    }
+    elsif (my $t = $c->param('t')) {
+        my $secret = _device_secret($c);
+        $email = $secret && verify_setup_token(secret => $secret,
+            purpose => 'mail-device-setup', token => $t);
+        return $c->render(data => '', status => 401) unless $email;
+        my $base = $c->app->public_base_url // '';
+        $base =~ s{/+$}{};
+        $url = "$base/devices/setup?t=$t";
+    }
+    else {
+        return $c->render(data => '', status => 401);
+    }
+
     # No URL means no signing secret on this install. 404 lets the
     # panel's <img> fail quietly beside the settings that always work.
     return $c->render(data => '', status => 404) unless $url;
@@ -435,6 +523,26 @@ sub device_qr ($c) {
     $c->res->headers->content_type('image/svg+xml');
     $c->res->headers->cache_control('no-store, private');
     return $c->render(data => $svg);
+}
+
+# GET /devices/setup-link -- session only. A fresh short-lived setup URL
+# as JSON, for the panel's "Copy link" button.
+#
+# A separate endpoint rather than a value in the dashboard's HTML, for
+# two reasons. It mints a capability, so minting one on every dashboard
+# render -- for every user, whether or not they ever look at the Mail
+# setup section -- is waste. And a token embedded in the page would then
+# live in the browser's history and back-forward cache of the dashboard
+# itself, which is a much longer life than the link's own few minutes.
+sub device_setup_link ($c) {
+    my ($email) = _current_auth($c);
+    return $c->render(json => { error => 'authentication required' }, status => 401)
+        unless $email;
+    my $url = _device_setup_url($c, $email);
+    return $c->render(json => { error => 'no signing secret on this install' }, status => 404)
+        unless $url;
+    $c->res->headers->cache_control('no-store, private');
+    return $c->render(json => { url => $url });
 }
 
 # Decides only what to show FIRST. Every option stays on the page, so a
@@ -852,6 +960,112 @@ sub admin_users_search ($c) {
     # can't corrupt the forwarded request.
     my $path = Mojo::URL->new('/api/v1/admin/users')->query(q => $q, limit => 20)->to_string;
     return $c->render(json => (_api_get($c, $jwt, $path) // []));
+}
+
+# POST /admin/welcome-email/resend  { user_email, also_to? }  (site_admin)
+#
+# Re-sends the messages a new account triggers. The reason this exists is
+# mundane and constant: the originals are sent once, at signup, to
+# addresses that bounce, to spam folders, and to people who delete them --
+# and the device-setup link inside them is how someone adds their NEXT
+# phone, months later. Without this, the only remedy was to read the
+# settings down the phone.
+#
+# WHAT GOES WHERE. Two messages, and they are not interchangeable:
+#
+#   * the WELCOME mail goes into the mailbox itself, always. Nothing
+#     needs to be known or typed for that -- the address is the account.
+#
+#   * the "your account is ready" mail goes to a CONTACT address, which
+#     is optional and TYPED BY THE ADMIN rather than looked up. That is
+#     deliberate: homelab-api exposes a user's recovery address only to
+#     that user, and the situation this action is for is almost always
+#     "they say nothing arrived, here is the address they are giving me
+#     now" -- which is a better input than whatever is on file anyway.
+#
+# The setup link is minted for DAYS, not the QR code's minutes: it has to
+# survive the recipient getting round to reading their mail.
+sub admin_resend_welcome ($c) {
+    my ($admin, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'site_admin role required' }, status => 403)
+        unless $admin;
+
+    my $target = lc($c->param('user_email') // '');
+    $target =~ s/^\s+|\s+$//g;
+    return $c->render(json => { error => 'A user email is required.' }, status => 400)
+        unless $target =~ /^[^\@\s]+\@[^\@\s]+\.[^\@\s]+$/;
+
+    my $also = $c->param('also_to') // '';
+    $also =~ s/^\s+|\s+$//g;
+    return $c->render(json => { error => "'$also' does not look like an email address." },
+        status => 400)
+        if length($also) && $also !~ /^[^\@\s]+\@[^\@\s]+\.[^\@\s]+$/;
+
+    my $mcfg = $c->app->mailer_config // {};
+    unless (($mcfg->{smtp_host} // '') && ($mcfg->{email} // '')) {
+        return $c->render(json => { error => 'This install has no mailer configured, so '
+            . 'myaccount cannot send mail. Add a mailer: block to '
+            . '/etc/homelab/accountmanage/config.yml on every node.' }, status => 501);
+    }
+
+    # The account has to exist. Checked through homelab-api with the
+    # admin's OWN token, so the authorization for the lookup is the same
+    # authorization as for the action -- and so a typo does not quietly
+    # send a welcome message into a catch-all.
+    my $path = Mojo::URL->new('/api/v1/admin/users')->query(q => $target, limit => 20)->to_string;
+    my $found = _api_get($c, $jwt, $path) // [];
+    my ($user) = grep { lc($_->{email} // '') eq $target } @$found;
+    return $c->render(json => { error => "No account found for $target." }, status => 404)
+        unless $user;
+
+    my $s    = _device_settings($c, $target);
+    my $dc   = _device_cfg($c);
+    my $days = $dc->{link_ttl_days} || 30;
+    my $setup_url = _device_setup_url($c, $target, ttl_seconds => $days * 86_400);
+
+    my $login_url = $c->app->public_base_url // '';
+    $login_url .= '/' unless $login_url =~ m{/$};
+    my %urls = (
+        login_url   => $login_url,
+        webmail_url => ($s->{webmail_url} || ''),
+        drive_url   => ($dc->{drive_url}  || ''),
+    );
+
+    # Independently evalled, like the originals in homelab-invite: one
+    # failing must not hide whether the other worked, and the admin needs
+    # to know which.
+    my @results;
+    my $send = sub ($to, $what, $subject, $text, $html) {
+        my $ok = eval {
+            send_mail(
+                smtp_host  => $mcfg->{smtp_host}, smtp_port => $mcfg->{smtp_port},
+                from_email => $mcfg->{email}, from_password => $mcfg->{smtp_password},
+                to => $to, subject => $subject, body => $text, html => $html,
+            );
+            1;
+        };
+        my $err = $ok ? undef : ($@ // 'unknown failure');
+        $err =~ s/\s+$// if defined $err;
+        push @results, { to => $to, what => $what, ok => $ok ? \1 : \0,
+                         ($err ? (error => $err) : ()) };
+        $c->app->log->info($ok
+            ? "accountmanage: $admin resent the $what message for $target to $to"
+            : "accountmanage: $admin could not resend the $what message to $to: $err");
+    };
+
+    $send->($target, 'welcome', welcome_email(
+        account_email => $target, settings => $s, setup_url => $setup_url, %urls));
+
+    $send->($also, 'account-ready', ready_email(
+        account_email => $target, settings => $s, setup_url => $setup_url, %urls))
+        if length $also;
+
+    my $sent = grep { ${ $_->{ok} } } @results;
+    return $c->render(json => {
+        ok        => ($sent == scalar @results) ? \1 : \0,
+        setup_url => ($setup_url ? \1 : \0),
+        results   => \@results,
+    });
 }
 
 # GET /admin/usage?type=drive|mail&user_email=<addr> -- proxies to the

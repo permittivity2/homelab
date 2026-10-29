@@ -3,7 +3,7 @@ use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::UserAgent;
 use Homelab::Common::Mailer qw(send_mail);
 use Homelab::Common::MailSetup qw(mail_settings);
-use Homelab::Invite::Welcome qw(ready_email welcome_email);
+use Homelab::Common::WelcomeMail qw(ready_email welcome_email);
 use Homelab::Common::AuditClient qw(enqueue);
 use Homelab::Common::Registry qw(system_agent_token lookup);
 

@@ -84,6 +84,42 @@ device_setup:
   myaccount_url: https://myaccount.mailmasker.org/
   webmail_url: https://mail.mailmasker.org/
 
+# Apple configuration-profile signing (optional).
+#
+# An unsigned .mobileconfig installs perfectly well; iOS just labels it
+# "Unverified" in red on the install screen. Signing turns that green and
+# names the signer.
+#
+# The signature is made by the CERTIFICATE ISSUER, not here. That is the
+# whole point: signing locally would need a private key for a publicly
+# trusted name on this host, and the ready-made way to get one
+# (homelab-certsync) also brings `key_encryption_key` -- a fleet-wide key
+# that decrypts every certificate the fleet has, mail.<domain> included.
+# So this host sends the profile's PARAMETERS to the issuer's narrow
+# signing endpoint and gets signed bytes back; no key moves anywhere.
+#
+# Leave BLANK to serve profiles unsigned, which is what this fleet did
+# before signing existed and what it falls back to any time the issuer
+# cannot be reached. Nothing breaks either way.
+#
+#   url      the issuer's signing endpoint on the service plane
+#            (homelab-cert-server's homelab-cert-sign unit, port 2516)
+#   lineage  which certificate to sign with -- must be on that host's
+#            own allow-list in cert-sign.yml
+profile_signing:
+  url: http://10.50.2.190:2516
+  lineage: invite.mailmasker.org
+  # Seconds to wait on the issuer. Short on purpose: a person is waiting
+  # on this download, and the fallback is a perfectly good unsigned
+  # profile.
+  timeout_seconds: 5
+  # How long a signed profile is reused from memory, and how long a
+  # FAILURE is remembered before trying again. The second matters more:
+  # without it an unreachable issuer would add the timeout above to every
+  # single profile download.
+  cache_seconds: 900
+  retry_seconds: 60
+
 # System mailbox identity this service sends mail AS (the invite email
 # itself when sent via `homelab-cli invite send`, and the "your account
 # is ready" welcome email after a real acceptance) -- a real api.users

@@ -45,11 +45,48 @@
       %# this host cannot render codes.
       <img src="/devices/qr.svg" alt="QR code linking to the mail setup page"
            width="170" height="170" onerror="this.closest('.qr-box').remove()">
+      %# A camera is the usual way across to the phone, but not the only
+      %# one -- plenty of people would rather message the link to
+      %# themselves, and on a desktop with no webcam there is no other
+      %# option at all. The URL is fetched on click rather than written
+      %# into this page: it is a capability, and one minted per dashboard
+      %# render would both be waste and outlive its few minutes inside
+      %# the browser's history of this page.
+      <button type="button" class="btn" id="dev-copy-link"
+              style="margin-top:0.5rem;font-size:0.8rem;">Copy link instead</button>
       <p class="muted" style="font-size:0.75rem;margin:0.5rem 0 0;">Link expires in a few minutes.</p>
     </div>
 % }
   </div>
 </div>
+
+<script>
+  (function () {
+    var btn = document.getElementById('dev-copy-link');
+    if (!btn) return;
+    var reset = function (label, ms) {
+      btn.textContent = label;
+      setTimeout(function () { btn.textContent = 'Copy link instead'; }, ms);
+    };
+    btn.addEventListener('click', function () {
+      btn.disabled = true;
+      fetch('/devices/setup-link', { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (d) {
+          if (!d.url) return Promise.reject('no url');
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(d.url).then(function () { reset('Copied', 2500); });
+          }
+          // No clipboard API: show it so it can be selected by hand
+          // rather than silently doing nothing.
+          window.prompt('Copy this link:', d.url);
+          reset('Copy link instead', 0);
+        })
+        .catch(function () { reset('Could not copy', 3000); })
+        .then(function () { btn.disabled = false; });
+    });
+  })();
+</script>
 
 <div class="card">
   <h2>Mail app settings <span class="hint">Android, Thunderbird, Outlook, anything else</span></h2>

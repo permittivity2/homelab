@@ -1,0 +1,7 @@
+name: cert-sign
+package: homelab-cert-server
+kind: http_service
+check:
+  systemd_unit: homelab-cert-sign
+  tcp_port: 2516
+description: "Signs Apple configuration profiles with a fleet TLS lineage, on the issuer host so no private key has to be copied to the services that serve the downloads"

@@ -163,6 +163,36 @@ device_setup:
 EOF
         fi
 
+        # --- Apple configuration-profile signing.
+        #
+        # Appended on every configure for the same reason as the block
+        # above: the seed branch never rewrites an existing config, so an
+        # upgrade would otherwise carry no profile_signing block at all
+        # and profiles would stay unsigned forever with nothing to
+        # explain why.
+        #
+        # Pointed at the fleet's certificate issuer, because signing
+        # locally would mean a publicly-trusted private key on THIS host
+        # -- and the ready-made way to get one also brings the fleet-wide
+        # key-encryption key. Unreachable issuer = unsigned profile, which
+        # is exactly what this fleet served before signing existed.
+        if ! grep -q '^profile_signing:' "$CONFIG_FILE"; then
+            echo "  adding profile_signing block to $CONFIG_FILE"
+            cat >> "$CONFIG_FILE" <<'EOF'
+
+# Apple configuration-profile signing -- added automatically. The issuer
+# (homelab-cert-server's homelab-cert-sign unit, :2516) signs; no private
+# key is held here. Blank url = serve profiles unsigned, which installs
+# fine and just shows red "Unverified" on the iOS install screen.
+profile_signing:
+  url: http://10.50.2.190:2516
+  lineage: invite.mailmasker.org
+  timeout_seconds: 5
+  cache_seconds: 900
+  retry_seconds: 60
+EOF
+        fi
+
         # RUNTIME_ROLE is only set above on a fresh install -- on an
         # upgrade, derive it from the config already on disk.
         if [ -z "$RUNTIME_ROLE" ]; then

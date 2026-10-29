@@ -1,0 +1,13 @@
+#!/usr/bin/perl
+# homelab-cert-sign-server -- the Apple-profile signing endpoint.
+#
+# Runs ONLY on the certificate issuer, as an unprivileged user of its
+# own, reading a materialized copy of the signable lineages rather than
+# /etc/letsencrypt or the KEK-bearing cert-server.yml. See
+# Homelab::CertServer::Signer for why signing lives here instead of on
+# the six hosts that serve the downloads.
+use strict;
+use warnings;
+use lib '/usr/share/homelab-cert-server/lib';
+use Mojolicious::Commands;
+Mojolicious::Commands->start_app('Homelab::CertServer::SignApp');

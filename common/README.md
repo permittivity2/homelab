@@ -54,7 +54,7 @@ architecture this implements.
 
 ### Device setup
 
-Four small modules that together answer "how do I get this mailbox onto
+Six small modules that together answer "how do I get this mailbox onto
 my phone?". They live here because **two** services answer it at two
 different moments — `homelab-invite` seconds after an account is created,
 `homelab-accountmanage` months later for the next device — and an answer
@@ -87,6 +87,29 @@ phone rather than updating the first.
   returns undef rather than dying: this package is installed on every host
   in the fleet and only two of them render codes, so the dependency is
   declared by those two packages, not here.
+- **`Homelab::Common::ProfileSigner`** — `sign_apple_profile`,
+  `signing_enabled`. Asks the certificate issuer to sign a profile, over
+  HTTP, authenticated with the local host's `homelab-agent` credential.
+  It is a network call rather than a local `openssl` for one reason: the
+  alternative is a publicly-trusted private key on all six hosts that
+  serve `.mobileconfig` downloads, and the ready-made way to get one
+  (`homelab-certsync`) also brings `key_encryption_key` — a **fleet-wide**
+  key that decrypts every certificate the fleet has. Six more copies of
+  that, to turn one red word green, is a trade worth refusing. It sends
+  profile *parameters*, never bytes, so the issuer can never be used as a
+  general signing oracle. **Every failure returns undef** and the caller
+  serves the profile unsigned; `Mojo::Transaction::result` *throws* on a
+  transport failure, which is the specific way this would otherwise turn
+  an unreachable issuer into a 500 on someone's download.
+- **`Homelab::Common::WelcomeMail`** — `ready_email`, `welcome_email`. The
+  two messages a new account triggers: one to the contact address the
+  invite went to, one delivered *into* the new mailbox. It moved here from
+  `homelab-invite` when `homelab-accountmanage` gained a site_admin action
+  to resend them — two packages composing the same message is what this
+  library is for, and a second copy is how the two drift until the resent
+  mail says something the original did not. Neither embeds a QR code:
+  Gmail and Outlook strip inline SVG, so the mails carry a link and the
+  page it opens carries the code.
 
 `Homelab::Common::Mailer`'s `send_mail` also gained an optional `html`
 argument, making the message `multipart/alternative` with `body` as the

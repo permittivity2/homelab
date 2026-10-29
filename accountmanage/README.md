@@ -40,7 +40,8 @@ avatar + dropdown) whose "Account Management" link points here.
 ```
 GET /devices/apple.mobileconfig   session OR signed token
 GET /devices/setup?t=<token>      standalone page, token only
-GET /devices/qr.svg               session ONLY
+GET /devices/qr.svg               session MINTS a code; a token ECHOES one
+GET /devices/setup-link           session only -> JSON { url }
 ```
 
 Adding a mailbox to a phone is inherently cross-device: the panel is open
@@ -49,9 +50,30 @@ signed in here and never will. So the QR code carries a signed, minutes-
 long token (`Homelab::Common::SetupToken`) and the page it opens accepts
 that token in place of a session.
 
-`/devices/qr.svg` is deliberately **session-only**: it MINTS the
-capability, so letting a token reach it would let a lapsed one be traded
-for a fresh one indefinitely.
+`/devices/qr.svg` behaves differently depending on how it is reached, and
+the difference is the security property:
+
+- **with a session** it issues a *fresh* minutes-long token and draws
+  that. A signed-in user can always get a new code; that is the panel's
+  whole job.
+- **with only `?t=`** it draws a code for *the token that was
+  presented* — re-encoding a capability the caller already holds, never
+  granting a new one. So a lapsed link cannot buy itself a fresh lease,
+  which it could if this minted unconditionally.
+
+The echo case exists for the resent welcome email: that link gets opened
+on a laptop as often as on a phone, and a setup page with no way across to
+the handset describes a one-tap install for a device the reader is not
+holding. `t/devices.t` asserts this on the bytes, comparing against
+`qr_svg` of the presented token's own URL.
+
+`/devices/setup-link` returns a fresh URL as JSON for the panel's "Copy
+link" button — a separate endpoint rather than a value in the dashboard
+HTML, because it mints a capability (minting one per dashboard render, for
+every user, whether or not they look at the section, is waste) and because
+a token embedded in the page would then live in the browser's history and
+back-forward cache of the dashboard itself, far longer than its own few
+minutes.
 
 **The signing key defaults to `session.secret`**, which is not laziness:
 myaccount is a three-node pool (`10.50.2.171/172/173`) and that is the one
@@ -69,8 +91,53 @@ an omission). Secret: `device_setup.token_secret`, written by the
 postinst. Absent, the panel still shows the download button and the manual
 settings — only the cross-device QR code goes away.
 
+**The profile is signed by the certificate issuer, not here** — see
+`Homelab::Common::ProfileSigner`. Configured under `profile_signing:`;
+blank, unreachable or failing means the profile is served **unsigned**,
+which installs exactly as well and only costs a red "Unverified" on the
+iOS install screen.
+
 Settings come from `Homelab::Common::MailSetup`, shared with
 homelab-invite's own setup page, so the two cannot drift.
+
+## Resending the welcome email (site_admin)
+
+```
+POST /admin/welcome-email/resend   { user_email, also_to? }
+```
+
+Administration → Users → **Resend the welcome email**. The reason it
+exists is mundane and constant: the originals are sent once, at signup, to
+addresses that bounce, to spam folders, and to people who delete them —
+and the device-setup link inside them is how someone adds their *next*
+phone months later. Without this the only remedy was reading IMAP
+settings down the phone.
+
+Two messages, and they are not interchangeable:
+
+- the **welcome** message goes into the mailbox itself, always. Nothing
+  has to be known or typed: the address *is* the account.
+- the **"your account is ready"** message goes to a contact address, which
+  is optional and **typed by the admin** rather than looked up.
+  Deliberately: `homelab-api` exposes a user's recovery address only to
+  that user, and the situation this action is for is almost always "they
+  say nothing arrived, here is the address they are giving me now" —
+  a better input than whatever is on file.
+
+The account must exist, checked through `homelab-api` with the admin's
+*own* token, so authorization for the lookup is the same authorization as
+for the action and a typo cannot quietly mail a catch-all. The setup link
+is minted for **days** (`device_setup.link_ttl_days`, default 30), not the
+QR code's minutes — it has to survive the recipient getting round to
+reading their mail. Both sends are evalled independently and reported
+**per destination**, because a partial send is the interesting case: "it
+reached the mailbox but their Gmail bounced" is a different conversation
+from "nothing sent".
+
+Needs a `mailer:` block (the same service mailbox homelab-invite sends as
+— the resent message is the same message, so it should come from the same
+place). Without one, this single action reports itself unavailable; this
+app sends no other mail.
 
 ## Deploy
 

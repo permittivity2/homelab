@@ -1,4 +1,4 @@
-package Homelab::Invite::Welcome;
+package Homelab::Common::WelcomeMail;
 use Mojo::Base -strict, -signatures;
 use Homelab::Common::MailSetup qw(manual_setup_rows);
 use Exporter 'import';
@@ -7,6 +7,14 @@ our $VERSION = '0.1.0';
 our @EXPORT_OK = qw(ready_email welcome_email);
 
 # The two messages a new account triggers.
+#
+# This lived in homelab-invite until 2026-10-29, which was the right
+# place while invite acceptance was the only thing that could create an
+# account. It moved here when myaccount gained an admin action to RESEND
+# these to an existing user: two packages composing the same message is
+# exactly what this library is for, and the alternative -- a second copy
+# in accountmanage -- is how the two drift until the resent mail quietly
+# says something the original did not.
 #
 #   ready_email   -> the CONTACT address the invite was sent to (a Gmail,
 #                    an Outlook, wherever they already read mail). This is
@@ -196,6 +204,6 @@ __END__
 
 =head1 NAME
 
-Homelab::Invite::Welcome - the two messages a newly created account triggers
+Homelab::Common::WelcomeMail - the two messages a newly created account triggers
 
 =cut

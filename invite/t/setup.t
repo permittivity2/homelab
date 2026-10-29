@@ -33,21 +33,26 @@ my $EMAIL  = 'johnboy002@mailmasker.org';
 {
     package TestSetupApp;
     use Mojo::Base 'Mojolicious', -signatures;
+    # Two separate attributes, matching the real app: invite_config is
+    # $config->{invite}, while device_setup: sits at the TOP level of the
+    # config file. This test used to nest device_setup inside
+    # invite_config -- which mirrored a bug in the controller rather than
+    # the config file, and so kept the bug invisible. Both now read the
+    # same place the real app writes.
     has 'invite_config';
+    has 'device_config';
     sub startup ($self) {
-        $self->invite_config({
-            public_base_url => 'https://invite.mailmasker.org',
-            device_setup => {
-                token_secret  => $SIGNER,
-                service_label => 'MailMasker',
-                myaccount_url => 'https://myaccount.mailmasker.org/',
-            },
+        $self->invite_config({ public_base_url => 'https://invite.mailmasker.org' });
+        $self->device_config({
+            token_secret  => $SIGNER,
+            service_label => 'MailMasker',
+            myaccount_url => 'https://myaccount.mailmasker.org/',
         });
         # The real app resolves this from invite.app_secrets so every node
         # in the pool agrees (see App.pm). Here it just returns what the
         # config holds -- the controller only ever asks for the key.
         $self->helper(device_setup_secret => sub ($c) {
-            my $s = $self->invite_config->{device_setup}{token_secret};
+            my $s = $self->device_config->{token_secret};
             return undef unless defined $s && length $s && $s !~ /^YOUR_/;
             return $s;
         });
@@ -127,18 +132,63 @@ subtest 'no signing secret means the feature is simply off' => sub {
     # device_setup block. That must disable the links, not break the
     # service or -- worse -- serve profiles to unsigned URLs.
     my $t2 = Test::Mojo->new('TestSetupApp');
-    $t2->app->invite_config({ public_base_url => 'https://x', device_setup => {} });
+    $t2->app->invite_config({ public_base_url => 'https://x' });
+    $t2->app->device_config({});
     $t2->get_ok("/setup/mail/apple.mobileconfig?t=$good")->status_is(410);
 
     # The placeholder straight out of the shipped example config must
     # also count as "no secret" -- otherwise every install that skipped
     # the postinst would share one publicly known signing key.
     my $t3 = Test::Mojo->new('TestSetupApp');
-    $t3->app->invite_config({ public_base_url => 'https://x',
-        device_setup => { token_secret => 'YOUR_SETUP_TOKEN_SECRET_HERE' } });
+    $t3->app->invite_config({ public_base_url => 'https://x' });
+    $t3->app->device_config({ token_secret => 'YOUR_SETUP_TOKEN_SECRET_HERE' });
     my $placeholder_token = issue_setup_token(secret => 'YOUR_SETUP_TOKEN_SECRET_HERE',
         purpose => 'mail-device-setup', subject => $EMAIL, ttl => 600);
     $t3->get_ok("/setup/mail/apple.mobileconfig?t=$placeholder_token")->status_is(410);
+};
+
+subtest 'the configured settings are the ones that get served' => sub {
+    # The regression guard for the bug this test previously mirrored:
+    # the controller read device_setup from the wrong level of the config
+    # and so always saw an empty hash. Nothing looked wrong, because
+    # every consumer has a hardcoded fallback that happens to match this
+    # fleet -- the damage would have been the setup page and the welcome
+    # emails quietly disagreeing the first time anyone changed a value.
+    my $tc = Test::Mojo->new('TestSetupApp');
+    $tc->app->invite_config({ public_base_url => 'https://invite.mailmasker.org' });
+    $tc->app->device_config({
+        token_secret  => $SIGNER,
+        imap_host     => 'imap.elsewhere.example',
+        imap_port     => 143,
+        smtp_host     => 'submission.elsewhere.example',
+        smtp_port     => 25,
+        service_label => 'Some Other Service',
+        organization  => 'Another Org, Ltd',
+    });
+    $tc->get_ok("/setup/mail/apple.mobileconfig?t=$good")
+      ->status_is(200)
+      ->content_like(qr/imap\.elsewhere\.example/,       'uses the configured IMAP host')
+      ->content_like(qr/submission\.elsewhere\.example/, 'uses the configured SMTP host')
+      ->content_like(qr/<integer>143<\/integer>/,          'uses the configured IMAP port')
+      ->content_like(qr/Some Other Service/,               'uses the configured label')
+      ->content_like(qr/Another Org, Ltd/,                 'uses the configured organization')
+      ->content_unlike(qr/mail\.mailmasker\.org/,         'and not the derived default');
+};
+
+subtest 'an unreachable signer costs a label, never the download' => sub {
+    # Signing happens on the certificate issuer, not here. That host
+    # being down must degrade to a red "Unverified" on the iOS install
+    # screen, never to a failed download -- pointed at a dead port to
+    # prove it.
+    my $ts = Test::Mojo->new('TestSetupApp');
+    $ts->app->config(profile_signing => { url => 'http://127.0.0.1:1',
+        lineage => 'invite.mailmasker.org', timeout_seconds => 2,
+        credential_file => '/nonexistent/credential.yml' });
+    $ts->get_ok("/setup/mail/apple.mobileconfig?t=$good")
+      ->status_is(200, 'still serves a profile')
+      ->header_is('Content-Type' => 'application/x-apple-aspen-config')
+      ->content_like(qr/<\?xml/, 'falls back to the unsigned XML form')
+      ->content_like(qr/\Q$EMAIL\E/, 'and it is still the right mailbox');
 };
 
 subtest 'the page renders' => sub {

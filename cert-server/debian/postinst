@@ -17,6 +17,44 @@ case "$1" in
         chgrp homelab /etc/homelab/services 2>/dev/null || true
         chmod 775 /etc/homelab/services 2>/dev/null || true
         cp "$SHARE/services/cert-server.yml" /etc/homelab/services/cert-server.yml
+        cp "$SHARE/services/cert-sign.yml"   /etc/homelab/services/cert-sign.yml
+
+        # --- the Apple-profile signing endpoint -----------------------
+        #
+        # A user of its OWN, not the fleet-wide `homelab` user. This
+        # daemon's whole job is to hold private keys, and `homelab` is a
+        # wide bucket on this host (it owns the group-writable
+        # /etc/homelab/services, and homelab-agent runs as it). Nothing
+        # else on the box should be able to read a signing key.
+        if ! getent group homelab-certsign >/dev/null 2>&1; then
+            addgroup --system homelab-certsign
+        fi
+        if ! getent passwd homelab-certsign >/dev/null 2>&1; then
+            adduser --system --no-create-home --ingroup homelab-certsign \
+                    --home /var/lib/homelab-cert-sign --shell /usr/sbin/nologin \
+                    homelab-certsign
+        fi
+
+        # 0750 root:homelab-certsign -- traversable and readable by the
+        # daemon, opaque to everything else. homelab-cert-sign-materialize
+        # re-asserts this on every start, so a hand-chmod does not persist
+        # as a surprise.
+        mkdir -p /var/lib/homelab-cert-sign
+        chown root:homelab-certsign /var/lib/homelab-cert-sign
+        chmod 0750 /var/lib/homelab-cert-sign
+
+        SIGN_CONFIG="$CONFIG_DIR/cert-sign.yml"
+        if [ ! -f "$SIGN_CONFIG" ]; then
+            cp "$SHARE/config/cert-sign.example.yml" "$SIGN_CONFIG"
+            echo "  wrote a starter $SIGN_CONFIG -- check api_base and lineages"
+        fi
+        # Readable by the daemon, writable by nobody but root. It holds
+        # NO secret (that is the point of it being a separate file from
+        # cert-server.yml, which holds the KEK at 0600 root) -- but a
+        # daemon that can rewrite its own allow-list of signable
+        # lineages would make that allow-list meaningless.
+        chown root:homelab-certsign "$SIGN_CONFIG"
+        chmod 0640 "$SIGN_CONFIG"
 
         if [ ! -f "$CONFIG" ]; then
             cp "$SHARE/config/cert-server.example.yml" "$CONFIG"
@@ -33,6 +71,22 @@ case "$1" in
             systemctl enable --now homelab-cert-server.timer >/dev/null 2>&1 \
                 || echo "  WARNING could not enable homelab-cert-server.timer -- check 'systemctl status homelab-cert-server.timer'"
             echo "  timer enabled (issue/renew + publish, twice daily)"
+        fi
+
+        # The signing endpoint is started regardless of whether the
+        # issuer config is still a placeholder: with no certificates for
+        # the configured lineages it simply reports itself unhealthy and
+        # every client falls back to serving profiles unsigned, which is
+        # the behaviour this fleet shipped with before signing existed.
+        # Nothing it can do is destructive and nothing it does burns an
+        # ACME rate limit, so there is no reason to hold it back.
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable homelab-cert-sign.service >/dev/null 2>&1 || true
+        # restart, not start: an upgrade must pick up new code.
+        systemctl restart homelab-cert-sign.service >/dev/null 2>&1 \
+            || echo "  WARNING homelab-cert-sign did not start -- check 'systemctl status homelab-cert-sign'"
+        if systemctl is-active --quiet homelab-cert-sign.service; then
+            echo "  profile signing endpoint active on :2516"
         fi
 
         echo "homelab-cert-server configured."

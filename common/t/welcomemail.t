@@ -3,18 +3,9 @@ use Test::More;
 
 use FindBin;
 use lib "$FindBin::Bin/../lib";
-# CI runs `prove -I lib` from inside each package, so the sibling
-# homelab-common checkout is NOT on @INC by default. Same explicit add
-# as t/basic.t does for the shared test helpers.
-use lib "$FindBin::Bin/../../common/lib";
-
-BEGIN {
-    plan skip_all => 'homelab-common not available'
-        unless eval { require Homelab::Common::MailSetup; 1 };
-}
 
 use Homelab::Common::MailSetup qw(mail_settings);
-use Homelab::Invite::Welcome qw(ready_email welcome_email);
+use Homelab::Common::WelcomeMail qw(ready_email welcome_email);
 
 my $EMAIL    = 'johnboy002@mailmasker.org';
 my $SETUP    = 'https://invite.mailmasker.org/setup/mail?t=v1.abc.123.def';

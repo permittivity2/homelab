@@ -65,6 +65,66 @@ device_setup:
 EOF
         fi
 
+        # --- Apple configuration-profile signing.
+        #
+        # Appended on every configure for the same reason as the block
+        # above: the seed branch never rewrites an existing config, so an
+        # upgrade would otherwise carry no profile_signing block at all
+        # and profiles would stay unsigned forever with nothing to
+        # explain why.
+        #
+        # Pointed at the fleet's certificate issuer, because signing
+        # locally would mean a publicly-trusted private key on THIS host
+        # -- and the ready-made way to get one also brings the fleet-wide
+        # key-encryption key. Unreachable issuer = unsigned profile, which
+        # is exactly what this fleet served before signing existed.
+        if ! grep -q '^profile_signing:' "$CONFIG_FILE"; then
+            echo "  adding profile_signing block to $CONFIG_FILE"
+            cat >> "$CONFIG_FILE" <<'EOF'
+
+# Apple configuration-profile signing -- added automatically. The issuer
+# (homelab-cert-server's homelab-cert-sign unit, :2516) signs; no private
+# key is held here. Blank url = serve profiles unsigned, which installs
+# fine and just shows red "Unverified" on the iOS install screen.
+profile_signing:
+  url: http://10.50.2.190:2516
+  lineage: myaccount.mailmasker.org
+  timeout_seconds: 5
+  cache_seconds: 900
+  retry_seconds: 60
+EOF
+        fi
+
+        # --- mailer identity for the site_admin "resend the welcome
+        # email" action. A commented stub only: it needs the password of
+        # a real service mailbox, which a maintainer script has no way to
+        # know and no business inventing. Until it is filled in, that one
+        # admin action reports itself unavailable and nothing else is
+        # affected -- this app sends no other mail.
+        if ! grep -q '^#\{0,1\}mailer:' "$CONFIG_FILE"; then
+            echo "  adding a commented mailer: stub to $CONFIG_FILE"
+            echo "  -> fill it in to enable Administration > Users > Resend the welcome email"
+            cat >> "$CONFIG_FILE" <<'EOF'
+
+# Mailer identity -- UNCOMMENT AND FILL IN to enable the site_admin
+# "resend the welcome email" action. Reuse the same service mailbox
+# homelab-invite sends as (its password is in that package's config on
+# the invite nodes); the resent message is the same message, so it should
+# come from the same place.
+#
+# smtp_host MUST be a submission endpoint that accepts a PLAIN
+# connection -- the edge HAProxy submission frontend, NOT a postfix
+# backend and NOT loopback. The backends require a PROXY-protocol header
+# a direct client cannot send, and pointing at one fails every send with
+# "421 4.3.0 Server local error" while the UI shows nothing at all.
+#mailer:
+#  email: invites@mailmasker.org
+#  smtp_host: 10.50.2.140
+#  smtp_port: 587
+#  smtp_password: PUT_THE_REAL_PASSWORD_HERE
+EOF
+        fi
+
         # Metrics tab egress: open this host -> the fleet Prometheus
         # (prometheus.base_url in the config) so the metrics.view-gated
         # Metrics tab can query it. The base output chain has a drop policy.

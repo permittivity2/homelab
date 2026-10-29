@@ -1,0 +1,64 @@
+[Unit]
+Description=Homelab certificate signing endpoint (Apple configuration profiles)
+Documentation=file:///usr/share/doc/homelab-cert-server/README.md.gz
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# A user of its own, NOT the fleet-wide `homelab` user. The private keys
+# this reads are the only thing on the host worth protecting from the
+# host's other services, and `homelab` is a wide bucket here (it owns the
+# group-writable /etc/homelab/services, among other things).
+User=homelab-certsign
+Group=homelab-certsign
+WorkingDirectory=/var/lib/homelab-cert-sign
+# /var/lib/homelab-cert-sign is 0750 ROOT:homelab-certsign -- the daemon
+# can read the signing material there and cannot write to it, which is
+# the point. So runtime state does not go there: systemd makes
+# /run/homelab-cert-sign owned by the service user instead, and that is
+# where hypnotoad's pid file lives (see cert-sign.yml's server.pid_file).
+RuntimeDirectory=homelab-cert-sign
+RuntimeDirectoryMode=0750
+Environment="HOMELAB_CERT_SIGN_CONFIG=/etc/homelab/cert-server/cert-sign.yml"
+# Root, before dropping to User=: certbot keeps private keys 0700 root
+# and resets that on every renewal, so the copy has to be made by
+# someone who can read them. '+' is what escapes User= for this one step.
+ExecStartPre=+/usr/bin/homelab-cert-sign-materialize
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-cert-sign-server
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-cert-sign-server
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+
+# This process exists to hold private keys and answer one narrow
+# question about them. It has no business anywhere else on the disk.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+# Nothing writable is granted here at all: RuntimeDirectory= above
+# already provides the one place this process writes. ProtectSystem=
+# strict makes /etc read-only, which is correct -- it reads its config
+# and never writes it, and a daemon that could rewrite its own allow-list
+# of signable lineages would make that allow-list meaningless.
+#
+# ExecStartPre= above carries a '+' prefix, which exempts it from all of
+# this -- including the namespacing -- so the root copy step can still
+# read certbot's 0700 key directory.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-cert-sign
+
+[Install]
+WantedBy=multi-user.target

@@ -270,6 +270,28 @@
         </div>
 
         <div class="card">
+          <h2>Resend the welcome email <span class="hint">and the mail-setup link</span></h2>
+          <form id="resend-welcome-form">
+            <div class="field">
+              <label>User email</label>
+              <input class="user-fill" type="email" name="user_email" required autocomplete="off" placeholder="type at least 3 characters…">
+            </div>
+            <div class="field">
+              <label>Also send the &ldquo;your account is ready&rdquo; version to <span class="muted">(optional)</span></label>
+              <input type="email" name="also_to" autocomplete="off" placeholder="their other address, e.g. a Gmail">
+            </div>
+            <button type="submit" class="btn btn-primary">Resend</button>
+          </form>
+          <div id="resend-welcome-result"></div>
+          <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">
+            The welcome message goes <em>into their mailbox</em>, where it stays as the link
+            they use to add their next phone. It carries a fresh device-setup link good for
+            30 days. The optional second address gets the &ldquo;your account is ready&rdquo;
+            wording instead &mdash; use it when someone says nothing ever arrived.
+          </p>
+        </div>
+
+        <div class="card">
           <h2>Invite quota <span class="hint">override per user</span></h2>
           <form id="invite-quota-form">
             <div class="field"><label>User email</label><input class="user-fill" type="email" name="user_email" required autocomplete="off" placeholder="type at least 3 characters…"></div>

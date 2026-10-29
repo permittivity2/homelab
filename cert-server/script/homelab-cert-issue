@@ -27,6 +27,7 @@ die "no configured lineage named '$only'\n" if $only && !@lins;
 my $AUTH    = '/usr/bin/homelab-cert-dns-auth';
 my $CLEANUP = '/usr/bin/homelab-cert-dns-cleanup';
 my $PUBLISH = '/usr/bin/homelab-cert-publish';
+my $MATERIALIZE = '/usr/bin/homelab-cert-sign-materialize';
 
 my $rc = 0;
 for my $l (@lins) {
@@ -63,4 +64,23 @@ for my $l (@lins) {
     system($PUBLISH, '--lineage', $name) == 0
         or log_msg("WARNING publish returned non-zero for $name (spooled; the timer will retry)");
 }
+
+# Refresh the signing endpoint's copy of whatever just changed.
+#
+# NOT a certbot deploy-hook: certbot runs deploy hooks once per renewed
+# lineage, and this is cheap, idempotent and content-compared, so one run
+# at the end covers every lineage including ones certbot left alone. No
+# restart of homelab-cert-sign is needed -- it opens the files per
+# request and keys its certificate metadata cache on mtime -- which also
+# means a renewal cannot interrupt a signature in flight.
+#
+# Unconditional and non-fatal: a host with no signing configured has
+# nothing to materialize and says so, and a failure here must not make a
+# successful renewal look like a failed one.
+if (!$dry && -x $MATERIALIZE) {
+    system($MATERIALIZE) == 0
+        or log_msg('WARNING could not refresh the profile-signing material'
+                 . ' -- signed profiles may be stale until the next run');
+}
+
 exit $rc;

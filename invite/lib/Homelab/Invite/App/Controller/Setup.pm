@@ -3,6 +3,7 @@ use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Homelab::Common::AppleProfile qw(build_mail_profile profile_filename);
 use Homelab::Common::MailSetup qw(mail_settings manual_setup_rows);
 use Homelab::Common::QRCode qw(qr_svg);
+use Homelab::Common::ProfileSigner qw(sign_apple_profile);
 use Homelab::Common::SetupToken qw(verify_setup_token);
 
 # The "add this mailbox to your phone" pages, served PUBLICLY (no login)
@@ -28,7 +29,16 @@ use Homelab::Common::SetupToken qw(verify_setup_token);
 # token-authenticated, in homelab-accountmanage -- that is where someone
 # goes months later when they get a second phone.
 
-sub _device_config ($c) { return $c->app->invite_config->{device_setup} // {} }
+# NOT $c->app->invite_config->{device_setup}, which is what this said
+# until 2026-10-29 and which is always empty: invite_config is
+# $config->{invite}, while device_setup: sits at the TOP level of the
+# file. The pages still looked right because every consumer of these
+# values carries a hardcoded fallback that happens to match this fleet's
+# config -- so the bug was invisible here and would have surfaced as the
+# setup page and the welcome emails disagreeing the first time anyone
+# changed service_label or a hostname. Which is the exact failure
+# Homelab::Common::MailSetup exists to make impossible.
+sub _device_config ($c) { return $c->app->device_config // {} }
 
 # What kind of device is reading this page? Used only to decide what to
 # show FIRST -- every option stays on the page whatever the answer, so a
@@ -134,9 +144,14 @@ sub page ($c) {
 # GET /setup/mail/apple.mobileconfig?t=...
 sub apple_profile ($c) {
     my $email = _subject_or_reject($c, 'text') or return;
-    my $s = mail_settings(email => $email, config => _device_config($c));
+    my $dc = _device_config($c);
+    my $s = mail_settings(email => $email, config => $dc);
 
-    my $xml = build_mail_profile(
+    # One parameter set, used BOTH to build the profile locally and to
+    # ask the signer to build it. They must not be able to drift: a
+    # signed profile that differs from the unsigned fallback would mean
+    # two people following the same link get different mail settings.
+    my %params = (
         email         => $email,
         imap_host     => $s->{imap_host}, imap_port => $s->{imap_port},
         smtp_host     => $s->{smtp_host}, smtp_port => $s->{smtp_port},
@@ -145,17 +160,30 @@ sub apple_profile ($c) {
         display_name  => $email,
     );
 
+    # Signed if the certificate issuer can be reached, unsigned if not.
+    # The difference is one word on the iOS install screen -- green
+    # "Verified" against red "Unverified" -- and never whether the
+    # download works. See Homelab::Common::ProfileSigner for why signing
+    # is a call to another host rather than a local openssl.
+    my $body = sign_apple_profile(
+        signing => $dc->{signing} // $c->app->config->{profile_signing},
+        profile => \%params,
+        log     => $c->app->log,
+    ) // build_mail_profile(%params);
+
     # application/x-apple-aspen-config is the type that makes iOS hand the
     # file to the profile installer instead of showing it as text. Serving
     # correct XML under the wrong type is the classic way this feature
-    # looks finished and does nothing.
+    # looks finished and does nothing. It is also the correct type for the
+    # SIGNED form, which is binary PKCS#7 rather than XML -- the type says
+    # what the file is for, not what encoding it is in.
     $c->res->headers->content_type('application/x-apple-aspen-config');
     $c->res->headers->content_disposition(
         'attachment; filename="' . profile_filename($email, $s->{service_label}) . '"');
     # The URL embeds a capability token; no shared cache should keep the
     # response, and no browser should serve it to the next person.
     $c->res->headers->cache_control('no-store, private');
-    return $c->render(data => $xml);
+    return $c->render(data => $body);
 }
 
 # GET /setup/mail/qr.svg?t=...

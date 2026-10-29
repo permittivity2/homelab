@@ -1,0 +1,82 @@
+# homelab-cert-sign -- the Apple configuration-profile signing endpoint.
+#
+# DELIBERATELY A SEPARATE FILE FROM cert-server.yml. That one is 0600
+# root because it carries `key_encryption_key`, the fleet-wide key that
+# decrypts every published certificate. This one is 0640
+# root:homelab-certsign and carries nothing secret, which is what lets
+# the network-facing daemon read its own configuration without being
+# able to read the KEK. Do not merge them.
+#
+# WHAT THIS SERVICE IS FOR. An unsigned .mobileconfig installs perfectly
+# well; iOS just labels it "Unverified" in red. Signing turns that green.
+# The signature needs a key for a publicly-trusted name -- and rather
+# than copy such a key (and the KEK that unwraps it) to the six hosts
+# that serve setup pages, those hosts send the profile's PARAMETERS here
+# and get signed bytes back. The key never leaves this host.
+#
+# It signs parameters, never submitted bytes: see
+# Homelab::CertServer::Signer for why that distinction is the whole
+# security argument.
+
+# homelab-api on the SERVICE PLANE. Used only to introspect the caller's
+# system_agent token -- this service holds no credential of its own.
+api_base: http://10.50.2.132:3000
+
+# The lineages this host will sign with. An ALLOW-LIST: a request naming
+# anything else is refused, which is what keeps a caller from asking for
+# a signature under mail.<domain> (the certificate that actually protects
+# mail) just because this host happens to hold it.
+#
+# These should be the names that serve the setup pages, so the name iOS
+# shows on the install screen is a name the user is already looking at in
+# their address bar.
+#
+# AN OPEN QUESTION, DELIBERATELY LEFT OPEN. A Let's Encrypt certificate
+# carries `extendedKeyUsage: serverAuth` and nothing else. openssl's own
+# S/MIME purpose check rejects such a certificate ("unsuitable
+# certificate purpose"), and whether iOS applies that same check before
+# printing a green "Verified" is genuinely unsettled -- plenty of people
+# report a plain TLS certificate working, and at least one signing tool
+# states flatly that emailProtection is required. So: signing is tried
+# with the TLS lineage, homelab-cert-sign-materialize prints a NOTE when
+# the identity has no emailProtection EKU, and the answer is one tap on
+# a real iPhone away. If it turns out to be needed, obtain an S/MIME
+# certificate from any publicly trusted CA, drop it on this host, and
+# name it below in the second form. No code changes; the clients fall
+# back to unsigned profiles throughout.
+lineages:
+  - invite.mailmasker.org
+  - myaccount.mailmasker.org
+  # The second form: an identity that is NOT one of this host's certbot
+  # lineages. `name` is what a caller asks for; the three paths are read
+  # by root at materialize time and copied where the daemon can read
+  # them, exactly as a certbot lineage is.
+  # - name: profile-signing
+  #   cert:    /etc/homelab/cert-server/signing/cert.pem
+  #   chain:   /etc/homelab/cert-server/signing/chain.pem
+  #   privkey: /etc/homelab/cert-server/signing/privkey.pem
+
+# Where certbot keeps its live symlinks on this host. Only
+# homelab-cert-sign-materialize (root) reads this; the daemon reads the
+# copy it makes under /var/lib/homelab-cert-sign.
+letsencrypt_live: /etc/letsencrypt/live
+
+server:
+  # NOT loopback: the callers are other hosts (the invite and myaccount
+  # pools). Nothing fronts this -- no webproxy vhost, no gateway route --
+  # and every route authenticates regardless, because "internal only" is
+  # not a security control. What bounds reachability is the fleet
+  # nftables baseline, which accepts intra-fleet 10.50/10.45/10.20 and
+  # drops everything else on both chains.
+  #
+  # 0.0.0.0 rather than this host's service-plane address so the shipped
+  # file is correct wherever the package lands (homelab-agent binds the
+  # same way for the same reason). Pin it to 10.50.2.<144+NN> if you
+  # would rather be explicit -- but then remember it is now a per-host
+  # value in a file the postinst will not rewrite.
+  listen: "http://0.0.0.0:2516"
+  workers: 2
+  # /run, not /var/lib: the material directory is root-owned and
+  # deliberately not writable by the daemon. systemd creates this one
+  # (RuntimeDirectory= in the unit) owned by the service user.
+  pid_file: /run/homelab-cert-sign/hypnotoad.pid

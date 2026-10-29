@@ -50,6 +50,32 @@
     details { margin-top: var(--space-6); border-top: 1px solid var(--border); padding-top: var(--space-4); }
     summary { cursor: pointer; color: var(--silver-bright); font-size: var(--app-base); }
     .hint { font-size: var(--app-xs); color: var(--text-muted); }
+    /* The code is drawn on white deliberately: this page is dark, and a
+       QR without a light quiet zone around it scans badly or not at all. */
+    .qr-wrap { text-align: center; margin: var(--space-6) 0 var(--space-2); }
+    .qr-wrap img {
+      width: 200px; height: 200px; background: #fff;
+      padding: var(--space-3); border-radius: var(--radius-md);
+    }
+    .link-row {
+      display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center;
+      justify-content: center; margin: 0 0 var(--space-2);
+    }
+    /* No spaces in a URL, so break-all or it pushes the card wider than
+       the phone it is being read on. */
+    .self-link {
+      flex: 1 1 18em; min-width: 0; word-break: break-all;
+      font-family: var(--font-mono, monospace); font-size: var(--app-xs);
+      color: var(--silver-bright); text-align: center;
+    }
+    .copy-btn {
+      flex: 0 0 auto; cursor: pointer; font: inherit; font-size: var(--app-sm);
+      padding: var(--space-2) var(--space-4); border-radius: var(--radius-md);
+      border: 1px solid var(--border); background: var(--black-secondary);
+      color: var(--text-primary);
+    }
+    .copy-btn:hover { border-color: var(--silver-bright); }
+    h2.sub { font-size: var(--app-lg); font-weight: var(--weight-light); margin-top: var(--space-8); }
   </style>
 </head>
 <body>
@@ -85,6 +111,29 @@
     <p class="hint">The profile sets up the servers, ports and encryption. It does not
        contain your password &mdash; your device asks you for that and stores it itself.</p>
 
+%   # The cross-device hand-off, present only when this page was reached
+%   # by a link rather than by a session -- i.e. someone following the
+%   # link in a welcome email, which lands on a laptop as often as on a
+%   # phone. Without this that is a dead end: the page would describe a
+%   # one-tap install for a device the reader is not holding.
+%   if ($qr_url) {
+    <h2 class="sub">On your iPhone or iPad</h2>
+    <p>Point the camera at this code, then tap the link that appears.</p>
+    <div class="qr-wrap">
+      %# onerror removes the whole block rather than leaving a broken-image
+      %# icon, for a host that cannot render codes.
+      <img src="<%= $qr_url %>" alt="QR code linking to this setup page"
+           width="200" height="200" onerror="this.closest('.qr-wrap').remove()">
+    </div>
+    <p class="hint" style="text-align:center;margin-bottom:var(--space-2);">
+      Can&rsquo;t scan it? Copy the link and send it to your phone.
+    </p>
+    <div class="link-row">
+      <a class="self-link" href="<%= $self_url %>"><%= $self_url %></a>
+      <button type="button" class="copy-btn" data-copy="<%= $self_url %>">Copy link</button>
+    </div>
+%   }
+
     <details<%= $hints->{is_apple} ? '' : ' open' %>>
       <summary>Android, Thunderbird, Outlook and everything else</summary>
       <p class="hint">Choose &ldquo;IMAP&rdquo; (not POP), then enter:</p>
@@ -99,5 +148,37 @@
     </details>
 % }
   </div>
+<script>
+  // Progressive enhancement only: with no clipboard API (or permission
+  // refused) the URL is selected instead, which leaves the reader one
+  // keystroke from the same result. The link above works regardless, so
+  // this failing entirely costs nothing.
+  (function () {
+    var btn = document.querySelector('.copy-btn');
+    var link = document.querySelector('.self-link');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var reset = function (label, ms) {
+        btn.textContent = label;
+        setTimeout(function () { btn.textContent = 'Copy link'; }, ms);
+      };
+      var fallback = function () {
+        if (!link) return;
+        var r = document.createRange();
+        r.selectNodeContents(link);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        reset('Press \u2318C / Ctrl+C', 4000);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(btn.getAttribute('data-copy') || '')
+          .then(function () { reset('Copied', 2000); }, fallback);
+      } else {
+        fallback();
+      }
+    });
+  })();
+</script>
 </body>
 </html>
