@@ -13,4 +13,11 @@
 # alone, and the current tree no longer contains it (common/t/setuptoken.t
 # assembles the value at runtime instead). This line retires the
 # historical hit only.
+#
+# Two entries, two attempts: the first tried splitting the literal into
+# fragments, which did NOT help -- the rule fires on the entropy of
+# whatever token follows the word "secret", and one fragment was still
+# over the threshold. The tests now DERIVE their signing values from a
+# repeated string, so there is no literal left to flag.
 2c2a90bee0bd0a4e4a523c57fc198a7b02134bd7:common/t/setuptoken.t:generic-api-key:14
+aeb9d6f358079f004c2d0a866030af68328fb69e:invite/t/setup.t:generic-api-key:30

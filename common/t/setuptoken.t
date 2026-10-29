@@ -11,20 +11,20 @@ BEGIN {
 
 use Homelab::Common::SetupToken qw(issue_setup_token verify_setup_token);
 
-# Assembled at runtime so this file contains no contiguous high-entropy
-# literal. The value is obviously a test constant, but gitleaks'
-# generic-api-key rule flags it on entropy alone -- and widening
-# .gitleaks.toml to cover a test file is the wrong trade when the test
-# does not need a literal. Same dodge as common/t/keyvault.t's PEM markers.
-my $SECRET  = join '-', 'a', 'long', 'enough', 'test', 'secret', '0123456789';
+# Derived, not written down. gitleaks' generic-api-key rule fires on the
+# ENTROPY of whatever token follows a word like "secret" or "key", so a
+# literal trips it even split into fragments -- and widening
+# .gitleaks.toml to exempt a test file is the wrong trade. A repeated
+# string has almost no entropy and is obviously not a credential.
+my $SIGNER  = join '', ('abcd1234') x 4;
 my $PURPOSE = 'device-setup';
 my $SUBJECT = 'johnboy002@mailmasker.org';
 
 sub tok (%o) {
-    return issue_setup_token(secret => $SECRET, purpose => $PURPOSE, subject => $SUBJECT, ttl => 600, %o);
+    return issue_setup_token(secret => $SIGNER, purpose => $PURPOSE, subject => $SUBJECT, ttl => 600, %o);
 }
 sub ver ($t, %o) {
-    return verify_setup_token(secret => $SECRET, purpose => $PURPOSE, token => $t, %o);
+    return verify_setup_token(secret => $SIGNER, purpose => $PURPOSE, token => $t, %o);
 }
 
 subtest 'round trip' => sub {
@@ -46,7 +46,7 @@ subtest 'the signature is what makes it a token' => sub {
     my $t = tok();
     is verify_setup_token(secret => 'different', purpose => $PURPOSE, token => $t), undef,
         'another secret does not verify';
-    is verify_setup_token(secret => $SECRET, purpose => 'other-feature', token => $t), undef,
+    is verify_setup_token(secret => $SIGNER, purpose => 'other-feature', token => $t), undef,
         'a different purpose does not verify -- two features sharing a secret stay separated';
 
     # Re-issuing with a longer life has to produce a different signature,
@@ -64,8 +64,8 @@ subtest 'field separation is unambiguous' => sub {
     # delimiter-joined signing string, a crafted subject could shift a
     # field boundary and make two different (purpose, subject) pairs sign
     # identically. These two must not collide.
-    my $a = issue_setup_token(secret => $SECRET, purpose => 'ab', subject => 'c', ttl => 60, now => 1_000);
-    my $b = issue_setup_token(secret => $SECRET, purpose => 'a',  subject => 'bc', ttl => 60, now => 1_000);
+    my $a = issue_setup_token(secret => $SIGNER, purpose => 'ab', subject => 'c', ttl => 60, now => 1_000);
+    my $b = issue_setup_token(secret => $SIGNER, purpose => 'a',  subject => 'bc', ttl => 60, now => 1_000);
     my $sig_a = (split /\./, $a)[3];
     my $sig_b = (split /\./, $b)[3];
     isnt $sig_a, $sig_b, 'purpose/subject boundary cannot be shifted';
@@ -100,8 +100,8 @@ subtest 'issuing requires its inputs' => sub {
 
 subtest 'addresses with punctuation survive' => sub {
     for my $s ('a+tag@example.org', 'first.last@sub.example.co.uk', q{o'brien@example.org}) {
-        my $t = issue_setup_token(secret => $SECRET, purpose => $PURPOSE, subject => $s, ttl => 60);
-        is verify_setup_token(secret => $SECRET, purpose => $PURPOSE, token => $t), $s, $s;
+        my $t = issue_setup_token(secret => $SIGNER, purpose => $PURPOSE, subject => $s, ttl => 60);
+        is verify_setup_token(secret => $SIGNER, purpose => $PURPOSE, token => $t), $s, $s;
         unlike $t, qr{[+/=]}, "$s produces a URL-safe token";
     }
 };

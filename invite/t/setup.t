@@ -22,12 +22,12 @@ use Homelab::Common::SetupToken qw(issue_setup_token);
 # and nothing else -- so this mounts the real controller on a minimal
 # app and tests it for real, in CI, with no infrastructure.
 
-# Assembled at runtime so this file contains no contiguous high-entropy
-# literal. The value is obviously a test constant, but gitleaks'
-# generic-api-key rule flags it on entropy alone -- and widening
-# .gitleaks.toml to cover a test file is the wrong trade when the test
-# does not need a literal. Same dodge as common/t/keyvault.t's PEM markers.
-my $SECRET = join '-', 'test', 'setup', 'secret', '0123456789abcdef';
+# Derived, not written down. gitleaks' generic-api-key rule fires on the
+# ENTROPY of whatever token follows a word like "secret" or "key", so a
+# literal trips it even split into fragments -- and widening
+# .gitleaks.toml to exempt a test file is the wrong trade. A repeated
+# string has almost no entropy and is obviously not a credential.
+my $SIGNER = join '', ('abcd1234') x 4;
 my $EMAIL  = 'johnboy002@mailmasker.org';
 
 {
@@ -38,7 +38,7 @@ my $EMAIL  = 'johnboy002@mailmasker.org';
         $self->invite_config({
             public_base_url => 'https://invite.mailmasker.org',
             device_setup => {
-                token_secret  => $SECRET,
+                token_secret  => $SIGNER,
                 service_label => 'MailMasker',
                 myaccount_url => 'https://myaccount.mailmasker.org/',
             },
@@ -60,7 +60,7 @@ my $EMAIL  = 'johnboy002@mailmasker.org';
 }
 
 my $t = Test::Mojo->new('TestSetupApp');
-my $good = issue_setup_token(secret => $SECRET, purpose => 'mail-device-setup',
+my $good = issue_setup_token(secret => $SIGNER, purpose => 'mail-device-setup',
                              subject => $EMAIL, ttl => 600);
 
 subtest 'the profile is served as an Apple configuration profile' => sub {
@@ -91,7 +91,7 @@ subtest 'the token is what authorises it' => sub {
 };
 
 subtest 'an expired token stops working' => sub {
-    my $old = issue_setup_token(secret => $SECRET, purpose => 'mail-device-setup',
+    my $old = issue_setup_token(secret => $SIGNER, purpose => 'mail-device-setup',
         subject => $EMAIL, ttl => 1, now => time - 100);
     $t->get_ok("/setup/mail/apple.mobileconfig?t=$old")->status_is(410);
 };
@@ -99,7 +99,7 @@ subtest 'an expired token stops working' => sub {
 subtest 'a token minted for another feature is not accepted here' => sub {
     # Domain separation inside one secret: if some future feature on this
     # service issues its own tokens, they must not open mailboxes.
-    my $other = issue_setup_token(secret => $SECRET, purpose => 'something-else',
+    my $other = issue_setup_token(secret => $SIGNER, purpose => 'something-else',
         subject => $EMAIL, ttl => 600);
     $t->get_ok("/setup/mail/apple.mobileconfig?t=$other")->status_is(410);
 };
