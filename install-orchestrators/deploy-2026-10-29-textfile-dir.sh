@@ -57,6 +57,11 @@ else
 fi
 
 step "and prometheus can see them"
+# The value array is ["<unix-time>","<count>"], so pull the LAST quoted field
+# of it. An earlier version anchored on "$ -- which never matches, because the
+# array closes with ]. It printed nothing and exited 1 on a successful run.
 echo -n "  hosts reporting homelab_agent_up: "
 ssh -o ConnectTimeout=8 10.20.2.213 'curl -s --data-urlencode "query=count(homelab_agent_up)" http://127.0.0.1:9090/api/v1/query' 2>/dev/null \
-  | grep -oE '"value":\[[^]]*\]' | grep -oE '"[0-9]+"$' | tr -d '"'
+  | sed -n 's/.*"value":\[[^,]*,"\([0-9]*\)".*/\1/p'
+echo
+exit 0
