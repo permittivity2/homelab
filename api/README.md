@@ -202,6 +202,30 @@ minutes *and* whose rightful owner never completed the rotation. What it buys
 is that an interrupted rotation stops being a permanent lockout — which had
 already fired fourteen times.
 
+### Verifying it against a running node
+
+`t/sessions.t` covers all of the above, but it **skips** unless
+`HOMELAB_API_CONFIG` names a real `config.yml` — and a real config holds the
+database password and the JWT secret, so it is not something to copy somewhere
+convenient in order to run a test. The practical consequence is that these
+subtests are easy to ship without ever executing them, which is exactly what
+happened with 0.1.63.
+
+So there is a second check that needs no config and no secret:
+
+```
+install-orchestrators/verify-refresh-grace.sh 10.50.2.156   # a node's service IP
+```
+
+It drives the deployed HTTP API with a throwaway account and asserts the
+observable behaviour — a normal rotation; a replay returning *the same*
+successor flagged `recovered`; the replay creating no new session; the
+successor being usable; the original refused once the successor is itself
+rotated; and a logged-out token staying unrecoverable. It deletes its own
+account afterwards. Run it on **each** node after any change to `_refresh`: a
+mixed pool is only safe if every member behaves identically, and three nodes
+round-robin here.
+
 ## Testing
 
 `t/auth.t` (unit, no DB), `t/basic.t` (real Postgres, real HTTP — set

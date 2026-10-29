@@ -17,8 +17,13 @@ global:
 # in Prometheus's own Alerts page / /api/v1/rules rather than paging anyone --
 # which is still the difference between a condition being visible and a node
 # being dead for four days before anyone notices (see rules/fleet-agent.yml).
+# This MUST match the postinst's $PROM_DIR/rules -- prometheus.service runs with
+# --config.file=/etc/prometheus/homelab/prometheus.yml, not the stock
+# /etc/prometheus/prometheus.yml. A rule_files glob that matches nothing is NOT
+# an error: prometheus starts clean with zero rule groups and says nothing. That
+# is how 0.7.1 shipped alert rules that were never evaluated.
 rule_files:
-  - /etc/prometheus/rules/*.yml
+  - /etc/prometheus/homelab/rules/*.yml
 
 scrape_configs:
   # Prometheus scraping itself.

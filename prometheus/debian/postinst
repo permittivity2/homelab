@@ -89,6 +89,26 @@ EOF
         systemctl restart prometheus \
             || echo "  WARNING: prometheus failed to (re)start -- check 'journalctl -xeu prometheus'."
 
+        # Assert the shipped rule_files glob actually matches what we just
+        # installed. A glob that matches nothing is not a startup error --
+        # prometheus comes up clean with zero rule groups and reports nothing --
+        # so 0.7.1 shipped three alert rules that were never evaluated, because
+        # prometheus.yml said /etc/prometheus/rules while the postinst wrote
+        # $PROM_DIR/rules. Cheap to check, invisible when it breaks.
+        RULE_GLOBS=$(sed -n '/^rule_files:/,/^[^ #-]/p' "$PROM_DIR/prometheus.yml" \
+            | sed -n 's/^[[:space:]]*-[[:space:]]*//p')
+        RULE_HITS=0
+        for g in $RULE_GLOBS; do
+            for f in $g; do [ -f "$f" ] && RULE_HITS=$((RULE_HITS+1)); done
+        done
+        if [ "$RULE_HITS" = 0 ]; then
+            echo "  WARNING: rule_files in $PROM_DIR/prometheus.yml matches no files."
+            echo "           Alert rules are installed in $PROM_DIR/rules but will NOT"
+            echo "           be evaluated. This is a packaging bug -- report it."
+        else
+            echo "  alert rules: $RULE_HITS file(s) matched by rule_files"
+        fi
+
         # --- first target pull (best-effort: needs an enrolled agent) ----
         if [ -f /etc/homelab/agent/credential.yml ]; then
             HOMELAB_PROMETHEUS_PULL_CONFIG="$PULL_CONFIG" homelab-prometheus-pull \

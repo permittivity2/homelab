@@ -21,7 +21,29 @@ case "$1" in
         # can publish per-app *.prom files there, exposed on :9100. --------
         TEXTFILE_DIR=/var/lib/prometheus/node-exporter
         mkdir -p "$TEXTFILE_DIR"
-        chgrp homelab "$TEXTFILE_DIR" 2>/dev/null && chmod 0775 "$TEXTFILE_DIR" 2>/dev/null || true
+        # chgrp and chmod are SEPARATE, deliberately. They used to be chained
+        # with && -- so on a host where the chgrp did not take, the chmod was
+        # skipped too and the whole thing swallowed by `|| true`. The result on
+        # prod-homelab46 was a root:root 0755 directory that homelab could not
+        # write, which meant the certificate issuer -- the one node whose
+        # silence actually cost something -- published no agent metrics at all,
+        # while every other host did. Found 2026-10-29 rolling out the agent
+        # health metrics of post-cutover item 37.
+        #
+        # 2775, not 0775: the setgid bit makes files created here inherit the
+        # homelab group, so a file written by one service stays readable and
+        # replaceable by the others rather than depending on each writer's
+        # umask.
+        if ! chgrp homelab "$TEXTFILE_DIR" 2>/dev/null; then
+            echo "  WARNING: could not chgrp $TEXTFILE_DIR to 'homelab'."
+            echo "           Services running as homelab (the agent, the Mojolicious"
+            echo "           apps) will publish NO metrics from this host."
+        fi
+        chmod 2775 "$TEXTFILE_DIR" 2>/dev/null \
+            || echo "  WARNING: could not chmod $TEXTFILE_DIR -- metrics may not be writable."
+        # Say what the state ended up as, so a wrong answer is visible in the
+        # install output instead of six weeks later in a missing graph.
+        echo "  textfile collector: $TEXTFILE_DIR ($(stat -c '%U:%G %a' "$TEXTFILE_DIR" 2>/dev/null || echo '?'))"
         DROPIN_DIR=/etc/systemd/system/prometheus-node-exporter.service.d
         mkdir -p "$DROPIN_DIR"
         install -m 644 "$SHARE_DIR/systemd/prometheus-node-exporter-textfile.conf" \

@@ -1,3 +1,9 @@
+homelab-prometheus (0.7.2) unstable; urgency=medium
+
+  * Release v0.7.2
+
+ -- Gardner <gardner@homelab>  Thu, 29 Oct 2026 12:25:10 -0500
+
 homelab-prometheus (0.7.1) unstable; urgency=medium
 
   * Release v0.7.1

@@ -12,14 +12,33 @@
 # durably stored, the host is locked out PERMANENTLY and silently. It cannot
 # re-login, and nothing retries except the refresh that can no longer succeed.
 #
-# It runs under hypnotoad with TWO workers, and both run the heartbeat timer
-# against the same file. When their timers collide, one worker's refresh
-# consumes the token while the other is still holding it; last-writer-wins on
-# the file does the rest. That is why this strikes a handful of hosts at
-# apparently random times (14 of 51 over ~10 days, 2026-10-29) rather than all
-# at once -- and why re-enrolling only resets the clock. The real fix is in
-# homelab-agent: one heartbeat owner, or a lock around rotation, plus a
-# recovery path. See post-cutover item 36.
+# THE CAUSE -- corrected 2026-10-29. The first diagnosis written here was that
+# hypnotoad's two workers raced the token over one file. That was WRONG:
+# homelab-agent 0.1.7 had already made the heartbeat a single owner, with a
+# per-firing flock and a fresh read of the credential each cycle, and 0.1.8 was
+# deployed fleet-wide. Reading that code is what ruled the race out.
+#
+# What actually happens is simpler and cannot be fixed on the client at all:
+# the server COMMITS the rotation and the client never learns the result. A
+# request timeout, a reset connection, or the process being killed between the
+# server's COMMIT and the agent's write to disk all land in the same place --
+# the old token is revoked, the new one was never received. That is why the 14
+# casualties of 2026-10-29 clustered around package rollouts, which is exactly
+# when responses get lost.
+#
+# FIXED, in three parts (post-cutover item 37):
+#   * homelab-api 0.1.63 + migration 020 -- rotation is one transaction, and a
+#     consumed token replayed within jwt.refresh_grace_seconds (300) returns
+#     THE SAME successor, so a client that lost the response just retries.
+#     Verified live by install-orchestrators/verify-refresh-grace.sh.
+#   * homelab-agent 0.1.9 -- refreshes within an hour of real expiry instead of
+#     every 60s: ~1 rotation a day per host, not ~1440. Most of the fix is that
+#     one number.
+#   * homelab-agent 0.1.9 + homelab-prometheus 0.7.1 -- agent health metrics and
+#     alert rules, so this stops being invisible for four days.
+#
+# This tool remains the repair for a host that is ALREADY locked out, and the
+# sweep after any agent rollout.
 #
 # HOW TO SPOT IT. credential.yml's mtime: a healthy agent rewrites it every
 # 60s, so anything older than a couple of minutes is wedged. Note that the
@@ -55,7 +74,7 @@ for a in "$@"; do
         --stale)   WANT="stale" ;;
         --dry-run) DRY=1 ;;
         --force)   FORCE=1 ;;
-        --help|-h) sed -n '2,42p' "$0"; exit 0 ;;
+        --help|-h) sed -n '2,62p' "$0"; exit 0 ;;
         *)         WANT="$WANT $a" ;;
     esac
 done
