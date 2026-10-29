@@ -316,6 +316,21 @@ sub startup ($self) {
     $r->post('/internal/v1/domains/:domain/dkim/:selector/retire'   => [domain => qr/[^\/]+/, selector => qr/[^\/]+/])->to('dkim#retire');
     $r->delete('/internal/v1/domains/:domain/dkim/:selector'        => [domain => qr/[^\/]+/, selector => qr/[^\/]+/])->to('dkim#cancel');
 
+    # --- DMARC aggregate report review (site_admin) ----------------------
+    # Read-only by design: reports are fetched by homelab-dmarc-ingest.timer,
+    # not on request, so nothing here can trigger a mailbox fetch and a slow
+    # or unreachable IMAP server can never make these endpoints hang.
+    #
+    # Paths are /internal/v1/dmarc/* rather than /internal/v1/domains/dmarc/*
+    # so homelab-api can gateway them as /api/v1/dmarc/* -- a sibling of
+    # /api/v1/domains/*, not a child of it. These are a per-domain feedback
+    # feed, not another attribute of a domain row.
+    $r->get('/internal/v1/dmarc/status')  ->to('dmarc#status');
+    $r->get('/internal/v1/dmarc/summary') ->to('dmarc#summary');
+    $r->get('/internal/v1/dmarc/sources') ->to('dmarc#sources');
+    $r->get('/internal/v1/dmarc/reports') ->to('dmarc#reports');
+    $r->get('/internal/v1/dmarc/reports/:id' => [id => qr/\d+/])->to('dmarc#report');
+
     # Restart-debounce timer: fires every 10s, but only actually restarts
     # pdns if a write was marked >=10s ago (the debounce window -- lets
     # one composite "add domain" operation's several writes settle

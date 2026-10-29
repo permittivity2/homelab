@@ -164,6 +164,10 @@ sub startup ($self) {
     $r->post('/admin/dns/records')     ->to('account#admin_dns_record_set');
     $r->post('/admin/dns/records/delete')->to('account#admin_dns_record_delete');
     # Fleet status dashboard (read-only), site_admin.
+    $r->get('/admin/dmarc/status')     ->to('account#admin_dmarc_status');
+    $r->get('/admin/dmarc/summary')    ->to('account#admin_dmarc_summary');
+    $r->get('/admin/dmarc/sources')    ->to('account#admin_dmarc_sources');
+    $r->get('/admin/dmarc/reports')    ->to('account#admin_dmarc_reports');
     $r->get('/admin/fleet/hosts')      ->to('account#admin_fleet_hosts');
     $r->get('/admin/fleet/mismatches') ->to('account#admin_fleet_mismatches');
     $r->get('/admin/topology')         ->to('account#admin_topology');
@@ -1182,6 +1186,45 @@ sub admin_fleet_hosts ($c) {
     return $c->render(json => [], status => 403) unless $email;
     return $c->render(json => (_api_get($c, $jwt, '/api/v1/admin/agent/hosts') // []));
 }
+# --- DMARC aggregate report review (site_admin) -----------------------
+# Thin forwards to homelab-api's /api/v1/dmarc/* (backed by
+# homelab-domain-admin). Read-only: there is no endpoint here that triggers
+# a mailbox fetch -- that is a timer on the domain-admin hosts.
+#
+# Query parameters are rebuilt from scratch rather than passed through, so
+# nothing a browser sends can reshape the upstream URL.
+sub _dmarc_days ($c) {
+    my $d = $c->param('days') // 30;
+    return ($d =~ /^\d+$/ && $d > 0 && $d <= 3650) ? $d + 0 : 30;
+}
+sub admin_dmarc_status ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    return $c->render(json => (_api_get($c, $jwt, '/api/v1/dmarc/status') // {}));
+}
+sub admin_dmarc_summary ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $path = '/api/v1/dmarc/summary?days=' . _dmarc_days($c);
+    return $c->render(json => (_api_get($c, $jwt, $path) // { domains => [] }));
+}
+sub admin_dmarc_sources ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $path = '/api/v1/dmarc/sources?days=' . _dmarc_days($c);
+    $path .= '&failing=1' if $c->param('failing');
+    my $domain = $c->param('domain');
+    $path .= '&domain=' . Mojo::Util::url_escape($domain)
+        if defined $domain && $domain =~ /^[A-Za-z0-9.-]{1,253}$/;
+    return $c->render(json => (_api_get($c, $jwt, $path) // { sources => [] }));
+}
+sub admin_dmarc_reports ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $path = '/api/v1/dmarc/reports?days=' . _dmarc_days($c);
+    return $c->render(json => (_api_get($c, $jwt, $path) // { reports => [] }));
+}
+
 sub admin_fleet_mismatches ($c) {
     my ($email, $jwt) = _admin_auth($c);
     return $c->render(json => [], status => 403) unless $email;

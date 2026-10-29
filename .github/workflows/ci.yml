@@ -52,7 +52,9 @@ jobs:
             libmojolicious-perl libyaml-libyaml-perl libmojo-pg-perl \
             libdbi-perl libdbd-pg-perl libminion-perl postgresql-client \
             libcrypt-jwt-perl libcryptx-perl libcrypt-argon2-perl libcrypt-urandom-perl \
-            libimage-magick-perl libarchive-zip-perl
+            libimage-magick-perl libarchive-zip-perl \
+            libemail-mime-perl libxml-libxml-perl libmail-imapclient-perl \
+            libio-socket-ssl-perl
       - name: Run every package's t/*.t (skips packages with none)
         # Only requires t/ — several packages (pgbouncer, database) ship
         # a script/ + t/ with no lib/ at all (no Perl modules, just a

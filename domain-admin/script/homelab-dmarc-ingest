@@ -1,0 +1,197 @@
+#!/usr/bin/env perl
+# Fetch DMARC aggregate (rua) reports from the reporting mailbox and store
+# them in domainadmin.dmarc_{reports,records}.
+#
+# Reports arrive as gzipped or zipped XML, one per reporting receiver per
+# domain per day, to the address every zone's _dmarc rua= points at. See
+# migrations/008-dmarc-reports.sql for what the tables mean and why the
+# alignment results are not the same thing as the raw auth results.
+#
+# This file is deliberately only plumbing -- IMAP, the claim, and the
+# inserts. All parsing lives in Homelab::DomainAdmin::DmarcReport so it can
+# be tested without a mailbox or a database (t/dmarc-report.t).
+#
+# Runs from homelab-dmarc-ingest.timer on every domain-admin host; exactly
+# one host does the work per tick.
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Homelab::Common::Config        qw(load_config);
+use Homelab::Common::DB            qw(runtime_pg);
+use Homelab::DomainAdmin::DmarcReport qw(extract_reports parse_report);
+use IO::Socket::SSL;
+use Mail::IMAPClient;
+use Mojo::JSON                     qw(encode_json);
+use Sys::Hostname                  qw(hostname);
+
+my $VERBOSE = $ENV{HOMELAB_DMARC_VERBOSE} ? 1 : 0;
+sub say_v { print "  @_\n" if $VERBOSE }
+sub say_i { print "@_\n" }
+
+my $config = load_config('HOMELAB_DOMAIN_ADMIN_CONFIG', '/etc/homelab/domain-admin/config.yml');
+my $cfg    = $config->{dmarc_reports} // {};
+
+# Absent/disabled config is NOT an error. The timer is enabled on every
+# domain-admin host, but only a deployment that has pointed its zones at a
+# reporting mailbox has anything to fetch -- so exit quietly rather than
+# leaving the unit failed on hosts where this was never set up.
+unless ($cfg->{enabled} && $cfg->{imap_host} && $cfg->{user} && $cfg->{password}) {
+    say_v 'dmarc_reports not configured/enabled -- nothing to do';
+    exit 0;
+}
+
+my $db = runtime_pg(%{ $config->{database} })->db;
+
+# --- single-runner claim ---------------------------------------------------
+# Six hosts run this timer against ONE mailbox. Without a gate they would all
+# fetch, parse and move the same messages, and the IMAP moves would race.
+# Same FOR UPDATE SKIP LOCKED idiom this package already uses for the pdns
+# restart debounce: whoever gets the row works, everyone else exits 0.
+# Holding the transaction for the whole run IS the lock -- it is released
+# automatically if this process dies, so a crash cannot wedge the next tick.
+my $tx = $db->begin;
+unless ($db->query('SELECT id FROM domainadmin.dmarc_ingest_lock WHERE id = TRUE FOR UPDATE SKIP LOCKED')->hash) {
+    say_v 'another host holds the ingest claim -- skipping this tick';
+    exit 0;
+}
+
+my %stat = (seen => 0, reports => 0, records => 0, skipped => 0, failed => 0);
+
+my $imap = eval { _imap_connect($cfg) };
+unless ($imap) {
+    my $why = $@ || 'unknown error';
+    # Release the claim before dying so a transient IMAP outage does not
+    # also block the next tick.
+    $tx->rollback;
+    die "homelab-dmarc-ingest: IMAP connect failed: $why";
+}
+
+eval {
+    $imap->select('INBOX') or die 'select INBOX: ' . $imap->LastError . "\n";
+    my @uids = @{ $imap->messages || [] };
+    say_v sprintf 'INBOX: %d message(s)', scalar @uids;
+
+    for my $uid (@uids) {
+        $stat{seen}++;
+        my $raw = eval { $imap->message_string($uid) };
+        unless (defined $raw) { $stat{failed}++; say_i "  uid $uid: could not fetch"; next }
+
+        my @xml = eval { extract_reports($raw) };
+        if ($@) { $stat{failed}++; say_i "  uid $uid: extract failed: $@"; next }
+
+        # No report attachment: a bounce, a probe, a notification, a human
+        # mail. Left in INBOX untouched and reported -- silently moving mail
+        # we do not understand is how real mail disappears.
+        unless (@xml) { $stat{skipped}++; say_v "uid $uid: no report attachment, left in place"; next }
+
+        my $all_ok = 1;
+        for my $x (@xml) {
+            my $parsed = eval { parse_report($x) };
+            if ($@) { $all_ok = 0; $stat{failed}++; say_i "  uid $uid: parse failed: $@"; next }
+            my ($r, $n) = eval { _store($db, $parsed) };
+            if ($@) { $all_ok = 0; $stat{failed}++; say_i "  uid $uid: store failed: $@"; next }
+            $stat{reports} += $r; $stat{records} += $n;
+        }
+
+        # Only move once EVERY attachment stored cleanly, so a partial
+        # failure stays in INBOX for the next tick to retry.
+        _file_away($imap, $uid, $cfg) if $all_ok;
+    }
+};
+my $err = $@;
+eval { $imap->logout };
+
+my $note = sprintf 'seen=%d reports+=%d records+=%d skipped=%d failed=%d',
+    @stat{qw(seen reports records skipped failed)};
+$db->query(
+    'UPDATE domainadmin.dmarc_ingest_lock SET last_run = NOW(), last_host = ?, last_note = ? WHERE id = TRUE',
+    hostname(), ($err ? "ERROR: $err" : $note),
+);
+$tx->commit;
+
+die "homelab-dmarc-ingest: $err" if $err;
+say_i "homelab-dmarc-ingest: $note";
+exit 0;
+
+# --------------------------------------------------------------------------
+
+sub _imap_connect {
+    my ($c) = @_;
+    # TLS IS verified here, unlike homelab-mailbridge which passes
+    # SSL_verify_mode => 0 with a comment about dovecot's self-signed cert.
+    # That comment predates the certificate work -- the mail name now carries
+    # a real Let's Encrypt cert, so the only thing that would fail is the
+    # hostname check against an IP, which SSL_verifycn_name answers without
+    # giving up verification. Confirmed against the live pool 2026-10-28.
+    my $imap = Mail::IMAPClient->new(
+        Server   => $c->{imap_host},
+        Port     => $c->{imap_port} // 993,
+        Ssl      => [
+            SSL_verifycn_name   => ($c->{verify_name} // 'mail.mailmasker.org'),
+            SSL_verifycn_scheme => 'imap',
+        ],
+        User     => $c->{user},
+        Password => $c->{password},
+        Uid      => 1,
+        # Peek: fetching must not set \Seen. Progress is tracked by MOVING a
+        # stored report out of INBOX, not by the flag, and flipping \Seen
+        # would make the mailbox useless to a human looking at what arrived.
+        Peek     => 1,
+    ) or die(($@ || $! || 'unknown error') . "\n");
+    return $imap;
+}
+
+sub _store {
+    my ($db, $parsed) = @_;
+    my $r = $parsed->{report};
+
+    my $row = $db->query(
+        q{INSERT INTO domainadmin.dmarc_reports
+            (org_name, org_email, report_id, date_begin, date_end,
+             policy_domain, policy_p, policy_sp, policy_pct, policy_adkim, policy_aspf)
+          VALUES (?, ?, ?, to_timestamp(?), to_timestamp(?), ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (org_name, report_id) DO NOTHING
+          RETURNING id},
+        @{$r}{qw(org_name org_email report_id date_begin date_end
+                 policy_domain policy_p policy_sp policy_pct policy_adkim policy_aspf)},
+    )->hash;
+
+    # Already stored -- the common case on a re-offer (a retry, a second
+    # host, a re-delivered message). Deliberately not an error.
+    return (0, 0) unless $row;
+
+    my $n = 0;
+    for my $rec (@{ $parsed->{records} }) {
+        $db->query(
+            q{INSERT INTO domainadmin.dmarc_records
+                (report_id, source_ip, message_count, disposition,
+                 dkim_result, spf_result, header_from, auth_results)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)},
+            $row->{id},
+            @{$rec}{qw(source_ip message_count disposition dkim_result spf_result header_from)},
+            encode_json($rec->{auth_results}),
+        );
+        $n++;
+    }
+    return (1, $n);
+}
+
+# Move a fully-stored report out of INBOX so the mailbox does not grow
+# without bound and each tick only reads new mail. A failed move is logged
+# but not fatal: the ON CONFLICT key makes a re-read next tick harmless,
+# just wasted work.
+sub _file_away {
+    my ($imap, $uid, $c) = @_;
+    my $folder = $c->{processed_folder} // 'DMARC/Processed';
+    unless ($imap->exists($folder)) {
+        $imap->create($folder)
+            or do { say_i "  could not create $folder: " . $imap->LastError; return };
+        $imap->subscribe($folder);
+    }
+    $imap->move($folder, $uid) or say_i "  could not move uid $uid to $folder: " . $imap->LastError;
+    $imap->expunge;
+    return;
+}

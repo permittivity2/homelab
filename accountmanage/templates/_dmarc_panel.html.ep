@@ -1,0 +1,75 @@
+<div class="dmarc-view" data-dmarc-root>
+  <div class="card">
+    <h2>DMARC reports <span class="hint">aggregate (rua) feedback from receiving mail providers</span></h2>
+
+    <%# Ingest health comes FIRST and deliberately. An empty summary because
+        nothing has fetched in a week looks identical to "no problems", which
+        is the worst possible failure mode for a compliance view -- so the
+        freshness of the data is stated before the data. %>
+    <div id="dmarc-status" class="dmarc-status"><p class="muted">Loading…</p></div>
+
+    <div class="field" style="max-width:16rem;">
+      <label for="dmarc-days">Window</label>
+      <select id="dmarc-days">
+        <option value="7">last 7 days</option>
+        <option value="30" selected>last 30 days</option>
+        <option value="90">last 90 days</option>
+        <option value="365">last year</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>By domain <span class="hint">is any of our own mail failing alignment?</span></h2>
+    <div class="scrollbox">
+      <table class="dmarc-table">
+        <thead><tr>
+          <th>Domain</th><th>Policy</th><th class="num">Messages</th>
+          <th class="num">Aligned</th><th class="num">Failing</th>
+          <th class="num">Quarantined<br>/rejected</th>
+          <th class="num">Reporters</th><th class="num">Sources</th>
+        </tr></thead>
+        <tbody id="dmarc-summary-body"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">
+      “Aligned” and “Failing” are DMARC’s own evaluation — a message can carry a
+      valid DKIM signature and still fail if the signing domain doesn’t align
+      with the From header.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>By sending source <span class="hint">who is sending mail as us</span></h2>
+    <label class="dmarc-inline"><input type="checkbox" id="dmarc-only-failing" checked> only sources with failures</label>
+    <div class="scrollbox">
+      <table class="dmarc-table">
+        <thead><tr>
+          <th>Source IP</th><th>Domain</th><th class="num">Messages</th>
+          <th class="num">Aligned</th><th class="num">Failing</th>
+          <th class="num">Reporters</th><th>Last seen</th>
+        </tr></thead>
+        <tbody id="dmarc-sources-body"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">
+      A source that isn’t ours, sending volume that fails, is the signal to
+      look at before moving any domain from <code>quarantine</code> to
+      <code>reject</code>. Our own senders should appear here with everything
+      aligned.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Reports received</h2>
+    <div class="scrollbox">
+      <table class="dmarc-table">
+        <thead><tr>
+          <th>Reporter</th><th>Domain</th><th>Window</th>
+          <th class="num">Messages</th><th class="num">Records</th><th>Ingested</th>
+        </tr></thead>
+        <tbody id="dmarc-reports-body"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>

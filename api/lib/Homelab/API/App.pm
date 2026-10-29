@@ -243,6 +243,18 @@ sub startup ($self) {
     $r->any('/api/v1/domains' => sub ($c) { $self->_gateway($c, 'homelab-domain-admin', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
     $r->any('/api/v1/domains/*capture' => sub ($c) { $self->_gateway($c, 'homelab-domain-admin', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
 
+    # DMARC aggregate report review, also backed by homelab-domain-admin but
+    # a SIBLING path of /api/v1/domains rather than a child: these are the
+    # per-domain feedback feed, not another attribute of a domain row, and
+    # keeping them separate means the domains gateway's placeholder rules
+    # (see above) do not have to grow a special case.
+    #
+    # Same two-route shape and for the same reason -- "*capture" alone would
+    # not match a bare "/api/v1/dmarc". Authorization is domain-admin's
+    # (site_admin via authenticated_email); the gateway only forwards.
+    $r->any('/api/v1/dmarc' => sub ($c) { $self->_gateway($c, 'homelab-domain-admin', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+    $r->any('/api/v1/dmarc/*capture' => sub ($c) { $self->_gateway($c, 'homelab-domain-admin', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+
     # homelab-worker's own routes are already /internal/v1/jobs/... --
     # same strip-"/api/v1"-then-reprepend-"/internal/v1" transform as
     # /api/v1/domains above (client /api/v1/jobs -> backend

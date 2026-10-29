@@ -1,0 +1,24 @@
+[Unit]
+Description=Ingest DMARC aggregate reports from the reporting mailbox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Type=oneshot with RemainAfterExit DEFAULTED OFF, deliberately. A oneshot
+# that stays "active" after exiting breaks timers that key off the unit's
+# activity -- homelab-certsync shipped exactly that combination and its
+# hourly timer silently never fired again. The timer below uses OnCalendar
+# so it is not affected either way, but leaving RemainAfterExit off keeps
+# `systemctl status` honest about whether a run is in progress.
+Type=oneshot
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_DOMAIN_ADMIN_CONFIG=/etc/homelab/domain-admin/config.yml"
+ExecStart=/usr/bin/homelab-dmarc-ingest
+# The mailbox and the database are both remote; neither should be able to
+# wedge the unit indefinitely.
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-dmarc-ingest

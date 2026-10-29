@@ -321,6 +321,25 @@ SUDOERS
             systemctl start homelab-domain-admin || echo "WARNING: homelab-domain-admin failed to start -- check 'systemctl status homelab-domain-admin' by hand."
         fi
 
+        # DMARC aggregate report ingest. The timer is enabled unconditionally
+        # because dh_installsystemd runs with --no-enable, but the SCRIPT is a
+        # quiet no-op until dmarc_reports.enabled is set in config.yml -- so
+        # enabling it here costs nothing on a host that is not collecting
+        # reports, and means a host that later turns it on does not also have
+        # to remember to enable a unit. Every domain-admin host gets the
+        # timer; a database claim makes exactly one of them do the work per
+        # tick (see migrations/008-dmarc-reports.sql).
+        systemctl enable homelab-dmarc-ingest.timer >/dev/null 2>&1 || true
+        systemctl start homelab-dmarc-ingest.timer >/dev/null 2>&1 \
+            || echo "WARNING: could not start homelab-dmarc-ingest.timer -- check 'systemctl status homelab-dmarc-ingest.timer'."
+        if ! grep -qE '^dmarc_reports:' "$CONFIG_FILE" 2>/dev/null; then
+            echo "  NOTE: DMARC report ingest is installed but not configured."
+            echo "        Add the dmarc_reports: block (see"
+            echo "        /usr/share/homelab-domain-admin/config/domain-admin.example.yml)"
+            echo "        with enabled: true to start collecting; review in"
+            echo "        myaccount -> Admin -> DMARC."
+        fi
+
         db_stop
 
         echo ""

@@ -53,6 +53,35 @@ dkim:
   # clearly; all other domain-admin functions still work).
   key_encryption_key: YOUR_BASE64_KEK_HERE
 
+# DMARC aggregate (rua) report ingest -- homelab-dmarc-ingest.timer.
+#
+# Every zone's _dmarc record points rua= at a mailbox; this fetches from that
+# mailbox, parses the gzipped/zipped XML and stores it in
+# domainadmin.dmarc_{reports,records}. Reviewed in myaccount under Admin ->
+# DMARC (site_admin). See migrations/008-dmarc-reports.sql.
+#
+# enabled: false (or any missing field below) makes the timer a quiet no-op,
+# so the unit does not sit failed on hosts where this was never set up.
+#
+# The account is a service account, NOT a human's mailbox -- create it with
+#   homelab-cli admin users create-service-account
+# and point every zone's rua= at it. It needs no roles.
+#
+# verify_name: TLS *is* verified. Because imap_host is an IP (the haproxy
+# mail VIP), the certificate's name has to be stated here rather than
+# inferred from the connect address. It is the mail hostname on the
+# certificate, not the host being dialled.
+dmarc_reports:
+  enabled: false
+  imap_host: 10.50.2.140
+  imap_port: 993
+  verify_name: mail.mailmasker.org
+  user: dmarc-reports@mailmasker.org
+  password: YOUR_DMARC_MAILBOX_PASSWORD_HERE
+  # Fully-stored reports are moved here so each run only reads new mail.
+  # Anything WITHOUT a report attachment is left in INBOX untouched.
+  processed_folder: DMARC/Processed
+
 # What this instance announces itself as in homelab-api's service
 # registry -- host/port only, deliberately no public_base_url: nothing
 # external ever connects to this directly.

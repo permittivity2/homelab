@@ -235,6 +235,7 @@
         <button type="button" data-atab="services">🧩 Services</button>
         <button type="button" data-atab="topology">🗺️ Topology</button>
         <button type="button" data-atab="ha">🔺 HA</button>
+        <button type="button" data-atab="dmarc">📮 DMARC reports</button>
 % if ($has_metrics) {
         <button type="button" data-atab="metrics">📈 Metrics</button>
 % }
@@ -586,6 +587,13 @@
           </div>
           <p class="muted" style="font-size:0.8rem;margin:0.6rem 0 0;">Nodes are host/service instances (live agent data + declared ingress); edges are proxy/gateway/mail/DNS connections. Health from the fleet agents. Metrics-on-hover and remote actions (reboot, service control) are planned once Prometheus lands.</p>
         </div>
+      </div>
+      <%# Unconditional for site_admin, unlike metrics (which needs a
+          configured Prometheus): these endpoints answer honestly whether
+          or not the ingest is set up, and the panel leads with that state
+          instead of the tab silently not existing. %>
+      <div class="admin-panel" data-apanel="dmarc">
+        %= include '_dmarc_panel'
       </div>
 % if ($has_metrics) {
       <div class="admin-panel" data-apanel="metrics">

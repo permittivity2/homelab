@@ -220,6 +220,19 @@
     .metrics-hosts th:not(:first-child), .metrics-hosts td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
     .metrics-hosts td.warm { color: var(--warning); }
     .metrics-hosts td.hot { color: var(--error); font-weight: var(--weight-semibold); }
+    /* DMARC review tables. Numeric columns are opted in with .num rather
+       than "every column but the first" like .metrics-hosts, because these
+       tables lead with two text columns (source IP + domain). */
+    .dmarc-table { width: 100%; border-collapse: collapse; font-size: var(--app-sm); }
+    .dmarc-table th, .dmarc-table td { text-align: left; padding: 0.3rem var(--space-2); border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .dmarc-table th.num, .dmarc-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .dmarc-table td.bad { color: var(--error); font-weight: var(--weight-semibold); }
+    .dmarc-table td.ok { color: var(--ok); }
+    .dmarc-table td.mono { font-family: var(--font-mono, monospace); }
+    .dmarc-status { margin: 0 0 var(--space-3); font-size: var(--app-sm); }
+    .dmarc-status.stale { color: var(--warning); }
+    .dmarc-status.never { color: var(--error); }
+    .dmarc-inline { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--app-sm); color: var(--muted); margin-bottom: var(--space-2); }
     .metrics-grafana { margin-top: var(--space-6); }
     .metrics-grafana-head { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-1); }
     .metrics-grafana-head .hint { color: var(--muted); font-size: var(--app-xs); }
@@ -946,6 +959,135 @@
       if (tab) tab.addEventListener('click', load);
       if ((location.hash || '').indexOf('admin:ha') >= 0) load();
     })();
+
+      // --- DMARC aggregate report review (admin) ----------------------
+      // Four read-only fetches. Ingest freshness is rendered FIRST and
+      // treated as part of the data: an empty summary because nothing has
+      // fetched in days is indistinguishable from "no problems" unless the
+      // page says so.
+      (function () {
+        var root = document.querySelector('[data-dmarc-root]');
+        if (!root) return;
+        var daysSel = document.getElementById('dmarc-days');
+        var onlyBad = document.getElementById('dmarc-only-failing');
+        var inflight = false;
+
+        function num(n) { return (n === null || n === undefined) ? '—' : Number(n).toLocaleString(); }
+        function when(ts) {
+          if (!ts) return '—';
+          var d = new Date(ts.replace(' ', 'T'));
+          return isNaN(d) ? ts : d.toLocaleString();
+        }
+        function td(v, cls) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>'; }
+        function row(cells) { return '<tr>' + cells.join('') + '</tr>'; }
+        function empty(body, cols, msg) {
+          body.innerHTML = '<tr><td colspan="' + cols + '" class="muted">' + hlEsc(msg) + '</td></tr>';
+        }
+
+        function renderStatus(d) {
+          var el = document.getElementById('dmarc-status');
+          var ing = (d && d.ingest) || {}, store = (d && d.store) || {};
+          el.className = 'dmarc-status';
+          if (!ing.last_run) {
+            el.classList.add('never');
+            el.innerHTML = '<strong>The report ingest has never run.</strong> ' +
+              'Reports are collected by homelab-dmarc-ingest.timer on the domain-admin hosts; ' +
+              'it stays idle until <code>dmarc_reports.enabled</code> is set in that package’s config.';
+            return;
+          }
+          var age = (Date.now() - new Date(String(ing.last_run).replace(' ', 'T')).getTime()) / 3600000;
+          // 25h, not 1h: the timer is hourly but receivers only send daily,
+          // so "nothing new for an hour" is normal and must not look alarming.
+          if (!(age < 25)) el.classList.add('stale');
+          el.innerHTML = 'Last ingest ' + hlEsc(when(ing.last_run)) +
+            (ing.last_host ? ' on ' + hlEsc(ing.last_host) : '') +
+            (!(age < 25) ? ' — <strong>that is over a day ago</strong>' : '') +
+            '. ' + num(store.reports) + ' report(s) stored' +
+            (store.latest ? ', covering up to ' + hlEsc(when(store.latest)) : '') + '.' +
+            (ing.last_note ? ' <span class="muted">(' + hlEsc(ing.last_note) + ')</span>' : '');
+        }
+
+        function renderSummary(d) {
+          var body = document.getElementById('dmarc-summary-body');
+          var rows = (d && d.domains) || [];
+          if (!rows.length) return empty(body, 8, 'No reports in this window yet.');
+          body.innerHTML = rows.map(function (r) {
+            return row([
+              td(hlEsc(r.domain || '—')),
+              td(hlEsc(r.policy_p || '—')),
+              td(num(r.messages), 'num'),
+              td(num(r.aligned), 'num ok'),
+              td(num(r.failing), 'num' + (Number(r.failing) > 0 ? ' bad' : '')),
+              td(num(r.acted_on), 'num' + (Number(r.acted_on) > 0 ? ' bad' : '')),
+              td(num(r.reporters), 'num'),
+              td(num(r.sources), 'num')
+            ]);
+          }).join('');
+        }
+
+        function renderSources(d) {
+          var body = document.getElementById('dmarc-sources-body');
+          var rows = (d && d.sources) || [];
+          if (!rows.length) {
+            return empty(body, 7, onlyBad && onlyBad.checked
+              ? 'No sending source failed DMARC in this window.'
+              : 'No sending sources recorded in this window yet.');
+          }
+          body.innerHTML = rows.map(function (r) {
+            return row([
+              td(hlEsc(r.source_ip || '—'), 'mono'),
+              td(hlEsc(r.domain || '—')),
+              td(num(r.messages), 'num'),
+              td(num(r.aligned), 'num ok'),
+              td(num(r.failing), 'num' + (Number(r.failing) > 0 ? ' bad' : '')),
+              td(num(r.reporters), 'num'),
+              td(hlEsc(when(r.last_seen)))
+            ]);
+          }).join('');
+        }
+
+        function renderReports(d) {
+          var body = document.getElementById('dmarc-reports-body');
+          var rows = (d && d.reports) || [];
+          if (!rows.length) return empty(body, 6, 'Nothing ingested yet.');
+          body.innerHTML = rows.map(function (r) {
+            return row([
+              td(hlEsc(r.org_name || '—')),
+              td(hlEsc(r.policy_domain || '—')),
+              td(hlEsc(when(r.date_begin)) + ' → ' + hlEsc(when(r.date_end))),
+              td(num(r.messages), 'num'),
+              td(num(r.records), 'num'),
+              td(hlEsc(when(r.ingested_at)))
+            ]);
+          }).join('');
+        }
+
+        function getJSON(path) {
+          return fetch(path, { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .catch(function () { return null; });
+        }
+
+        function load() {
+          if (inflight) return;
+          inflight = true;
+          var days = (daysSel && daysSel.value) || '30';
+          var q = '?days=' + encodeURIComponent(days);
+          var sq = q + ((onlyBad && onlyBad.checked) ? '&failing=1' : '');
+          Promise.all([
+            getJSON('/admin/dmarc/status').then(renderStatus),
+            getJSON('/admin/dmarc/summary' + q).then(renderSummary),
+            getJSON('/admin/dmarc/sources' + sq).then(renderSources),
+            getJSON('/admin/dmarc/reports' + q).then(renderReports)
+          ]).then(function () { inflight = false; }, function () { inflight = false; });
+        }
+
+        if (daysSel) daysSel.addEventListener('change', load);
+        if (onlyBad) onlyBad.addEventListener('change', load);
+        var tab = document.querySelector('.admin-tabs button[data-atab="dmarc"]');
+        if (tab) tab.addEventListener('click', load);
+        if ((location.hash || '').indexOf('admin:dmarc') >= 0) load();
+      })();
 
     // --- Service accounts / invite quota / a user's sessions (admin) --
     (function () {

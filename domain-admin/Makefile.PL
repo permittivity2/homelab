@@ -18,7 +18,7 @@ WriteMakefile(
         'Test::More' => '1.3',
         'Test::Mojo' => '0.0',
     },
-    EXE_FILES    => ['script/homelab-domain-admin', 'script/homelab-domain-admin-migrate'],
+    EXE_FILES    => ['script/homelab-domain-admin', 'script/homelab-domain-admin-migrate', 'script/homelab-dmarc-ingest'],
     DIR          => [],
     dist         => { COMPRESS => 'gzip -9f', SUFFIX => '.gz' },
     clean        => { FILES    => 'Homelab-DomainAdmin-* *.deb *.changes *.buildinfo' },
