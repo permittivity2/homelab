@@ -15,6 +15,7 @@ has 'api_base';
 has 'invite_config';
 has 'mailer_config';
 has 'device_config';
+has 'device_secret_cache';
 
 sub startup ($self) {
     # Templates land at /usr/share/homelab-invite/templates, not next to the
@@ -55,12 +56,6 @@ sub startup ($self) {
     # postinst appends the block, but a hand-maintained config file may
     # not have it and must not stop the service from starting.
     $self->device_config($config->{device_setup} // {});
-    unless (($self->device_config->{token_secret} // '') =~ /^.+$/
-            && ($self->device_config->{token_secret} // '') !~ /^YOUR_/) {
-        $self->log->warn('homelab-invite: device_setup.token_secret is unset -- '
-            . 'the "add to your phone" links will not be offered '
-            . '(run dpkg-reconfigure homelab-invite, or add the key by hand)');
-    }
 
     mount_health_route($self, check => sub {
         $self->pg->db->query('SELECT 1');
@@ -85,6 +80,63 @@ sub startup ($self) {
     # unlike domain-admin's own version of this helper) -- several
     # routes below need a per-request "is this ALSO a site_admin"
     # check without a second introspect() round trip.
+    # The HMAC key behind the device-setup links.
+    #
+    # IT COMES FROM THE DATABASE, not from this host's config file, and
+    # that is the whole point: homelab-invite runs as a POOL (three nodes
+    # behind one webproxy vhost, round-robined per request). A key
+    # generated per host would verify on about one request in three --
+    # intermittently, which is the worst way for a link to fail. The
+    # database is the one thing all three nodes already share.
+    #
+    # Fetched lazily and cached, not read at startup: an app that refuses
+    # to boot because the database was briefly unreachable is a much
+    # worse failure than a setup link that is missing for a minute.
+    $self->helper(device_setup_secret => sub ($c) {
+        # An explicitly configured key wins, for an operator who wants to
+        # pin it (to rotate on their own schedule, or to keep it out of
+        # the database entirely). Blank or the shipped placeholder means
+        # "use the shared one".
+        my $pinned = $self->device_config->{token_secret};
+        return $pinned if defined $pinned && length $pinned && $pinned !~ /^YOUR_/;
+
+        return $self->device_secret_cache if $self->device_secret_cache;
+
+        my $db = eval { $self->pg->db } or do {
+            $self->log->warn('homelab-invite: no database handle for the device-setup secret');
+            return undef;
+        };
+        my $sel = q{SELECT secret FROM invite.app_secrets WHERE name = 'device_setup'};
+        my $row = eval { $db->query($sel)->hash };
+        unless ($row && $row->{secret}) {
+            my $fresh = eval {
+                open(my $fh, '<', '/dev/urandom') or die "cannot open /dev/urandom: $!\n";
+                read($fh, my $bytes, 32) == 32 or die "short read from /dev/urandom\n";
+                close $fh;
+                unpack 'H*', $bytes;
+            };
+            unless ($fresh) {
+                $self->log->warn("homelab-invite: could not generate a device-setup secret: $@");
+                return undef;
+            }
+            # ON CONFLICT DO NOTHING + re-SELECT: two pool nodes starting
+            # at the same moment must end up with ONE secret, not two.
+            eval {
+                $db->query(q{INSERT INTO invite.app_secrets (name, secret)
+                             VALUES ('device_setup', ?) ON CONFLICT (name) DO NOTHING}, $fresh);
+            };
+            $row = eval { $db->query($sel)->hash };
+        }
+        unless ($row && $row->{secret}) {
+            $self->log->warn('homelab-invite: device-setup secret unavailable -- '
+                . 'the "add to your phone" links will not be offered '
+                . '(is migration 002 applied?)');
+            return undef;
+        }
+        $self->device_secret_cache($row->{secret});
+        return $row->{secret};
+    });
+
     # The signed, expiring URL that lets a brand-new account be added to a
     # phone that has never logged in. Returns undef when this install has
     # no signing secret, which every caller treats as "do not offer the
@@ -96,9 +148,8 @@ sub startup ($self) {
     # minutes. It discloses an email address and nothing else.
     $self->helper(setup_url_for => sub ($c, $email) {
         my $dc     = $self->device_config;
-        my $secret = $dc->{token_secret} // '';
-        return undef unless length $secret && $secret !~ /^YOUR_/;
-        my $days = $dc->{link_ttl_days} // 30;
+        my $secret = $c->device_setup_secret or return undef;
+        my $days   = $dc->{link_ttl_days} // 30;
         my $token = eval {
             issue_setup_token(secret => $secret, purpose => 'mail-device-setup',
                 subject => $email, ttl => $days * 86_400);
@@ -205,7 +256,7 @@ sub startup ($self) {
     # not behind a login. --------------------------------------------
     $r->get('/setup/mail')                       ->to('setup#page');
     $r->get('/setup/mail/apple.mobileconfig')    ->to('setup#apple_profile');
-    $r->get('/setup/mail/qr.svg')                ->to('setup#qr');
+    $r->get('/setup/mail/qr.svg')                ->to('setup#qr_code');
 
     $r->get('/invite/:token' => [token => qr/[^\/]+/])           ->to('invites#show');
     $r->post('/invite/:token/username' => [token => qr/[^\/]+/])  ->to('invites#check_username');

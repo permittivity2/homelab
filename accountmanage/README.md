@@ -53,6 +53,15 @@ that token in place of a session.
 capability, so letting a token reach it would let a lapsed one be traded
 for a fresh one indefinitely.
 
+**The signing key defaults to `session.secret`**, which is not laziness:
+myaccount is a three-node pool (`10.50.2.171/172/173`) and that is the one
+key already guaranteed identical across it — a cookie signed by one node
+has to validate on the next. A key generated per host would verify on
+about one request in three. Sharing it is safe because every signature
+commits to a `purpose` string, and cookie signing is a different algorithm
+over a different message. `device_setup.token_secret` overrides it, set
+identically on every node.
+
 What the token is worth: it names a mailbox. The profile behind it holds
 an email address and two public hostnames and **no password** (see
 `Homelab::Common::AppleProfile` for why that is non-negotiable rather than

@@ -73,10 +73,13 @@ device_setup:
   # protecting a credential. After it lapses the same setup page is
   # always available, signed in, from myaccount.
   link_ttl_days: 30
-  # HMAC secret for those links. Written by the postinst on install --
-  # if it is missing or still the placeholder, the links are simply not
-  # offered (the account still works; only the convenience is absent).
-  token_secret: YOUR_SETUP_TOKEN_SECRET_HERE
+  # HMAC secret for those links. LEAVE BLANK. This service runs as a
+  # three-node pool behind one vhost, so the key has to be the same on
+  # every node or a link verifies on roughly one request in three; blank
+  # means "use the shared one in invite.app_secrets", which the app
+  # creates on first use. Set a value here only to pin your own key --
+  # and then set the SAME value on every node in the pool.
+  token_secret:
   # Where a lapsed link sends someone instead.
   myaccount_url: https://myaccount.mailmasker.org/
   webmail_url: https://mail.mailmasker.org/

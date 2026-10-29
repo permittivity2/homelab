@@ -22,7 +22,7 @@ set -uo pipefail
 
 REPO="${REPO:-http://projects.thedude.vip/apt-homelab}"
 DIST="${DIST:-unstable}"
-FIRST="${FIRST:-0}"; LAST="${LAST:-67}"   # node NN -> 10.20.2.(144+NN)
+FIRST="${FIRST:-0}"; LAST="${LAST:-69}"   # node NN -> 10.20.2.(144+NN)
 PAR="${PAR:-20}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 

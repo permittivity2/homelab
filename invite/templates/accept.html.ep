@@ -148,9 +148,23 @@ document.getElementById('go').onclick = async function () {
     if (pw.length < 8) { errEl.textContent = 'Password must be at least 8 characters.'; return; }
     if (pw !== pw2) { errEl.textContent = 'The two passwords do not match.'; return; }
 
-    var res = await postJSON('/invite/' + TOKEN + '/accept', {
-        username: username, password: pw, password_confirm: pw2, recovery_email: recovery
-    });
+    // Creating the account sends two emails before it answers (the
+    // contact address and the new mailbox itself), each a real SMTP
+    // conversation -- so this request takes a few seconds. Say so,
+    // rather than leaving a dead button that invites a second click.
+    var goBtn = document.getElementById('go');
+    var goLabel = goBtn.textContent;
+    goBtn.disabled = true;
+    goBtn.textContent = 'Creating your account\u2026';
+    var res;
+    try {
+        res = await postJSON('/invite/' + TOKEN + '/accept', {
+            username: username, password: pw, password_confirm: pw2, recovery_email: recovery
+        });
+    } finally {
+        goBtn.disabled = false;
+        goBtn.textContent = goLabel;
+    }
     if (res.ok && res.body.ok) {
         // Replace only the CARD BODY. This used to overwrite document.body,
         // which threw away the page's own chrome (and now the shared logo and

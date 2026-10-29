@@ -38,11 +38,19 @@ my $EMAIL  = 'johnboy002@mailmasker.org';
                 myaccount_url => 'https://myaccount.mailmasker.org/',
             },
         });
+        # The real app resolves this from invite.app_secrets so every node
+        # in the pool agrees (see App.pm). Here it just returns what the
+        # config holds -- the controller only ever asks for the key.
+        $self->helper(device_setup_secret => sub ($c) {
+            my $s = $self->invite_config->{device_setup}{token_secret};
+            return undef unless defined $s && length $s && $s !~ /^YOUR_/;
+            return $s;
+        });
         my $r = $self->routes;
         $r->namespaces(['Homelab::Invite::App::Controller']);
         $r->get('/setup/mail')                    ->to('setup#page');
         $r->get('/setup/mail/apple.mobileconfig') ->to('setup#apple_profile');
-        $r->get('/setup/mail/qr.svg')             ->to('setup#qr');
+        $r->get('/setup/mail/qr.svg')             ->to('setup#qr_code');
     }
 }
 

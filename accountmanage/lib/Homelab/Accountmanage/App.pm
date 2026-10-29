@@ -311,11 +311,34 @@ sub _metrics_auth ($c) {
 
 sub _device_cfg ($c) { return $c->app->device_config // {} }
 
+# The HMAC key behind the QR links.
+#
+# Defaults to THE SESSION SECRET, which is not laziness -- it is the only
+# key this app already guarantees is identical on every node. myaccount
+# runs as a three-node pool behind one webproxy vhost, round-robined per
+# request; a key generated per host would verify on about one request in
+# three. session.secret must already be the same across the pool or a
+# signed cookie issued by one node would be rejected by the next, so
+# reusing it is pool-safe by construction rather than by convention.
+#
+# Safe to reuse because the token is domain-separated: every signature
+# commits to a `purpose` string (Homelab::Common::SetupToken), and the
+# cookie signing it shares a key with is a different algorithm over a
+# different message entirely.
+#
+# device_setup.token_secret overrides it, for an operator who would
+# rather these did not share -- set the SAME value on every pool node.
 sub _device_secret ($c) {
     my $s = _device_cfg($c)->{token_secret};
-    return undef unless defined $s && length $s;
-    return undef if $s =~ /^YOUR_/;    # untouched placeholder from the example config
-    return $s;
+    return $s if defined $s && length $s && $s !~ /^YOUR_/;
+
+    my $sess = eval { $c->app->secrets->[0] };
+    return undef unless defined $sess && length $sess;
+    # The shipped example's placeholder. An install still carrying it has
+    # bigger problems, but signing with a publicly known string is not
+    # one we should add to them.
+    return undef if $sess =~ /^CHANGE_ME/;
+    return $sess;
 }
 
 # A signed URL for the phone, or undef when this install has no secret

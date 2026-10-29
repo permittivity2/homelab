@@ -37,8 +37,12 @@ case "$1" in
         # Runs on EVERY configure, because the branch above only seeds a
         # config on a FIRST install -- an upgrade from a version
         # predating this feature would otherwise have no device_setup
-        # block and the QR code would silently never appear. Both steps
-        # are guarded, so this is a no-op once it has run.
+        # block and the QR code would silently never appear.
+        #
+        # NOTE no secret is generated here. This app runs as a three-node
+        # pool and a per-host key would verify on about one request in
+        # three; blank means "use session.secret", which is already
+        # identical across the pool because signed cookies require it.
         if ! grep -q '^device_setup:' "$CONFIG_FILE"; then
             echo "  adding device_setup block to $CONFIG_FILE (upgrade from a pre-device-setup version)"
             cat >> "$CONFIG_FILE" <<'EOF'
@@ -46,7 +50,8 @@ case "$1" in
 # Device setup -- added automatically on upgrade. imap_host/smtp_host are
 # left blank to derive mail.<domain> / smtp.<domain> from each signed-in
 # user's own address; set them only if those are not the names the edge
-# certificate carries.
+# certificate carries. token_secret blank = use session.secret (see the
+# shipped example config for why that is the pool-safe default).
 device_setup:
   imap_host:
   imap_port: 993
@@ -56,26 +61,8 @@ device_setup:
   organization: Silver Linings, LLC
   webmail_url: https://mail.mailmasker.org/
   qr_ttl_minutes: 15
-  token_secret: YOUR_SETUP_TOKEN_SECRET_HERE
+  token_secret:
 EOF
-        fi
-
-        # HMAC secret for the QR links. Generated, not prompted: it is
-        # machine-to-machine and nobody needs to know it. Hex, so it is
-        # both sed- and YAML-safe.
-        if grep -q 'YOUR_SETUP_TOKEN_SECRET_HERE' "$CONFIG_FILE"; then
-            SETUP_SECRET="$(openssl rand -hex 32 2>/dev/null)"
-            if [ -n "$SETUP_SECRET" ]; then
-                sed -i "s/YOUR_SETUP_TOKEN_SECRET_HERE/$SETUP_SECRET/" "$CONFIG_FILE"
-                echo "  generated device_setup.token_secret"
-            else
-                # Substituting an EMPTY value would leave a config that
-                # looks configured and silently is not. Leave the
-                # placeholder: the app treats it as "no secret" and the
-                # panel just omits the QR code.
-                echo "  WARNING: could not generate device_setup.token_secret (openssl unavailable);"
-                echo "           the Mail setup QR code will not be offered until one is set."
-            fi
         fi
 
         # Metrics tab egress: open this host -> the fleet Prometheus

@@ -54,18 +54,13 @@ sub _device_hints ($c) {
     };
 }
 
-# The signing secret, or undef when the install has not got one. undef
-# disables the whole feature rather than failing an upgrade: an older
-# config file on disk simply has no device_setup block (the postinst
-# appends one, but a hand-managed config may not have been through it),
-# and an account that works without a setup link is much better than a
-# service that will not start.
-sub _secret ($c) {
-    my $s = _device_config($c)->{token_secret};
-    return undef unless defined $s && length $s;
-    return undef if $s =~ /^YOUR_/;    # untouched placeholder from the example config
-    return $s;
-}
+# The signing secret, or undef when this install has not got one. undef
+# disables the whole feature rather than failing: an account that works
+# without a setup link is much better than a service that will not start.
+#
+# The key is SHARED ACROSS THE POOL via the database -- see App.pm's
+# device_setup_secret helper for why that is not optional here.
+sub _secret ($c) { return $c->device_setup_secret }
 
 # Shared by all three routes: turn ?t= into a mailbox, or reject and
 # return undef.
@@ -164,7 +159,11 @@ sub apple_profile ($c) {
 }
 
 # GET /setup/mail/qr.svg?t=...
-sub qr ($c) {
+#
+# NOT named `qr`: that is the quote-regex builtin, and while Mojolicious
+# dispatches it as a method regardless, a sub shadowing an operator in
+# this package is a trap for whoever next writes a regex in it.
+sub qr_code ($c) {
     my $email = _subject_or_reject($c, 'empty') or return;
     my $base = $c->app->invite_config->{public_base_url} // '';
     $base =~ s{/+$}{};

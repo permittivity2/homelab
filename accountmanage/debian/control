@@ -14,8 +14,7 @@ Depends: perl (>= 5.36),
          libmojolicious-perl,
          libyaml-libyaml-perl,
          libtext-qrcode-perl,
-         adduser,
-         openssl
+         adduser
 Recommends: homelab-api, homelab-sso, homelab-agent
 Description: Account self-service + administration web UI for the homelab-* ecosystem
  A thin BFF Mojolicious app served at myaccount.<domain>: browsers talk

@@ -132,8 +132,13 @@ case "$1" in
         # branch above deliberately never rewrites an existing config
         # file -- so an upgrade from a version that predates this feature
         # would otherwise have no device_setup block at all and the links
-        # would silently never appear. Both steps are individually
-        # guarded, so this is a no-op once it has run.
+        # would silently never appear.
+        #
+        # NOTE there is no secret generated here. This service runs as a
+        # three-node pool behind one vhost, and a key generated per host
+        # would verify on about one request in three. The shared key
+        # lives in invite.app_secrets (migration 002) and the app creates
+        # it on first use. See App.pm's device_setup_secret helper.
         if ! grep -q '^device_setup:' "$CONFIG_FILE"; then
             echo "  adding device_setup block to $CONFIG_FILE (upgrade from a pre-device-setup version)"
             cat >> "$CONFIG_FILE" <<'EOF'
@@ -141,6 +146,8 @@ case "$1" in
 # Device setup -- added automatically on upgrade. imap_host/smtp_host are
 # left blank to derive mail.<account_domain> / smtp.<account_domain>; set
 # them only if those names are not what the edge certificate carries.
+# token_secret is left blank on purpose: the pool-shared key lives in
+# invite.app_secrets. Set it here only to pin your own, on EVERY node.
 device_setup:
   imap_host:
   imap_port: 993
@@ -149,30 +156,11 @@ device_setup:
   service_label: MailMasker
   organization: Silver Linings, LLC
   link_ttl_days: 30
-  token_secret: YOUR_SETUP_TOKEN_SECRET_HERE
+  token_secret:
   myaccount_url: https://myaccount.mailmasker.org/
   webmail_url: https://mail.mailmasker.org/
   drive_url: https://drive.mailmasker.org/
 EOF
-        fi
-
-        # The HMAC secret for the setup links. Generated here rather than
-        # prompted for: it is machine-to-machine, nobody needs to know it,
-        # and a debconf question for a random string is a question with
-        # only one sensible answer. Hex, so it is sed- and YAML-safe.
-        if grep -q 'YOUR_SETUP_TOKEN_SECRET_HERE' "$CONFIG_FILE"; then
-            SETUP_SECRET="$(openssl rand -hex 32 2>/dev/null)"
-            if [ -n "$SETUP_SECRET" ]; then
-                sed -i "s/YOUR_SETUP_TOKEN_SECRET_HERE/$SETUP_SECRET/" "$CONFIG_FILE"
-                echo "  generated device_setup.token_secret"
-            else
-                # Substituting an EMPTY value would leave a config that
-                # looks configured and silently is not. Leave the
-                # placeholder: the app treats it as "no secret" and simply
-                # does not offer the setup links.
-                echo "  WARNING: could not generate device_setup.token_secret (openssl unavailable);"
-                echo "           the phone-setup links will not be offered until one is set."
-            fi
         fi
 
         # RUNTIME_ROLE is only set above on a fresh install -- on an

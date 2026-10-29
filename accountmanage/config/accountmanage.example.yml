@@ -62,10 +62,14 @@ device_setup:
   # link in the welcome email, this one is generated while the person is
   # looking at the screen and is meant to be used within the minute.
   qr_ttl_minutes: 15
-  # HMAC secret for those QR links. Written by the postinst; if it is
-  # missing the panel still shows the manual settings and the download
-  # button, and only the cross-device QR code is absent.
-  token_secret: YOUR_SETUP_TOKEN_SECRET_HERE
+  # HMAC secret for those QR links. LEAVE BLANK: it then uses
+  # session.secret, which is the only key this app already guarantees is
+  # identical across the three-node pool (a cookie signed by one node has
+  # to validate on the next). The token commits to its own purpose
+  # string, so sharing the key does not let one be replayed as the other.
+  # Set a value only if you would rather they did not share -- and then
+  # set the SAME value on every node in the pool.
+  token_secret:
 
 # homelab-sso: the only place a user types a password.
 sso:
