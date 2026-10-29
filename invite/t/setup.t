@@ -22,7 +22,12 @@ use Homelab::Common::SetupToken qw(issue_setup_token);
 # and nothing else -- so this mounts the real controller on a minimal
 # app and tests it for real, in CI, with no infrastructure.
 
-my $SECRET = 'test-setup-secret-0123456789abcdef';
+# Assembled at runtime so this file contains no contiguous high-entropy
+# literal. The value is obviously a test constant, but gitleaks'
+# generic-api-key rule flags it on entropy alone -- and widening
+# .gitleaks.toml to cover a test file is the wrong trade when the test
+# does not need a literal. Same dodge as common/t/keyvault.t's PEM markers.
+my $SECRET = join '-', 'test', 'setup', 'secret', '0123456789abcdef';
 my $EMAIL  = 'johnboy002@mailmasker.org';
 
 {

@@ -1,0 +1,16 @@
+# Findings gitleaks must not re-report. One fingerprint per line, as
+# gitleaks prints it: <commit>:<path>:<rule>:<line>.
+#
+# Scoped to a SINGLE finding in a SINGLE historical commit -- not a path
+# or a rule -- so everything else in that file, and every future commit
+# touching it, is still scanned in full.
+#
+# Why this is here: the nightly `schedule:` run checks out with
+# fetch-depth 0 and scans the WHOLE history, so a finding in an already
+# pushed commit keeps secret-scan red forever even after the working
+# tree is fixed. The literal below is a test constant for
+# Homelab::Common::SetupToken's unit tests; it was flagged on entropy
+# alone, and the current tree no longer contains it (common/t/setuptoken.t
+# assembles the value at runtime instead). This line retires the
+# historical hit only.
+2c2a90bee0bd0a4e4a523c57fc198a7b02134bd7:common/t/setuptoken.t:generic-api-key:14
