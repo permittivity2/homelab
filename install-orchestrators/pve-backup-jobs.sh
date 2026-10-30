@@ -45,12 +45,19 @@
 # That is reported, not silently fixed: these four jobs are fleet-only by
 # request.
 #
-# WHAT THIS DOES NOT DO. It does not touch notifications. pve2 runs postfix with
-# no relayhost and no root alias, so the default mail-to-root target drops job
-# mail into a local mailbox nobody reads -- a failed backup is currently silent.
-# pve2 CAN reach the fleet mail host (10.50.2.140 answers on :25 and :587), so
-# it is fixable, but it is a separate change and is called out rather than
-# bundled in here.
+# NOTIFICATIONS ALREADY WORK -- do not "fix" the relayhost. An empty postfix
+# relayhost on pve2 looks like mail goes nowhere, and that is the wrong
+# inference: postfix with no relayhost still delivers straight to MX. The MX for
+# forge.name is mail.forge.name -> 23.116.91.66, the fleet's own edge, which pve2
+# reaches on :25. Proven, not assumed:
+#   pvesh create /cluster/notifications/targets/mail-to-root/test
+#   -> postfix/smtp: to=<gardner@forge.name>, relay=mail.forge.name[23.116.91.66]:25,
+#      dsn=2.0.0, status=sent (250 2.0.0 Ok)
+# root@pam's address is set (gardner@forge.name) and datacenter email_from is
+# pve2@forge.name, so a failed job does reach a real mailbox. Note there is no
+# /var/log/mail.log on this host -- delivery is only in the journal, so use
+# `journalctl -t postfix/smtp`, and an absent mail.log is not evidence of
+# anything.
 # ============================================================================
 set -uo pipefail
 
@@ -217,8 +224,8 @@ step "result"
 if [ "$RC" = 0 ]; then
     echo "  ${G}backup jobs are in place and consistent.${O}"
     echo
-    echo "  ${D}Not done by this script, and worth doing: pve2 cannot deliver job${O}"
-    echo "  ${D}mail anywhere, so a failed backup is silent. See the header.${O}"
+    echo "  ${D}Job mail reaches root@pam's address by direct MX delivery; verify${O}"
+    echo "  ${D}with: pvesh create /cluster/notifications/targets/mail-to-root/test${O}"
 else
     echo "  ${R}something is wrong -- see the failures above.${O}"
 fi
