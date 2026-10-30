@@ -4,9 +4,10 @@
 # to date, and verify it.
 #
 #   ./edge-rotate.sh 01              # swap to 01, update it, verify it
-#   ./edge-rotate.sh 01 --os-updates # ...and apply the OS updates too, + reboot
+#   ./edge-rotate.sh 01 --os-updates # ...and apply the OS updates too
 #   ./edge-rotate.sh 00 --no-updates # swap back, verify only
 #   ./edge-rotate.sh 01 --dry-run    # say what it would do
+#   ./edge-rotate.sh 01 --os-updates --no-phased   # leave phased updates alone
 #
 # WHY THIS IS A SCRIPT AND NOT A SEQUENCE OF COMMANDS.
 #
@@ -41,14 +42,15 @@
 # ============================================================================
 set -uo pipefail
 
-TARGET=""; DRY=0; UPDATES=1; OS_UPDATES=0
+TARGET=""; DRY=0; UPDATES=1; OS_UPDATES=0; PHASED=1
 for a in "$@"; do
     case "$a" in
         --dry-run)    DRY=1 ;;
         --no-updates) UPDATES=0 ;;
         --os-updates) OS_UPDATES=1 ;;
+        --no-phased)  PHASED=0 ;;
         00|01|02|0|1|2) TARGET=$(printf '%02d' "$((10#$a))") ;;
-        *) echo "unknown argument '$a' (usage: edge-rotate.sh <00|01|02> [--os-updates] [--no-updates] [--dry-run])"; exit 1 ;;
+        *) echo "unknown argument '$a' (usage: edge-rotate.sh <00|01|02> [--os-updates] [--no-phased] [--no-updates] [--dry-run])"; exit 1 ;;
     esac
 done
 [ -z "$TARGET" ] && { echo "which edge? (00, 01 or 02)"; exit 1; }
@@ -258,6 +260,20 @@ if [ "$UPDATES" = 1 ]; then
         echo "   * it runs DETACHED under systemd-run, not in this ssh session. The"
         echo "     set includes openssh-server, and a dropped connection part-way"
         echo "     through dpkg leaves broken packages behind."
+        if [ "$PHASED" = 1 ]; then
+            PHASE_OPT='-o APT::Get::Always-Include-Phased-Updates=true'
+            echo "   * it INCLUDES phased updates. Ubuntu rolls an -updates package out"
+            echo "     to a deterministic fraction of machines first, keyed to"
+            echo "     /etc/machine-id -- so the same apt run on these three nodes"
+            echo "     installs DIFFERENT versions. That is the opposite of what this"
+            echo "     trio needs: they carry the same MACs and are swapped for one"
+            echo "     another, so a rotation would silently change the version of"
+            echo "     systemd/PID 1 under production. Pass --no-phased to leave them."
+        else
+            PHASE_OPT=''
+            warn "phased updates EXCLUDED (--no-phased): this node may end up on"
+            warn "different versions than the other two edge nodes."
+        fi
 
         PAYLOAD=$(base64 -w0 <<'UPGRADE'
 #!/bin/bash
@@ -268,10 +284,14 @@ set -e
 apt-get update -qq
 # Download first: this part touches nothing, so the node keeps serving while it
 # runs and the install window stays as short as it can be.
-DEBIAN_FRONTEND=noninteractive apt-get -y -qq -d full-upgrade
-DEBIAN_FRONTEND=noninteractive apt-get -y     -o Dpkg::Options::=--force-confdef     -o Dpkg::Options::=--force-confold     full-upgrade
+DEBIAN_FRONTEND=noninteractive apt-get -y -qq __PHASE_OPT__ -d full-upgrade
+DEBIAN_FRONTEND=noninteractive apt-get -y __PHASE_OPT__     -o Dpkg::Options::=--force-confdef     -o Dpkg::Options::=--force-confold     full-upgrade
 UPGRADE
 )
+        # Substituted after the heredoc so the heredoc itself stays unexpanded:
+        # everything else in it is literal on purpose.
+        PAYLOAD=$(printf '%s' "$PAYLOAD" | base64 -d \
+                  | sed "s|__PHASE_OPT__|$PHASE_OPT|" | base64 -w0)
         ssh -o ConnectTimeout=10 "$MGMT" "
             printf '%s' '$PAYLOAD' | base64 -d | sudo tee /run/edge-os-upgrade.sh >/dev/null
             sudo chmod +x /run/edge-os-upgrade.sh
@@ -299,7 +319,18 @@ UPGRADE
         RESULT=$(cexec 'systemctl show edge-os-upgrade -p Result --value')
         LEFT=$(cexec 'apt list --upgradable 2>/dev/null | grep -c upgradable')
         case "$RESULT" in
-            success) ok "upgrade finished cleanly (was $PENDING pending, now $LEFT)" ;;
+            success) if [ "${LEFT:-0}" -gt 0 ] 2>/dev/null; then
+                         # The unit succeeding and the work being done are two
+                         # different things: apt exits 0 having deliberately
+                         # kept packages back. Saying "clean" with a non-zero
+                         # remainder is how a shortfall goes unnoticed.
+                         warn "unit succeeded but $LEFT package(s) are STILL pending (was $PENDING)"
+                         cexec 'apt list --upgradable 2>/dev/null | grep upgradable' \
+                           | sed 's/^/      /' | head -15
+                         warn "if these are phased, re-run without --no-phased"
+                     else
+                         ok "upgrade finished cleanly (was $PENDING pending, now $LEFT)"
+                     fi ;;
             "")      warn "could not read the unit result (was $PENDING pending, now $LEFT)" ;;
             *)       bad "upgrade result: $RESULT (was $PENDING pending, now $LEFT)" ;;
         esac
