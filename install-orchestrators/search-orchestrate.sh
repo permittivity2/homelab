@@ -341,9 +341,6 @@ homelab_api:
 
 session:
   secret: \"__SESSION_SECRET__\"
-
-web_theme:
-  base_url: https://static.mailmasker.org
 SEARCHWEB
 sudo sed -i -e \"s#__SSO_SECRET__#$SSO_SECRET#\" -e \"s#__SESSION_SECRET__#$SESSION_SECRET#\" $CONFIG" \
         && ok "appended the web-app blocks" || bad "could not append the web-app blocks"
@@ -357,6 +354,12 @@ step "3c. normalise the web-app config on $NODE1"
 # to be repaired, not skipped.
 on "$NODE1" "sudo perl -0pi -e 's/\nregistry:\n  host: [^\n]*\n  port: [^\n]*\n//' $CONFIG" 2>/dev/null \
     && ok "no registry: block (it cannot work for this app)" || warn "could not strip registry:"
+# An earlier version of this script wrote web_theme.base_url =
+# https://static.mailmasker.org, overriding homelab-webtheme's correct default
+# of .../theme/v1. theme.css then 404'd and every rule using a var(--...)
+# evaluated to nothing, so the page rendered as unstyled browser defaults.
+on "$NODE1" "sudo perl -0pi -e 's/\nweb_theme:\n  base_url: [^\n]*\n//' $CONFIG" 2>/dev/null \
+    && ok "no web_theme override (the package default is correct)" || warn "could not strip web_theme"
 if on "$NODE1" "grep -q 'pid_file: /run/homelab-search' $CONFIG" 2>/dev/null; then
     ok "hypnotoad pid_file points at the runtime directory"
 else

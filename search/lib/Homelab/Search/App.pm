@@ -49,7 +49,14 @@ sub startup ($self) {
     $self->plugin('Homelab::WebTheme' => {
         app_name    => 'Search',
         signout_url => '/logout',
-        ($config->{web_theme}{base_url} ? (theme_base => $config->{web_theme}{base_url}) : ()),
+        # NO theme_base override. Homelab::WebTheme's own default is
+        # https://static.mailmasker.org/theme/v1 -- the version lives in the
+        # PATH -- and no other app overrides it. Setting it from config here
+        # is how it went wrong once already: the value written was
+        # https://static.mailmasker.org, theme.css 404'd, and every CSS rule
+        # using a var(--...) silently evaluated to nothing, so the whole page
+        # fell back to unstyled browser defaults. A config key that merely
+        # restates a default only exists to drift away from it.
         user_email  => sub ($c) { $c->stash('email') // '' },
         menu_links  => [
             { href => 'https://mail.mailmasker.org/',      label => 'Email' },
@@ -253,9 +260,27 @@ sub _filters ($c) {
     return \%f;
 }
 
+# Did the user actually ask for anything? An empty form is a landing page,
+# not a search for everything.
+sub _searched ($f) {
+    return 1 if length($f->{q} // '') || length($f->{person} // '')
+             || length($f->{from} // '') || length($f->{to} // '')
+             || length($f->{mime} // '') || length($f->{mailbox} // '')
+             || $f->{in_trash} || $f->{has_attachments}
+             || $f->{min_size} || $f->{max_size};
+    return 0;
+}
+
 sub _run ($c, $acct, $f) {
     my ($mail, $drive) = ([], []);
     return ($mail, $drive) unless $acct;
+    # Nothing asked for, nothing run. The page already renders "type something
+    # above" in this case -- but it used to compute both result sets first and
+    # then discard them, and an unfiltered mail query over 25,798 messages
+    # takes 5.2 SECONDS because ORDER BY ... LIMIT 50 still has to sort every
+    # row. That was the whole of the delay between clicking Deep Search and
+    # seeing the page.
+    return ($mail, $drive) unless _searched($f);
     $mail  = $c->app->query->search_mail($acct->{account_id}, $f)  if $f->{source} ne 'drive';
     $drive = $c->app->query->search_drive($acct->{account_id}, $f) if $f->{source} ne 'mail';
     return ($mail, $drive);
@@ -277,9 +302,7 @@ sub index ($c) {
         drive      => $drive,
         mailboxes  => ($acct ? $c->app->query->mailboxes($acct->{account_id}) : []),
         counts     => ($acct ? $c->app->query->counts($acct->{account_id})    : {}),
-        searched   => (length($f->{q}) || length($f->{person}) || length($f->{from})
-                    || length($f->{to}) || length($f->{mime}) || $f->{in_trash}
-                    || $f->{has_attachments} ? 1 : 0),
+        searched   => _searched($f),
     );
 }
 

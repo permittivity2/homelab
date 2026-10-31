@@ -79,9 +79,9 @@ homelab_api:
 session:
   secret: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
 
-# Shared web chrome (homelab-webtheme). Optional; omit to use its default.
-web_theme:
-  base_url: https://static.mailmasker.org
+# No web_theme block: homelab-webtheme already defaults to the right URL
+# (https://static.mailmasker.org/theme/v1 -- the version is in the path), and
+# nothing else overrides it. Restating a default here is how it drifts.
 
 # NO registry: block, deliberately. Homelab::Common::Registry's
 # register_recurring reads /etc/homelab/agent/credential.yml, which is

@@ -41,6 +41,33 @@
     details.pv > summary { cursor: pointer; color: var(--silver-dim); font-size: var(--app-xs); }
     details.pv iframe { width: 100%; height: 420px; border: 1px solid var(--border);
                         border-radius: var(--radius-sm); margin-top: var(--space-2); background: var(--black-primary); }
+
+    /* Single breakpoint and 44px touch targets, matching homelab-drive's
+       mobile pass. The desktop row packs four fields side by side; on a
+       phone that is four cramped columns, so they stack and every control
+       becomes full width and thumb-sized. 16px on inputs is deliberate --
+       iOS Safari zooms the whole page when a focused input is smaller. */
+    @media (max-width: 720px) {
+      .wrap { padding: var(--space-4) var(--space-3) var(--space-8); }
+      .searchbar { padding: var(--space-3); }
+      .searchbar .row { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+      .searchbar .row > div { flex: 1 1 auto !important; width: 100%; }
+      .field input[type=text], .field input[type=date], .field select {
+        font-size: 16px; min-height: 44px; }
+      .searchbar .row button { width: 100%; min-height: 44px; font-size: var(--app-base); }
+      /* One control per line: a label and a <select> side by side wrap
+         mid-word at this width otherwise. */
+      .chips { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+      .chips label, .chips .aioff { justify-content: space-between; min-height: 36px; }
+      .chips select { flex: 0 1 60%; min-height: 40px; font-size: 16px; }
+      /* Date and meta belong under the subject on a narrow screen, not
+         squeezed onto the same line. */
+      .hit .t { flex-direction: column; gap: 2px; }
+      .hit .meta { white-space: normal; }
+      details.pv iframe { height: 320px; }
+      .acts { gap: var(--space-4); }
+      .acts a { min-height: 32px; display: inline-flex; align-items: center; }
+    }
   </style>
 </head>
 <body>
