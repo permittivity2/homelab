@@ -100,6 +100,31 @@ sub startup ($self) {
     # is the wrong trade; homelab-agent reports this service from
     # /etc/homelab/services/search.yml instead.
 
+    # Formatting helpers live here, NOT in the template. Mojolicious compiles
+    # a template into a package that does not enable the `signatures`
+    # feature, so `my $f = sub ($x) {...}` inside an .ep is parsed as a
+    # PROTOTYPE and every use of $x is an undeclared global -- which fails at
+    # render time with "Global symbol \"$s\" requires explicit package name",
+    # not at build or install. A helper is both the correct place for this and
+    # a context where signatures work.
+    $self->helper(human_size => sub ($c, $bytes) {
+        return '' unless defined $bytes;
+        my @u = ('B', 'KB', 'MB', 'GB', 'TB');
+        my ($n, $i) = ($bytes, 0);
+        while ($n >= 1024 && $i < $#u) { $n /= 1024; $i++ }
+        return sprintf($i ? '%.1f %s' : '%d %s', $n, $u[$i]);
+    });
+    # Postgres hands back '2026-01-01 10:00:00+00'; the page wants the day and
+    # the time, not the fractional seconds or the offset.
+    $self->helper(short_date => sub ($c, $ts) {
+        return '' unless defined $ts && length $ts;
+        my $t = "$ts";
+        $t =~ s/\.\d+//;
+        $t =~ s/[+-]\d\d(?::?\d\d)?\z//;
+        $t =~ s/\s+\z//;
+        return $t;
+    });
+
     # The template asks the SAME function the server uses, rather than
     # re-deriving the rule in markup.
     $self->helper(viewable => sub ($c, $mime) {

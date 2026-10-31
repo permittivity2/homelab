@@ -1,16 +1,9 @@
 % layout 'default';
 % title 'Search';
-% use POSIX qw(floor);
-%
-%# Human sizes and dates are formatted here rather than in SQL: the same rows
-%# go out as JSON to homelab-cli, which wants the raw numbers.
-% my $sz = sub ($b) {
-%   return '' unless defined $b;
-%   my @u = ('B','KB','MB','GB','TB'); my $i = 0;
-%   while ($b >= 1024 && $i < $#u) { $b /= 1024; $i++ }
-%   return sprintf($i ? '%.1f %s' : '%d %s', $b, $u[$i]);
-% };
-% my $dt = sub ($s) { return '' unless defined $s; my $t = "$s"; $t =~ s/\..*$//; $t =~ s/\+\d\d$//; return $t };
+%# Sizes and dates are formatted by the human_size/short_date HELPERS, not by
+%# subs defined here: a template is compiled without the `signatures` feature,
+%# so `sub ($x) {...}` in an .ep is a prototype and $x is an undeclared global.
+%# The raw values still go out unformatted in the JSON that homelab-cli reads.
 
 <form class="searchbar" method="get" action="/">
   <div class="row">
@@ -85,7 +78,7 @@
     <div class="hit">
       <div class="t">
         <span class="subj"><%= length($m->{subject} // '') ? $m->{subject} : '(no subject)' %></span>
-        <span class="meta"><%= $m->{mailbox} %> · <%= $dt->($m->{sent_at} // $m->{received_at}) %><%= $m->{has_attachments} ? ' · attachment' : '' %></span>
+        <span class="meta"><%= $m->{mailbox} %> · <%= short_date($m->{sent_at} // $m->{received_at}) %><%= $m->{has_attachments} ? ' · attachment' : '' %></span>
       </div>
       <div class="who"><%= $m->{from_name} || $m->{from_addr} || '(unknown sender)' %><%= $m->{from_name} && $m->{from_addr} ? " <$m->{from_addr}>" : '' %></div>
 % if (length($m->{snippet} // '')) {
@@ -100,7 +93,7 @@
       </details>
       <div class="acts">
         <a href="/mail/<%= $m->{message_id} %>/download">Download .eml</a>
-        <span class="hint"><%= $sz->($m->{size_bytes}) %></span>
+        <span class="hint"><%= human_size($m->{size_bytes}) %></span>
       </div>
     </div>
 % }
@@ -121,7 +114,7 @@
     <div class="hit">
       <div class="t">
         <span class="subj"><%= $d->{file_name} %></span>
-        <span class="meta"><%= $mime %> · <%= $sz->($d->{size_bytes}) %> · <%= $dt->($d->{content_created_at} // $d->{uploaded_at}) %></span>
+        <span class="meta"><%= $mime %> · <%= human_size($d->{size_bytes}) %> · <%= short_date($d->{content_created_at} // $d->{uploaded_at}) %></span>
       </div>
 % if (length($d->{folder_path} // '')) {
       <div class="who">in <%= $d->{folder_path} %></div>

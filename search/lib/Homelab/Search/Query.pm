@@ -25,6 +25,11 @@ has 'log';
 #     own sake: RLS is the backstop for a mistake in this file, and this file
 #     is the backstop for a mistake in the policies. Neither alone.
 sub _scoped ($self, $account_id, $cb) {
+    # Refuse to scope to anything that is not an account id. Setting the GUC
+    # to '' or undef does not fail here -- it fails later, inside the RLS
+    # policy, as a confusing cast error on an unrelated table.
+    die "Homelab::Search::Query: refusing to scope to a non-numeric account id\n"
+        unless defined $account_id && $account_id =~ /\A[0-9]+\z/;
     my $db = $self->pg->db;
     my $tx = $db->begin;
     $db->query('SELECT set_config(?, ?, true)', 'homelab.account_id', $account_id);
@@ -70,19 +75,32 @@ sub search_mail ($self, $account_id, $f) {
     my $limit = $f->{limit}  || 50;
     my $off   = $f->{offset} || 0;
 
-    my (@where, @bind);
-    push @where, 'm.account_id = ?';           push @bind, $account_id;
+    # BINDS ARE COLLECTED PER CLAUSE, IN STATEMENT ORDER, and assembled at the
+    # end in that same order. The rank expression lives in the SELECT list,
+    # which precedes WHERE -- so its placeholder is the FIRST one in the
+    # statement, not the last.
+    #
+    # Appending the rank's bind at the end instead is what this code did
+    # first, and it does not fail cleanly: the tsquery parameter silently
+    # received the account id and the bigint account_id column received the
+    # search term, so every search 500'd with
+    #   invalid input syntax for type bigint: "invoice"
+    # Keeping each fragment next to its own binds is what makes the ordering
+    # structurally right rather than something to remember.
+    my (@sel_bind, @where, @where_bind);
+    push @where, 'm.account_id = ?'; push @where_bind, $account_id;
 
     # Ranking: subject weighted above participants above body, which is what
     # makes "invoice" find the message ABOUT invoices rather than the one that
     # merely mentions the word in a footer.
     my $rank = q{0};
     if (length $q) {
-        push @where, "(b.tsv @@ $TSQ OR m.subject ILIKE ?)";
-        push @bind, $q, '%' . $q . '%';
         $rank = qq{ts_rank_cd(
             setweight(to_tsvector('english', coalesce(m.subject,'')), 'A')
          || setweight(coalesce(b.tsv, ''::tsvector), 'C'), $TSQ)};
+        push @sel_bind, $q;
+        push @where, "(b.tsv @@ $TSQ OR m.subject ILIKE ?)";
+        push @where_bind, $q, '%' . $q . '%';
     }
     if (defined $f->{person} && length $f->{person}) {
         # Through message_addresses, never by reading search.addresses
@@ -96,12 +114,12 @@ sub search_mail ($self, $account_id, $f) {
              WHERE ma.message_id = m.message_id
                AND ma.account_id = m.account_id
                AND (ad.addr_text ILIKE ? OR dn.display_name ILIKE ?))};
-        push @bind, '%' . $f->{person} . '%', '%' . $f->{person} . '%';
+        push @where_bind, '%' . $f->{person} . '%', '%' . $f->{person} . '%';
     }
-    push @where, 'coalesce(m.sent_at, m.received_at) >= ?::date' and push @bind, $from if $from;
-    push @where, 'coalesce(m.sent_at, m.received_at) <  (?::date + 1)' and push @bind, $to if $to;
+    push @where, 'coalesce(m.sent_at, m.received_at) >= ?::date' and push @where_bind, $from if $from;
+    push @where, 'coalesce(m.sent_at, m.received_at) <  (?::date + 1)' and push @where_bind, $to if $to;
     push @where, 'm.has_attachments' if $f->{has_attachments};
-    push @where, 'mb.name = ?' and push @bind, $f->{mailbox} if defined $f->{mailbox} && length $f->{mailbox};
+    push @where, 'mb.name = ?' and push @where_bind, $f->{mailbox} if defined $f->{mailbox} && length $f->{mailbox};
 
     my $sql = qq{
         SELECT m.message_id, m.subject, m.sent_at, m.received_at, m.size_bytes,
@@ -123,12 +141,8 @@ sub search_mail ($self, $account_id, $f) {
          ORDER BY } . (length $q ? 'rank DESC, ' : '') . qq{coalesce(m.sent_at, m.received_at) DESC
          LIMIT ? OFFSET ?};
 
-    # The tsquery text appears twice when ranking (once in WHERE, once in
-    # ORDER BY), so the rank bind has to be appended in the same order the
-    # placeholders occur.
-    my @final = @bind;
-    push @final, $q if length $q;
-    push @final, $limit, $off;
+    my @final = (@sel_bind, @where_bind, $limit, $off);
+    _assert_binds($sql, \@final);
 
     return $self->_scoped($account_id, sub ($db) { $db->query($sql, @final)->hashes });
 }
@@ -140,8 +154,9 @@ sub search_drive ($self, $account_id, $f) {
     my $limit = $f->{limit} || 50;
     my $off   = $f->{offset} || 0;
 
-    my (@where, @bind);
-    push @where, 'i.account_id = ?'; push @bind, $account_id;
+    # Same per-clause bind collection as search_mail -- see the note there.
+    my (@sel_bind, @where, @where_bind);
+    push @where, 'i.account_id = ?'; push @where_bind, $account_id;
     # Trash is excluded unless explicitly asked for. drive's own soft-delete
     # discipline, carried into search: a deleted file must not come back as a
     # search hit.
@@ -149,21 +164,22 @@ sub search_drive ($self, $account_id, $f) {
 
     my $rank = q{0};
     if (length $q) {
-        push @where, "(x.tsv @@ $TSQ OR i.file_name ILIKE ?)";
-        push @bind, $q, '%' . $q . '%';
         $rank = qq{ts_rank_cd(coalesce(x.tsv, ''::tsvector), $TSQ)};
+        push @sel_bind, $q;
+        push @where, "(x.tsv @@ $TSQ OR i.file_name ILIKE ?)";
+        push @where_bind, $q, '%' . $q . '%';
     }
     if (defined $f->{mime} && $f->{mime} =~ m{\A([a-z]+)(?:/([a-z0-9.+-]+))?\z}) {
-        push @where, 't.type = ?'; push @bind, $1;
-        if (defined $2) { push @where, 't.subtype = ?'; push @bind, $2 }
+        push @where, 't.type = ?'; push @where_bind, $1;
+        if (defined $2) { push @where, 't.subtype = ?'; push @where_bind, $2 }
     }
     # content_created_at is the file's OWN date and is NULL for everything
     # uploaded before drive migration 012, so the date filter falls back to
     # uploaded_at rather than silently excluding the whole existing corpus.
-    push @where, 'coalesce(i.content_created_at, i.uploaded_at) >= ?::date'      and push @bind, $from if $from;
-    push @where, 'coalesce(i.content_created_at, i.uploaded_at) <  (?::date + 1)' and push @bind, $to   if $to;
-    push @where, 'i.size_bytes >= ?' and push @bind, $f->{min_size} if $f->{min_size};
-    push @where, 'i.size_bytes <= ?' and push @bind, $f->{max_size} if $f->{max_size};
+    push @where, 'coalesce(i.content_created_at, i.uploaded_at) >= ?::date'      and push @where_bind, $from if $from;
+    push @where, 'coalesce(i.content_created_at, i.uploaded_at) <  (?::date + 1)' and push @where_bind, $to   if $to;
+    push @where, 'i.size_bytes >= ?' and push @where_bind, $f->{min_size} if $f->{min_size};
+    push @where, 'i.size_bytes <= ?' and push @where_bind, $f->{max_size} if $f->{max_size};
 
     my $sql = qq{
         SELECT i.drive_item_id, i.drive_file_id, i.file_uuid::text AS file_uuid,
@@ -179,11 +195,24 @@ sub search_drive ($self, $account_id, $f) {
          ORDER BY } . (length $q ? 'rank DESC, ' : '') . qq{coalesce(i.content_created_at, i.uploaded_at) DESC
          LIMIT ? OFFSET ?};
 
-    my @final = @bind;
-    push @final, $q if length $q;
-    push @final, $limit, $off;
+    my @final = (@sel_bind, @where_bind, $limit, $off);
+    _assert_binds($sql, \@final);
 
     return $self->_scoped($account_id, sub ($db) { $db->query($sql, @final)->hashes });
+}
+
+# Placeholder count must equal bind count. Postgres would reject a mismatch
+# anyway, but it reports it as a type error on whichever parameter happened to
+# line up wrong -- which reads like a data problem rather than a bug in this
+# file, and sent the first diagnosis of exactly that failure in the wrong
+# direction. Failing here names the real problem.
+sub _assert_binds ($sql, $binds) {
+    my $holes = () = $sql =~ /\?/g;
+    die sprintf("Homelab::Search::Query: %d placeholders but %d bind values -- "
+              . "a clause was added without its bind, or in the wrong order\n",
+                $holes, scalar @$binds)
+        unless $holes == @$binds;
+    return 1;
 }
 
 # --------------------------------------------------------- one item, scoped
