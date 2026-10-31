@@ -52,6 +52,41 @@ sub _pg {
 
 my %cbs;
 
+# START OF EACH MESSAGE. Without this, per-message state only ever got
+# cleared in the `close` callback -- and close fires when the SMTP CONNECTION
+# ends, not when a message does.
+#
+# Any sending MTA may deliver many messages down one connection; that is
+# normal, not unusual. Every message after the first then had the PREVIOUS
+# messages' bodies accumulated into $priv->{body}, and eom's replacebody
+# wrote that back. Observed on a 300-message run over one connection:
+# message 143 was delivered with the bodies of messages 1-143 in it, 28 KB
+# instead of 180 bytes.
+#
+# Worse than the size: one connection can carry messages for DIFFERENT
+# recipients, so recipient B could receive recipient A's message body. The
+# accumulating `candidates` list has the same shape of problem -- an earlier
+# message's recipients stayed eligible for later ones.
+#
+# envfrom is the canonical per-message boundary, so the reset belongs here.
+$cbs{envfrom} = sub {
+    my ($ctx) = @_;
+    # Deliberately a fresh hashref rather than deleting known keys: anything
+    # a future callback adds is then reset too, instead of silently becoming
+    # the next instance of this bug.
+    $ctx->setpriv({});
+    return SMFIS_CONTINUE;
+};
+
+# A message abandoned mid-stream (client disconnect, reject, DATA abort)
+# never reaches eom, so without this its partial body would be inherited by
+# whatever is sent next on the same connection.
+$cbs{abort} = sub {
+    my ($ctx) = @_;
+    $ctx->setpriv({});
+    return SMFIS_CONTINUE;
+};
+
 $cbs{envrcpt} = sub {
     my ($ctx, $addr, @esmtp) = @_;
     my $priv = $ctx->getpriv() // {};
