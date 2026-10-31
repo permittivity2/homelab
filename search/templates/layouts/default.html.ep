@@ -101,6 +101,17 @@
        same line as its subject, a taller preview. */
     @media (min-width: 721px) {
       .wrap { padding: var(--space-6) var(--space-4) var(--space-10); }
+      /* The search block is centred and capped; the RESULTS below stay full
+         width, because a result list wants the room and a text field does
+         not. Stretching the input to 1100px just made the caret start a long
+         way from the text.
+         560px holds roughly 70 characters, which is more than any query
+         typed here. A literal 20% of this column would be 220px -- too
+         narrow to see a phrase query while typing it -- so the intent is
+         kept and the number is the readable one. */
+      .searchbar { max-width: 760px; margin-left: auto; margin-right: auto; }
+      .askrow    { max-width: 560px; margin-left: auto; margin-right: auto; }
+      .counts    { max-width: 760px; margin-left: auto; margin-right: auto; text-align: center; }
       .fgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .checks { flex-direction: row; flex-wrap: wrap; gap: var(--space-5); }
       .hit .t { flex-direction: row; align-items: baseline; justify-content: space-between; gap: var(--space-3); }

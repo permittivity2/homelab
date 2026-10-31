@@ -53,6 +53,13 @@
     display: flex; align-items: center; gap: 10px; min-height: 36px;
     font-size: var(--app-sm); color: var(--text-muted); }
   .drive-search .checks input[type=checkbox] { width: 18px; height: 18px; flex: 0 0 auto; }
+  /* Capped like the search page's, but LEFT aligned rather than centred:
+     here the box is a toolbar above a left-aligned file table, and centring
+     it would detach it from the content it filters. */
+  @media (min-width: 721px) {
+    .drive-search        { max-width: 760px; }
+    .drive-search .askrow { max-width: 560px; }
+  }
 
   .size-toggle { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--app-xs); color: var(--text-muted); cursor: pointer; user-select: none; margin-left: auto; }
   .size-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
