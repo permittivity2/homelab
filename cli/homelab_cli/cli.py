@@ -1264,6 +1264,68 @@ def cmd_mail_block_link_disable(args):
 # --- drive: homelab-api's /api/v1/drive/* gateway -> homelab-drive's
 # own JSON API (see ../../drive/README.md's "JSON API" section). -------
 
+def cmd_search(args):
+    """Search mail and drive together.
+
+    One command rather than `drive search` plus `mail search`: the whole
+    point of the index is that a question like "the invoice Constance sent in
+    January" does not know, or care, which of the two it lives in.
+    """
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).search(
+            session["token"],
+            q=args.query,
+            person=args.person,
+            **{"from": args.since},
+            to=args.until,
+            source=args.source,
+            mailbox=args.mailbox,
+            mime=args.type,
+            has_attachments=args.attachments,
+            in_trash=args.trash,
+            limit=args.limit,
+        )
+    except ApiError as e:
+        _emit_error(args, f"Search failed: {e.message}")
+        return 1
+
+    if _emit(args, result):
+        return 0
+
+    mail = result.get("mail") or []
+    drive = result.get("drive") or []
+    if not result.get("indexed"):
+        print("Nothing of yours has been indexed yet.")
+        return 0
+    if not mail and not drive:
+        print("No matches.")
+        return 0
+
+    if mail:
+        print(f"EMAIL ({len(mail)})")
+        rows = []
+        for m in mail:
+            who = m.get("from_name") or m.get("from_addr") or "?"
+            when = (m.get("sent_at") or m.get("received_at") or "")[:16]
+            rows.append([m["message_id"], when, who[:28],
+                         (m.get("subject") or "(no subject)")[:52], m.get("mailbox", "")])
+        _print_table(["ID", "DATE", "FROM", "SUBJECT", "MAILBOX"], rows)
+    if drive:
+        if mail:
+            print()
+        print(f"FILES ({len(drive)})")
+        rows = []
+        for d in drive:
+            when = (d.get("content_created_at") or d.get("uploaded_at") or "")[:16]
+            rows.append([d["drive_item_id"], when, d.get("file_name", "")[:44],
+                         f"{d.get('size_bytes') or 0} bytes", d.get("mime_type") or ""])
+        _print_table(["ID", "DATE", "NAME", "SIZE", "TYPE"], rows)
+    return 0
+
+
 def cmd_drive_list(args):
     session = _require_session(args)
     if not session:
@@ -2406,6 +2468,22 @@ def build_parser():
     p.set_defaults(func=cmd_mail_block_link_enable)
     p = block_link_sub.add_parser("disable", help="Turn off click-to-block links for your account, overriding the domain default")
     p.set_defaults(func=cmd_mail_block_link_disable)
+
+    p = sub.add_parser("search", help="Search your email and files together")
+    p.add_argument("query", nargs="?", default="", help='Words, "a phrase", or -exclude')
+    p.add_argument("--person", help="Match a sender or recipient by name or address")
+    # --since/--until rather than --from/--to: `from` is a Python keyword, and
+    # --to reads as a recipient next to --person.
+    p.add_argument("--since", metavar="YYYY-MM-DD", help="Only items on or after this date")
+    p.add_argument("--until", metavar="YYYY-MM-DD", help="Only items on or before this date")
+    p.add_argument("--source", choices=["both", "mail", "drive"], default="both",
+                   help="Search mail, files, or both (default: both)")
+    p.add_argument("--mailbox", help="Restrict to one mailbox")
+    p.add_argument("--type", help="File type: text, image, application/pdf, video, audio")
+    p.add_argument("--attachments", action="store_true", help="Only mail with attachments")
+    p.add_argument("--trash", action="store_true", help="Search deleted files instead")
+    p.add_argument("--limit", type=int, default=25, help="Maximum results per source (default 25)")
+    p.set_defaults(func=cmd_search)
 
     drive = sub.add_parser("drive", help="File storage, via homelab-api's drive gateway")
     drive_sub = drive.add_subparsers(dest="drive_command", required=True)

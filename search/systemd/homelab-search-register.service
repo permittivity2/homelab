@@ -1,0 +1,25 @@
+[Unit]
+Description=Register homelab-search in the homelab-api service registry
+Documentation=file:///usr/share/doc/homelab-search/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# As homelab, NOT vmail: this is the one piece that needs the agent
+# credential (0600 homelab:homelab), and keeping it out of the web app is the
+# whole point of it being a separate unit. It opens no listening socket.
+User=homelab
+Group=homelab
+ExecStart=/usr/bin/homelab-search-register
+# Deliberately NO RemainAfterExit. A oneshot that stays "active" is exactly
+# what silently broke the certsync timer: OnUnitActiveSec never re-arms
+# against a unit that never deactivates. The timer below uses OnCalendar for
+# the same reason.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

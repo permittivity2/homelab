@@ -1,0 +1,62 @@
+#!/usr/bin/env perl
+# Registers homelab-search in homelab-api's service registry, so the
+# gateway route /api/v1/search can resolve a backend for it.
+#
+# WHY THIS IS A SEPARATE PROGRAM INSTEAD OF register_recurring() IN THE APP.
+#
+# Registration needs a system_agent JWT, read from
+# /etc/homelab/agent/credential.yml. That is deliberate and documented in
+# Homelab::Common::Registry: the registry IS the gateway's routing table, and
+# before it was authenticated anyone on the network could silently repoint a
+# feature's backend at themselves.
+#
+# The search app cannot hold that credential. It runs as vmail (uid 5000)
+# because it has to read a mail store where dovecot creates maildirs 0700,
+# and the credential is 0600 homelab:homelab. Widening it would hand a
+# system_agent identity to the one process on this host that is reachable
+# from the internet -- the wrong trade for a routing-table entry.
+#
+# So the app stays as vmail with no access to it, and this tiny program --
+# no network listener, run by a timer as `homelab` -- does the registration
+# on its behalf.
+use strict;
+use warnings;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Homelab::Common::Config   qw(load_config);
+use Homelab::Common::Registry qw(register);
+
+my $config = load_config('HOMELAB_SEARCH_CONFIG', '/etc/homelab/search/config.yml');
+my $me     = $config->{registry} // {};
+
+unless ($me->{host} && $me->{port}) {
+    print "homelab-search: no registry.host/port configured -- nothing to register.\n";
+    exit 0;
+}
+
+# Validated as its own statement, NOT inline as `api_base => $x // die "..."`.
+# That is a real Perl trap and Registry.pm's own header warns about it: die is
+# a list operator with no parens, so its argument list silently swallows every
+# subsequent key/value pair -- even though it never runs. The result here was
+# register() receiving ONLY api_base and dying with "feature_name required",
+# which reads like the wrong argument name rather than a parsing problem.
+my $api_base = $config->{homelab_api}{base_url}
+    or die "config: homelab_api.base_url is required\n";
+
+my $ok = eval {
+    register(
+        api_base         => $api_base,
+        feature_name     => 'homelab-search',
+        host             => $me->{host},
+        port             => $me->{port},
+        health_check_url => '/health',
+        description      => 'Unified search over mail and drive',
+    );
+    1;
+};
+unless ($ok) {
+    print STDERR "homelab-search: registration failed: $@";
+    exit 1;
+}
+print "homelab-search: registered $me->{host}:$me->{port}\n";

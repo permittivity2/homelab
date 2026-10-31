@@ -83,14 +83,18 @@ session:
 # (https://static.mailmasker.org/theme/v1 -- the version is in the path), and
 # nothing else overrides it. Restating a default here is how it drifts.
 
-# NO registry: block, deliberately. Homelab::Common::Registry's
-# register_recurring reads /etc/homelab/agent/credential.yml, which is
-# 0600 homelab:homelab -- and this app runs as vmail (uid 5000) because it has
-# to read the mail store, where dovecot creates maildirs 0700. Making the
-# agent credential group-readable to work around that would weaken a
-# credential for a cosmetic feature. Service presence is reported by
-# homelab-agent from /etc/homelab/services/search.yml instead, which is what
-# the fleet status view actually reads.
+# Where this node advertises itself in homelab-api's service registry, which
+# is what the gateway route /api/v1/search resolves to reach this host.
+#
+# Registered by homelab-search-register (a timer running as `homelab`), NOT
+# by the web app: registration needs a system_agent credential and the app
+# runs as vmail precisely so it cannot hold one. See that script's header.
+#
+# host is PER NODE -- the three hosts share this config otherwise, so the
+# orchestrator rewrites this line after copying it.
+registry:
+  host: 10.50.2.214
+  port: 2517
 
 log_level: info
 

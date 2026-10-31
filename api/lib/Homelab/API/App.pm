@@ -220,6 +220,13 @@ sub startup ($self) {
     # /api/v1/mail/... themselves (it only exists to back this
     # gateway), so nothing needs rewriting for that one.
     $r->any('/api/v1/drive/*capture' => sub ($c) { $self->_gateway($c, 'homelab-drive', strip_prefix => '/api/v1/drive', backend_prefix => '/api/v1') });
+    # homelab-search keeps its own /api/v1/search path (its real, standalone
+    # API), so the same strip_prefix + backend_prefix pair as drive applies:
+    # a client path of /api/v1/search?q=x becomes /api/v1/search?q=x on the
+    # backend, not /search. This is what lets `homelab-cli search` reach it
+    # through the one base URL the CLI is configured with, instead of needing
+    # a second host.
+    $r->any('/api/v1/search' => sub ($c) { $self->_gateway($c, 'homelab-search', strip_prefix => '/api/v1/search', backend_prefix => '/api/v1/search') });
     $r->any('/api/v1/mail/*capture'  => sub ($c) { $self->_gateway($c, 'homelab-mailbridge') });
     # homelab-domain-admin's own routes are already /internal/v1/domains/...
     # -- note they KEEP the "domains" segment, unlike drive (whose

@@ -1,0 +1,14 @@
+[Unit]
+Description=Keep homelab-search's service-registry entry fresh
+
+[Timer]
+# OnCalendar, not OnUnitActiveSec: see the note in the .service. Entries do
+# not expire, so this only has to refresh updated_at and re-register after a
+# restart -- every two minutes is ample.
+OnCalendar=*:0/2
+# Catch up after a reboot rather than waiting for the next even minute.
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

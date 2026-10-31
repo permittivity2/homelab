@@ -20,7 +20,8 @@ WriteMakefile(
     TEST_REQUIRES => {
         'Test::More' => '1.3',
     },
-    EXE_FILES    => ['script/homelab-search', 'script/homelab-search-indexer', 'script/homelab-search-migrate'],
+    EXE_FILES    => ['script/homelab-search', 'script/homelab-search-indexer',
+                     'script/homelab-search-migrate', 'script/homelab-search-register'],
     DIR          => [],
     dist         => { COMPRESS => 'gzip -9f', SUFFIX => '.gz' },
     clean        => { FILES    => 'Homelab-Search-* *.deb *.changes *.buildinfo' },

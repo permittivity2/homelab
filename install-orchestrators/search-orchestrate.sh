@@ -134,6 +134,21 @@ if [ "$VERIFY_ONLY" = 1 ] || [ "$REINDEX" = 1 ]; then
         [ "$r" = 302 ] && ok "$n / -> 302 (redirects to sign-in)" || bad "$n / -> '${r:-no answer}'"
     done
 
+    step "the api gateway can reach search"
+    # /api/v1/search is what homelab-cli uses. It resolves the backend from
+    # the service registry, so this fails the moment registration lapses --
+    # which is a different failure from the app being down.
+    for n in $NODES; do
+        rc=$(on "$n" "curl -s -o /dev/null -w '%{http_code}' --max-time 8 'http://api.svc.homelab:3000/api/v1/search?q=x'" 2>/dev/null)
+        case "$rc" in
+            401) ok "$n gateway -> search reachable (401 unauthenticated, as it should be)" ;;
+            502) bad "$n gateway says homelab-search is not available -- check homelab-search-register.timer" ;;
+            *)   bad "$n gateway returned '$rc'" ;;
+        esac
+    done
+    REG=$(on "$PRIMARY" "sudo -u postgres psql -d homelab -Atc \"SELECT count(*) FROM api.service_registry WHERE feature_name='homelab-search'\"" 2>/dev/null)
+    [ "${REG:-0}" = 3 ] && ok "all three nodes registered" || bad "${REG:-0}/3 nodes in the service registry"
+
     step "schema, isolation and index state"
     EXT=$(on "$PRIMARY" "sudo -u postgres psql -d homelab -Atc \"SELECT count(*) FROM pg_extension WHERE extname IN ('pg_trgm','unaccent','btree_gin')\"" 2>/dev/null)
     [ "$EXT" = 3 ] && ok "pg_trgm, unaccent, btree_gin present" || bad "only $EXT/3 extensions present"
@@ -352,8 +367,17 @@ step "3c. normalise the web-app config on $NODE1"
 # runs as vmail and the agent credential is 0600 homelab:homelab), and left
 # hypnotoad with no writable pid path. Hosts configured by that version have
 # to be repaired, not skipped.
-on "$NODE1" "sudo perl -0pi -e 's/\nregistry:\n  host: [^\n]*\n  port: [^\n]*\n//' $CONFIG" 2>/dev/null \
-    && ok "no registry: block (it cannot work for this app)" || warn "could not strip registry:"
+# registry: IS needed -- not by the app (which runs as vmail and must not
+# hold the agent credential) but by homelab-search-register, the timer that
+# keeps the gateway's routing entry for this node fresh. An earlier version of
+# this script stripped it, which left /api/v1/search returning
+# "homelab-search is not currently available".
+if on "$NODE1" "grep -q '^registry:' $CONFIG" 2>/dev/null; then
+    ok "registry block present (the gateway resolves this node through it)"
+else
+    on "$NODE1" "printf '\nregistry:\n  host: 10.50.2.214\n  port: 2517\n' | sudo tee -a $CONFIG >/dev/null" \
+        && ok "registry block added" || bad "could not add the registry block"
+fi
 # An earlier version of this script wrote web_theme.base_url =
 # https://static.mailmasker.org, overriding homelab-webtheme's correct default
 # of .../theme/v1. theme.css then 404'd and every rule using a var(--...)
@@ -392,6 +416,15 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends h
     scp -q -o ConnectTimeout=15 "$SCRATCH/config.yml" "$n:/tmp/search-config.yml" || { bad "$n copy failed"; continue; }
     on "$n" "sudo install -o root -g homelab -m 640 /tmp/search-config.yml $CONFIG && rm -f /tmp/search-config.yml" \
         && ok "$n config placed" || { bad "$n could not place config"; continue; }
+    # registry.host is the ONE per-node value in an otherwise shared config,
+    # so it has to be rewritten after the copy -- same as drive-orchestrate.sh
+    # does for its own advertise address. Leaving node 1's address here would
+    # make all three register as node 1 and the gateway would send every
+    # request to one host.
+    svc="10.50.2.$(( ${n##*.} ))"
+    on "$n" "sudo sed -i 's#^  host: 10\.50\.2\.[0-9]*#  host: $svc#' $CONFIG" \
+        && ok "$n registry.host -> $svc" || bad "$n could not set registry.host"
+    on "$n" "sudo systemctl enable --now homelab-search-register.timer >/dev/null 2>&1; sudo systemctl start homelab-search-register.service" >/dev/null 2>&1
     on "$n" "sudo systemctl restart homelab-search-indexer" >/dev/null 2>&1
     on "$n" "systemctl is-active --quiet homelab-search-indexer" \
         && ok "$n indexer running" || bad "$n indexer not running"

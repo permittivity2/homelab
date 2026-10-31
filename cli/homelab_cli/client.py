@@ -265,6 +265,14 @@ class Client:
     # paths are that same API with a /drive/ prefix added by the
     # gateway). Uploads/downloads get a longer timeout than the default;
     # everything else here is a quick JSON call. ---
+    def search(self, token, **filters):
+        """Unified search over mail and drive, through homelab-api's search
+        gateway. Only filters the caller actually set are sent, so the server
+        applies its own defaults rather than receiving a wall of empty
+        strings it has to treat as 'unset'."""
+        params = {k: v for k, v in filters.items() if v not in (None, "", False)}
+        return self._request("GET", "/api/v1/search", headers=self._auth(token), params=params)
+
     def drive_list_files(self, token, folder_id=None):
         params = {"folder_id": folder_id} if folder_id else {}
         return self._request("GET", "/api/v1/drive/files", headers=self._auth(token), params=params)

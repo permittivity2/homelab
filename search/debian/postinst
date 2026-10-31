@@ -169,6 +169,14 @@ case "$1" in
 
         # The indexer writes the index; the web app serves it. Both run as
         # uid 5000 and both are enabled here.
+        # The registrar's timer, which keeps the gateway's routing entry for
+        # this node fresh. Enabled separately from the two services because
+        # it is a timer, and because it is the one unit that runs as homelab.
+        systemctl enable homelab-search-register.timer >/dev/null 2>&1 || true
+        systemctl start  homelab-search-register.timer >/dev/null 2>&1 || true
+        systemctl start  homelab-search-register.service >/dev/null 2>&1 \
+            || echo "  NOTE: first registry registration failed -- the timer will retry."
+
         for unit in homelab-search-indexer homelab-search; do
             systemctl enable "$unit" >/dev/null 2>&1 || true
             if systemctl is-active --quiet "$unit"; then

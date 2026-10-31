@@ -809,3 +809,31 @@ def test_audit_list_non_capability_cross_user_raises_403(client):
         with pytest.raises(ApiError) as exc_info:
             client.audit_list("the-jwt", affecting="someone-else@b.com")
     assert exc_info.value.status_code == 403
+
+
+def test_search_sends_only_the_filters_that_were_set(client):
+    """Unset filters must not be sent.
+
+    The server treats a missing parameter as "no filter" and applies its own
+    default; sending from="" and mime="" instead would make every search look
+    filtered, and `_searched()` on the server decides whether to run a query
+    at all from exactly that.
+    """
+    with patch("requests.request", return_value=_mock_response(200, {"mail": [], "drive": []})) as m:
+        client.search("the-jwt", q="invoice", person=None, source="both",
+                      has_attachments=False, limit=25)
+    params = m.call_args.kwargs["params"]
+    assert params == {"q": "invoice", "source": "both", "limit": 25}
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/search")
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer the-jwt"
+
+
+def test_search_passes_date_and_type_filters_through(client):
+    with patch("requests.request", return_value=_mock_response(200, {"mail": [], "drive": []})) as m:
+        client.search("the-jwt", q="report", **{"from": "2026-01-01"},
+                      to="2026-06-30", mime="application/pdf", in_trash=True)
+    params = m.call_args.kwargs["params"]
+    assert params["from"] == "2026-01-01"
+    assert params["to"] == "2026-06-30"
+    assert params["mime"] == "application/pdf"
+    assert params["in_trash"] is True
