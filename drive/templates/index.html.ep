@@ -47,17 +47,38 @@
           <option value="mail">Mail only</option>
         </select>
       </div>
-      <div class="field" data-only="drive">
-        <label for="ds-mime">File type</label>
-        <select id="ds-mime" name="mime">
-          <option value="">Any type</option>
-          <option value="text">Text</option>
-          <option value="image">Images</option>
-          <option value="application/pdf">PDF</option>
-          <option value="video">Video</option>
-          <option value="audio">Audio</option>
+%# File type, include AND exclude -- the same control and the same wire
+%# format as the search page's own filters.
+%#
+%# These are the GROUP keys only. The canonical list, the labels, the
+%# per-type members and the expansion to (type, subtype) all live in
+%# search/lib/Homelab/Search/Mime.pm; what crosses between the two apps is
+%# the `cat:<key>` token, and that is the contract. Drive deliberately does
+%# NOT offer the granular per-type list the search page does: that list is
+%# built from the signed-in account's own index, which drive has no access to
+%# (and should not -- it has no grant on the search schema). Widening to an
+%# exact subtype is a click away on the search page itself.
+%#
+%# A key search no longer knows is dropped there, not errored, so the worst
+%# case if this list ever falls behind is a filter that does nothing.
+% my @GROUPS = (
+%   [ pictures => 'Pictures' ], [ pdf => 'PDF' ], [ text => 'Text' ],
+%   [ videos => 'Videos' ], [ audio => 'Audio' ], [ documents => 'Documents' ],
+%   [ spreadsheets => 'Spreadsheets' ], [ presentations => 'Presentations' ],
+%   [ archives => 'Archives' ], [ calendar => 'Calendar' ],
+%   [ email => 'Email messages' ], [ code => 'Code and data' ],
+% );
+% for my $d (['type_in','include'], ['type_ex','exclude']) {
+      <div class="field">
+        <label for="ds-<%= $d->[0] %>">File type — <%= $d->[1] %></label>
+        <select id="ds-<%= $d->[0] %>" name="<%= $d->[0] %>" multiple size="6">
+% for my $g (@GROUPS) {
+          <option value="cat:<%= $g->[0] %>"><%= $g->[1] %></option>
+% }
         </select>
       </div>
+% }
+      <p class="fnote">Pick more than one with Ctrl- (or ⌘-) click.</p>
       <div class="field">
         <label for="ds-from">From date</label>
         <input type="date" id="ds-from" name="from">

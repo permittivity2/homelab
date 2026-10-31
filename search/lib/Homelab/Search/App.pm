@@ -164,6 +164,7 @@ use Encode qw(decode FB_DEFAULT);
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::Common::SSOClient  qw(exchange_code);
 use Homelab::Search::Paths      qw(mailbox_dir_for drive_blob_for);
+use Homelab::Search::Mime       ();
 use Homelab::Search::MailParse  qw(parse_message);
 use Homelab::Search::Serve      qw(serve_mode);
 
@@ -257,6 +258,16 @@ sub _filters ($c) {
     }
     $f{source} = ($c->param('source') // 'both');
     $f{source} = 'both' unless $f{source} =~ /\A(?:both|mail|drive)\z/;
+
+    # Type include/exclude. Repeatable, and capped at 40 tokens each purely
+    # to bound the generated boolean -- a request with 5,000 of them should
+    # be a short query, not a long one. Homelab::Search::Mime drops anything
+    # malformed, so no validation belongs here.
+    for my $k (qw(type_in type_ex)) {
+        my @v = @{ $c->every_param($k) };
+        @v = @v[0 .. 39] if @v > 40;
+        $f{$k} = [ grep { defined && length } @v ];
+    }
     return \%f;
 }
 
@@ -267,7 +278,8 @@ sub _searched ($f) {
              || length($f->{from} // '') || length($f->{to} // '')
              || length($f->{mime} // '') || length($f->{mailbox} // '')
              || $f->{in_trash} || $f->{has_attachments}
-             || $f->{min_size} || $f->{max_size};
+             || $f->{min_size} || $f->{max_size}
+             || @{ $f->{type_in} // [] } || @{ $f->{type_ex} // [] };
     return 0;
 }
 
@@ -302,6 +314,8 @@ sub index ($c) {
         drive      => $drive,
         mailboxes  => ($acct ? $c->app->query->mailboxes($acct->{account_id}) : []),
         counts     => ($acct ? $c->app->query->counts($acct->{account_id})    : {}),
+        mime_cats  => Homelab::Search::Mime::categories(),
+        mime_facets => ($acct ? $c->app->query->mime_facets($acct->{account_id}) : []),
         searched   => _searched($f),
     );
 }
@@ -344,6 +358,27 @@ sub _message_path ($c, $m) {
     };
 }
 
+# Why a file cannot be served, told apart properly.
+#
+# "no longer on disk" was reported for all three of these, and for the one
+# that mattered it was the wrong answer: drive stored every blob over 256 KB
+# as 0600, so this app (uid 5000) got EACCES on exactly the photos and PDFs
+# people click, and said the file was gone. It was not gone; it was ours to
+# fix. An unreadable file is an operator fault, it gets a 503 and a logged
+# error, and it never again looks to a user like their data vanished.
+sub _unservable ($c, $path, $what) {
+    return ("that $what is not available", 404) unless defined $path;
+    return () if -r $path;
+    unless (-e $path) {
+        $c->app->log->info("serve: $what gone from disk: $path");
+        return ("that $what is no longer on disk", 410);
+    }
+    $c->app->log->error("serve: $what is present but UNREADABLE by uid $> -- "
+        . "check the blob's mode/group and the export: $path");
+    return ("that $what is on disk but this server cannot read it; "
+        . "the error has been logged for an administrator", 503);
+}
+
 sub mail_preview ($c) {
     my ($email, $acct) = _scope($c);
     return $c->render(text => 'not logged in', status => 401) unless $email && $acct;
@@ -351,8 +386,8 @@ sub mail_preview ($c) {
         or return $c->render(text => 'not found', status => 404);
 
     my $path = _message_path($c, $m);
-    return $c->render(text => 'message file is no longer on disk', status => 410)
-        unless $path && -r $path;
+    my ($why, $status) = _unservable($c, $path, 'message');
+    return $c->render(text => $why, status => $status) if $why;
 
     open(my $fh, '<', $path) or return $c->render(text => 'unreadable', status => 500);
     binmode $fh; local $/ = undef; my $raw = <$fh>; close $fh;
@@ -373,8 +408,8 @@ sub mail_download ($c) {
     my $m = $c->app->query->message($acct->{account_id}, $c->stash('id'))
         or return $c->render(text => 'not found', status => 404);
     my $path = _message_path($c, $m);
-    return $c->render(text => 'message file is no longer on disk', status => 410)
-        unless $path && -r $path;
+    my ($why, $status) = _unservable($c, $path, 'message');
+    return $c->render(text => $why, status => $status) if $why;
 
     my $name = $m->{subject} // 'message';
     $name =~ s/[^\w.\- ]+/_/g;
@@ -395,8 +430,8 @@ sub _drive_serve ($c, $force_download) {
         or return $c->render(text => 'not found', status => 404);
 
     my $path = eval { drive_blob_for($c->app->drive_root, $i->{file_uuid}) };
-    return $c->render(text => 'file is no longer on disk', status => 410)
-        unless $path && -r $path;
+    my ($why, $status) = _unservable($c, $path, 'file');
+    return $c->render(text => $why, status => $status) if $why;
 
     my ($mode, $ctype) = serve_mode($i->{mime_type});
     $mode = 'download' if $force_download;

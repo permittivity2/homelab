@@ -22,8 +22,43 @@ case "$1" in
         # real-disk, same-filesystem reasoning so finalizing is a rename.
         mkdir -p /var/lib/homelab "$CONFIG_DIR" /var/lib/homelab/drive-storage \
             /var/lib/homelab/drive-storage/.uploads-tmp /var/lib/homelab/drive-storage/.partials
-        chown homelab:homelab /var/lib/homelab /var/lib/homelab/drive-storage \
+        chown homelab:homelab /var/lib/homelab \
             /var/lib/homelab/drive-storage/.uploads-tmp /var/lib/homelab/drive-storage/.partials
+
+        # drive-storage is GROUP vmail(5000) + setgid, and its blobs are
+        # 0640 -- owner (this service) rw, group r, others nothing.
+        #
+        # Why group 5000 specifically, and why numeric: homelab-search
+        # reads these blobs over the read-only NFS export as uid 5000, and
+        # the NAS has `manage-gids=y`, so the server DISCARDS the client's
+        # supplementary group list and resolves groups locally by uid. On
+        # the NAS uid 5000 resolves to exactly {5000}, so 5000 is the only
+        # group that can grant it read. (The group it had, 1001, is
+        # `vault` on the NAS -- a group containing one human and not the
+        # reader, so 0640 with that group would have locked search out of
+        # every file rather than letting it in.) Numeric because this host
+        # has no vmail user at all; only the number crosses NFS anyway.
+        #
+        # setgid is what keeps it true without privilege: the service runs
+        # as homelab and is not a member of group 5000, so it cannot chgrp
+        # its own uploads -- the directory assigns the group for it.
+        chown homelab:5000 /var/lib/homelab/drive-storage || true
+        chmod g+s /var/lib/homelab/drive-storage || true
+
+        # Reconcile blobs written before the rule existed. Mojolicious
+        # hands `move_to` either a Mojo::Asset::Memory (spurts a fresh
+        # file under our umask -> 0644) or, once the body passes
+        # max_memory_size, a File::Temp already on disk (move_to is a
+        # rename, which PRESERVES File::Temp's 0600) -- so a blob's mode
+        # used to depend on whether it crossed 256 KB. It is not a
+        # migration artifact: every one of the 109 live 0600 files was
+        # over that threshold and all 30,403 under it were 0644. The
+        # 0600 ones were unreadable by search, which could only report
+        # them as missing. The test skips files already correct, so this
+        # is a cheap stat sweep on every upgrade after the first.
+        find /var/lib/homelab/drive-storage -maxdepth 1 -type f \
+             \( ! -group 5000 -o ! -perm 640 \) \
+             -exec chgrp 5000 {} + -exec chmod 0640 {} + 2>/dev/null || true
 
         # Shared manifest dir -- may not exist yet if homelab-agent isn't
         # installed on this host first (install order isn't guaranteed

@@ -1,5 +1,6 @@
 package Homelab::Search::Query;
 use Mojo::Base -base, -signatures;
+use Homelab::Search::Mime qw(token_sql);
 
 has 'pg';
 has 'log';
@@ -119,6 +120,23 @@ sub search_mail ($self, $account_id, $f) {
     push @where, 'coalesce(m.sent_at, m.received_at) >= ?::date' and push @where_bind, $from if $from;
     push @where, 'coalesce(m.sent_at, m.received_at) <  (?::date + 1)' and push @where_bind, $to if $to;
     push @where, 'm.has_attachments' if $f->{has_attachments};
+    # A type filter on MAIL means "has an attachment of this type" -- the
+    # message itself has no interesting mime. Include is EXISTS, exclude is
+    # NOT EXISTS over the same set, which (deliberately) also keeps messages
+    # with no attachments at all: "not a picture" should not mean "must have
+    # an attachment that isn't a picture".
+    for my $spec ([ $f->{type_in}, 0 ], [ $f->{type_ex}, 1 ]) {
+        my ($frag, @b) = token_sql('ta', $spec->[0], 0);
+        next unless $frag;
+        my $exists = qq{EXISTS (
+            SELECT 1 FROM search.attachments at
+              JOIN search.mime_types ta USING (mime_type_id)
+             WHERE at.message_id = m.message_id
+               AND at.account_id = m.account_id
+               AND $frag)};
+        push @where, ($spec->[1] ? "NOT $exists" : $exists);
+        push @where_bind, @b;
+    }
     push @where, 'mb.name = ?' and push @where_bind, $f->{mailbox} if defined $f->{mailbox} && length $f->{mailbox};
 
     my $sql = qq{
@@ -172,6 +190,12 @@ sub search_drive ($self, $account_id, $f) {
     if (defined $f->{mime} && $f->{mime} =~ m{\A([a-z]+)(?:/([a-z0-9.+-]+))?\z}) {
         push @where, 't.type = ?'; push @where_bind, $1;
         if (defined $2) { push @where, 't.subtype = ?'; push @where_bind, $2 }
+    }
+    # Include/exclude by type. The file's OWN type here; for mail the same
+    # tokens match its attachments (see search_mail).
+    for my $spec ([ $f->{type_in}, 0 ], [ $f->{type_ex}, 1 ]) {
+        my ($frag, @b) = token_sql('t', $spec->[0], $spec->[1]);
+        push @where, $frag and push @where_bind, @b if $frag;
     }
     # content_created_at is the file's OWN date and is NULL for everything
     # uploaded before drive migration 012, so the date filter falls back to
@@ -270,6 +294,30 @@ sub counts ($self, $account_id) {
             SELECT (SELECT count(*) FROM search.messages    WHERE account_id = ?) AS messages,
                    (SELECT count(*) FROM search.drive_items WHERE account_id = ? AND deleted_at IS NULL) AS drive_items},
             $account_id, $account_id)->hash;
+    });
+}
+
+# The leaf types THIS account actually has, for the granular half of the
+# type picker. Per-account on purpose: a global list of every mime type in
+# the index would tell one person that somebody, somewhere, stores .dwg --
+# small, but it is still a fact about another account, and the whole schema
+# is built so that cannot happen by accident. Both sides are unioned because
+# the picker is shared: a type may exist only as an attachment, or only on
+# drive, and either way a person should be able to pick it.
+sub mime_facets ($self, $account_id) {
+    return $self->_scoped($account_id, sub ($db) {
+        $db->query(q{
+            SELECT type || '/' || subtype AS mime, sum(n)::bigint AS n FROM (
+                SELECT t.type, t.subtype, count(*) AS n
+                  FROM search.drive_items i JOIN search.mime_types t USING (mime_type_id)
+                 WHERE i.account_id = ? AND i.deleted_at IS NULL
+                 GROUP BY 1, 2
+                UNION ALL
+                SELECT t.type, t.subtype, count(*) AS n
+                  FROM search.attachments a JOIN search.mime_types t USING (mime_type_id)
+                 WHERE a.account_id = ?
+                 GROUP BY 1, 2
+            ) u GROUP BY 1 ORDER BY 2 DESC, 1}, $account_id, $account_id)->hashes;
     });
 }
 

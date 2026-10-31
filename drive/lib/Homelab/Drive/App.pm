@@ -452,7 +452,7 @@ sub _claim_and_deliver_zip_placement ($self) {
         ($row->{mime_type} // 'application/octet-stream'), $row->{dest_folder_id},
     )->hash;
     my $dest = $self->storage_path . '/' . $file_row->{uuid};
-    $asset->move_to($dest);
+    $self->_store_blob($asset, $dest);
 
     unless (defined $row->{mime_type}) {
         my $sniffed = eval { $PLACEMENT_MAGIC->checktype_filename($dest) };
@@ -678,6 +678,7 @@ sub _run_append_jobs ($self) {
                     $job->{id}, $attempt);
                 return;
             }
+            $self->_blob_mode($dest);
             my $sniffed = eval { $PLACEMENT_MAGIC->checktype_filename($dest) };
             $pdb->query('UPDATE drive.files SET mime_type = ? WHERE id = ?', $sniffed, $file->{id})
                 if $sniffed;
@@ -781,6 +782,42 @@ sub _purge_expired_trash ($self) {
     my $n = scalar(@$files) + scalar(@$folders);
     $self->log->info("purged $n expired trash item(s)") if $n;
     return;
+}
+
+# The ONE place a stored blob's bytes land on disk.
+#
+# It exists because `move_to` does not give a consistent file mode and the
+# inconsistency is invisible until something else tries to read the file.
+# Mojolicious picks the asset class by size: under `max_memory_size` (256 KB)
+# the body is a Mojo::Asset::Memory and `move_to` spurts a brand-new file
+# under our umask -> 0644; over it the body is already a File::Temp in
+# MOJO_TMPDIR and `move_to` is a rename on the same filesystem, which
+# PRESERVES File::Temp's 0600. So a blob's permissions used to depend on
+# whether the upload crossed 256 KB, which is not a rule anything here meant
+# to have: of 30,512 live files, the 109 at 0600 were ALL over the threshold
+# and all 30,403 under it were 0644.
+#
+# That reads as "large files are private", and the practical effect was that
+# homelab-search -- which reads these blobs over the read-only NFS export as
+# uid 5000 -- got EACCES on exactly the photos and PDFs people most want to
+# open, and could only report them as no longer on disk.
+#
+# 0640: owner (this service) rw, group r, others nothing. The GROUP comes
+# from the setgid bit on the storage directory, not from here, because this
+# service is not a member of group 5000 and so cannot chgrp its own uploads
+# -- see debian/postinst, which owns that half of the rule.
+# Four paths put bytes into storage -- a plain upload, a chunked upload's
+# finalize, an append/concat job and a zip placement -- and three of them are
+# a rename of a file somebody else created, so every one of them has to say
+# the mode out loud. They all go through here.
+sub _blob_mode ($self, $dest) {
+    $self->log->error("chmod 0640 $dest failed: $!") unless chmod 0640, $dest;
+    return $dest;
+}
+
+sub _store_blob ($self, $asset, $dest) {
+    $asset->move_to($dest);
+    return $self->_blob_mode($dest);
 }
 
 package Homelab::Drive::App::Controller::Drive;
@@ -1138,7 +1175,7 @@ sub _save_upload ($c, $email, $upload, $folder_id) {
     )->hash;
 
     my $dest = $c->app->storage_path . '/' . $row->{uuid};
-    $upload->move_to($dest);
+    $c->app->_store_blob($upload, $dest);
 
     # The client-declared Content-Type used in the INSERT above is never
     # trustworthy (a browser/script can send anything, including a
@@ -1338,6 +1375,7 @@ sub _finalize_upload_session ($c, $session, $partial) {
             die "could not move finalized upload into storage: $err\n";
         }
     }
+    $c->app->_blob_mode($dest);
 
     $c->app->pg->db->query(
         q{UPDATE drive.upload_sessions SET state = 'completed', result_file_id = ?, updated_at = NOW() WHERE id = ?},

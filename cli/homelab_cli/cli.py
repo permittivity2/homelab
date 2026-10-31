@@ -1284,6 +1284,8 @@ def cmd_search(args):
             source=args.source,
             mailbox=args.mailbox,
             mime=args.type,
+            type_in=args.include_type,
+            type_ex=args.exclude_type,
             has_attachments=args.attachments,
             in_trash=args.trash,
             limit=args.limit,
@@ -2480,6 +2482,14 @@ def build_parser():
                    help="Search mail, files, or both (default: both)")
     p.add_argument("--mailbox", help="Restrict to one mailbox")
     p.add_argument("--type", help="File type: text, image, application/pdf, video, audio")
+    # Include/exclude by type, repeatable. A value is either a group
+    # (cat:pictures, cat:documents...), a whole top-level type (image/*), or
+    # one exact type (image/png) -- the same three widths the web filters
+    # offer, and the same tokens. On mail they match a message's attachments.
+    p.add_argument("--include-type", action="append", metavar="TYPE", default=[],
+                   help="Only these types; repeatable. cat:pictures | image/* | image/png")
+    p.add_argument("--exclude-type", action="append", metavar="TYPE", default=[],
+                   help="Leave these types out; repeatable. Same forms as --include-type")
     p.add_argument("--attachments", action="store_true", help="Only mail with attachments")
     p.add_argument("--trash", action="store_true", help="Search deleted files instead")
     p.add_argument("--limit", type=int, default=25, help="Maximum results per source (default 25)")

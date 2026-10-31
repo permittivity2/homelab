@@ -47,6 +47,16 @@
     width: 100%; max-width: 100%; min-width: 0; background: var(--black-primary);
     color: var(--text-primary); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 0 10px; font-size: 16px; min-height: 40px; }
+  /* A multi-select sizes from `size`; the single-line height above would
+     squash it to one scrolling row. 16px font stays -- below that iOS zooms
+     the page on focus. */
+  .drive-search .field select[multiple] {
+    height: auto; min-height: 0; padding: 6px 8px; line-height: 1.5; }
+  .drive-search .field select[multiple] optgroup { color: var(--text-muted); }
+  .drive-search .field select[multiple] option { padding: 3px 2px; }
+  .drive-search .fnote {
+    grid-column: 1 / -1; margin: 0; font-size: var(--app-xs);
+    color: var(--text-muted); line-height: 1.5; }
   .drive-search .checks {
     display: flex; flex-wrap: wrap; gap: var(--space-5); margin-top: var(--space-3); }
   .drive-search .checks label {

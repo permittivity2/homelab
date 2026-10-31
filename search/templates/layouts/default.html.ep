@@ -57,6 +57,18 @@
       border: 1px solid var(--border); border-radius: var(--radius-sm);
       padding: 0 10px; font-size: 16px; min-height: 44px;
     }
+    /* A multi-select sizes itself from `size`, so the 44px single-line
+       padding/height rules above would squash it into a one-row list that
+       scrolls -- the whole point of the control is seeing several options at
+       once. 16px font stays: anything smaller and iOS zooms the page on
+       focus. */
+    .field select[multiple] { height: auto; min-height: 0; padding: 6px 8px; line-height: 1.5; }
+    .field select[multiple] optgroup { color: var(--text-muted); font-size: var(--app-xs); }
+    .field select[multiple] option { padding: 3px 2px; color: var(--text-primary); }
+    .fnote {
+      grid-column: 1 / -1; margin: 0; font-size: var(--app-xs);
+      color: var(--text-muted); line-height: 1.5;
+    }
 
     .checks { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
     .checks label {

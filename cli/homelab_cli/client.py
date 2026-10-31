@@ -270,7 +270,11 @@ class Client:
         gateway. Only filters the caller actually set are sent, so the server
         applies its own defaults rather than receiving a wall of empty
         strings it has to treat as 'unset'."""
-        params = {k: v for k, v in filters.items() if v not in (None, "", False)}
+        # An empty list has to go too, not just an empty string: requests
+        # would drop it anyway, but a repeatable filter reads more clearly
+        # as "absent" than as "present and empty".
+        params = {k: v for k, v in filters.items()
+                  if v not in (None, "", False) and v != [] and v != ()}
         return self._request("GET", "/api/v1/search", headers=self._auth(token), params=params)
 
     def drive_list_files(self, token, folder_id=None):

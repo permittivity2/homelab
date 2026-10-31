@@ -16,6 +16,7 @@
 %# narrowed search never hides why it is narrowed.
 % my $filters_on = (length($f->{person}) || length($f->{from}) || length($f->{to})
 %                || length($f->{mailbox}) || length($f->{mime})
+%                || @{ $f->{type_in} // [] } || @{ $f->{type_ex} // [] }
 %                || $f->{has_attachments} || $f->{in_trash} || $f->{source} ne 'both') ? 1 : 0;
 <form class="searchbar" method="get" action="/">
   <div class="askrow">
@@ -62,15 +63,42 @@
 % }
         </select>
       </div>
-      <div class="field" data-only="drive">
-        <label for="mime">File type</label>
-        <select id="mime" name="mime">
-          <option value="">Any type</option>
-% for my $m (['text','Text'],['image','Images'],['application/pdf','PDF'],['video','Video'],['audio','Audio']) {
-          <option value="<%= $m->[0] %>"<%= $f->{mime} eq $m->[0] ? ' selected' : '' %>><%= $m->[1] %></option>
+%# File type, include AND exclude.
+%#
+%# Two multi-selects rather than a grid of checkboxes: with 12 groups plus
+%# the account's own leaf types, a checkbox per option per direction is a
+%# hundred-odd controls inside a panel whose whole point is not being a wall
+%# of form. A native <select multiple> is also the one control that already
+%# works on a phone without JavaScript.
+%#
+%# Each list holds the curated GROUPS first (Pictures, PDF, Text... -- the
+%# ones people actually reach for) and then the specific types this account
+%# really has, so "videos" and "exactly video/quicktime" are the same
+%# mechanism at two widths. See Homelab::Search::Mime.
+% my %tin = map { $_ => 1 } @{ $f->{type_in} // [] };
+% my %tex = map { $_ => 1 } @{ $f->{type_ex} // [] };
+% for my $d (['type_in','include',\%tin], ['type_ex','exclude',\%tex]) {
+%   my ($name, $word, $sel) = @$d;
+      <div class="field">
+        <label for="<%= $name %>">File type — <%= $word %></label>
+        <select id="<%= $name %>" name="<%= $name %>" multiple size="6">
+          <optgroup label="Groups">
+% for my $cat (@$mime_cats) {
+            <option value="cat:<%= $cat->{key} %>"<%= $sel->{'cat:' . $cat->{key}} ? ' selected' : '' %>><%= $cat->{label} %></option>
+% }
+          </optgroup>
+% if (@$mime_facets) {
+          <optgroup label="Specific types you have">
+%   for my $mf (@$mime_facets) {
+            <option value="<%= $mf->{mime} %>"<%= $sel->{$mf->{mime}} ? ' selected' : '' %>><%= $mf->{mime} %> (<%= $mf->{n} %>)</option>
+%   }
+          </optgroup>
 % }
         </select>
       </div>
+% }
+      <p class="fnote">Pick more than one with Ctrl- (or ⌘-) click. On email, a
+        type matches the message's <em>attachments</em>.</p>
     </div>
     <div class="checks">
       <label data-only="mail"><input type="checkbox" name="has_attachments" value="1"<%= $f->{has_attachments} ? ' checked' : '' %>> Has attachments</label>
