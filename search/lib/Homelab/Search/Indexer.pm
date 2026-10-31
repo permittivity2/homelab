@@ -105,20 +105,31 @@ sub new_from_config ($class, $config, $log) {
 # and no state to leak. The transaction here does no writes -- it exists only
 # to scope the lock -- so it ends in rollback; the actual upserts run on their
 # own pooled connections via Index::_tx.
+# NOTE ON ENDING THE TRANSACTION: Mojo::Pg::Transaction (4.28) has commit(),
+# db(), new() and DESTROY -- and NO rollback() method. A transaction that is
+# not committed is rolled back by its destructor when it goes out of scope, so
+# the lock is released by letting $tx fall out of the block below, not by
+# calling rollback on it. Calling $tx->rollback dies with "Can't locate object
+# method", and because the enqueues happen BEFORE that line the symptom was
+# subtle: discovery did its work, then threw, the caller logged the error, and
+# the advisory lock lingered until garbage collection -- which looked exactly
+# like healthy single-flight contention ("another host is discovering") on
+# every host.
 sub discover ($self) {
-    my $db  = $self->pg->db;
-    my $tx  = $db->begin;
-    my $got = $db->query('SELECT pg_try_advisory_xact_lock(?) AS ok', DISCOVERY_LOCK)->hash->{ok};
+    my $db = $self->pg->db;
+    my ($got, $n, $err) = (0, 0, undef);
+    {
+        my $tx = $db->begin;
+        $got = $db->query('SELECT pg_try_advisory_xact_lock(?) AS ok', DISCOVERY_LOCK)->hash->{ok};
+        if ($got) {
+            eval { $n = $self->_discover_mail + $self->_discover_drive; 1 } or $err = $@ || 'discovery failed';
+        }
+    }   # $tx destroyed here -> ROLLBACK -> the xact lock is released
     unless ($got) {
-        $tx->rollback;
         $self->log->debug('another host is discovering; skipping');
         return 0;
     }
-    my $n = 0;
-    my $ok = eval { $n = $self->_discover_mail + $self->_discover_drive; 1 };
-    my $err = $@;
-    $tx->rollback;
-    die $err unless $ok;
+    die $err if defined $err;
     return $n;
 }
 
