@@ -434,10 +434,43 @@ def test_drive_list_files_omits_folder_id_param_when_not_given(client):
 def test_drive_upload_file_passes_folder_id_as_form_data(client):
     fake_path = MagicMock()
     fake_path.name = "report.txt"
+    fake_path.stat.return_value.st_mtime = 1704067200.9
     with patch("builtins.open", mock_open(read_data=b"content")):
         with patch("requests.request", return_value=_mock_response(201, {"id": 7})) as m:
             client.drive_upload_file("the-jwt", fake_path, folder_id=5)
-    assert m.call_args.kwargs["data"] == {"folder_id": 5}
+    assert m.call_args.kwargs["data"]["folder_id"] == 5
+
+
+def test_drive_upload_file_sends_the_files_own_mtime(client):
+    """The file's own date, as an integer epoch.
+
+    Once the bytes land on the NFS share their mtime becomes the upload time,
+    so this is the only chance to record when the file was actually created
+    (drive migration 012). Truncated to an int because the server only accepts
+    digits -- a float would be rejected and silently stored as NULL.
+    """
+    fake_path = MagicMock()
+    fake_path.name = "report.txt"
+    fake_path.stat.return_value.st_mtime = 1704067200.9
+    with patch("builtins.open", mock_open(read_data=b"content")):
+        with patch("requests.request", return_value=_mock_response(201, {"id": 7})) as m:
+            client.drive_upload_file("the-jwt", fake_path)
+    assert m.call_args.kwargs["data"]["client_mtime"] == 1704067200
+
+
+def test_drive_upload_file_omits_mtime_when_unavailable(client):
+    """An unstattable path must not block the upload.
+
+    The date is advisory metadata; losing it is acceptable, failing the upload
+    over it is not.
+    """
+    fake_path = MagicMock()
+    fake_path.name = "report.txt"
+    fake_path.stat.side_effect = OSError("no such file")
+    with patch("builtins.open", mock_open(read_data=b"content")):
+        with patch("requests.request", return_value=_mock_response(201, {"id": 7})) as m:
+            client.drive_upload_file("the-jwt", fake_path)
+    assert "client_mtime" not in m.call_args.kwargs["data"]
 
 
 def test_drive_list_folders_sends_bearer_token(client):
