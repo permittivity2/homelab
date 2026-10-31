@@ -19,6 +19,12 @@
 # stopped -- a stopped container still backs up fine, and keying on VMID means
 # an edge rotation cannot shuffle a node between jobs.
 #
+# SEARCH HOSTS 470/471/472 joined the position jobs on 2026-10-31. They are a
+# pool of three like any other tier, so they split across pos1/pos2/pos3 by
+# position -- and they are NOT bare spares even though they were cloned from
+# one: they hold the search index hosts' own config and read-only mounts of the
+# mail and drive stores.
+#
 # A FOURTH JOB exists for the bare spares (445, 447-461, 468): monthly, keeping
 # two. They hold nothing today (zero homelab packages, zero service manifests),
 # so weekly copies of empty machines would be ~12GB/week of nothing -- but
@@ -87,9 +93,9 @@ RC=0
 
 # id | schedule | comment | prune-backups | vmid list
 JOBS=(
-"fleet-pos1|mon 03:13|Fleet position 1 - first of each failover set, plus singletons|$RET_SETS|400,403,406,409,412,415,418,421,424,427,430,433,436,439,442,446,462,465,469"
-"fleet-pos2|tue 03:13|Fleet position 2 - second of each failover set|$RET_SETS|401,404,407,410,413,416,419,422,425,428,431,434,437,440,443,463,466"
-"fleet-pos3|wed 03:13|Fleet position 3 - third of each failover set|$RET_SETS|402,405,408,411,414,417,420,423,426,429,432,435,438,441,444,464,467"
+"fleet-pos1|mon 03:13|Fleet position 1 - first of each failover set, plus singletons|$RET_SETS|400,403,406,409,412,415,418,421,424,427,430,433,436,439,442,446,462,465,469,470"
+"fleet-pos2|tue 03:13|Fleet position 2 - second of each failover set|$RET_SETS|401,404,407,410,413,416,419,422,425,428,431,434,437,440,443,463,466,471"
+"fleet-pos3|wed 03:13|Fleet position 3 - third of each failover set|$RET_SETS|402,405,408,411,414,417,420,423,426,429,432,435,438,441,444,464,467,472"
 "fleet-spares|Thu *-*-01..07 03:13|Bare spares - monthly, first Thursday|$RET_SPARES|445,447,448,449,450,451,452,453,454,455,456,457,458,459,460,461,468"
 )
 
