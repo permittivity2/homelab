@@ -111,6 +111,43 @@ the INSERT. `body_text` keeps the full text, `tsv_source` holds only the prefix
 that was vectorized, and `truncated` records that it happened — which makes
 "was this fully indexed?" answerable instead of invisible.
 
+## Measured: full-text search under RLS cannot use the GIN index
+
+Worth knowing before Phase 2's query layer is written. It is not a
+configuration mistake and it is not obvious.
+
+A full-text query run as the runtime role does a **sequential scan**, even
+though `idx_bodies_tsv` exists and the planner uses it happily for the same
+predicate without RLS:
+
+```
+Seq Scan on message_bodies  (cost=0.00..4245.84 rows=1525)
+  Filter: ((RLS predicate) AND (tsv @@ '''invoic'''::tsquery))
+```
+
+The cause is Postgres's leakproof rule. `tsvector @@ tsquery` is not marked
+leakproof, so it may not be evaluated before the row-security qual — and
+using the GIN index would do exactly that. Three plausible explanations were
+ruled out by measuring rather than reasoning:
+
+- **not** the two OR'd policies: the identical predicate written as a plain
+  `WHERE` clause uses `Bitmap Index Scan on idx_bodies_tsv`;
+- **not** a missing explicit account filter: adding `account_id = 20`
+  alongside the policy changes the plan not at all;
+- **not** a missing composite index: a `GIN (account_id, tsv)` index built
+  with `btree_gin` was not used either, so it was dropped rather than left to
+  slow every insert for no benefit.
+
+**Measured cost: ~109 ms for 1,601 hits over 27,194 messages**, scaling
+linearly — so roughly 1.1 s at ten times this corpus. Fine now, worth fixing
+before it is not.
+
+The fix, when needed, is a `SECURITY DEFINER` search function taking the
+account id as an argument and doing the filtering itself, so the planner sees
+an ordinary query and can use the index; RLS stays on as the backstop for any
+direct table access. That is a query-layer decision and belongs with Phase 2,
+where the interface is actually written.
+
 ## pg_trgm is a prerequisite the package cannot install
 
 `CREATE EXTENSION` is superuser-only and this schema's migrate role
@@ -119,7 +156,7 @@ deliberately is not. Once, on the Patroni primary:
 ```sql
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE EXTENSION IF NOT EXISTS unaccent;
-CREATE EXTENSION IF NOT EXISTS btree_gin;
+CREATE EXTENSION IF NOT EXISTS btree_gin;   -- see the RLS/leakproof note above
 ```
 
 The migration tests for `pg_trgm` and builds GIN trigram indexes if present,
@@ -210,11 +247,28 @@ to recover. Those rows stay NULL and every reader falls back to `uploaded_at`.
 
 ## Install notes
 
-The postinst creates group `vmail` with **gid 5000** explicitly and adds
-`homelab` to it. The mail export is mode `0770` `5000:5000` and NFS here is
-`sec=sys`, so the *client* asserts the identity: an auto-allocated gid would
-not match and would fail as "every mailbox is empty" rather than as a
-permission error.
+**The indexer runs as uid 5000 (`vmail`), not as `homelab`.** The postinst
+creates that user and group with those exact fixed ids. Two independent
+reasons, both of which produce a silent empty index if you get them wrong:
+
+- **The store has two permission modes.** 21 account directories are `0770
+  vmail:vmail` and 5 are `0700 vmail:vmail` — dovecot creates new maildirs
+  `0700` by default. Group membership reads the older accounts and silently
+  misses every newly created one, so the gap grows with each new mailbox.
+  Presenting uid 5000 reads both.
+- **The NAS has `manage-gids=y`**, so the NFS server resolves the caller's
+  groups *locally by uid* and discards the supplementary group list the
+  client sends. A supplementary gid of 5000 therefore buys nothing over NFS;
+  only the uid and primary gid in the RPC credential count.
+
+Running as the store's owner does **not** make it writable: for these hosts
+the export is `ro=` on the *server*, so writes are refused whatever identity
+is presented. That is why the read-only grant was put on the server rather
+than left to a client mount option.
+
+> **Running the indexer by hand needs the same identity.**
+> `sudo -u vmail -g vmail homelab-search-indexer --once`
+> `sudo -u homelab …` reads *nothing* and logs "cannot read the mail root".
 
 `postrm purge` does **not** drop the `search` schema. It is rebuildable, but
 dropping a schema during a routine apt operation is the shape of the

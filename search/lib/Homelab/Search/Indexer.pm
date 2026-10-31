@@ -18,6 +18,9 @@ has drive_root   => '/srv/drive-ro';
 has lease_secs   => 300;
 has max_attempts => 5;
 has batch_size   => 200;
+# How often a full drive reconcile runs. The watermark and the deleted-state
+# check handle the common cases; this is the net for the rest.
+has reconcile_interval => 3600;
 
 # A long-running service on each of the three search hosts. ALL THREE INDEX;
 # none sits idle.
@@ -140,7 +143,12 @@ sub _discover_mail ($self) {
     my $root = $self->mail_root;
     my $enq  = 0;
 
-    opendir(my $rh, $root) or do { $self->log->warn("cannot read $root: $!"); return 0 };
+    opendir(my $rh, $root) or do {
+        $self->log->warn("cannot read the mail root $root: $! -- NO mail will be indexed."
+            . " The indexer must run as uid 5000 (vmail); by hand that means"
+            . " `sudo -u vmail -g vmail`, not `sudo -u homelab`.");
+        return 0;
+    };
     my @domains = grep { !/^\./ && -d "$root/$_" } readdir $rh;
     closedir $rh;
 
@@ -152,12 +160,26 @@ sub _discover_mail ($self) {
         for my $user (sort @users) {
             my $email = lc "$user\@$domain";
             my $acct  = $self->index->upsert_account($email, has_mail => 1) or next;
-            my $adir  = eval { maildir_for($root, $domain, $user) } or next;
+            my $adir  = eval { maildir_for($root, $domain, $user) };
+            unless ($adir) {
+                $self->log->warn("cannot resolve a maildir for $email: $@");
+                next;
+            }
 
             # INBOX is the account root in Maildir++; named folders are
             # dot-prefixed siblings.
             my @boxes = ('INBOX');
-            opendir(my $ah, $adir) or next;
+            # An UNREADABLE account must be loud. This was `or next`, which
+            # discarded EACCES without a word -- so five accounts whose
+            # directories dovecot had created 0700 were skipped entirely and
+            # the only symptom was a count that looked complete. A gap you
+            # cannot see is worse than a crash.
+            my $ah;
+            unless (opendir($ah, $adir)) {
+                $self->log->warn("cannot read the maildir for $email ($adir): $!"
+                    . " -- this account will NOT be indexed");
+                next;
+            }
             push @boxes, grep { /^\./ && $_ ne '.' && $_ ne '..' && -d "$adir/$_" } readdir $ah;
             closedir $ah;
 
@@ -184,35 +206,127 @@ sub _discover_mail ($self) {
 # only way that respects the rule in Homelab::Search::Paths: the storage
 # directory is never enumerated, and a blob is only opened for a uuid a
 # user_email-scoped query just returned.
+#
+# THREE QUERIES, NOT ONE SWEEP. The first version selected every row of
+# drive.files on every pass and enqueued all ~153 batches again, so the queue
+# grew without bound and mail indexing starved behind the churn while the
+# drive counts sat at a complete-looking 30,497. The fix is a watermark plus
+# two targeted checks, with a full sweep only on a slow timer:
+#
+#   1. id > watermark          -- new uploads. drive ids only increase.
+#   2. deleted-state mismatch  -- a file drive says is deleted that the index
+#                                 still shows live, or vice versa. Both sets
+#                                 are small, and this is what makes a trashed
+#                                 file leave the index on the NEXT pass rather
+#                                 than whenever a reconcile happens to run.
+#   3. full sweep              -- every reconcile_interval (default 1h), to
+#                                 catch anything the first two cannot see,
+#                                 such as a rename or a changed mime type.
 sub _discover_drive ($self) {
     my $dpg = $self->drive_pg or return 0;
     my $enq = 0;
 
-    my $rows = eval {
-        $dpg->db->query(q{
-            SELECT f.id, f.user_email
-              FROM drive.files f
-             ORDER BY f.id})->hashes;
-    };
-    unless ($rows) { $self->log->warn("drive discovery failed: $@"); return 0 }
+    my $now  = time;
+    my $last = $self->index->meta_get('drive_last_reconcile') // 0;
+    my $reconcile = ($now - $last) >= $self->reconcile_interval ? 1 : 0;
+
+    my @ids;
+
+    # (1) New uploads. drive ids only increase, so anything above the
+    #     watermark has never been seen.
+    my $mark = $self->index->drive_watermark;
+    my $new  = eval { $dpg->db->query('SELECT id FROM drive.files WHERE id > ? ORDER BY id', $mark)->hashes };
+    unless ($new) { $self->log->warn("drive discovery failed: $@"); return 0 }
+    push @ids, map { $_->{id} } @$new;
+
+    # (2) Deleted or restored. The id does not change, so the watermark cannot
+    #     see these -- and a trashed file must stop appearing in search on the
+    #     next pass, not whenever a reconcile happens to run.
+    my $live = $self->index->live_drive_ids;
+    my $gone = eval { $dpg->db->query('SELECT id FROM drive.files WHERE deleted_at IS NOT NULL')->hashes } // [];
+    my %gone_id;
+    for my $r (@$gone) {
+        $gone_id{ $r->{id} } = 1;
+        push @ids, $r->{id} if $live->{ $r->{id} };          # index still thinks it is live
+    }
+    my $idx_dead = eval {
+        $self->index->_tx(sub ($db) {
+            $db->query(q{SELECT drive_file_id FROM search.drive_items
+                          WHERE deleted_at IS NOT NULL AND drive_file_id IS NOT NULL})->hashes;
+        });
+    } // [];
+    for my $r (@$idx_dead) {
+        push @ids, $r->{drive_file_id} unless $gone_id{ $r->{drive_file_id} };   # restored
+    }
+
+    # (3) The slow net: a SET DIFFERENCE, not a re-index.
+    #
+    #     This deliberately enqueues NOTHING when the index is in sync. The
+    #     first version re-enqueued every file on a timer, which meant the
+    #     same 30k rows were re-upserted forever and mail indexing starved
+    #     behind the churn -- and because the drive counts looked complete,
+    #     nothing about it appeared wrong. A file in drive is immutable after
+    #     upload apart from deleted_at (there is no rename endpoint), so
+    #     "already indexed" really does mean "nothing to do".
+    if ($reconcile) {
+        my $all = eval { $dpg->db->query('SELECT id FROM drive.files')->hashes };
+        if ($all) {
+            my $have = $self->index->all_drive_ids;
+            my %in_drive;
+            my @missing;
+            for my $r (@$all) {
+                $in_drive{ $r->{id} } = 1;
+                push @missing, $r->{id} unless $have->{ $r->{id} };
+            }
+            my @purged = grep { !$in_drive{$_} } keys %$have;
+            push @ids, @missing;
+            if (@purged) {
+                my $d = $self->index->delete_drive_items([@purged]);
+                $self->log->info("drive reconcile: dropped $d index row(s) for purged file(s)");
+            }
+            $self->index->meta_set('drive_last_reconcile', $now);
+            $self->log->info(sprintf('drive reconcile: %d in drive, %d indexed, %d missing, %d purged',
+                scalar @$all, scalar(keys %$have), scalar @missing, scalar @purged));
+        }
+        else { $self->log->warn("drive reconcile failed: $@") }
+    }
+
+    my %seen; @ids = grep { defined $_ && !$seen{$_}++ } @ids;
+    $self->log->debug('drive: ' . scalar(@ids) . " change(s) to index") if @ids;
+
+    return 0 unless @ids;
+
+    # Group by owner so a batch belongs to one account, which keeps the
+    # account_id on the queue row meaningful.
+    my $ph = join ',', map { '?' } @ids;
+    my $own = eval { $dpg->db->query("SELECT id, user_email FROM drive.files WHERE id IN ($ph)", @ids)->hashes };
+    unless ($own) { $self->log->warn("drive owner lookup failed: $@"); return 0 }
 
     my %by_account;
-    for my $r (@$rows) {
+    for my $r (@$own) {
         my $acct = $self->index->upsert_account(lc $r->{user_email}, has_drive => 1) or next;
         push @{ $by_account{$acct} }, $r->{id};
     }
     for my $acct (sort keys %by_account) {
-        my @ids = @{ $by_account{$acct} };
-        while (my @chunk = splice @ids, 0, $self->batch_size) {
+        my @a = @{ $by_account{$acct} };
+        while (my @chunk = splice @a, 0, $self->batch_size) {
             $enq += $self->_enqueue(kind => 'drive_batch', account_id => $acct, file_ids => \@chunk);
         }
     }
     return $enq;
 }
 
-# Idempotent enqueue: an identical unclaimed unit already waiting is not
-# duplicated, so a discovery pass that overlaps a slow one does not double
-# the work.
+# Idempotent enqueue. "Already queued" must include units that are IN FLIGHT,
+# not just unclaimed ones.
+#
+# The first version checked `claimed_by IS NULL`, which meant: host A claims
+# mailbox 5, the next discovery pass does not see a free unit for mailbox 5 and
+# enqueues another, host B claims that one, and both index the same maildir at
+# once -- producing
+#   duplicate key value violates unique constraint "message_files_mailbox_id_uniq_part_key"
+# and parking 18 mailboxes. Dropping the claimed_by condition is the actual
+# fix; _do_mailbox tolerating the collision (below) is the belt to this braces,
+# because a lease can still expire under a slow worker.
 sub _enqueue ($self, %a) {
     my $db = $self->pg->db;
     my $tx = $db->begin;
@@ -220,7 +334,7 @@ sub _enqueue ($self, %a) {
     my $dup = $db->query(q{
         SELECT 1 FROM search.index_queue
          WHERE kind = ? AND account_id = ? AND coalesce(mailbox_id, -1) = coalesce(?, -1)
-           AND claimed_by IS NULL AND parked = FALSE
+           AND parked = FALSE
          LIMIT 1}, $a{kind}, $a{account_id}, $a{mailbox_id})->hash;
     if ($dup && $a{kind} eq 'mailbox') { $tx->commit; return 0 }
 
@@ -316,7 +430,11 @@ sub _do_mailbox ($self, $row) {
         my @st = stat($dir) or next;
         $newest = $st[9] if $st[9] > $newest;
 
-        opendir(my $dh, $dir) or next;
+        my $dh;
+        unless (opendir($dh, $dir)) {
+            $self->log->warn("cannot read $dir: $!  -- messages here will be missed");
+            next;
+        }
         while (defined(my $name = readdir $dh)) {
             next if $name =~ /^\./;
             my $path = "$dir/$name";
@@ -357,9 +475,23 @@ sub _do_mailbox ($self, $row) {
                     size_bytes => $fst[7], received_at => $fst[9], sent_at => $fst[9],
                 };
             }
-            $self->index->index_message(
-                account_id => $info->{account_id}, mailbox_id => $info->{mailbox_id},
-                parsed => $parsed, file => $file);
+            # A unique violation on (mailbox_id, uniq_part) means another worker
+            # indexed this message first -- which is a success, not an error.
+            # index_message runs in its own transaction, so the failed attempt
+            # leaves nothing behind. Anything else is a real failure and is
+            # re-thrown so the unit retries and eventually parks.
+            my $okmsg = eval {
+                $self->index->index_message(
+                    account_id => $info->{account_id}, mailbox_id => $info->{mailbox_id},
+                    parsed => $parsed, file => $file);
+                1;
+            };
+            if (!$okmsg) {
+                my $e = $@ // '';
+                die $e unless $e =~ /duplicate key value|unique constraint/i;
+                $self->log->debug("already indexed by another worker: $fl->{uniq_part}");
+                next;
+            }
             $indexed++;
         }
         closedir $dh;

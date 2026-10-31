@@ -6,27 +6,33 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=homelab
-# Group=vmail is load-bearing and NOT interchangeable with
-# SupplementaryGroups=vmail.
+# RUNS AS uid 5000 (vmail), the owner of the mail store, and this is not
+# interchangeable with "a member of group 5000".
 #
-# The mail store is mode 0770 vmail:vmail (uid/gid 5000), and the NAS has
-# `manage-gids=y` in /etc/nfs.conf -- which makes the NFS server resolve the
-# caller's groups LOCALLY, by uid, and discard the supplementary group list
-# the client sends. uid 118 (homelab here) is not in group 5000 on the NAS,
-# so supplementary membership buys nothing: only the PRIMARY gid in the RPC
-# credential is honoured. With SupplementaryGroups=vmail the indexer could
-# not open a single mailbox -- it read "Permission denied" on the mount root
-# while `id homelab` showed it in the group, which is as confusing as it
-# sounds.
+# The store has TWO permission modes on account directories: 21 are 0770
+# vmail:vmail and 5 are 0700 vmail:vmail. Dovecot creates new maildirs 0700 by
+# default, so group membership reads the older accounts and silently misses
+# every newly created one -- which is how dmarc-reports, johnboy002,
+# smoketest, routingprobe* and an e2e test account went unindexed while
+# everything looked finished. That gap would have grown with every new
+# mailbox.
 #
-# Running with primary gid 5000 does not make this writable: the export is
-# `ro=` on the SERVER for these hosts, so writes are refused regardless of
-# identity.
+# The NAS also has manage-gids=y, which makes the server resolve groups
+# locally by uid and discard the client's supplementary group list, so a
+# supplementary gid of 5000 buys nothing over NFS either. Presenting uid 5000
+# is what actually works.
+#
+# This does NOT make the store writable: for these three hosts the export is
+# `ro=` on the SERVER (see install-orchestrators/search-hosts-nfs.sh), so
+# writes are refused whatever identity we present. That is exactly why the
+# read-only grant was put on the server side rather than relying on a client
+# mount option.
+User=vmail
 Group=vmail
-# homelab stays as a supplementary group for the LOCAL config file
-# (/etc/homelab/search/config.yml is root:homelab 0640). Supplementary groups
-# work normally there -- the manage-gids problem is specific to NFS.
+# homelab as a supplementary group for the LOCAL config file
+# (/etc/homelab/search/config.yml is root:homelab 0640, and holds the DB
+# password). Supplementary groups work normally on a local filesystem; the
+# manage-gids problem is specific to NFS.
 SupplementaryGroups=homelab
 ExecStart=/usr/bin/homelab-search-indexer
 Restart=always

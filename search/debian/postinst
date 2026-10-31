@@ -26,6 +26,21 @@ case "$1" in
             addgroup --system --gid 5000 vmail 2>/dev/null \
                 || echo "  WARNING: could not create group vmail(5000) -- mail indexing will read nothing."
         fi
+        # And the USER, with the same fixed uid as the store's owner. The
+        # indexer runs as this uid because dovecot creates new maildirs 0700,
+        # so group membership alone reads the old accounts and silently skips
+        # every new one. An auto-allocated uid would not match the export.
+        if ! getent passwd vmail >/dev/null 2>&1; then
+            adduser --system --uid 5000 --gid 5000 --home /nonexistent --no-create-home \
+                --shell /usr/sbin/nologin vmail 2>/dev/null \
+                || echo "  WARNING: could not create user vmail(5000) -- mail indexing will read nothing."
+        fi
+        VMAIL_UID="$(getent passwd vmail | cut -d: -f3)"
+        if [ "$VMAIL_UID" != "5000" ]; then
+            echo "  WARNING: user vmail has uid $VMAIL_UID, but the mail store is owned by 5000."
+            echo "           Account directories created 0700 by dovecot will not be readable."
+        fi
+        adduser vmail homelab >/dev/null 2>&1 || true
         VMAIL_GID="$(getent group vmail | cut -d: -f3)"
         if [ "$VMAIL_GID" != "5000" ]; then
             echo "  WARNING: group vmail has gid $VMAIL_GID, but the mail export is owned by 5000."

@@ -369,6 +369,74 @@ sub delete_messages ($self, $ids) {
     return $n;
 }
 
+# ------------------------------------------------------------ bookkeeping
+sub meta_get ($self, $key) {
+    return $self->_tx(sub ($db) {
+        my $r = $db->query('SELECT value FROM search.index_meta WHERE key = ?', $key)->hash;
+        return $r ? $r->{value} : undef;
+    });
+}
+
+sub meta_set ($self, $key, $value) {
+    $self->_tx(sub ($db) {
+        $db->query(q{
+            INSERT INTO search.index_meta (key, value, updated_at) VALUES (?, ?, NOW())
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()},
+            $key, $value);
+    });
+}
+
+# Every drive_file_id the index holds, live or trashed. Used for the
+# set-difference reconcile: what drive has that we do not, and what we have
+# that drive no longer does.
+sub all_drive_ids ($self) {
+    return $self->_tx(sub ($db) {
+        my %have;
+        my $rows = $db->query(q{SELECT drive_file_id FROM search.drive_items
+                                 WHERE drive_file_id IS NOT NULL})->hashes;
+        $have{ $_->{drive_file_id} } = 1 for @$rows;
+        return \%have;
+    });
+}
+
+# Purged in drive (not merely trashed) -- the index row has to go, since
+# nothing will ever reference it again.
+sub delete_drive_items ($self, $ids) {
+    return 0 unless ref $ids eq 'ARRAY' && @$ids;
+    my $n = 0;
+    while (my @chunk = splice @$ids, 0, 500) {
+        my $ph = join ',', map { '?' } @chunk;
+        $self->_tx(sub ($db) {
+            $db->query("DELETE FROM search.drive_items WHERE drive_file_id IN ($ph)", @chunk);
+        });
+        $n += @chunk;
+    }
+    return $n;
+}
+
+# Highest drive.files id already in the index. New uploads get higher ids, so
+# this is what stops discovery re-enqueueing the entire corpus every pass.
+sub drive_watermark ($self) {
+    return $self->_tx(sub ($db) {
+        my $r = $db->query('SELECT coalesce(max(drive_file_id), 0) AS m FROM search.drive_items')->hash;
+        return $r ? $r->{m} : 0;
+    });
+}
+
+# drive_file_ids the index currently believes are LIVE. Compared against the
+# set drive says is deleted, so a trashed file leaves the index on the next
+# pass rather than waiting for a full reconcile -- "deleted files must stop
+# appearing immediately" is a correctness requirement, not a nicety.
+sub live_drive_ids ($self) {
+    return $self->_tx(sub ($db) {
+        my %live;
+        my $rows = $db->query(q{SELECT drive_file_id FROM search.drive_items
+                                 WHERE deleted_at IS NULL AND drive_file_id IS NOT NULL})->hashes;
+        $live{ $_->{drive_file_id} } = 1 for @$rows;
+        return \%live;
+    });
+}
+
 # ------------------------------------------------------------------- drive
 sub index_drive_item ($self, %a) {
     my ($account_id, $row, $text) = @a{qw(account_id row text)};
