@@ -47,38 +47,36 @@
           <option value="mail">Mail only</option>
         </select>
       </div>
-%# File type, include AND exclude -- the same control and the same wire
-%# format as the search page's own filters.
+%# File type -- tick what you want, empty means every type.
 %#
-%# These are the GROUP keys only. The canonical list, the labels, the
-%# per-type members and the expansion to (type, subtype) all live in
+%# These are the GROUP keys only. The canonical list -- the labels, the
+%# display order, which specific types each group covers -- lives in
 %# search/lib/Homelab/Search/Mime.pm; what crosses between the two apps is
-%# the `cat:<key>` token, and that is the contract. Drive deliberately does
-%# NOT offer the granular per-type list the search page does: that list is
-%# built from the signed-in account's own index, which drive has no access to
-%# (and should not -- it has no grant on the search schema). Widening to an
-%# exact subtype is a click away on the search page itself.
+%# the `cat:<key>` token, and that token is the contract. A key search no
+%# longer knows is dropped there rather than erroring, so the worst case if
+%# this list ever falls behind is a box that does nothing.
 %#
-%# A key search no longer knows is dropped there, not errored, so the worst
-%# case if this list ever falls behind is a filter that does nothing.
+%# Drive deliberately does NOT offer the per-type list the search page does.
+%# That list is built from the signed-in account's own index, which drive
+%# has no access to and should not have -- it holds no grant on the search
+%# schema. Narrowing to an exact subtype is one click away on the results
+%# page.
 % my @GROUPS = (
 %   [ pictures => 'Pictures' ], [ pdf => 'PDF' ], [ text => 'Text' ],
-%   [ videos => 'Videos' ], [ audio => 'Audio' ], [ documents => 'Documents' ],
-%   [ spreadsheets => 'Spreadsheets' ], [ presentations => 'Presentations' ],
-%   [ archives => 'Archives' ], [ calendar => 'Calendar' ],
-%   [ email => 'Email messages' ], [ code => 'Code and data' ],
+%   [ videos => 'Videos' ], [ documents => 'Documents' ],
+%   [ archives => 'Archives' ], [ audio => 'Audio' ], [ calendar => 'Calendar' ],
+%   [ code => 'Code and data' ], [ email => 'Email messages' ],
+%   [ presentations => 'Presentations' ], [ spreadsheets => 'Spreadsheets' ],
 % );
-% for my $d (['type_in','include'], ['type_ex','exclude']) {
-      <div class="field">
-        <label for="ds-<%= $d->[0] %>">File type — <%= $d->[1] %></label>
-        <select id="ds-<%= $d->[0] %>" name="<%= $d->[0] %>" multiple size="6">
+      <div class="field tfield">
+        <span class="flabel">File type</span>
+        <div class="cats">
 % for my $g (@GROUPS) {
-          <option value="cat:<%= $g->[0] %>"><%= $g->[1] %></option>
+          <label class="chk"><input type="checkbox" name="type_in" value="cat:<%= $g->[0] %>"><span><%= $g->[1] %></span></label>
 % }
-        </select>
+        </div>
+        <p class="fnote">Leave every box clear to search all types.</p>
       </div>
-% }
-      <p class="fnote">Pick more than one with Ctrl- (or ⌘-) click.</p>
       <div class="field">
         <label for="ds-from">From date</label>
         <input type="date" id="ds-from" name="from">

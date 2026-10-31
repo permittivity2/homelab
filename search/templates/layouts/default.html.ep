@@ -57,16 +57,47 @@
       border: 1px solid var(--border); border-radius: var(--radius-sm);
       padding: 0 10px; font-size: 16px; min-height: 44px;
     }
-    /* A multi-select sizes itself from `size`, so the 44px single-line
-       padding/height rules above would squash it into a one-row list that
-       scrolls -- the whole point of the control is seeing several options at
-       once. 16px font stays: anything smaller and iOS zooms the page on
-       focus. */
-    .field select[multiple] { height: auto; min-height: 0; padding: 6px 8px; line-height: 1.5; }
-    .field select[multiple] optgroup { color: var(--text-muted); font-size: var(--app-xs); }
-    .field select[multiple] option { padding: 3px 2px; color: var(--text-primary); }
+    /* File type. A full-width block rather than a grid cell: it is a set of
+       checkboxes, not a one-line control, and squeezing it into a third of
+       the row is what made the first version unreadable. */
+    .tfield { grid-column: 1 / -1; }
+    .flabel {
+      display: block; font-size: var(--app-xs); color: var(--text-muted);
+      margin-bottom: 6px; letter-spacing: var(--tracking-wide); text-transform: uppercase;
+    }
+    .cats { display: flex; flex-wrap: wrap; gap: 4px var(--space-4); }
+    .chk {
+      display: inline-flex; align-items: center; gap: 8px; min-height: 40px;
+      font-size: var(--app-sm); color: var(--text-primary); cursor: pointer; min-width: 0;
+    }
+    .chk input[type=checkbox] { width: 18px; height: 18px; flex: 0 0 auto; margin: 0; }
+    .chk span { min-width: 0; overflow-wrap: anywhere; }
+    .chk em { font-style: normal; color: var(--text-muted); }
+
+    details.specific { margin-top: var(--space-2); }
+    details.specific > summary {
+      cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px;
+      font-size: var(--app-xs); color: var(--text-muted);
+      letter-spacing: var(--tracking-wide); text-transform: uppercase; min-height: 32px;
+    }
+    details.specific > summary::-webkit-details-marker { display: none; }
+    details.specific > summary::before { content: '\25B8'; font-size: 0.8em; }
+    details.specific[open] > summary::before { content: '\25BE'; }
+    .leafwrap {
+      display: grid; grid-template-columns: 1fr; gap: var(--space-3);
+      margin-top: var(--space-2); padding: var(--space-3);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: var(--black-primary);
+    }
+    .leafgroup { min-width: 0; }
+    .leafgroup h5 {
+      margin: 0 0 2px; font-size: var(--app-xs); color: var(--text-muted);
+      letter-spacing: var(--tracking-wide); text-transform: uppercase; font-weight: 600;
+    }
+    .leafgroup .chk { display: flex; min-height: 36px; }
+
     .fnote {
-      grid-column: 1 / -1; margin: 0; font-size: var(--app-xs);
+      grid-column: 1 / -1; margin: var(--space-2) 0 0; font-size: var(--app-xs);
       color: var(--text-muted); line-height: 1.5;
     }
 
@@ -125,6 +156,7 @@
       .askrow    { max-width: 560px; margin-left: auto; margin-right: auto; }
       .counts    { max-width: 760px; margin-left: auto; margin-right: auto; text-align: center; }
       .fgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .leafwrap { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .checks { flex-direction: row; flex-wrap: wrap; gap: var(--space-5); }
       .hit .t { flex-direction: row; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
       .hit .meta { white-space: nowrap; }

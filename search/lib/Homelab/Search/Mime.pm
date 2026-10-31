@@ -2,7 +2,7 @@ package Homelab::Search::Mime;
 use Mojo::Base -strict, -signatures;
 use Exporter 'import';
 
-our @EXPORT_OK = qw(categories category_label parse_tokens token_sql);
+our @EXPORT_OK = qw(categories category_label classify parse_tokens token_sql);
 
 # MIME filtering, in ONE place, because three callers need the same answer:
 # the mail query (matching a message's ATTACHMENT types), the drive query
@@ -40,12 +40,12 @@ our @EXPORT_OK = qw(categories category_label parse_tokens token_sql);
 
 # Order IS the display order, commonest first.
 my @CATEGORIES = (
-    { key => 'pictures', label => 'Pictures',      types => ['image'] },
-    { key => 'pdf',      label => 'PDF',           pairs => [ 'application/pdf' ] },
-    { key => 'text',     label => 'Text',          types => ['text'] },
-    { key => 'videos',   label => 'Videos',        types => ['video'] },
+    { key => 'pictures', featured => 1, label => 'Pictures',      types => ['image'] },
+    { key => 'pdf', featured => 1,      label => 'PDF',           pairs => [ 'application/pdf' ] },
+    { key => 'text', featured => 1,     label => 'Text',          types => ['text'] },
+    { key => 'videos', featured => 1,   label => 'Videos',        types => ['video'] },
     { key => 'audio',    label => 'Audio',         types => ['audio'] },
-    { key => 'documents', label => 'Documents', pairs => [
+    { key => 'documents', featured => 1, label => 'Documents', pairs => [
         'application/pdf',
         'application/msword',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -86,8 +86,47 @@ my @CATEGORIES = (
 
 my %BY_KEY = map { $_->{key} => $_ } @CATEGORIES;
 
-sub categories () { return [ map { { key => $_->{key}, label => $_->{label} } } @CATEGORIES ] }
+# Display order: the handful people reach for first, in the order declared
+# above, and then everything else sorted case-insensitively. Sorting the tail
+# rather than hand-ordering all of it means a category added later lands
+# somewhere predictable instead of wherever it was appended.
+my @ORDERED = (
+    (grep {  $_->{featured} } @CATEGORIES),
+    (sort { lc($a->{label}) cmp lc($b->{label}) } grep { !$_->{featured} } @CATEGORIES),
+);
+
+sub categories () {
+    return [ map { {
+        key   => $_->{key},
+        label => $_->{label},
+        # The picker needs to know what a category COVERS, so ticking it can
+        # tick the specific types underneath it. Two shapes, because that is
+        # genuinely what the categories are: a whole top-level type, or an
+        # explicit list.
+        types => [ @{ $_->{types} || [] } ],
+        pairs => [ @{ $_->{pairs} || [] } ],
+    } } @ORDERED ];
+}
+
 sub category_label ($key) { return ($BY_KEY{$key} || {})->{label} }
+
+# Which category a specific type belongs to, for grouping the specific-types
+# list under the same headings as the checkboxes. First match in display
+# order wins: the categories overlap on purpose (text/csv is Text and also a
+# Spreadsheet), and a thing shown twice in a list of checkboxes is a thing
+# that can be ticked twice, so a leaf is filed exactly once. Featured
+# categories come first in that order, so csv files under Text rather than
+# somewhere alphabetical is deliberate.
+sub classify ($mime) {
+    my $m = lc($mime // '');
+    return undef unless $m =~ m{\A([a-z]+)/(.+)\z};
+    my $type = $1;
+    for my $c (@ORDERED) {
+        return $c->{key} if grep { $_ eq $type } @{ $c->{types} || [] };
+        return $c->{key} if grep { lc($_) eq $m } @{ $c->{pairs} || [] };
+    }
+    return undef;
+}
 
 # A token is untrusted input and goes nowhere near SQL text, so parsing is
 # also the validation: anything that is not one of the three recognised forms

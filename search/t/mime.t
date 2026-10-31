@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Test::More;
 use lib 'lib';
-use Homelab::Search::Mime qw(categories category_label parse_tokens token_sql);
+use Homelab::Search::Mime qw(categories category_label classify parse_tokens token_sql);
 
 # ---------------------------------------------------------------- the widths
 # One mechanism, three widths. These three forms are the whole user-facing
@@ -78,6 +78,47 @@ my $cats = categories();
 ok scalar(@$cats) >= 10, 'the picker has a useful number of groups';
 is $cats->[0]{key}, 'pictures', 'commonest first: pictures leads';
 is $cats->[1]{key}, 'pdf',      'then PDF';
+
+# Featured ones keep their declared order; everything after them is sorted
+# case-insensitively, so a category added later lands somewhere predictable
+# instead of wherever it happened to be appended.
+my @labels = map { $_->{label} } @$cats;
+my @featured = @labels[0 .. 4];
+is_deeply \@featured, ['Pictures', 'PDF', 'Text', 'Videos', 'Documents'],
+    'the featured five, in declared order';
+my @tail = @labels[5 .. $#labels];
+is_deeply \@tail, [ sort { lc($a) cmp lc($b) } @tail ],
+    'the rest are sorted case-insensitively';
+ok !grep({ my $l = $_; grep { $_ eq $l } @featured } @tail), 'no category appears twice';
+
+# The picker needs to know what each group covers, to tick the specific
+# types underneath it.
+my ($pics) = grep { $_->{key} eq 'pictures' } @$cats;
+is_deeply $pics->{types}, ['image'], 'pictures exposes its top-level type';
+my ($docs_c) = grep { $_->{key} eq 'documents' } @$cats;
+ok scalar(@{ $docs_c->{pairs} }) > 1, 'documents exposes its explicit members';
+
+# ------------------------------------------------------------------ classify
+is classify('image/jpeg'),       'pictures',     'a leaf files under its type';
+is classify('IMAGE/JPEG'),       'pictures',     'case does not matter';
+is classify('application/pdf'),  'pdf',          'pdf wins over documents (declared first)';
+is classify('video/quicktime'),  'videos',       'an unseen subtype still files by type';
+is classify('message/rfc822'),   'email',        'an explicit member files correctly';
+is classify('application/zip'),  'archives',     'archives';
+# text/csv is in BOTH Text and Spreadsheets; it must be filed exactly once,
+# or it renders as two checkboxes for one thing.
+is classify('text/csv'),         'text',         'an overlapping leaf files under the earlier group';
+is classify('application/vnd.hp-hpgl'), undef,   'an unknown type is ungrouped, not forced';
+is classify('nonsense'),         undef,          'a non-mime is ungrouped';
+is classify(undef),              undef,          'undef is ungrouped';
+
+# Every leaf the categories name must classify, or the specific-types list
+# would show it under "Other" while its own group sits right above.
+for my $c (@$cats) {
+    for my $m (@{ $c->{pairs} }) {
+        ok defined classify($m), "classify knows $m";
+    }
+}
 ok !grep({ !length($_->{label}) } @$cats), 'every group has a label';
 is category_label('videos'), 'Videos', 'labels are addressable by key';
 is category_label('nope'),   undef,    'an unknown key has no label';

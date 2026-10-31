@@ -63,42 +63,71 @@
 % }
         </select>
       </div>
-%# File type, include AND exclude.
+%# File type: tick what you want, leave it empty for everything.
 %#
-%# Two multi-selects rather than a grid of checkboxes: with 12 groups plus
-%# the account's own leaf types, a checkbox per option per direction is a
-%# hundred-odd controls inside a panel whose whole point is not being a wall
-%# of form. A native <select multiple> is also the one control that already
-%# works on a phone without JavaScript.
+%# This started as two multi-selects, include and exclude. Both halves were
+%# wrong. A <select multiple> is a power-user control -- you have to know to
+%# Ctrl-click, and on a phone it is a modal list -- and "include" beside
+%# "exclude" asks the reader to hold two opposite ideas at once to answer one
+%# question. Checkboxes say the whole thing without a legend: what is ticked
+%# is what you get, nothing ticked means no filter at all. Excluding a type
+%# is still possible through the API and homelab-cli's --exclude-type, where
+%# the reader is already holding a manual.
 %#
-%# Each list holds the curated GROUPS first (Pictures, PDF, Text... -- the
-%# ones people actually reach for) and then the specific types this account
-%# really has, so "videos" and "exactly video/quicktime" are the same
-%# mechanism at two widths. See Homelab::Search::Mime.
+%# The groups come from Homelab::Search::Mime in display order: the few
+%# people actually reach for, then the rest alphabetically.
 % my %tin = map { $_ => 1 } @{ $f->{type_in} // [] };
-% my %tex = map { $_ => 1 } @{ $f->{type_ex} // [] };
-% for my $d (['type_in','include',\%tin], ['type_ex','exclude',\%tex]) {
-%   my ($name, $word, $sel) = @$d;
-      <div class="field">
-        <label for="<%= $name %>">File type — <%= $word %></label>
-        <select id="<%= $name %>" name="<%= $name %>" multiple size="6">
-          <optgroup label="Groups">
+%
+%# Specific types are the ones THIS account really has, grouped under the
+%# same headings as the checkboxes above them, so "Pictures" and the three
+%# image types it covers are visibly the same thing at two depths. Folded
+%# away, because most searches never need it.
+% my (%by_cat, @ungrouped);
+% for my $mf (@$mime_facets) {
+%   my $k = Homelab::Search::Mime::classify($mf->{mime});
+%   if (defined $k) { push @{ $by_cat{$k} }, $mf } else { push @ungrouped, $mf }
+% }
+% my $n_specific = scalar grep { $tin{$_->{mime}} } @$mime_facets;
+      <div class="field tfield">
+        <span class="flabel">File type</span>
+        <div class="cats">
 % for my $cat (@$mime_cats) {
-            <option value="cat:<%= $cat->{key} %>"<%= $sel->{'cat:' . $cat->{key}} ? ' selected' : '' %>><%= $cat->{label} %></option>
+          <label class="chk"><input type="checkbox" name="type_in" value="cat:<%= $cat->{key} %>"
+                 data-cat="<%= $cat->{key} %>"
+                 data-types="<%= join(',', @{ $cat->{types} }) %>"
+                 data-mimes="<%= join(',', @{ $cat->{pairs} }) %>"
+                 <%= $tin{'cat:' . $cat->{key}} ? 'checked' : '' %>><span><%= $cat->{label} %></span></label>
 % }
-          </optgroup>
+        </div>
 % if (@$mime_facets) {
-          <optgroup label="Specific types you have">
-%   for my $mf (@$mime_facets) {
-            <option value="<%= $mf->{mime} %>"<%= $sel->{$mf->{mime}} ? ' selected' : '' %>><%= $mf->{mime} %> (<%= $mf->{n} %>)</option>
+        <details class="specific"<%= $n_specific ? ' open' : '' %>>
+          <summary>Specific types<%= $n_specific ? " ($n_specific selected)" : '' %></summary>
+          <div class="leafwrap">
+% for my $cat (@$mime_cats) {
+%   next unless $by_cat{ $cat->{key} };
+            <div class="leafgroup">
+              <h5><%= $cat->{label} %></h5>
+%   for my $mf (@{ $by_cat{ $cat->{key} } }) {
+              <label class="chk"><input type="checkbox" name="type_in" value="<%= $mf->{mime} %>"
+                     data-leaf="<%= $cat->{key} %>"<%= $tin{$mf->{mime}} ? ' checked' : '' %>><span><%= $mf->{mime} %> <em><%= $mf->{n} %></em></span></label>
 %   }
-          </optgroup>
+            </div>
 % }
-        </select>
+% if (@ungrouped) {
+            <div class="leafgroup">
+              <h5>Other</h5>
+% for my $mf (@ungrouped) {
+              <label class="chk"><input type="checkbox" name="type_in" value="<%= $mf->{mime} %>"
+                     data-leaf=""<%= $tin{$mf->{mime}} ? ' checked' : '' %>><span><%= $mf->{mime} %> <em><%= $mf->{n} %></em></span></label>
+% }
+            </div>
+% }
+          </div>
+        </details>
+% }
+        <p class="fnote">Leave every box clear to search all types. On email, a
+          type matches the message's <em>attachments</em>.</p>
       </div>
-% }
-      <p class="fnote">Pick more than one with Ctrl- (or ⌘-) click. On email, a
-        type matches the message's <em>attachments</em>.</p>
     </div>
     <div class="checks">
       <label data-only="mail"><input type="checkbox" name="has_attachments" value="1"<%= $f->{has_attachments} ? ' checked' : '' %>> Has attachments</label>
@@ -137,6 +166,60 @@
   }
   src.addEventListener('change', sync);
   sync();
+})();
+
+// Keep the category checkboxes and the specific types underneath them
+// telling the same story.
+//
+// Both submit the same parameter, so the server sees a union either way and
+// this script is a convenience, not a requirement -- with JavaScript off the
+// boxes still filter exactly as they are ticked. What it adds: ticking
+// "Pictures" ticks the image types it covers, so you can SEE what the group
+// means, and un-ticking one of them drops the group (leaving its siblings
+// ticked) rather than silently contradicting it -- the group would otherwise
+// go on matching the type you just said you did not want.
+(function () {
+  var cats = document.querySelectorAll('input[data-cat]');
+  if (!cats.length) return;
+
+  function leavesOf(cat) {
+    var types = (cat.getAttribute('data-types') || '').split(',').filter(Boolean);
+    var mimes = (cat.getAttribute('data-mimes') || '').split(',').filter(Boolean);
+    return Array.prototype.filter.call(
+      document.querySelectorAll('input[data-leaf]'),
+      function (leaf) {
+        var v = leaf.value;
+        if (mimes.indexOf(v) !== -1) return true;
+        return types.some(function (t) { return v.indexOf(t + '/') === 0 });
+      });
+  }
+
+  cats.forEach(function (cat) {
+    cat.addEventListener('change', function () {
+      leavesOf(cat).forEach(function (leaf) { leaf.checked = cat.checked });
+      count();
+    });
+  });
+
+  document.querySelectorAll('input[data-leaf]').forEach(function (leaf) {
+    leaf.addEventListener('change', function () {
+      if (!leaf.checked) {
+        cats.forEach(function (cat) {
+          if (cat.checked && leavesOf(cat).indexOf(leaf) !== -1) cat.checked = false;
+        });
+      }
+      count();
+    });
+  });
+
+  // The summary carries the count because the list is collapsed by default:
+  // a filter you cannot see is a filter you forget you set.
+  function count() {
+    var sum = document.querySelector('details.specific > summary');
+    if (!sum) return;
+    var n = document.querySelectorAll('input[data-leaf]:checked').length;
+    sum.textContent = 'Specific types' + (n ? ' (' + n + ' selected)' : '');
+  }
 })();
 </script>
 
