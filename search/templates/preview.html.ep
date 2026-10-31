@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+%# Served inside a sandboxed iframe with a `default-src 'none'` CSP, so this
+%# page intentionally carries its own minimal inline styling and loads nothing
+%# at all -- no theme, no fonts, no script. The body below is PLAIN TEXT that
+%# the same parser the indexer uses reduced from whatever the sender sent; a
+%# stranger's HTML is never rendered as HTML.
+<head>
+  <meta charset="utf-8">
+  <title>Message</title>
+  <style>
+    body { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+           background: #0d0d0f; color: #d7d7da; margin: 0; padding: 12px; }
+    dl { margin: 0 0 12px; display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; }
+    dt { color: #8a8a90; }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0;
+          border-top: 1px solid #2a2a2e; padding-top: 10px; }
+    .none { color: #8a8a90; }
+  </style>
+</head>
+<body>
+% my $p = stash 'parsed';
+  <dl>
+    <dt>Subject</dt><dd><%= length($p->{subject} // '') ? $p->{subject} : '(no subject)' %></dd>
+% for my $role (['from','From'], ['to','To'], ['cc','Cc']) {
+%   my $list = $p->{addresses}{$role->[0]} // [];
+%   next unless @$list;
+    <dt><%= $role->[1] %></dt><dd><%= join ', ', map { ($_->{display_name} ? "$_->{display_name} <$_->{local_part}\@$_->{domain}>" : "$_->{local_part}\@$_->{domain}") } @$list %></dd>
+% }
+    <dt>Mailbox</dt><dd><%= $m->{mailbox} %></dd>
+% if (@{ $p->{attachments} // [] }) {
+    <dt>Attachments</dt><dd><%= join ', ', map { ($_->{file_name} // '?') . ' (' . ($_->{mime_type} // '?') . ')' } @{ $p->{attachments} } %></dd>
+% }
+  </dl>
+% if (length($p->{body_text} // '')) {
+  <pre><%= $p->{body_text} %></pre>
+% } else {
+  <p class="none">This message has no text body.</p>
+% }
+</body>
+</html>

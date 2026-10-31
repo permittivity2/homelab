@@ -18,6 +18,7 @@ Depends: perl (>= 5.36),
          libhttp-date-perl,
          libhtml-format-perl,
          libhtml-tree-perl,
+         homelab-webtheme,
          nfs-common,
          adduser,
          sudo

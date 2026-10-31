@@ -30,3 +30,33 @@ Type: string
 Default: 2517
 Description: Port the search web app will listen on:
  Phase 2. The indexer itself listens on nothing.
+
+Template: homelab-search/sso_base
+Type: string
+Default:
+Description: Public homelab-sso base URL (browser redirect target):
+ Must be the PUBLIC SSO vhost -- this is where the browser is sent to sign in.
+
+Template: homelab-search/sso_internal_base
+Type: string
+Default:
+Description: Internal homelab-sso base URL (server-to-server):
+ Where this app exchanges the authorization code. Defaults to the public URL
+ if left blank, which is only correct when SSO is on this same host.
+
+Template: homelab-search/sso_secret
+Type: password
+Description: SSO client secret for client_id "search":
+ Must match exactly what homelab-sso's own clients: block holds.
+
+Template: homelab-search/public_base_url
+Type: string
+Default: https://search.mailmasker.org
+Description: This app's own public URL:
+ Used to build the OAuth redirect_uri.
+
+Template: homelab-search/api_base
+Type: string
+Default: http://api.svc.homelab:3000
+Description: Base URL where homelab-api is reachable:
+ Every request is authenticated by introspecting the caller's JWT here.

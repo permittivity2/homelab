@@ -19,5 +19,9 @@ override_dh_install:
 		debian/homelab-search/usr/share/homelab-search/services/search.yml
 	install -D -m 644 systemd/homelab-search-indexer.service \
 		debian/homelab-search/lib/systemd/system/homelab-search-indexer.service
+	install -D -m 644 systemd/homelab-search.service \
+		debian/homelab-search/lib/systemd/system/homelab-search.service
+	find templates -type f -exec install -D -m 644 {} \
+		debian/homelab-search/usr/share/homelab-search/{} \;
 	find migrations -type f -exec install -D -m 644 {} \
 		debian/homelab-search/usr/share/homelab-search/{} \;

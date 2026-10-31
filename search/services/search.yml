@@ -1,6 +1,7 @@
-# Fleet agent manifest: what homelab-agent should expect to find running on
-# a search host. See homelab-agent's README.
-name: homelab-search
-description: Indexed search over mail and drive
-units:
-  - homelab-search-indexer.service
+name: search
+package: homelab-search
+kind: http_service
+check:
+  systemd_unit: homelab-search
+  tcp_port: 2517
+description: "Unified search over mail and drive (search.mailmasker.org); homelab-search-indexer keeps the index current"

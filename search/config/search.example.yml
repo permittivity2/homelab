@@ -52,8 +52,51 @@ indexer:
   busy_sleep_seconds: 0
   max_units_per_pass: 1000
 
+# homelab-sso is the only place a user ever types a password. This app
+# redirects here for /login and /logout.
+#
+# base_url is a BROWSER redirect target and must be the PUBLIC SSO vhost;
+# internal_base_url is this app's own server-to-server exchange_code() call
+# and should be SSO's internal address. Getting these the same way round as
+# every other relying party matters -- see homelab-drive's config for the
+# incident where base_url was set to the internal address: server-to-server
+# worked, browser redirects did not, and fixing it the obvious way broke the
+# other side.
+sso:
+  base_url: YOUR_SSO_BASE_URL_HERE
+  internal_base_url: YOUR_SSO_INTERNAL_BASE_URL_HERE
+  client_id: search
+  client_secret: YOUR_SSO_CLIENT_SECRET_HERE
+  redirect_uri: https://search.mailmasker.org/oauth/callback
+
+# This instance's own PUBLIC address.
+public_base_url: https://search.mailmasker.org
+
+homelab_api:
+  base_url: http://api.svc.homelab:3000
+
+# Session cookie signing secret -- CHANGE THIS.
+session:
+  secret: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
+
+# Shared web chrome (homelab-webtheme). Optional; omit to use its default.
+web_theme:
+  base_url: https://static.mailmasker.org
+
+# NO registry: block, deliberately. Homelab::Common::Registry's
+# register_recurring reads /etc/homelab/agent/credential.yml, which is
+# 0600 homelab:homelab -- and this app runs as vmail (uid 5000) because it has
+# to read the mail store, where dovecot creates maildirs 0700. Making the
+# agent credential group-readable to work around that would weaken a
+# credential for a cosmetic feature. Service presence is reported by
+# homelab-agent from /etc/homelab/services/search.yml instead, which is what
+# the fleet status view actually reads.
+
 log_level: info
 
 server:
   listen: "http://0.0.0.0:2517"
   workers: 2
+  # In the runtime directory systemd creates for this unit, because the
+  # service runs as vmail and /var/lib/homelab belongs to homelab.
+  pid_file: /run/homelab-search/hypnotoad.pid

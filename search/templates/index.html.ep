@@ -1,0 +1,152 @@
+% layout 'default';
+% title 'Search';
+% use POSIX qw(floor);
+%
+%# Human sizes and dates are formatted here rather than in SQL: the same rows
+%# go out as JSON to homelab-cli, which wants the raw numbers.
+% my $sz = sub ($b) {
+%   return '' unless defined $b;
+%   my @u = ('B','KB','MB','GB','TB'); my $i = 0;
+%   while ($b >= 1024 && $i < $#u) { $b /= 1024; $i++ }
+%   return sprintf($i ? '%.1f %s' : '%d %s', $b, $u[$i]);
+% };
+% my $dt = sub ($s) { return '' unless defined $s; my $t = "$s"; $t =~ s/\..*$//; $t =~ s/\+\d\d$//; return $t };
+
+<form class="searchbar" method="get" action="/">
+  <div class="row">
+    <div class="field grow">
+      <label for="q">Search your email and files</label>
+      <input type="text" id="q" name="q" value="<%= $f->{q} %>" autofocus
+             placeholder="words, &quot;a phrase&quot;, or -exclude">
+    </div>
+    <div class="field" style="flex:0 0 190px">
+      <label for="person">From / to (person)</label>
+      <input type="text" id="person" name="person" value="<%= $f->{person} %>" placeholder="name or address">
+    </div>
+    <div class="field" style="flex:0 0 140px">
+      <label for="from">From date</label>
+      <input type="date" id="from" name="from" value="<%= $f->{from} %>">
+    </div>
+    <div class="field" style="flex:0 0 140px">
+      <label for="to">To date</label>
+      <input type="date" id="to" name="to" value="<%= $f->{to} %>">
+    </div>
+    <div><button class="btn btn-primary" type="submit">Search</button></div>
+  </div>
+
+  <div class="chips">
+    <label>Source
+      <select name="source">
+% for my $s (qw(both mail drive)) {
+        <option value="<%= $s %>"<%= $f->{source} eq $s ? ' selected' : '' %>><%= ucfirst $s %></option>
+% }
+      </select>
+    </label>
+    <label>Mailbox
+      <select name="mailbox">
+        <option value="">any</option>
+% for my $mb (@$mailboxes) {
+        <option value="<%= $mb->{name} %>"<%= $f->{mailbox} eq $mb->{name} ? ' selected' : '' %>><%= $mb->{name} %> (<%= $mb->{n} %>)</option>
+% }
+      </select>
+    </label>
+    <label>File type
+      <select name="mime">
+        <option value="">any</option>
+% for my $m (['text','Text'],['image','Images'],['application/pdf','PDF'],['video','Video'],['audio','Audio']) {
+        <option value="<%= $m->[0] %>"<%= $f->{mime} eq $m->[0] ? ' selected' : '' %>><%= $m->[1] %></option>
+% }
+      </select>
+    </label>
+    <label><input type="checkbox" name="has_attachments" value="1"<%= $f->{has_attachments} ? ' checked' : '' %>> Has attachments</label>
+    <label><input type="checkbox" name="in_trash" value="1"<%= $f->{in_trash} ? ' checked' : '' %>> Search trash instead</label>
+    %# Rendered and disabled on purpose. The whole product has to be useful
+    %# with the model switched off, so Phase 2 ships the real search first and
+    %# the toggle exists only to say that the other mode is coming.
+    <span class="aioff" title="Not available yet">
+      <input type="checkbox" disabled> AI search <span class="hint">(coming)</span>
+    </span>
+  </div>
+% if (($counts->{messages} // 0) || ($counts->{drive_items} // 0)) {
+  <div class="counts">Indexed for you: <%= $counts->{messages} // 0 %> messages, <%= $counts->{drive_items} // 0 %> files.</div>
+% }
+</form>
+
+% unless ($account) {
+  <p class="empty">Nothing of yours has been indexed yet. If you have just signed up, give the indexer a few minutes.</p>
+% } elsif (!$searched) {
+  <p class="empty">Type something above to search your mail and files together.</p>
+% } else {
+
+% if ($f->{source} ne 'drive') {
+  <h2 class="sec">Email — <%= scalar @$mail %> result<%= @$mail == 1 ? '' : 's' %></h2>
+  <div class="res">
+% for my $m (@$mail) {
+    <div class="hit">
+      <div class="t">
+        <span class="subj"><%= length($m->{subject} // '') ? $m->{subject} : '(no subject)' %></span>
+        <span class="meta"><%= $m->{mailbox} %> · <%= $dt->($m->{sent_at} // $m->{received_at}) %><%= $m->{has_attachments} ? ' · attachment' : '' %></span>
+      </div>
+      <div class="who"><%= $m->{from_name} || $m->{from_addr} || '(unknown sender)' %><%= $m->{from_name} && $m->{from_addr} ? " <$m->{from_addr}>" : '' %></div>
+% if (length($m->{snippet} // '')) {
+      <div class="snip"><%= $m->{snippet} %></div>
+% }
+      %# Email gets BOTH a dropdown preview and a download, per the rendering
+      %# contract. The preview is server-rendered text -- a stranger's HTML is
+      %# never rendered as HTML here.
+      <details class="pv">
+        <summary>Preview</summary>
+        <iframe src="/mail/<%= $m->{message_id} %>/preview" sandbox loading="lazy" title="Message preview"></iframe>
+      </details>
+      <div class="acts">
+        <a href="/mail/<%= $m->{message_id} %>/download">Download .eml</a>
+        <span class="hint"><%= $sz->($m->{size_bytes}) %></span>
+      </div>
+    </div>
+% }
+% unless (@$mail) {
+    <p class="empty">No matching email.</p>
+% }
+  </div>
+% }
+
+% if ($f->{source} ne 'mail') {
+  <h2 class="sec">Files — <%= scalar @$drive %> result<%= @$drive == 1 ? '' : 's' %></h2>
+  <div class="res">
+% for my $d (@$drive) {
+%   my $mime = $d->{mime_type} // '';
+%   # Asks the same function the server uses to decide, so the link offered
+%   # and the response given can never disagree. See Homelab::Search::Serve.
+%   my $viewable = viewable($mime);
+    <div class="hit">
+      <div class="t">
+        <span class="subj"><%= $d->{file_name} %></span>
+        <span class="meta"><%= $mime %> · <%= $sz->($d->{size_bytes}) %> · <%= $dt->($d->{content_created_at} // $d->{uploaded_at}) %></span>
+      </div>
+% if (length($d->{folder_path} // '')) {
+      <div class="who">in <%= $d->{folder_path} %></div>
+% }
+% if (length($d->{snippet} // '')) {
+      <div class="snip"><%= $d->{snippet} %></div>
+% }
+      <div class="acts">
+% if ($viewable) {
+        <a href="/drive/<%= $d->{drive_item_id} %>/view" target="_blank" rel="noopener noreferrer">Open</a>
+% }
+        <a href="/drive/<%= $d->{drive_item_id} %>/download">Download</a>
+% unless ($viewable) {
+        <span class="hint">download only</span>
+% }
+% if ($d->{deleted_at}) {
+        <span class="hint">in trash</span>
+% }
+      </div>
+    </div>
+% }
+% unless (@$drive) {
+    <p class="empty">No matching files.</p>
+% }
+  </div>
+% }
+
+% }

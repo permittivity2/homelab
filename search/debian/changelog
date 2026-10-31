@@ -1,3 +1,21 @@
+homelab-search (0.2.2) unstable; urgency=medium
+
+  * Release v0.2.2
+
+ -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 14:16:24 -0500
+
+homelab-search (0.2.1) unstable; urgency=medium
+
+  * Release v0.2.1
+
+ -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 14:13:51 -0500
+
+homelab-search (0.2.0) unstable; urgency=medium
+
+  * Release v0.2.0
+
+ -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 14:11:24 -0500
+
 homelab-search (0.1.11) unstable; urgency=medium
 
   * Release v0.1.11

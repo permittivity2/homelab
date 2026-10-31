@@ -17,6 +17,11 @@
   /* Bytes / human-readable size switch. Lives in the toolbar row rather than
      the top bar now: the top bar is shared across apps, and a drive-only
      view preference does not belong in shared chrome. */
+  /* Pushed to the right of the breadcrumbs, ahead of the size toggle. */
+  .deep-search { margin-left: auto; font-size: var(--app-xs); color: var(--silver-dim);
+                 border: 1px solid var(--border); border-radius: var(--radius-pill);
+                 padding: 3px 10px; white-space: nowrap; text-decoration: none; }
+  .deep-search:hover { background: var(--surface-hover); color: var(--text-primary); }
   .size-toggle { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--app-xs); color: var(--text-muted); cursor: pointer; user-select: none; margin-left: auto; }
   .size-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
   .size-toggle .switch { position: relative; width: 32px; height: 17px; background: var(--surface-hover); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); flex-shrink: 0; transition: background-color var(--transition-fast); }

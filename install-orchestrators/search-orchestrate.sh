@@ -94,13 +94,44 @@ if [ "$VERIFY_ONLY" = 1 ] || [ "$REINDEX" = 1 ]; then
     for n in $NODES; do
         v=$(on "$n" "dpkg-query -W -f='\${Version}' homelab-search 2>/dev/null")
         [ -n "$v" ] && ok "$n homelab-search $v" || bad "$n homelab-search not installed"
-        s=$(on "$n" "systemctl is-active homelab-search-indexer" 2>/dev/null)
-        [ "$s" = active ] && ok "$n indexer active" || bad "$n indexer is '$s'"
-        g=$(on "$n" "getent group vmail | cut -d: -f3" 2>/dev/null)
-        [ "$g" = 5000 ] && ok "$n group vmail has gid 5000" \
-                        || bad "$n group vmail gid is '${g:-missing}' -- mail reads nothing without 5000"
+        for u in homelab-search-indexer homelab-search; do
+            s=$(on "$n" "systemctl is-active $u" 2>/dev/null)
+            [ "$s" = active ] && ok "$n $u active" || bad "$n $u is '$s'"
+        done
+        g=$(on "$n" "getent passwd vmail | cut -d: -f3" 2>/dev/null)
+        [ "$g" = 5000 ] && ok "$n user vmail has uid 5000" \
+                        || bad "$n user vmail uid is '${g:-missing}' -- 0700 maildirs read nothing without it"
+        for u in homelab-search-indexer homelab-search; do
+            ru=$(on "$n" "systemctl show $u -p User --value" 2>/dev/null)
+            [ "$ru" = vmail ] && ok "$n $u runs as vmail" || bad "$n $u runs as '$ru', not vmail"
+        done
         m=$(on "$n" "id -nG homelab 2>/dev/null | tr ' ' '\n' | grep -c '^vmail\$'" 2>/dev/null)
         [ "${m:-0}" -ge 1 ] && ok "$n user homelab is in vmail" || bad "$n homelab is not in group vmail"
+    done
+
+    step "the whole pool must share ONE session secret"
+    # The OAuth state lives in the signed session cookie and requests are not
+    # sticky across the three nodes, so a per-host secret fails two sign-ins
+    # in three -- intermittently, which is the worst way to find out.
+    SEC1=$(on "$NODE1" "sudo sed -n 's/^  secret: //p' $CONFIG | tr -d '\"'" 2>/dev/null)
+    if [ -z "$SEC1" ]; then
+        bad "no session secret in $CONFIG on $NODE1"
+    else
+        same=1
+        for n in $NODES; do
+            sx=$(on "$n" "sudo sed -n 's/^  secret: //p' $CONFIG | tr -d '\"'" 2>/dev/null)
+            [ "$sx" = "$SEC1" ] || same=0
+        done
+        [ "$same" = 1 ] && ok "identical session secret on all three nodes" \
+                        || bad "the session secret DIFFERS between nodes -- sign-in will fail ~2 times in 3"
+    fi
+
+    step "web app answers on :2517"
+    for n in $NODES; do
+        h=$(on "$n" "curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:2517/health" 2>/dev/null)
+        [ "$h" = 200 ] && ok "$n /health -> 200" || bad "$n /health -> '${h:-no answer}'"
+        r=$(on "$n" "curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:2517/" 2>/dev/null)
+        [ "$r" = 302 ] && ok "$n / -> 302 (redirects to sign-in)" || bad "$n / -> '${r:-no answer}'"
     done
 
     step "schema, isolation and index state"
@@ -274,8 +305,67 @@ for p in $PGB_NODES; do
     fi
 done
 
+# ------------------------------------------------- 3b. web-app config blocks
+step "3b. web-app config on $NODE1 (sso, session, public_base_url)"
+# The config written at first install predates the web app, and postinst will
+# not touch an existing config.yml -- so the sso/session/public_base_url blocks
+# are appended here, with the client secret read from SSO rather than pasted.
+if on "$NODE1" "grep -q '^sso:' $CONFIG" 2>/dev/null; then
+    ok "already has the web-app blocks (idempotent)"
+else
+    SSO_SECRET=$(on 10.20.2.162 "sudo awk '/client_id: search/{f=1} f&&/client_secret:/{print \$2; exit}' /etc/homelab/sso/config.yml" 2>/dev/null)
+    [ -n "$SSO_SECRET" ] || die "could not read the 'search' client secret from SSO (10.20.2.162).
+Register the client first -- see search-vhost-provision.sh."
+    ok "read the SSO client secret for client_id 'search' (not logged)"
+
+    # ONE session secret for the whole pool, generated here. A per-host secret
+    # is the trap this fleet has hit before: the OAuth state lives in the
+    # signed session cookie, requests are not sticky, so two requests in three
+    # would land on a node that cannot read the cookie it is handed and the
+    # sign-in would fail intermittently.
+    SESSION_SECRET=$(head -c 32 /dev/urandom | base64 | tr -d '\n=')
+
+    on "$NODE1" "sudo tee -a $CONFIG >/dev/null <<'SEARCHWEB'
+
+sso:
+  base_url: https://login.mailmasker.org
+  internal_base_url: http://10.50.2.162:2502
+  client_id: search
+  client_secret: __SSO_SECRET__
+  redirect_uri: https://search.mailmasker.org/oauth/callback
+
+public_base_url: https://search.mailmasker.org
+
+homelab_api:
+  base_url: http://api.svc.homelab:3000
+
+session:
+  secret: \"__SESSION_SECRET__\"
+
+web_theme:
+  base_url: https://static.mailmasker.org
+SEARCHWEB
+sudo sed -i -e \"s#__SSO_SECRET__#$SSO_SECRET#\" -e \"s#__SESSION_SECRET__#$SESSION_SECRET#\" $CONFIG" \
+        && ok "appended the web-app blocks" || bad "could not append the web-app blocks"
+fi
+
+step "3c. normalise the web-app config on $NODE1"
+# Always run, not guarded by 3b's "already has sso:" check -- an earlier
+# version of this script appended a registry: block that cannot work (the app
+# runs as vmail and the agent credential is 0600 homelab:homelab), and left
+# hypnotoad with no writable pid path. Hosts configured by that version have
+# to be repaired, not skipped.
+on "$NODE1" "sudo perl -0pi -e 's/\nregistry:\n  host: [^\n]*\n  port: [^\n]*\n//' $CONFIG" 2>/dev/null \
+    && ok "no registry: block (it cannot work for this app)" || warn "could not strip registry:"
+if on "$NODE1" "grep -q 'pid_file: /run/homelab-search' $CONFIG" 2>/dev/null; then
+    ok "hypnotoad pid_file points at the runtime directory"
+else
+    on "$NODE1" "sudo perl -0pi -e 's#(  listen: \"http://0\.0\.0\.0:2517\"\n  workers: 2\n)#\$1  pid_file: /run/homelab-search/hypnotoad.pid\n#' $CONFIG" 2>/dev/null \
+        && ok "pid_file set to /run/homelab-search/hypnotoad.pid" || warn "could not set pid_file"
+fi
+
 # ------------------------------------------------------- 4/5. finish all nodes
-step "4. finish $NODE1 (migrations + indexer)"
+step "4. finish $NODE1 (migrations + indexer + web app)"
 out=$(on "$NODE1" "sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure homelab-search" 2>&1)
 printf '%s\n' "$out" | grep -iE "applied|migration|pg_trgm|NOTE|WARNING|configured" | sed 's/^/      /' | head -8
 on "$NODE1" "systemctl is-active --quiet homelab-search-indexer" \

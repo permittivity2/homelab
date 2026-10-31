@@ -7,6 +7,11 @@
 % for my $crumb (@$breadcrumb) {
   <span class="sep">/</span><a href="/folders/<%= $crumb->{id} %>"><%= $crumb->{name} %></a>
 % }
+  %# Deep Search lives at its own vhost (search.mailmasker.org) rather than
+  %# inside drive, because it searches mail AND files together -- half of what
+  %# it covers has nothing to do with this app. A link, not an embed.
+  <a class="deep-search" href="https://search.mailmasker.org/"
+     title="Search your email and files together">Deep Search</a>
   %# Moved down from the top bar: that bar is shared chrome now, and a
   %# drive-only display preference does not belong in it.
   <label class="size-toggle" title="File size display, remembered for this browser session">
@@ -61,7 +66,14 @@
     <form class="upload-bar" method="post" action="/upload" enctype="multipart/form-data"
           onsubmit="this.querySelector('button').disabled = true; this.querySelector('.upload-status').textContent = 'Uploading\x{2026}';">
       <input type="hidden" name="folder_id" value="<%= $current_folder_id // '' %>">
-      <input type="file" name="file" required>
+      <%# The file's own date. Only the browser knows it -- once the bytes are
+          on the NFS share their mtime is the upload time, so if it is not
+          captured here it is gone for good (see migration 012). Filled on
+          change rather than on submit so a drag-and-drop path that posts the
+          form programmatically gets it too. %>
+      <input type="hidden" name="client_mtime_ms" id="client-mtime-ms">
+      <input type="file" name="file" required
+             onchange="var f=this.files&&this.files[0]; document.getElementById('client-mtime-ms').value = (f && f.lastModified) ? f.lastModified : '';">
       <button type="submit">Upload</button>
       <span class="upload-status"></span>
       <span class="drop-tip">or drag files/folders here or onto a folder</span>

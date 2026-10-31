@@ -1,0 +1,39 @@
+[Unit]
+Description=Homelab unified search (search.mailmasker.org)
+Documentation=file:///usr/share/doc/homelab-search/README.md
+After=network-online.target srv-mail\x2dro.mount srv-drive\x2dro.mount
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Same identity as the indexer, and for the same reason: previews and
+# downloads read the message file and the drive blob off the read-only
+# mounts, and dovecot creates new maildirs 0700 -- so anything but uid 5000
+# can serve some accounts and not others. See the unit comment in
+# homelab-search-indexer.service for the full reasoning.
+User=vmail
+Group=vmail
+SupplementaryGroups=homelab
+# hypnotoad -f, matching homelab-drive and homelab-accountmanage. NOT
+# `homelab-search prefork`: prefork does not read the app's `hypnotoad`
+# config block, so it silently ignored the configured listen address and
+# bound Mojolicious's default :3000 -- the unit reported active while
+# nothing answered on :2517.
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-search
+Restart=on-failure
+RestartSec=5
+# hypnotoad's pid file. /var/lib/homelab is homelab:homelab and this service
+# runs as vmail, so the pid file goes in a runtime directory systemd creates
+# owned by the service user -- rather than loosening permissions on a shared
+# state directory.
+RuntimeDirectory=homelab-search
+RuntimeDirectoryMode=0750
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# It serves these; it has no business writing them.
+ReadOnlyPaths=/srv/mail-ro /srv/drive-ro
+
+[Install]
+WantedBy=multi-user.target

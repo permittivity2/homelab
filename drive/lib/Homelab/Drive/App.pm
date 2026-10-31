@@ -1108,11 +1108,33 @@ sub _owned_folder ($c, $email, $folder_id) {
 # below -- inserts the DB row and moves the uploaded file into storage,
 # returning the new row (id, filename, size_bytes, mime_type,
 # uploaded_at). Callers decide how to respond (redirect vs JSON).
+# The file's own date, if the client told us (see migration 012). The
+# browser sends File.lastModified in milliseconds; homelab-cli sends stat()
+# mtime in seconds. Both are CLIENT-SUPPLIED and therefore advisory: a
+# nonsensical value is dropped rather than stored, because this column is
+# used for date-range search and a file claiming to be from 1899 or from
+# next century would sort ahead of everything real. Unknown stays NULL and
+# every reader falls back to uploaded_at.
+sub _client_created_at ($c) {
+    my $ms = $c->param('client_mtime_ms');
+    my $s  = $c->param('client_mtime');
+    my $epoch = defined $ms && $ms =~ /\A[0-9]+\z/      ? int($ms / 1000)
+              : defined $s  && $s  =~ /\A[0-9]+(?:\.[0-9]+)?\z/ ? int($s)
+              :                                            undef;
+    return undef unless defined $epoch;
+    # 1990-01-01 .. now + 1 day of clock skew.
+    return undef if $epoch < 631_152_000 || $epoch > time + 86_400;
+    return $epoch;
+}
+
 sub _save_upload ($c, $email, $upload, $folder_id) {
+    my $created = _client_created_at($c);
     my $row = $c->app->pg->db->query(
-        q{INSERT INTO drive.files (user_email, filename, size_bytes, mime_type, folder_id)
-          VALUES (?, ?, ?, ?, ?) RETURNING id, filename, size_bytes, mime_type, uploaded_at, folder_id, uuid},
+        q{INSERT INTO drive.files (user_email, filename, size_bytes, mime_type, folder_id, content_created_at)
+          VALUES (?, ?, ?, ?, ?, CASE WHEN ?::bigint IS NULL THEN NULL ELSE to_timestamp(?::bigint) END)
+          RETURNING id, filename, size_bytes, mime_type, uploaded_at, content_created_at, folder_id, uuid},
         $email, $upload->filename, $upload->size, $upload->headers->content_type, $folder_id,
+        $created, $created,
     )->hash;
 
     my $dest = $c->app->storage_path . '/' . $row->{uuid};

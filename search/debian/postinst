@@ -77,7 +77,21 @@ case "$1" in
                 exit 0
             fi
 
+            SESSION_SECRET="$(head -c 32 /dev/urandom | base64 | tr -d '\n=')"
+            db_get homelab-search/sso_base || true;          SSO_BASE="${RET:-}"
+            db_get homelab-search/sso_internal_base || true; SSO_INTERNAL="${RET:-}"
+            db_get homelab-search/sso_secret || true;        SSO_SECRET="${RET:-}"
+            db_get homelab-search/public_base_url || true;   PUBLIC_URL="${RET:-}"
+            db_get homelab-search/api_base || true;          API_BASE="${RET:-http://api.svc.homelab:3000}"
+
             sed \
+                -e "s#YOUR_SSO_BASE_URL_HERE#$SSO_BASE#g" \
+                -e "s#YOUR_SSO_INTERNAL_BASE_URL_HERE#$SSO_INTERNAL#g" \
+                -e "s#YOUR_SSO_CLIENT_SECRET_HERE#$SSO_SECRET#g" \
+                -e "s#^public_base_url:.*#public_base_url: $PUBLIC_URL#" \
+                -e "s#^  base_url: http://api\.svc\.homelab:3000#  base_url: $API_BASE#" \
+                -e "s#CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS#$SESSION_SECRET#g" \
+                -e "s#redirect_uri: https://search\.mailmasker\.org/oauth/callback#redirect_uri: ${PUBLIC_URL}/oauth/callback#" \
                 -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
                 -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
                 -e "s#homelab_search_runtime#$RUNTIME_ROLE#g" \
@@ -153,21 +167,26 @@ case "$1" in
                echo "        registration for homelab_search_runtime." ;;
         esac
 
-        systemctl enable homelab-search-indexer >/dev/null 2>&1 || true
-        if systemctl is-active --quiet homelab-search-indexer; then
-            systemctl restart homelab-search-indexer \
-                || echo "WARNING: homelab-search-indexer restart failed -- check 'systemctl status homelab-search-indexer'."
-        else
-            systemctl start homelab-search-indexer \
-                || echo "WARNING: homelab-search-indexer failed to start -- check 'systemctl status homelab-search-indexer'."
-        fi
+        # The indexer writes the index; the web app serves it. Both run as
+        # uid 5000 and both are enabled here.
+        for unit in homelab-search-indexer homelab-search; do
+            systemctl enable "$unit" >/dev/null 2>&1 || true
+            if systemctl is-active --quiet "$unit"; then
+                systemctl restart "$unit" \
+                    || echo "WARNING: $unit restart failed -- check 'systemctl status $unit'."
+            else
+                systemctl start "$unit" \
+                    || echo "WARNING: $unit failed to start -- check 'systemctl status $unit'."
+            fi
+        done
 
         db_stop
 
         echo ""
         echo "homelab-search configured."
         echo "config:  $CONFIG_FILE"
-        echo "status:  homelab-search-indexer --status"
+        echo "status:  sudo -u vmail -g vmail homelab-search-indexer --status"
+        echo "web:     https://search.mailmasker.org/  (listens on :2517)"
         echo ""
         ;;
 

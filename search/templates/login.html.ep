@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+%# Shared theme but not the shared header: there is no signed-in user here,
+%# so a top bar would render an empty account cluster.
+%= include 'homelab/head'
+  <title>Sign in — Search</title>
+  <style>
+    body { margin: 0; display: flex; min-height: 100vh; align-items: center;
+           justify-content: center; padding: var(--space-4); background: var(--black-primary); }
+    .box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+           padding: var(--space-8) var(--space-6); max-width: 380px; width: 100%; text-align: center;
+           box-shadow: var(--shadow-lg); }
+    .box h1 { font-size: var(--app-lg); font-weight: var(--weight-light); margin: 0 0 var(--space-2); }
+    .box p { color: var(--text-muted); font-size: var(--app-base); margin: 0 0 var(--space-6); }
+    .err { color: var(--error); font-size: var(--app-base); margin-bottom: var(--space-4);
+           padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
+           background: rgba(216,92,92,0.10); border: 1px solid rgba(216,92,92,0.35); }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Search</h1>
+    <p>Search your email and files in one place.</p>
+% if (my $e = stash 'error') {
+    <div class="err"><%= $e %></div>
+% }
+    <a class="btn btn-primary" href="/login">Sign in</a>
+  </div>
+</body>
+</html>

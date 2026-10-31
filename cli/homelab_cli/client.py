@@ -271,6 +271,14 @@ class Client:
 
     def drive_upload_file(self, token, path, folder_id=None):
         data = {"folder_id": folder_id} if folder_id else {}
+        # The file's own mtime. Once the bytes land on the NFS share their
+        # mtime becomes the upload time, so this is the only chance to record
+        # when the file was actually created (see drive migration 012). The
+        # server validates and ignores anything implausible.
+        try:
+            data["client_mtime"] = int(path.stat().st_mtime)
+        except OSError:
+            pass
         # timeout is per-read, not total (requests streams the file object
         # so RAM stays flat) -- 60s was far too short for a multi-GB
         # upload; 3600s gives a slow link room without hanging forever.
