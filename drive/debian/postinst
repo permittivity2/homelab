@@ -22,8 +22,7 @@ case "$1" in
         # real-disk, same-filesystem reasoning so finalizing is a rename.
         mkdir -p /var/lib/homelab "$CONFIG_DIR" /var/lib/homelab/drive-storage \
             /var/lib/homelab/drive-storage/.uploads-tmp /var/lib/homelab/drive-storage/.partials
-        chown homelab:homelab /var/lib/homelab \
-            /var/lib/homelab/drive-storage/.uploads-tmp /var/lib/homelab/drive-storage/.partials
+        chown homelab:homelab /var/lib/homelab
 
         # drive-storage is GROUP vmail(5000) + setgid, and its blobs are
         # 0640 -- owner (this service) rw, group r, others nothing.
@@ -43,7 +42,51 @@ case "$1" in
         # as homelab and is not a member of group 5000, so it cannot chgrp
         # its own uploads -- the directory assigns the group for it.
         chown homelab:5000 /var/lib/homelab/drive-storage || true
-        chmod g+s /var/lib/homelab/drive-storage || true
+        # 2750, as ONE number, because the setgid bit above has to survive
+        # the mode change: owner (this service) rwx, group (search, as uid
+        # 5000) r-x, everyone else NOTHING.
+        #
+        # It was created 0777, and on an rw NFS client that means every
+        # local uid on a drive node -- the prometheus exporter, any future
+        # service, anybody with a shell -- could list all 30,512 blobs, and
+        # since write permission on a DIRECTORY is what authorises unlink,
+        # could delete them. No reader needs it: drive owns the directory,
+        # search only ever opens a uuid a `user_email = ?` query already
+        # returned and deliberately never enumerates the store (see
+        # search/lib/Homelab/Search/Paths.pm), and root is unaffected either
+        # way because the export is no_root_squash.
+        #
+        # Deliberately NOT o+x: nothing reaches a blob by a path it was
+        # handed rather than by listing, and the blobs are 0640 anyway, so
+        # the execute bit would buy an unprivileged uid nothing but the
+        # ability to confirm a uuid exists.
+        chmod 2750 /var/lib/homelab/drive-storage || true
+
+        # The two temp directories need the SAME group and setgid, and that
+        # is not belt-and-braces -- it is load-bearing. Three of the four
+        # paths that put bytes into storage finish with rename(2), and
+        # rename(2) PRESERVES the source file's group; a destination's
+        # setgid bit only applies to files CREATED there. So temp
+        # directories in group homelab silently produced blobs in group
+        # homelab -- which is `vault` on the NAS, and unreadable by search
+        # -- but ONLY for uploads over 256 KB, because under that size
+        # Mojolicious creates the file in the storage directory itself and
+        # setgid does apply.
+        #
+        # That is the same size-dependent split as the mode bug above, one
+        # level up, and it was caught by uploading a 600 KB file and looking
+        # at the result rather than by reading the code: the fix for the
+        # mode set the mode explicitly on all four paths, but left the group
+        # to a setgid bit that three of them bypass.
+        #
+        # .uploads-tmp is MOJO_TMPDIR (plain uploads, and the spool for a
+        # zip/concat artifact downloaded back from homelab-worker) and also
+        # holds append-job-* scratch; .partials holds chunked uploads being
+        # assembled. Every one of those is renamed into storage.
+        for d in .uploads-tmp .partials; do
+            chown homelab:5000 "/var/lib/homelab/drive-storage/$d" || true
+            chmod 2750 "/var/lib/homelab/drive-storage/$d" || true
+        done
 
         # Reconcile blobs written before the rule existed. Mojolicious
         # hands `move_to` either a Mojo::Asset::Memory (spurts a fresh

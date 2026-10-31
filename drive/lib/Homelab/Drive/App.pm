@@ -85,6 +85,7 @@ sub startup ($self) {
     # hand-set storage.path still works on first boot. See
     # migrations/006-upload-sessions.sql.
     make_path($self->storage_path . '/.partials');
+    _check_storage_groups($self);
     $self->image_config($config->{image} // {});
     # Soft-deleted (trashed) items are auto-purged after this many days
     # (see _purge_expired_trash). 0 disables auto-purge (manual Empty
@@ -802,17 +803,73 @@ sub _purge_expired_trash ($self) {
 # uid 5000 -- got EACCES on exactly the photos and PDFs people most want to
 # open, and could only report them as no longer on disk.
 #
-# 0640: owner (this service) rw, group r, others nothing. The GROUP comes
-# from the setgid bit on the storage directory, not from here, because this
-# service is not a member of group 5000 and so cannot chgrp its own uploads
-# -- see debian/postinst, which owns that half of the rule.
+# 0640: owner (this service) rw, group r, others nothing. The GROUP cannot be
+# set from here -- this service is not a member of group 5000, and chgrp to a
+# group you are not in needs privilege -- so it comes from the setgid bit on
+# the directory the file is CREATED in. That distinction is the whole trap:
+# three of the four paths below finish with rename(2), and rename PRESERVES
+# the source's group, so the destination's setgid bit never gets a say. The
+# group therefore has to be right on the TEMP directories, which is what
+# debian/postinst now guarantees (.uploads-tmp and .partials carry the same
+# group + setgid as storage itself).
+#
 # Four paths put bytes into storage -- a plain upload, a chunked upload's
 # finalize, an append/concat job and a zip placement -- and three of them are
 # a rename of a file somebody else created, so every one of them has to say
 # the mode out loud. They all go through here.
+#
+# The group check below is not decoration. This exact bug has now been found
+# twice -- once as a mode (0600 on every blob over 256 KB) and once as a
+# group (homelab, i.e. `vault` on the NAS, on every blob over 256 KB) -- and
+# both times the only symptom was homelab-search getting EACCES and telling a
+# user their photo was no longer on disk. We cannot repair it here, but a
+# logged error at WRITE time is the difference between noticing immediately
+# and someone reporting a missing file months later.
 sub _blob_mode ($self, $dest) {
     $self->log->error("chmod 0640 $dest failed: $!") unless chmod 0640, $dest;
+
+    my $want = (stat $self->storage_path)[5];
+    my $got  = (stat $dest)[5];
+    if (defined $want && defined $got && $want != $got) {
+        $self->log->error(
+            "blob $dest landed in group $got but the storage directory is "
+          . "group $want -- homelab-search reads these over NFS as a member "
+          . "of $want and will get EACCES on this file. The directory it was "
+          . "renamed from is almost certainly not setgid group $want; see "
+          . "homelab-drive's postinst.");
+    }
     return $dest;
+}
+
+# Startup sanity check for the rule _blob_mode depends on: every directory a
+# blob can be renamed into storage FROM must carry storage's own group and the
+# setgid bit, or rename(2) quietly produces a blob homelab-search cannot read.
+# Logged, never fatal -- drive serving its own users must not depend on the
+# search export being wired up, and on a host where storage is local (tests,
+# a fresh box with no NFS mount) the group is simply whatever it is.
+sub _check_storage_groups ($self) {
+    my $root = $self->storage_path;
+    my $want = (stat $root)[5];
+    return unless defined $want;
+
+    unless ((stat $root)[2] & 02000) {
+        $self->log->warn("storage directory $root is not setgid -- blobs "
+            . "created directly in it will not land in group $want");
+    }
+    for my $sub (qw(.uploads-tmp .partials)) {
+        my $dir = "$root/$sub";
+        next unless -d $dir;
+        my ($mode, $gid) = (stat $dir)[2, 5];
+        next if $gid == $want && ($mode & 02000);
+        $self->log->error(
+            "$dir is group $gid mode " . sprintf('%04o', $mode & 07777)
+          . " but must be group $want and setgid: blobs are renamed from here "
+          . "into $root, and rename preserves the source group, so every "
+          . "upload large enough to spool through this directory will be "
+          . "unreadable by homelab-search. Fix with: chown :$want $dir && "
+          . "chmod 2750 $dir");
+    }
+    return;
 }
 
 sub _store_blob ($self, $asset, $dest) {
