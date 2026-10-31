@@ -1,0 +1,98 @@
+#!/usr/bin/env perl
+# The continuous indexer. One of these runs on each search host; all three
+# consume the same queue (see Homelab::Search::Indexer for why discovery is
+# single-flight but execution is shared).
+#
+#   homelab-search-indexer              # run forever, as the systemd unit does
+#   homelab-search-indexer --once       # one discovery + drain, then exit
+#   homelab-search-indexer --discover   # enqueue only, run no units
+#   homelab-search-indexer --status     # print queue/index counts and exit
+use strict;
+use warnings;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Getopt::Long qw(GetOptions);
+use Mojo::Log;
+use Homelab::Common::Config qw(load_config);
+use Homelab::Search::Indexer;
+
+my ($once, $discover_only, $status, $verbose) = (0, 0, 0, 0);
+GetOptions('once' => \$once, 'discover' => \$discover_only,
+           'status' => \$status, 'verbose' => \$verbose)
+    or die "usage: homelab-search-indexer [--once] [--discover] [--status] [--verbose]\n";
+
+my $config = load_config('HOMELAB_SEARCH_CONFIG', '/etc/homelab/search/config.yml');
+my $log    = Mojo::Log->new(level => ($verbose ? 'debug' : ($config->{log_level} // 'info')));
+my $ix     = Homelab::Search::Indexer->new_from_config($config, $log);
+
+# Deliberately modest defaults. The shared bottleneck is the Patroni primary
+# (tsv is a GENERATED column, so to_tsvector runs server-side) and the NAS,
+# not these CPUs -- so this is a number to tune with evidence, including down
+# to 1, rather than "as many as there are cores".
+my $idle_sleep = $config->{indexer}{idle_sleep_seconds} // 15;
+my $busy_sleep = $config->{indexer}{busy_sleep_seconds} // 0;
+my $max_units  = $config->{indexer}{max_units_per_pass} // 1000;
+
+if ($status) {
+    # Transaction-local marker, not a session-level SET: a session GUC would
+    # survive on the pooled server connection after this process exits, where
+    # the web app could inherit it. Same reasoning as Indexer::_tx.
+    my $db = $ix->pg->db;
+    my $tx = $db->begin;
+    $db->query(q{SELECT set_config('homelab.indexer', 'on', true)});
+    for my $q (
+        ['queued',          q{SELECT count(*) AS n FROM search.index_queue WHERE parked = FALSE AND claimed_by IS NULL}],
+        ['in flight',       q{SELECT count(*) AS n FROM search.index_queue WHERE claimed_by IS NOT NULL AND lease_until > NOW()}],
+        ['parked',          q{SELECT count(*) AS n FROM search.index_queue WHERE parked = TRUE}],
+        ['accounts',        q{SELECT count(*) AS n FROM search.accounts}],
+        ['mailboxes',       q{SELECT count(*) AS n FROM search.mailboxes}],
+        ['messages',        q{SELECT count(*) AS n FROM search.messages}],
+        ['bodies indexed',  q{SELECT count(*) AS n FROM search.message_bodies}],
+        ['bodies truncated',q{SELECT count(*) AS n FROM search.message_bodies WHERE truncated}],
+        ['addresses',       q{SELECT count(*) AS n FROM search.addresses}],
+        ['display names',   q{SELECT count(*) AS n FROM search.display_names}],
+        ['drive items',     q{SELECT count(*) AS n FROM search.drive_items}],
+        ['drive text',      q{SELECT count(*) AS n FROM search.drive_item_text}],
+    ) {
+        printf "  %-18s %s\n", $q->[0], $db->query($q->[1])->hash->{n};
+    }
+    $tx->commit;
+    exit 0;
+}
+
+$log->info('homelab-search-indexer starting on ' . $ix->host);
+
+my $run = 1;
+$SIG{TERM} = $SIG{INT} = sub { $log->info('shutting down after the current unit'); $run = 0 };
+
+while ($run) {
+    my $enqueued = eval { $ix->discover };
+    $log->error("discovery failed: $@") if $@;
+    $log->info("discovery enqueued $enqueued unit(s)") if $enqueued;
+    last if $discover_only;
+
+    my ($units, $items, $errors) = (0, 0, 0);
+    while ($run && $units < $max_units) {
+        my $row = eval { $ix->claim };
+        if ($@) { $log->error("claim failed: $@"); last }
+        last unless $row;
+        my ($n, $err) = $ix->run_unit($row);
+        $units++; $items += $n; $errors += $err;
+        sleep $busy_sleep if $busy_sleep;
+    }
+    if ($units) {
+        $log->info("pass: $units unit(s), $items item(s), $errors error(s)");
+        my $db = $ix->pg->db;
+        my $tx = $db->begin;
+        $db->query(q{SELECT set_config('homelab.indexer', 'on', true)});
+        $db->query(q{INSERT INTO search.index_runs (host, finished_at, units, items, errors)
+                     VALUES (?, NOW(), ?, ?, ?)}, $ix->host, $units, $items, $errors);
+        $tx->commit;
+    }
+
+    last if $once;
+    sleep $idle_sleep unless $units;
+}
+
+$log->info('homelab-search-indexer stopped');

@@ -1,0 +1,45 @@
+[Unit]
+Description=Homelab search indexer (mail + drive -> Postgres full-text index)
+Documentation=file:///usr/share/doc/homelab-search/README.md
+After=network-online.target srv-mail\x2dro.mount srv-drive\x2dro.mount
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+# Group=vmail is load-bearing and NOT interchangeable with
+# SupplementaryGroups=vmail.
+#
+# The mail store is mode 0770 vmail:vmail (uid/gid 5000), and the NAS has
+# `manage-gids=y` in /etc/nfs.conf -- which makes the NFS server resolve the
+# caller's groups LOCALLY, by uid, and discard the supplementary group list
+# the client sends. uid 118 (homelab here) is not in group 5000 on the NAS,
+# so supplementary membership buys nothing: only the PRIMARY gid in the RPC
+# credential is honoured. With SupplementaryGroups=vmail the indexer could
+# not open a single mailbox -- it read "Permission denied" on the mount root
+# while `id homelab` showed it in the group, which is as confusing as it
+# sounds.
+#
+# Running with primary gid 5000 does not make this writable: the export is
+# `ro=` on the SERVER for these hosts, so writes are refused regardless of
+# identity.
+Group=vmail
+# homelab stays as a supplementary group for the LOCAL config file
+# (/etc/homelab/search/config.yml is root:homelab 0640). Supplementary groups
+# work normally there -- the manage-gids problem is specific to NFS.
+SupplementaryGroups=homelab
+ExecStart=/usr/bin/homelab-search-indexer
+Restart=always
+RestartSec=10
+# Indexing must never starve dovecot or drive of NAS I/O.
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# Read-only even to this process: it has no business writing either store.
+ReadOnlyPaths=/srv/mail-ro /srv/drive-ro
+
+[Install]
+WantedBy=multi-user.target

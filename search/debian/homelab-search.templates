@@ -1,0 +1,32 @@
+Template: homelab-search/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-search/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
+Template: homelab-search/mail_root
+Type: string
+Default: /srv/mail-ro
+Description: Read-only mount of the dovecot mail store:
+ Must be exported read-only by the NAS as well, not merely mounted -o ro.
+ See install-orchestrators/search-hosts-nfs.sh.
+
+Template: homelab-search/drive_root
+Type: string
+Default: /srv/drive-ro
+Description: Read-only mount of the drive blob store:
+ Blobs are stored flat by uuid, so this directory is never enumerated --
+ a blob is only opened for a uuid an account-scoped query returned.
+
+Template: homelab-search/listen_port
+Type: string
+Default: 2517
+Description: Port the search web app will listen on:
+ Phase 2. The indexer itself listens on nothing.

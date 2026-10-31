@@ -1,0 +1,20 @@
+#!/usr/bin/env perl
+# Applies homelab-search's own migrations/*.sql via the migrate role.
+# Same template as homelab-worker-migrate -- see that file's comment.
+use strict;
+use warnings;
+
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+
+use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(migrate_dbh);
+use Homelab::Common::Migrate qw(run_migrations);
+
+my $config = load_config('HOMELAB_SEARCH_CONFIG', '/etc/homelab/search/config.yml');
+my $dbh    = migrate_dbh(%{ $config->{database_migrate} });
+
+my $dir = $ENV{HOMELAB_SEARCH_MIGRATIONS_DIR} // '/usr/share/homelab-search/migrations';
+my $applied = run_migrations(dbh => $dbh, schema => 'search', migrations_dir => $dir);
+
+print "homelab-search: applied $applied migration(s)\n";

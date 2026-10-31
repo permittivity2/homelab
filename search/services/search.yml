@@ -1,0 +1,6 @@
+# Fleet agent manifest: what homelab-agent should expect to find running on
+# a search host. See homelab-agent's README.
+name: homelab-search
+description: Indexed search over mail and drive
+units:
+  - homelab-search-indexer.service

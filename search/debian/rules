@@ -1,0 +1,23 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+# --no-enable --no-start: postinst handles enable/start itself, after the
+# config exists and the migrations have run. Starting the indexer before
+# then would just crash-loop against a missing config.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/search.example.yml \
+		debian/homelab-search/usr/share/homelab-search/config/search.example.yml
+	install -D -m 644 services/search.yml \
+		debian/homelab-search/usr/share/homelab-search/services/search.yml
+	install -D -m 644 systemd/homelab-search-indexer.service \
+		debian/homelab-search/lib/systemd/system/homelab-search-indexer.service
+	find migrations -type f -exec install -D -m 644 {} \
+		debian/homelab-search/usr/share/homelab-search/{} \;

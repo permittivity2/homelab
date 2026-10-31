@@ -1,0 +1,59 @@
+# Homelab Search Configuration
+#
+# The indexer reads the mail and drive stores through READ-ONLY NFS mounts
+# and writes a normalized index into the `search` schema. Phase 2 adds the
+# web app; this file already carries both halves' settings.
+
+# RUNTIME connection -- CRUD only, no DDL. Point this at pgbouncer.
+#
+# The indexer uses this role too: indexing is INSERT/UPDATE/DELETE, which is
+# CRUD, so it needs no DDL. It marks its own transactions with
+# `homelab.indexer = 'on'` to pass the row-level security policy that
+# otherwise scopes every table to one account -- see migrations/001-search.sql.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_search_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection -- direct to Postgres, bypassing pgbouncer. Only used
+# by homelab-search-migrate at install/upgrade time.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_search_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+# READ-ONLY. The drive index is driven from drive's own tables rather than
+# by walking the storage directory: that is exact (deletions and restores
+# are visible) and it keeps the rule that the storage directory is never
+# enumerated. A narrow read-only role is enough.
+drive_database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_search_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# The read-only mounts. These must be mounted `ro` AND exported `ro=` by the
+# NAS -- a client-side mount option is a promise the client makes to itself.
+# See install-orchestrators/search-hosts-nfs.sh.
+mail_root:  /srv/mail-ro
+drive_root: /srv/drive-ro
+
+indexer:
+  # Seconds to wait after a pass that found nothing. The fast path is a stat
+  # per mailbox, so this can be short without being expensive.
+  idle_sleep_seconds: 15
+  # Pause between units. 0 is right while the queue is the bottleneck; raise
+  # it if the NAS or the Patroni primary is.
+  busy_sleep_seconds: 0
+  max_units_per_pass: 1000
+
+log_level: info
+
+server:
+  listen: "http://0.0.0.0:2517"
+  workers: 2

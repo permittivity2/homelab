@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        rm -f /etc/homelab/services/search.yml
+        rm -rf /etc/homelab/search
+        # The index itself is NOT dropped on purge. It is rebuildable from
+        # the stores, but dropping a schema on package removal is exactly the
+        # shape of the homelab-database-ha landmine -- a routine apt
+        # operation destroying data. Dropping it is a deliberate operator
+        # act: DROP SCHEMA search CASCADE.
+        echo "homelab-search purged. The 'search' schema was left in place;"
+        echo "drop it by hand if you really mean to: DROP SCHEMA search CASCADE;"
+        ;;
+esac
+
+exit 0

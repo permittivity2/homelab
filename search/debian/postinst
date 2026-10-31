@@ -1,0 +1,168 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/search
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-search
+
+case "$1" in
+    configure)
+        echo "homelab-search post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        # The mail store is mode 0770 vmail:vmail (uid/gid 5000) on the NAS,
+        # and NFS here is sec=sys, so the CLIENT asserts the identity: without
+        # a local group of that gid the service cannot read a single mailbox.
+        # Created with the fixed gid deliberately -- an auto-allocated gid
+        # would not match the export and would fail silently as "empty
+        # mailboxes" rather than as a permission error.
+        if ! getent group vmail >/dev/null 2>&1; then
+            addgroup --system --gid 5000 vmail 2>/dev/null \
+                || echo "  WARNING: could not create group vmail(5000) -- mail indexing will read nothing."
+        fi
+        VMAIL_GID="$(getent group vmail | cut -d: -f3)"
+        if [ "$VMAIL_GID" != "5000" ]; then
+            echo "  WARNING: group vmail has gid $VMAIL_GID, but the mail export is owned by 5000."
+            echo "           The indexer will not be able to read mail until that matches."
+        fi
+        adduser homelab vmail >/dev/null 2>&1 || true
+
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services
+        cp "$SHARE_DIR/services/search.yml" "/etc/homelab/services/search.yml"
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-search/db_host || true;        DB_HOST="${RET:-localhost}"
+            db_get homelab-search/pgbouncer_host || true; PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-search/mail_root || true;      MAIL_ROOT="${RET:-/srv/mail-ro}"
+            db_get homelab-search/drive_root || true;     DRIVE_ROOT="${RET:-/srv/drive-ro}"
+            db_get homelab-search/listen_port || true;    LISTEN_PORT="${RET:-2517}"
+
+            echo "  bootstrapping Postgres roles for 'homelab_search' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_search --schema search --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+            BOOTSTRAP_MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^BOOTSTRAP_MANUAL=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success -- see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-search' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            sed \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_search_runtime#$RUNTIME_ROLE#g" \
+                -e "s#YOUR_POSTGRES_HOST#$DB_HOST#g" \
+                -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
+                -e "s#homelab_search_migrate#$MIGRATE_ROLE#g" \
+                -e "s#^mail_root:.*#mail_root:  $MAIL_ROOT#" \
+                -e "s#^drive_root:.*#drive_root: $DRIVE_ROOT#" \
+                -e "s#\"http://0\.0\.0\.0:2517\"#\"http://0.0.0.0:$LISTEN_PORT\"#g" \
+                "$SHARE_DIR/config/search.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+
+            if [ "$BOOTSTRAP_MANUAL" = "1" ]; then
+                echo ""
+                echo "  ================================================================"
+                echo "  CONFIG WRITTEN -- but DB-side steps remain (runbook printed above):"
+                echo "    1) run the role SQL on the DB primary"
+                echo "    2) register '$RUNTIME_ROLE' in pgbouncer on each pooler"
+                echo "  Then finish this host (applies migrations + starts the indexer):"
+                echo "      sudo dpkg-reconfigure homelab-search"
+                echo "  ================================================================"
+                echo ""
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- register '$RUNTIME_ROLE' by hand."
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+            echo "  (dpkg-reconfigure homelab-search to redo the prompts)"
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_SEARCH_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
+            HOMELAB_SEARCH_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-search-migrate
+
+        # pg_trgm cannot be created by the migrate role (CREATE EXTENSION is
+        # superuser-only), so say so here rather than letting substring
+        # search quietly degrade to sequential scans.
+        #
+        # The extension name is a BIND PARAMETER, and the exit codes separate
+        # "cannot connect" from "extension absent". The first version of this
+        # did neither: it inlined q{pg_trgm} inside a DOUBLE-quoted Perl
+        # string, where q{} is not a quote operator but literal text, so the
+        # statement was a syntax error, selectrow_array returned undef, and
+        # the result was reported as "pg_trgm is not installed" on a cluster
+        # where it demonstrably was -- the migration had just built all four
+        # GIN trigram indexes with it. A check that cannot tell a broken query
+        # from a real answer is worse than no check.
+        echo "  checking pg_trgm..."
+        sudo -u homelab env HOMELAB_SEARCH_CONFIG="$CONFIG_FILE" \
+             perl -MHomelab::Common::Config=load_config -MDBI -e '
+                my $c = load_config("HOMELAB_SEARCH_CONFIG")->{database};
+                my $d = DBI->connect("dbi:Pg:dbname=$c->{name};host=$c->{host};port=$c->{port}",
+                                     $c->{user}, $c->{password}, { RaiseError => 0, PrintError => 0 });
+                exit 2 unless $d;
+                my ($r) = $d->selectrow_array("SELECT 1 FROM pg_extension WHERE extname = ?", undef, "pg_trgm");
+                exit($r ? 0 : 1);' 2>/dev/null
+        case "$?" in
+            0) echo "  pg_trgm present -- trigram indexes are in use." ;;
+            1) echo "  NOTE: pg_trgm is not installed in the homelab database."
+               echo "        Substring search will work but will use sequential scans."
+               echo "        On the Patroni primary, once:  CREATE EXTENSION pg_trgm;"
+               echo "        then: sudo dpkg-reconfigure homelab-search   (to build the GIN indexes)" ;;
+            *) echo "  NOTE: could not connect as the runtime role to check pg_trgm."
+               echo "        This says nothing about the extension -- check the pgbouncer"
+               echo "        registration for homelab_search_runtime." ;;
+        esac
+
+        systemctl enable homelab-search-indexer >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-search-indexer; then
+            systemctl restart homelab-search-indexer \
+                || echo "WARNING: homelab-search-indexer restart failed -- check 'systemctl status homelab-search-indexer'."
+        else
+            systemctl start homelab-search-indexer \
+                || echo "WARNING: homelab-search-indexer failed to start -- check 'systemctl status homelab-search-indexer'."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-search configured."
+        echo "config:  $CONFIG_FILE"
+        echo "status:  homelab-search-indexer --status"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0
