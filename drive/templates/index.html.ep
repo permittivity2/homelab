@@ -7,11 +7,6 @@
 % for my $crumb (@$breadcrumb) {
   <span class="sep">/</span><a href="/folders/<%= $crumb->{id} %>"><%= $crumb->{name} %></a>
 % }
-  %# Deep Search lives at its own vhost (search.mailmasker.org) rather than
-  %# inside drive, because it searches mail AND files together -- half of what
-  %# it covers has nothing to do with this app. A link, not an embed.
-  <a class="deep-search" href="https://search.mailmasker.org/"
-     title="Search your email and files together">Deep Search</a>
   %# Moved down from the top bar: that bar is shared chrome now, and a
   %# drive-only display preference does not belong in it.
   <label class="size-toggle" title="File size display, remembered for this browser session">
@@ -21,6 +16,102 @@
     <span>Human Readable</span>
   </label>
 </nav>
+
+%# Search, scoped to files, submitting to search.mailmasker.org with
+%# source=drive. Deliberately NOT a search implemented inside this app: same
+%# index, same query layer, same ranking, and drive has no access to the
+%# search schema -- duplicating the query builder here is how the two would
+%# drift apart. It is a full content search over files, not a filename match.
+%#
+%# This replaced a plain "Deep Search" link. The link's only distinct use was
+%# reaching the search page, which submitting an empty query does, and the
+%# Source selector below widens to mail from here -- so the link was two ways
+%# to do one thing.
+<form class="drive-search" method="get" action="https://search.mailmasker.org/">
+  <div class="askrow">
+    <input type="text" name="q" aria-label="Search your files"
+           placeholder="Search your files">
+    <button class="btn btn-primary" type="submit">Search</button>
+  </div>
+  <details class="filters">
+    <summary>Filters</summary>
+    <div class="fgrid">
+      <div class="field">
+        <label for="ds-source">Source</label>
+        %# Defaults to files, because this is drive -- but widening to mail
+        %# from here is one click, and the results land on the same page
+        %# either way.
+        <select id="ds-source" name="source">
+          <option value="drive" selected>Files only</option>
+          <option value="both">Mail and files</option>
+          <option value="mail">Mail only</option>
+        </select>
+      </div>
+      <div class="field" data-only="drive">
+        <label for="ds-mime">File type</label>
+        <select id="ds-mime" name="mime">
+          <option value="">Any type</option>
+          <option value="text">Text</option>
+          <option value="image">Images</option>
+          <option value="application/pdf">PDF</option>
+          <option value="video">Video</option>
+          <option value="audio">Audio</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="ds-from">From date</label>
+        <input type="date" id="ds-from" name="from">
+      </div>
+      <div class="field">
+        <label for="ds-to">To date</label>
+        <input type="date" id="ds-to" name="to">
+      </div>
+      <div class="field" data-only="mail">
+        <label for="ds-person">From / to</label>
+        <input type="text" id="ds-person" name="person" placeholder="name or address">
+      </div>
+      <div class="field" data-only="mail">
+        <label for="ds-mailbox">Mailbox</label>
+        %# Drive does not know the mailbox list, and with source=drive this is
+        %# greyed out anyway. Choosing a mail source here and a specific
+        %# mailbox is a job for the search page itself.
+        <select id="ds-mailbox" name="mailbox" disabled>
+          <option value="">Any mailbox</option>
+        </select>
+      </div>
+    </div>
+    <div class="checks">
+      <label data-only="mail"><input type="checkbox" name="has_attachments" value="1"> Has attachments</label>
+      <label data-only="drive"><input type="checkbox" name="in_trash" value="1"> Search trash instead</label>
+    </div>
+  </details>
+</form>
+
+%# Same greying rule as search.mailmasker.org's own page: a filter that cannot
+%# apply to the chosen source is dimmed and disabled, so a search never
+%# silently ignores half of what was typed. Presentational only -- the server
+%# ignores inapplicable filters regardless. Keep this in step with the copy in
+%# homelab-search's index.html.ep.
+<script>
+(function () {
+  var src = document.getElementById('ds-source');
+  if (!src) return;
+  function sync() {
+    var v = src.value;
+    document.querySelectorAll('.drive-search [data-only]').forEach(function (el) {
+      var applies = (v === 'both') || (el.getAttribute('data-only') === v);
+      el.style.opacity = applies ? '' : '0.4';
+      el.querySelectorAll('input, select').forEach(function (c) {
+        c.disabled = !applies;
+        c.title = applies ? '' : 'Not applicable when searching ' +
+          (v === 'drive' ? 'files only' : 'mail only');
+      });
+    });
+  }
+  src.addEventListener('change', sync);
+  sync();
+})();
+</script>
 
 <div class="layout">
   <div id="sidebar-backdrop"></div>

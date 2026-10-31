@@ -17,11 +17,43 @@
   /* Bytes / human-readable size switch. Lives in the toolbar row rather than
      the top bar now: the top bar is shared across apps, and a drive-only
      view preference does not belong in shared chrome. */
-  /* Pushed to the right of the breadcrumbs, ahead of the size toggle. */
-  .deep-search { margin-left: auto; font-size: var(--app-xs); color: var(--silver-dim);
-                 border: 1px solid var(--border); border-radius: var(--radius-pill);
-                 padding: 3px 10px; white-space: nowrap; text-decoration: none; }
-  .deep-search:hover { background: var(--surface-hover); color: var(--text-primary); }
+  /* Search, scoped to files. Mirrors homelab-search's own page so the two
+     read as one feature rather than two: same one-question row, same
+     collapsed Filters disclosure, same greying of inapplicable controls.
+     min-width:0 on the controls because a flex item defaults to
+     min-width:auto and a <select> with long options otherwise widens the
+     whole page on a phone. */
+  .drive-search { margin: 0 var(--space-4) var(--space-3); }
+  .drive-search .askrow { display: flex; gap: var(--space-2); }
+  .drive-search .askrow input {
+    flex: 1 1 auto; min-width: 0; background: var(--black-primary); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 0 12px; font-size: 16px; min-height: 40px; }
+  .drive-search .askrow button { flex: 0 0 auto; min-height: 40px; padding: 0 var(--space-4); }
+  .drive-search details.filters > summary {
+    cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px;
+    font-size: var(--app-sm); color: var(--silver-dim); padding: var(--space-2) 0; min-height: 36px; }
+  .drive-search details.filters > summary::-webkit-details-marker { display: none; }
+  .drive-search details.filters > summary::before { content: '\25B8'; font-size: 0.8em; }
+  .drive-search details.filters[open] > summary::before { content: '\25BE'; }
+  .drive-search .fgrid {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-3); margin-top: var(--space-2); }
+  .drive-search .field { min-width: 0; }
+  .drive-search .field label {
+    display: block; font-size: var(--app-xs); color: var(--text-muted); margin-bottom: 4px;
+    letter-spacing: var(--tracking-wide); text-transform: uppercase; }
+  .drive-search .field input, .drive-search .field select {
+    width: 100%; max-width: 100%; min-width: 0; background: var(--black-primary);
+    color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 0 10px; font-size: 16px; min-height: 40px; }
+  .drive-search .checks {
+    display: flex; flex-wrap: wrap; gap: var(--space-5); margin-top: var(--space-3); }
+  .drive-search .checks label {
+    display: flex; align-items: center; gap: 10px; min-height: 36px;
+    font-size: var(--app-sm); color: var(--text-muted); }
+  .drive-search .checks input[type=checkbox] { width: 18px; height: 18px; flex: 0 0 auto; }
+
   .size-toggle { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--app-xs); color: var(--text-muted); cursor: pointer; user-select: none; margin-left: auto; }
   .size-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
   .size-toggle .switch { position: relative; width: 32px; height: 17px; background: var(--surface-hover); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); flex-shrink: 0; transition: background-color var(--transition-fast); }
@@ -297,6 +329,11 @@
      minimum) since a mouse-era 0.85rem icon button is genuinely hard to
      tap accurately. */
   @media (max-width: 720px) {
+    .drive-search { margin: 0 var(--space-3) var(--space-3); }
+    .drive-search .fgrid { grid-template-columns: 1fr; }
+    .drive-search .checks { flex-direction: column; gap: var(--space-2); }
+    .drive-search .askrow input, .drive-search .askrow button,
+    .drive-search .field input, .drive-search .field select { min-height: 44px; }
     nav.breadcrumb { padding: var(--space-2) var(--space-4); }
     /* "Bytes"/"Human Readable" text labels are the widest thing in the
        toolbar row -- the switch itself (plus its title= tooltip) is

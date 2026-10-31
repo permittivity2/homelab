@@ -28,7 +28,7 @@
   <details class="filters"<%= $filters_on ? ' open' : '' %>>
     <summary>Filters<%= $filters_on ? ' (active)' : '' %></summary>
     <div class="fgrid">
-      <div class="field">
+      <div class="field" data-only="mail">
         <label for="person">From / to</label>
         <input type="text" id="person" name="person" value="<%= $f->{person} %>" placeholder="name or address">
       </div>
@@ -48,7 +48,7 @@
         <label for="to">To date</label>
         <input type="date" id="to" name="to" value="<%= $f->{to} %>">
       </div>
-      <div class="field">
+      <div class="field" data-only="mail">
         <label for="mailbox">Mailbox</label>
         <select id="mailbox" name="mailbox">
           <option value="">Any mailbox</option>
@@ -62,7 +62,7 @@
 % }
         </select>
       </div>
-      <div class="field">
+      <div class="field" data-only="drive">
         <label for="mime">File type</label>
         <select id="mime" name="mime">
           <option value="">Any type</option>
@@ -73,14 +73,44 @@
       </div>
     </div>
     <div class="checks">
-      <label><input type="checkbox" name="has_attachments" value="1"<%= $f->{has_attachments} ? ' checked' : '' %>> Has attachments</label>
-      <label><input type="checkbox" name="in_trash" value="1"<%= $f->{in_trash} ? ' checked' : '' %>> Search trash instead</label>
+      <label data-only="mail"><input type="checkbox" name="has_attachments" value="1"<%= $f->{has_attachments} ? ' checked' : '' %>> Has attachments</label>
+      <label data-only="drive"><input type="checkbox" name="in_trash" value="1"<%= $f->{in_trash} ? ' checked' : '' %>> Search trash instead</label>
       %# Rendered and disabled on purpose: the product has to be useful with
       %# the model switched off, so this only says the other mode is coming.
       <label class="aioff" title="Not available yet"><input type="checkbox" disabled> AI search <span class="hint">(coming)</span></label>
     </div>
   </details>
 </form>
+
+%# Grey out the filters that cannot apply to the chosen source. Mailbox,
+%# sender and "has attachments" mean nothing for a file; file type and trash
+%# mean nothing for a message. Leaving them live invites a search that
+%# silently ignores half of what was typed.
+%#
+%# Presentational only -- the server already ignores a filter that does not
+%# apply to the source it is querying, so a browser with JS off loses the
+%# visual cue and nothing else. Drive's own search box carries a copy of
+%# this; keep the two in step.
+<script>
+(function () {
+  var src = document.getElementById('source');
+  if (!src) return;
+  function sync() {
+    var v = src.value;
+    document.querySelectorAll('[data-only]').forEach(function (el) {
+      var applies = (v === 'both') || (el.getAttribute('data-only') === v);
+      el.style.opacity = applies ? '' : '0.4';
+      el.querySelectorAll('input, select').forEach(function (c) {
+        c.disabled = !applies;
+        c.title = applies ? '' : 'Not applicable when searching ' +
+          (v === 'drive' ? 'files only' : 'mail only');
+      });
+    });
+  }
+  src.addEventListener('change', sync);
+  sync();
+})();
+</script>
 
 % if (($counts->{messages} // 0) || ($counts->{drive_items} // 0)) {
 <p class="counts"><%= $counts->{messages} // 0 %> messages and <%= $counts->{drive_items} // 0 %> files indexed for you.</p>
