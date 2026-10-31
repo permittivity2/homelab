@@ -20,6 +20,31 @@ lives here rather than in anyone's shell history.
 - Scripts are re-runnable where practical, and log to a file they name on
   startup.
 
+## Audits (they change nothing)
+
+Two scripts only look and report. Exit 0 means clean, 1 means findings.
+
+| Script | Answers |
+|---|---|
+| `fleet-version-audit.sh` | is every node running what the apt repo publishes? |
+| `fleet-permission-audit.sh` | can anything read or destroy data it has no business touching — or is anything so tight the service that needs it cannot? |
+
+`fleet-permission-audit.sh` was written the day after the drive blob store was
+found at **0777** — every local uid on a drive node could list all 30,512 of a
+user's files and, because write permission on a *directory* is what authorises
+unlink, delete them. In the same hour the opposite failure turned up in the
+same directory: blobs over 256 KB were landing in the wrong group, so
+`homelab-search` got `EACCES` and told users their photos were "no longer on
+disk". Both had been true for months. Both were found by a person clicking a
+link, not by a check.
+
+The generalisation is the point: permissions on a shared store are a fleet
+invariant, not a per-package detail, and an invariant nobody measures is a
+wish. Its rules deliberately judge the *property* rather than the filename —
+the first version flagged every service manifest as a leaked secret, and a
+check that cries wolf twelve times per node is worse than no check, because it
+teaches you to skip it.
+
 ## Credentials
 
 **No credential is stored in this directory.** Anything secret is read at

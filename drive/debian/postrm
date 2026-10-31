@@ -9,6 +9,32 @@ case "$1" in
         # and the fleet dashboard shows a permanent phantom outage --
         # exactly the domain-admin/ct11 drift this cleans up).
         rm -f /etc/homelab/services/drive.yml
+
+        # Clean up the storage scaffolding this package created -- but only
+        # on a host where storage is LOCAL, and only with rmdir.
+        #
+        # The mountpoint test is load-bearing, not caution. On a real drive
+        # node /var/lib/homelab/drive-storage is an NFS mount SHARED by all
+        # three nodes, so removing .uploads-tmp or .partials from it during a
+        # purge on one node would pull them out from under the other two --
+        # turning a routine purge into an outage for hosts nobody touched.
+        # Where it is a mountpoint we therefore leave everything alone; the
+        # blobs are not ours to delete either.
+        #
+        # rmdir rather than rm -rf for the same reason, one layer deeper: a
+        # purge must never be able to delete a user's files. If anything is
+        # in there, rmdir fails and that is the correct outcome.
+        #
+        # Worth doing because the residue is not harmless-looking: node 39
+        # carried an empty local drive-storage for weeks after the package
+        # was removed, and it surfaced as a CRIT in
+        # install-orchestrators/fleet-permission-audit.sh -- a false alarm
+        # that costs more than the directory it describes.
+        if ! mountpoint -q /var/lib/homelab/drive-storage 2>/dev/null; then
+            rmdir /var/lib/homelab/drive-storage/.uploads-tmp \
+                  /var/lib/homelab/drive-storage/.partials \
+                  /var/lib/homelab/drive-storage 2>/dev/null || true
+        fi
         ;;
 
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
