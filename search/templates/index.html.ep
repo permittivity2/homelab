@@ -5,65 +5,86 @@
 %# so `sub ($x) {...}` in an .ep is a prototype and $x is an undeclared global.
 %# The raw values still go out unformatted in the JSON that homelab-cli reads.
 
+%# ONE question up front, everything else folded away.
+%#
+%# The first version put six controls and three checkboxes on the page at
+%# once. On a phone that is a wall of form before you reach a single result,
+%# and the honest feedback was "way too busy". A search page should ask one
+%# question; the filters are for the second attempt, not the first.
+%#
+%# The disclosure opens automatically when a filter is actually in use, so a
+%# narrowed search never hides why it is narrowed.
+% my $filters_on = (length($f->{person}) || length($f->{from}) || length($f->{to})
+%                || length($f->{mailbox}) || length($f->{mime})
+%                || $f->{has_attachments} || $f->{in_trash} || $f->{source} ne 'both') ? 1 : 0;
 <form class="searchbar" method="get" action="/">
-  <div class="row">
-    <div class="field grow">
-      <label for="q">Search your email and files</label>
-      <input type="text" id="q" name="q" value="<%= $f->{q} %>" autofocus
-             placeholder="words, &quot;a phrase&quot;, or -exclude">
-    </div>
-    <div class="field" style="flex:0 0 190px">
-      <label for="person">From / to (person)</label>
-      <input type="text" id="person" name="person" value="<%= $f->{person} %>" placeholder="name or address">
-    </div>
-    <div class="field" style="flex:0 0 140px">
-      <label for="from">From date</label>
-      <input type="date" id="from" name="from" value="<%= $f->{from} %>">
-    </div>
-    <div class="field" style="flex:0 0 140px">
-      <label for="to">To date</label>
-      <input type="date" id="to" name="to" value="<%= $f->{to} %>">
-    </div>
-    <div><button class="btn btn-primary" type="submit">Search</button></div>
+  <div class="askrow">
+    <input type="text" id="q" name="q" value="<%= $f->{q} %>" autofocus
+           aria-label="Search your email and files"
+           placeholder="Search your email and files">
+    <button class="btn btn-primary" type="submit">Search</button>
   </div>
 
-  <div class="chips">
-    <label>Source
-      <select name="source">
-% for my $s (qw(both mail drive)) {
-        <option value="<%= $s %>"<%= $f->{source} eq $s ? ' selected' : '' %>><%= ucfirst $s %></option>
+  <details class="filters"<%= $filters_on ? ' open' : '' %>>
+    <summary>Filters<%= $filters_on ? ' (active)' : '' %></summary>
+    <div class="fgrid">
+      <div class="field">
+        <label for="person">From / to</label>
+        <input type="text" id="person" name="person" value="<%= $f->{person} %>" placeholder="name or address">
+      </div>
+      <div class="field">
+        <label for="source">Source</label>
+        <select id="source" name="source">
+% for my $s (['both','Mail and files'],['mail','Mail only'],['drive','Files only']) {
+          <option value="<%= $s->[0] %>"<%= $f->{source} eq $s->[0] ? ' selected' : '' %>><%= $s->[1] %></option>
 % }
-      </select>
-    </label>
-    <label>Mailbox
-      <select name="mailbox">
-        <option value="">any</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="from">From date</label>
+        <input type="date" id="from" name="from" value="<%= $f->{from} %>">
+      </div>
+      <div class="field">
+        <label for="to">To date</label>
+        <input type="date" id="to" name="to" value="<%= $f->{to} %>">
+      </div>
+      <div class="field">
+        <label for="mailbox">Mailbox</label>
+        <select id="mailbox" name="mailbox">
+          <option value="">Any mailbox</option>
 % for my $mb (@$mailboxes) {
-        <option value="<%= $mb->{name} %>"<%= $f->{mailbox} eq $mb->{name} ? ' selected' : '' %>><%= $mb->{name} %> (<%= $mb->{n} %>)</option>
+%   # Maildir++ folder names are long ('.Tax Audit.Tax Year 2020'); the full
+%   # name stays the value, only the label is shortened. An option wider than
+%   # the viewport is what made the page scroll sideways.
+%   my $lbl = $mb->{name}; $lbl =~ s/^\.//; $lbl =~ s/\./ \/ /g;
+%   $lbl = substr($lbl, 0, 22) . '…' if length($lbl) > 23;
+          <option value="<%= $mb->{name} %>"<%= $f->{mailbox} eq $mb->{name} ? ' selected' : '' %>><%= $lbl %> (<%= $mb->{n} %>)</option>
 % }
-      </select>
-    </label>
-    <label>File type
-      <select name="mime">
-        <option value="">any</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="mime">File type</label>
+        <select id="mime" name="mime">
+          <option value="">Any type</option>
 % for my $m (['text','Text'],['image','Images'],['application/pdf','PDF'],['video','Video'],['audio','Audio']) {
-        <option value="<%= $m->[0] %>"<%= $f->{mime} eq $m->[0] ? ' selected' : '' %>><%= $m->[1] %></option>
+          <option value="<%= $m->[0] %>"<%= $f->{mime} eq $m->[0] ? ' selected' : '' %>><%= $m->[1] %></option>
 % }
-      </select>
-    </label>
-    <label><input type="checkbox" name="has_attachments" value="1"<%= $f->{has_attachments} ? ' checked' : '' %>> Has attachments</label>
-    <label><input type="checkbox" name="in_trash" value="1"<%= $f->{in_trash} ? ' checked' : '' %>> Search trash instead</label>
-    %# Rendered and disabled on purpose. The whole product has to be useful
-    %# with the model switched off, so Phase 2 ships the real search first and
-    %# the toggle exists only to say that the other mode is coming.
-    <span class="aioff" title="Not available yet">
-      <input type="checkbox" disabled> AI search <span class="hint">(coming)</span>
-    </span>
-  </div>
-% if (($counts->{messages} // 0) || ($counts->{drive_items} // 0)) {
-  <div class="counts">Indexed for you: <%= $counts->{messages} // 0 %> messages, <%= $counts->{drive_items} // 0 %> files.</div>
-% }
+        </select>
+      </div>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" name="has_attachments" value="1"<%= $f->{has_attachments} ? ' checked' : '' %>> Has attachments</label>
+      <label><input type="checkbox" name="in_trash" value="1"<%= $f->{in_trash} ? ' checked' : '' %>> Search trash instead</label>
+      %# Rendered and disabled on purpose: the product has to be useful with
+      %# the model switched off, so this only says the other mode is coming.
+      <label class="aioff" title="Not available yet"><input type="checkbox" disabled> AI search <span class="hint">(coming)</span></label>
+    </div>
+  </details>
 </form>
+
+% if (($counts->{messages} // 0) || ($counts->{drive_items} // 0)) {
+<p class="counts"><%= $counts->{messages} // 0 %> messages and <%= $counts->{drive_items} // 0 %> files indexed for you.</p>
+% }
 
 % unless ($account) {
   <p class="empty">Nothing of yours has been indexed yet. If you have just signed up, give the indexer a few minutes.</p>
