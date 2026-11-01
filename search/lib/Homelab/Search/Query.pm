@@ -296,6 +296,43 @@ sub watermarks ($self, $account_id) {
     });
 }
 
+# Per-type metadata for a set of drive items, ready to display.
+#
+# $visibility is 'all' or 'safe'. 'safe' omits every key flagged sensitive
+# in metadata_keys -- today that is the GPS trio. The filter is a WHERE
+# clause rather than a post-filter in Perl, so a caller cannot forget it
+# and a key added as sensitive later is excluded the moment it is added.
+#
+# Returns { drive_item_id => [ { key_name, label, kind, value }, ... ] }.
+sub metadata_for ($self, $account_id, $ids, $visibility = 'all') {
+    return {} unless $ids && @$ids;
+    my @ids = grep { defined && /\A\d+\z/ } @$ids;
+    return {} unless @ids;
+    my $ph = join ',', ('?') x @ids;
+    my $only_safe = $visibility eq 'safe' ? 'AND NOT k.sensitive' : '';
+    return $self->_scoped($account_id, sub ($db) {
+        my $rows = $db->query(qq{
+            SELECT m.drive_item_id, k.key_name, k.label, k.value_kind,
+                   m.value_text, m.value_num, m.value_at
+              FROM search.drive_metadata m
+              JOIN search.metadata_keys k USING (key_id)
+             WHERE m.account_id = ? AND m.drive_item_id IN ($ph) $only_safe
+             ORDER BY m.drive_item_id, k.key_name}, $account_id, @ids)->hashes;
+        my %out;
+        for my $r (@$rows) {
+            my $v = $r->{value_kind} eq 'num' ? $r->{value_num}
+                  : $r->{value_kind} eq 'at'  ? $r->{value_at}
+                  :                             $r->{value_text};
+            next unless defined $v;
+            push @{ $out{ $r->{drive_item_id} } }, {
+                key_name => $r->{key_name}, label => $r->{label},
+                kind     => $r->{value_kind}, value => $v,
+            };
+        }
+        return \%out;
+    });
+}
+
 # The ALREADY-EXTRACTED text of one item, for AI mode's get_excerpt.
 #
 # Deliberately not message()/drive_item() with an extra column: those two

@@ -535,6 +535,18 @@
 % if (length($d->{snippet} // '')) {
       <div class="snip"><%= $d->{snippet} %></div>
 % }
+%# Per-type metadata: a camera, a duration, a page count. Shown only where
+%# there is something to show, so a text file gains no empty row. GPS is
+%# here because this is the owner's own page -- it is filtered out of what
+%# AI mode sends to a third party, not out of what they can see themselves.
+% if (my $md = $drive_meta->{ $d->{drive_item_id} }) {
+      <dl class="meta-kv">
+%   for my $kv (@$md) {
+        <dt><%= $kv->{label} %></dt>
+        <dd><%= meta_value($kv) %></dd>
+%   }
+      </dl>
+% }
       <div class="acts">
 % if ($viewable) {
         <a href="/drive/<%= $d->{drive_item_id} %>/view" target="_blank" rel="noopener noreferrer">Open</a>

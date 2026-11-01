@@ -1,3 +1,42 @@
+homelab-search (0.2.19) unstable; urgency=medium
+
+  * Release v0.2.19
+
+ -- Gardner <gardner@homelab>  Sun, 01 Nov 2026 00:04:48 -0500
+
+homelab-search (0.2.19) unstable; urgency=medium
+
+  * Per-type file metadata (plan phase 5): EXIF from images,
+    duration/codec/dimensions from video and audio, title/author/page
+    count from PDF and Office, and the member list from archives - so
+    'the zip with the invoice in it' is findable.
+  * Normalized into search.metadata_keys + search.drive_metadata rather
+    than a JSONB blob: a key is a row, the value is indexed and typed,
+    and the key - not the row - decides which of the three value columns
+    is used.
+  * content_created_at now comes from EXIF DateTimeOriginal where there
+    is one. Before this, 8 of 30,499 drive items had any real creation
+    date; a photo's upload time is not when it was taken.
+  * GPS is stored and shown to the owner but NEVER sent to a third
+    party: metadata_keys.sensitive is filtered in SQL by
+    Query::metadata_for('safe'), which is what AI mode's drive tool
+    calls. The live corpus already contains a drone photo with the exact
+    spot it was taken.
+  * Extraction is adversarial-input work: a wall-clock alarm, no shell,
+    every value capped, and any failure means the file is indexed on its
+    basic fields rather than failing the unit.
+  * drive_items.extractor_version makes a re-index incremental - bump
+    Extract::EXTRACTOR_VERSION and discovery re-queues stale files
+    through the existing work queue, capped per pass so a bump cannot
+    starve mail indexing.
+  * Three bugs found by running it: a 256 MB size cap silently skipped
+    every video (ExifTool reads headers, so a 564 MB file costs under a
+    millisecond); passing an explicit tag list broke COMPOSITE tags, so
+    videos indexed with dimensions but no duration; and the numeric
+    parser read '1e400' as the number 1 instead of rejecting it.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 00:04:48 -0500
+
 homelab-search (0.2.18) unstable; urgency=medium
 
   * Release v0.2.18

@@ -214,17 +214,35 @@ sub run_tool ($query, $account_id, $name, $input, $budget) {
         $f->{limit} = $room if $room < $f->{limit};
         my $rows = $query->search_drive($account_id, $f);
         $budget->{rows_used} += scalar @$rows;
+
+        # Per-type metadata, so "photos from the DJI" and "videos over a
+        # minute" are answerable.
+        #
+        # 'safe' IS THE WHOLE POINT. It drops every key flagged sensitive
+        # in metadata_keys -- today the GPS trio -- as a WHERE clause in
+        # the query rather than a filter here, so this cannot be forgotten
+        # and a key marked sensitive later is excluded the moment it is.
+        # A photo's coordinates are the most revealing thing the index
+        # holds; the owner sees them on the page, and they do not leave
+        # the building.
+        my $meta = $query->metadata_for($account_id,
+                       [ map { $_->{drive_item_id} } @$rows ], 'safe');
+
         return (_fence({
             source  => 'files',
             count   => scalar @$rows,
-            results => [ map { {
-                id      => $_->{drive_item_id},
-                name    => _clip($_->{file_name}, 200),
-                folder  => $_->{folder_path},
-                type    => $_->{mime_type},
-                bytes   => $_->{size_bytes},
-                date    => substr($_->{content_created_at} // $_->{uploaded_at} // '', 0, 10),
-                snippet => _clip($_->{snippet}, MAX_SNIPPET_CHARS),
+            results => [ map { my $r = $_; {
+                id      => $r->{drive_item_id},
+                name    => _clip($r->{file_name}, 200),
+                folder  => $r->{folder_path},
+                type    => $r->{mime_type},
+                bytes   => $r->{size_bytes},
+                date    => substr($r->{content_created_at} // $r->{uploaded_at} // '', 0, 10),
+                snippet => _clip($r->{snippet}, MAX_SNIPPET_CHARS),
+                (@{ $meta->{ $r->{drive_item_id} } // [] }
+                    ? (details => { map { $_->{key_name} => $_->{value} }
+                                    @{ $meta->{ $r->{drive_item_id} } } })
+                    : ()),
             } } @$rows ],
         }), [ map { [ file => $_->{drive_item_id} ] } @$rows ]);
     }

@@ -6,6 +6,7 @@ use Mojo::Pg;
 use Homelab::Search::Index;
 use Homelab::Search::MailParse qw(parse_message parse_maildir_name);
 use Homelab::Search::Paths     qw(maildir_for mailbox_dir_for drive_blob_for);
+use Homelab::Search::Extract   qw(extract best_created_at EXTRACTOR_VERSION);
 
 has 'pg';
 has 'drive_pg';          # separate handle: the drive schema is another role's
@@ -15,6 +16,8 @@ has 'index';
 has host         => sub { hostname() };
 has mail_root    => '/srv/mail-ro';
 has drive_root   => '/srv/drive-ro';
+# How many metadata-stale files to re-queue per discovery pass. See (2b).
+has stale_batch  => 400;
 has lease_secs   => 300;
 has max_attempts => 5;
 has batch_size   => 200;
@@ -257,6 +260,39 @@ sub _discover_drive ($self) {
     } // [];
     for my $r (@$idx_dead) {
         push @ids, $r->{drive_file_id} unless $gone_id{ $r->{drive_file_id} };   # restored
+    }
+
+    # (2b) Files whose metadata predates the current extractor.
+    #
+    #      This is what makes adding a tag or fixing a transform cheap:
+    #      bump Extract::EXTRACTOR_VERSION and the next pass re-queues
+    #      exactly the files below it, in id order, draining through the
+    #      existing work queue. No migration and no flag day.
+    #
+    #      Every file is stamped once, text files included -- they have no
+    #      metadata to extract, but stamping them is what stops them being
+    #      re-queued on every subsequent pass. So the first run after a
+    #      bump walks the whole corpus once and then goes quiet, rather
+    #      than the ~115 files that actually yield anything.
+    #
+    #      CAPPED PER PASS on purpose. A version bump makes every file
+    #      stale at once, and enqueuing 30k units in one go is the
+    #      starvation this function's section (3) exists to avoid. A few
+    #      hundred per pass drains in minutes and leaves mail indexing
+    #      alive throughout.
+    my $stale = eval {
+        $self->index->_tx(sub ($db) {
+            $db->query(q{SELECT drive_file_id FROM search.drive_items
+                          WHERE deleted_at IS NULL AND drive_file_id IS NOT NULL
+                            AND (extractor_version IS NULL OR extractor_version < ?)
+                          ORDER BY drive_file_id LIMIT ?},
+                       Homelab::Search::Extract::EXTRACTOR_VERSION, $self->stale_batch)->hashes;
+        });
+    } // [];
+    if (@$stale) {
+        $self->log->info(sprintf 'drive: %d file(s) below extractor v%d, re-queuing',
+                         scalar @$stale, Homelab::Search::Extract::EXTRACTOR_VERSION);
+        push @ids, map { $_->{drive_file_id} } @$stale;
     }
 
     # (3) The slow net: a SET DIFFERENCE, not a re-index.
@@ -551,23 +587,50 @@ sub _do_drive_batch ($self, $row) {
     my $n = 0;
     for my $r (@$rows) {
         my $acct = $self->index->upsert_account(lc $r->{user_email}, has_drive => 1) or next;
-        my $text;
-        # Only extract from what is worth extracting, and only if the blob is
-        # actually readable. Everything else is indexed on metadata alone.
-        if (!$r->{deleted_at} && ($r->{mime_type} // '') =~ m{^text/}
-            && ($r->{size_bytes} // 0) <= 8 * 1024 * 1024) {
-            my $path = eval { drive_blob_for($self->drive_root, $r->{uuid}) };
-            if ($path && -r $path && open(my $fh, '<', $path)) {
-                binmode $fh;
-                read $fh, my $buf, 1024 * 1024;
-                close $fh;
-                $text = $buf;
-                $text =~ s/\0//g;
+        my ($text, $meta);
+        my $mime = lc($r->{mime_type} // '');
+        my $path = $r->{deleted_at} ? undef
+                 : eval { drive_blob_for($self->drive_root, $r->{uuid}) };
+
+        if ($path && -r $path) {
+            # Text gets its body indexed, as before.
+            if ($mime =~ m{^text/} && ($r->{size_bytes} // 0) <= 8 * 1024 * 1024) {
+                if (open(my $fh, '<', $path)) {
+                    binmode $fh;
+                    read $fh, my $buf, 1024 * 1024;
+                    close $fh;
+                    $text = $buf;
+                    $text =~ s/\0//g;
+                }
+            }
+            # Everything else that carries facts in its HEADERS rather than
+            # its text. Cheap: ExifTool reads headers, so a 564 MB video
+            # costs about as much as a thumbnail.
+            elsif ($mime =~ m{^(?:image|video|audio)/}
+                || $mime =~ m{^application/(?:pdf|zip|x-zip-compressed|vnd\.openxmlformats|vnd\.oasis|msword|vnd\.ms-)}) {
+                $meta = extract($mime, $path, log => $self->log);
+                $meta = undef unless $meta && %$meta;
             }
         }
+
+        # THE POINT OF ALL THIS, for most people: a real creation date.
+        # drive.files.uploaded_at is when we received the file, which for a
+        # photo taken years earlier is simply wrong -- and before this, 8
+        # of 30,499 items had any content_created_at at all. EXIF's
+        # DateTimeOriginal is the date the shutter fired.
+        #
+        # Only fills a GAP: a date drive already captured at upload time
+        # came from the client's own file and is not overridden here.
+        if ($meta && !$r->{content_created_at}) {
+            if (my $made = best_created_at($meta)) { $r->{content_created_at} = $made }
+        }
+
         $self->index->index_drive_item(account_id => $acct, row => {
             %$r, folder_path => $r->{folder_name},
-        }, text => $text);
+            # Recorded even when extraction found nothing, so a file we have
+            # already looked at is not looked at again on every pass.
+            extractor_version => ($path ? EXTRACTOR_VERSION : undef),
+        }, text => $text, meta => $meta);
         $n++;
     }
     return $n;

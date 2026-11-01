@@ -265,6 +265,25 @@ isnt Digest::SHA::sha256_hex($body . ' '), notice_sha256(),
     cmp_ok length($long->[0]{why}), '<=', 200, 'a model-authored reason is truncated';
 }
 
+# ------------------------------------------------- GPS never leaves
+# The single most revealing field the index holds. The owner sees it on
+# the page; it must not reach a third party. Enforced by asking the query
+# layer for 'safe', which filters on metadata_keys.sensitive in SQL.
+{
+    my $asked;
+    my $q = MetaQuery->new(
+        drive => [ { drive_item_id => 7, file_name => 'lake.jpg',
+                     mime_type => 'image/jpeg', size_bytes => 100 } ],
+        on_meta => sub { $asked = $_[0] },   # records the visibility argument
+    );
+    my ($text) = run_tool($q, 20, 'search_drive', { query => 'lake' }, { rows_used => 0 });
+
+    is $asked, 'safe', 'the drive tool asks for SAFE metadata, not all of it';
+    like $text, qr/image\.camera_model/, 'non-sensitive metadata does reach the model';
+    unlike $text, qr/gps\.latitude|gps\.longitude|45\.337/,
+        'and no GPS key or coordinate appears anywhere in the tool result';
+}
+
 done_testing;
 
 # ---------------------------------------------------------------------------
@@ -277,6 +296,25 @@ sub search_drive { return $_[0]{drive} // [] }
 sub excerpt      { return $_[0]{excerpt} }
 sub message      { return $_[0]{message} }
 sub drive_item   { return $_[0]{drive_item} }
+
+# Returns drive rows plus metadata, recording which visibility was asked
+# for. The stand-in returns ONLY safe keys when asked for 'safe', the way
+# the real SQL does.
+package MetaQuery;
+sub new { my ($c,%a)=@_; return bless {%a}, $c }
+sub search_mail  { return [] }
+sub search_drive { return $_[0]{drive} // [] }
+sub metadata_for {
+    my ($self, $acct, $ids, $vis) = @_;
+    $self->{on_meta}->($vis) if $self->{on_meta};
+    my @all = (
+        { key_name => 'image.camera_model', label => 'Camera model', kind => 'text', value => 'FC9113' },
+        { key_name => 'gps.latitude',  label => 'Latitude',  kind => 'num', value => 45.3373175555556 },
+        { key_name => 'gps.longitude', label => 'Longitude', kind => 'num', value => -109.012832361111 },
+    );
+    @all = grep { $_->{key_name} !~ /^gps\./ } @all if ($vis // '') eq 'safe';
+    return { 7 => \@all };
+}
 
 # Resolves exactly one id, so "mine" and "not mine" are distinguishable.
 package ResolveQuery;

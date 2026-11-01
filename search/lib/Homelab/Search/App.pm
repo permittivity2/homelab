@@ -174,6 +174,38 @@ sub startup ($self) {
         return '/?q=' . url_escape($q);
     });
 
+    # Metadata as a person reads it. 40.166 is a duration of 0:40, 0.0125
+    # is an exposure of 1/80, and 1.8 is f/1.8 -- the index stores the
+    # number because that is what sorts and filters, and this is the only
+    # place that turns it back into the notation on the camera body.
+    $self->helper(meta_value => sub ($c, $kv) {
+        my ($k, $v, $kind) = @{$kv}{qw(key_name value kind)};
+        return '' unless defined $v;
+        return $c->short_date($v) if $kind eq 'at';
+        if ($kind eq 'num') {
+            return sprintf('%d:%02d', int($v / 60), int($v) % 60) if $k eq 'media.duration_s';
+            # The shutter speed as written on a lens: a reciprocal under a
+            # second, a plain number above it.
+            return $v >= 1 ? sprintf('%.3gs', $v) : sprintf('1/%d', int(1 / $v + 0.5))
+                if $k eq 'image.exposure_s' && $v > 0;
+            return sprintf('f/%.3g', $v)          if $k eq 'image.f_number';
+            return sprintf('%.3g mm', $v)         if $k eq 'image.focal_length_mm';
+            return sprintf('%.1f m', $v)          if $k eq 'gps.altitude_m';
+            return sprintf('%.5f', $v)            if $k =~ /^gps\.(?:latitude|longitude)$/;
+            return sprintf('%.1f Mbps', $v / 1_000_000) if $k eq 'media.bitrate' && $v > 1_000_000;
+            return sprintf('%.3g fps', $v)        if $k eq 'video.frame_rate';
+            # Orientation is an EXIF enum, and the number means nothing to
+            # anyone who has not read the spec.
+            if ($k eq 'image.orientation') {
+                my %o = (1 => 'Normal', 3 => 'Upside down',
+                         6 => 'Rotated right', 8 => 'Rotated left');
+                return $o{$v} // "Orientation $v";
+            }
+            return $v == int($v) ? int($v) : sprintf('%.4g', $v);
+        }
+        return $v;
+    });
+
     # The template asks the SAME function the server uses, rather than
     # re-deriving the rule in markup.
     $self->helper(viewable => sub ($c, $mime) {
@@ -412,6 +444,14 @@ sub index ($c) {
         counts     => ($acct ? $c->app->query->counts($acct->{account_id})    : {}),
         mime_cats  => Homelab::Search::Mime::categories(),
         mime_groups => _mime_groups($acct ? $c->app->query->mime_facets($acct->{account_id}) : []),
+        # Per-type metadata for the file results on this page, in ONE query
+        # rather than one per row. 'all' here, not 'safe': this is the
+        # owner's own page, and the sensitive filter exists for what leaves
+        # the building, not for what they can already see.
+        drive_meta => (($acct && @$drive)
+            ? $c->app->query->metadata_for($acct->{account_id},
+                  [ map { $_->{drive_item_id} } @$drive ], 'all')
+            : {}),
         searched   => _searched($f),
     );
 }

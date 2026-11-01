@@ -285,6 +285,23 @@
       font-size: var(--app-sm); color: var(--text-muted); margin-top: 4px; overflow: hidden;
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     }
+    /* Per-type metadata under a file hit. A definition list because that
+       is what it is: a label and its value, repeated. Inline-wrapping
+       rather than a table, so three fields on a phone are three chips and
+       not a horizontal scroll. */
+    .meta-kv {
+      display: flex; flex-wrap: wrap; gap: 2px var(--space-3);
+      margin: 6px 0 0; font-size: var(--app-xs);
+    }
+    .meta-kv dt {
+      color: var(--text-muted); margin: 0;
+      text-transform: uppercase; letter-spacing: var(--tracking-wide);
+      font-size: 0.6875rem; align-self: center;
+    }
+    .meta-kv dd {
+      color: var(--text-secondary); margin: 0 var(--space-2) 0 0;
+      font-variant-numeric: tabular-nums; overflow-wrap: anywhere; min-width: 0;
+    }
     .acts { margin-top: 8px; display: flex; flex-wrap: wrap; gap: var(--space-4); font-size: var(--app-xs); }
     .acts a { color: var(--silver-dim); min-height: 32px; display: inline-flex; align-items: center; }
     .empty { color: var(--text-muted); padding: var(--space-6) 0; }

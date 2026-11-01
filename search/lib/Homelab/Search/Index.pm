@@ -1,5 +1,6 @@
 package Homelab::Search::Index;
 use Mojo::Base -base, -signatures;
+use Homelab::Search::Extract ();
 
 use Homelab::Search::MailParse qw(HEADER_ALLOWLIST);
 
@@ -81,6 +82,9 @@ sub _intern ($self, $db, $sql, @bind) {
     return $r ? $r->[0] : undef;
 }
 
+my %META_KEY = map { $_->{key_name} => $_ }
+              @{ Homelab::Search::Extract::keys_catalogue() };
+
 sub domain_id ($self, $db, $domain) {
     $domain = lc($domain // '');
     return undef unless length $domain;
@@ -123,6 +127,25 @@ sub mime_type_id ($self, $db, $mime) {
             'type = ? AND subtype = ?', [$type, $subtype],
             'INSERT INTO search.mime_types (type, subtype) VALUES (?, ?) ON CONFLICT DO NOTHING',
             [$type, $subtype]);
+    });
+}
+
+# The metadata key lookup, interned like the others. Attributes come from
+# Extract's catalogue, so the label and the sensitive flag have ONE
+# definition -- the module that produces the value also says what it is
+# called and whether it may leave the building.
+sub metadata_key_id ($self, $db, $key_name) {
+    return undef unless defined $key_name && length $key_name;
+    return $self->_cached('metakey', $key_name, sub {
+        my $spec = $META_KEY{$key_name} or return undef;
+        return $self->_get_or_create($db, 'search.metadata_keys', 'key_id',
+            'key_name = ?', [$key_name],
+            'INSERT INTO search.metadata_keys (key_name, label, value_kind, sensitive)
+             VALUES (?, ?, ?, ?) ON CONFLICT (key_name) DO UPDATE
+                SET label = EXCLUDED.label, value_kind = EXCLUDED.value_kind,
+                    sensitive = EXCLUDED.sensitive
+             RETURNING key_id',
+            [$key_name, $spec->{label}, $spec->{value_kind}, ($spec->{sensitive} ? 1 : 0)]);
     });
 }
 
@@ -439,26 +462,28 @@ sub live_drive_ids ($self) {
 
 # ------------------------------------------------------------------- drive
 sub index_drive_item ($self, %a) {
-    my ($account_id, $row, $text) = @a{qw(account_id row text)};
+    my ($account_id, $row, $text, $meta) = @a{qw(account_id row text meta)};
     return $self->_tx(sub ($db) {
         my $id = $self->_intern($db, q{
             INSERT INTO search.drive_items
                 (account_id, drive_file_id, file_uuid, file_name, folder_path, mime_type_id,
-                 size_bytes, content_created_at, uploaded_at, deleted_at, indexed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                 size_bytes, content_created_at, uploaded_at, deleted_at, extractor_version, indexed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ON CONFLICT (account_id, file_uuid) DO UPDATE SET
                 file_name          = EXCLUDED.file_name,
                 folder_path        = EXCLUDED.folder_path,
                 mime_type_id       = EXCLUDED.mime_type_id,
                 size_bytes         = EXCLUDED.size_bytes,
                 content_created_at = EXCLUDED.content_created_at,
+                extractor_version  = EXCLUDED.extractor_version,
                 uploaded_at        = EXCLUDED.uploaded_at,
                 deleted_at         = EXCLUDED.deleted_at,
                 indexed_at         = NOW()
             RETURNING drive_item_id},
             $account_id, $row->{id}, $row->{uuid}, $row->{filename}, $row->{folder_path},
             $self->mime_type_id($db, $row->{mime_type}),
-            $row->{size_bytes}, $row->{content_created_at}, $row->{uploaded_at}, $row->{deleted_at});
+            $row->{size_bytes}, $row->{content_created_at}, $row->{uploaded_at}, $row->{deleted_at},
+            $row->{extractor_version});
 
         if (defined $text) {
             my $src = length($text) > TSV_BUDGET ? substr($text, 0, TSV_BUDGET) : $text;
@@ -469,6 +494,29 @@ sub index_drive_item ($self, %a) {
                     body_text = EXCLUDED.body_text, tsv_source = EXCLUDED.tsv_source,
                     truncated = EXCLUDED.truncated},
                 $id, $account_id, $text, $src, (length($text) > TSV_BUDGET ? 1 : 0));
+        }
+
+        # Per-type metadata. Replaced wholesale rather than merged: a
+        # re-extraction is the authority on what this file now has, and a
+        # key that disappeared (a tag removed from the map, a file
+        # replaced) must disappear with it rather than linger as a fact
+        # nothing produces any more.
+        if ($meta) {
+            $db->query('DELETE FROM search.drive_metadata WHERE drive_item_id = ?', $id);
+            for my $key (sort keys %$meta) {
+                my $kid = $self->metadata_key_id($db, $key) or next;
+                my $kind = $META_KEY{$key}{value_kind};
+                my @cols = $kind eq 'num' ? ('value_num',  $meta->{$key})
+                         : $kind eq 'at'  ? ('value_at',   $meta->{$key})
+                         :                  ('value_text', $meta->{$key});
+                next unless defined $cols[1];
+                $db->query("INSERT INTO search.drive_metadata
+                                (drive_item_id, account_id, key_id, $cols[0])
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT (drive_item_id, key_id) DO UPDATE
+                               SET $cols[0] = EXCLUDED.$cols[0]",
+                           $id, $account_id, $kid, $cols[1]);
+            }
         }
         return $id;
     });
