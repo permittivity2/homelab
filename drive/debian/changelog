@@ -1,3 +1,12 @@
+homelab-drive (0.1.62) unstable; urgency=medium
+
+  * Add Search to the account menu, and a per-folder exclude_from_search
+    flag (migration 013). A folder already called Private is excluded on
+    upgrade, which is the requested default. The flag applies to the
+    whole subtree: folders nest, and a folder inside Private is private.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:06:49 -0600
+
 homelab-drive (0.1.61) unstable; urgency=medium
 
   * Deep-search filter panel reset to match homelab-search: same

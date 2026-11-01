@@ -194,6 +194,12 @@ sub search_drive ($self, $account_id, $f) {
     # discipline, carried into search: a deleted file must not come back as a
     # search hit.
     push @where, ($f->{in_trash} ? 'i.deleted_at IS NOT NULL' : 'i.deleted_at IS NULL');
+    # A folder its owner marked non-searchable. The file is still indexed
+    # -- its text and metadata are there, it still opens in drive -- it
+    # simply never comes back from a search. Unconditional: there is no
+    # caller flag to pass that turns this off, because an "include private
+    # results" option is how it would end up on a shared screen.
+    push @where, 'i.searchable';
 
     my $rank = q{0};
     if (length $q) {

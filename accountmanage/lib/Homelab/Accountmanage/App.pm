@@ -64,8 +64,9 @@ sub startup ($self) {
         # No "Manage your account" entry -- this IS that page, and a menu
         # item linking to the page you are already on is just noise.
         menu_links  => [
-            { href => 'https://mail.mailmasker.org/',  label => 'Email' },
-            { href => 'https://drive.mailmasker.org/', label => 'Drive' },
+            { href => 'https://mail.mailmasker.org/',   label => 'Email' },
+            { href => 'https://drive.mailmasker.org/',  label => 'Drive' },
+            { href => 'https://search.mailmasker.org/', label => 'Search' },
         ],
     });
 

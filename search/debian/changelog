@@ -1,3 +1,21 @@
+homelab-search (0.2.27) unstable; urgency=medium
+
+  * Honour drive's exclude_from_search flag (migration 010). Files in a
+    non-searchable folder are STILL INDEXED - their text and metadata
+    are held, and they still open in drive - but they never come back
+    from a search. The filter is unconditional: there is no caller flag
+    that turns it off, because an 'include private results' option is
+    how it ends up on a shared screen.
+  * The flag is carried onto the indexed row rather than joined from
+    drive at query time: this schema holds no grant on drive.*, by
+    design. Defaults to searchable, because defaulting the other way
+    would empty everyone's results until a re-index finished. Exclusion
+    applies to the whole folder subtree, and discovery re-queues any
+    file whose searchability disagrees with drive, so ticking the box
+    takes effect on the next pass.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:07:04 -0600
+
 homelab-search (0.2.26) unstable; urgency=medium
 
   * Fix ancestor tag search. A photo is linked only to the most specific

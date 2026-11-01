@@ -1,3 +1,9 @@
+homelab-accountmanage (0.1.41) unstable; urgency=medium
+
+  * Add Search to the account menu.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:07:02 -0600
+
 homelab-accountmanage (0.1.40) unstable; urgency=medium
 
   * Release v0.1.40

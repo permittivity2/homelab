@@ -262,6 +262,35 @@ sub _discover_drive ($self) {
         push @ids, $r->{drive_file_id} unless $gone_id{ $r->{drive_file_id} };   # restored
     }
 
+    # (2a) Files whose SEARCHABILITY disagrees with drive.
+    #
+    #      Marking a folder non-searchable has to take effect on the next
+    #      pass, not whenever that file happens to be touched again --
+    #      otherwise someone ticks the box, nothing changes, and they
+    #      reasonably conclude it is broken. Same shape as the deleted
+    #      check above: compare the two sides and enqueue the difference.
+    my $exdrive = eval {
+        $dpg->db->query(q{
+            WITH RECURSIVE excluded AS (
+                SELECT id FROM drive.folders WHERE exclude_from_search
+                UNION
+                SELECT c.id FROM drive.folders c JOIN excluded e ON c.parent_folder_id = e.id
+            )
+            SELECT id FROM drive.files
+             WHERE folder_id IN (SELECT id FROM excluded)})->hashes } // [];
+    my %want_hidden = map { $_->{id} => 1 } @$exdrive;
+    my $idx_state = eval {
+        $self->index->_tx(sub ($db) {
+            $db->query(q{SELECT drive_file_id, searchable FROM search.drive_items
+                          WHERE drive_file_id IS NOT NULL AND deleted_at IS NULL})->hashes })
+    } // [];
+    for my $r (@$idx_state) {
+        my $hидden = 0;
+        my $is_hidden = $r->{searchable} ? 0 : 1;
+        my $should    = $want_hidden{ $r->{drive_file_id} } ? 1 : 0;
+        push @ids, $r->{drive_file_id} if $is_hidden != $should;
+    }
+
     # (2b) Files whose metadata predates the current extractor.
     #
     #      This is what makes adding a tag or fixing a transform cheap:
@@ -575,11 +604,22 @@ sub _do_drive_batch ($self, $row) {
     my $created = $self->_drive_created_col($dpg);
 
     my $ph = join ',', map { '?' } @$ids;
+    # `excluded` walks the folder tree UPWARDS: a file is non-searchable if
+    # its own folder is marked, or ANY folder above it is. Folders nest,
+    # and a folder inside Private is private -- anything else would be a
+    # trap. Computed in one recursive CTE per batch rather than per file.
     my $rows = $dpg->db->query(qq{
+        WITH RECURSIVE excluded AS (
+            SELECT id FROM drive.folders WHERE exclude_from_search
+            UNION
+            SELECT c.id FROM drive.folders c JOIN excluded e ON c.parent_folder_id = e.id
+        )
         SELECT f.id, f.user_email, f.filename, f.uuid::text AS uuid, f.size_bytes,
                f.mime_type, f.uploaded_at, f.deleted_at,
                $created AS content_created_at,
-               fo.name AS folder_name
+               fo.name AS folder_name,
+               (f.folder_id IS NOT NULL
+                AND f.folder_id IN (SELECT id FROM excluded)) AS excluded
           FROM drive.files f
           LEFT JOIN drive.folders fo ON fo.id = f.folder_id
          WHERE f.id IN ($ph)}, @$ids)->hashes;
@@ -630,6 +670,7 @@ sub _do_drive_batch ($self, $row) {
             # Recorded even when extraction found nothing, so a file we have
             # already looked at is not looked at again on every pass.
             extractor_version => ($path ? EXTRACTOR_VERSION : undef),
+            searchable        => ($r->{excluded} ? 0 : 1),
         }, text => $text, meta => $meta);
         $n++;
     }

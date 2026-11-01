@@ -508,8 +508,9 @@ sub index_drive_item ($self, %a) {
         my $id = $self->_intern($db, q{
             INSERT INTO search.drive_items
                 (account_id, drive_file_id, file_uuid, file_name, folder_path, mime_type_id,
-                 size_bytes, content_created_at, uploaded_at, deleted_at, extractor_version, indexed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                 size_bytes, content_created_at, uploaded_at, deleted_at, extractor_version,
+                 searchable, indexed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ON CONFLICT (account_id, file_uuid) DO UPDATE SET
                 file_name          = EXCLUDED.file_name,
                 folder_path        = EXCLUDED.folder_path,
@@ -517,6 +518,7 @@ sub index_drive_item ($self, %a) {
                 size_bytes         = EXCLUDED.size_bytes,
                 content_created_at = EXCLUDED.content_created_at,
                 extractor_version  = EXCLUDED.extractor_version,
+                searchable         = EXCLUDED.searchable,
                 uploaded_at        = EXCLUDED.uploaded_at,
                 deleted_at         = EXCLUDED.deleted_at,
                 indexed_at         = NOW()
@@ -524,7 +526,8 @@ sub index_drive_item ($self, %a) {
             $account_id, $row->{id}, $row->{uuid}, $row->{filename}, $row->{folder_path},
             $self->mime_type_id($db, $row->{mime_type}),
             $row->{size_bytes}, $row->{content_created_at}, $row->{uploaded_at}, $row->{deleted_at},
-            $row->{extractor_version});
+            $row->{extractor_version},
+            (exists $row->{searchable} ? ($row->{searchable} ? 1 : 0) : 1));
 
         # WHAT IS SEARCHABLE vs WHAT IS DISPLAYED, which is why these are
         # two columns: body_text is the document (snippets, get_excerpt),

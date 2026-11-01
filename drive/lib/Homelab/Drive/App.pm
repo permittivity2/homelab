@@ -115,6 +115,7 @@ sub startup ($self) {
         menu_links  => [
             { href => $self->account_manage_url, label => 'Manage your account' },
             { href => 'https://mail.mailmasker.org/', label => 'Email' },
+            { href => 'https://search.mailmasker.org/', label => 'Search' },
         ],
     });
 
