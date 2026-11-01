@@ -202,6 +202,72 @@
 
     .counts { font-size: var(--app-xs); color: var(--text-muted); margin: 0 0 var(--space-4); }
 
+    /* ----------------------------------------------------------- AI mode */
+    /* The consent dialog. Deliberately plain: this is a statement about
+       where someone's mail goes, and dressing it up would be the wrong
+       register. No scary colour either -- it is information, not an error. */
+    dialog.consent {
+      max-width: 34rem; width: calc(100% - var(--space-6));
+      border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+      background: var(--surface); color: var(--text-primary);
+      padding: var(--space-6); box-shadow: var(--shadow-lg);
+    }
+    dialog.consent::backdrop { background: rgba(0, 0, 0, 0.7); }
+    dialog.consent h2 {
+      margin: 0 0 var(--space-4); font-size: var(--app-md);
+      font-weight: var(--weight-semibold); color: var(--silver-bright);
+      line-height: var(--leading-tight);
+    }
+    dialog.consent .cbody p {
+      margin: 0 0 var(--space-3); font-size: var(--app-sm);
+      color: var(--text-secondary); line-height: var(--leading-normal);
+    }
+    dialog.consent .cacts {
+      display: flex; flex-wrap: wrap; gap: var(--space-2);
+      justify-content: flex-end; margin-top: var(--space-4);
+    }
+    dialog.consent .cacts .btn { min-height: 40px; padding: 0 var(--space-4); }
+
+    /* The answer. A panel, not a page takeover: keyword results stay below
+       it and are what you fall back to when any of this fails. */
+    .aibox {
+      border: 1px solid var(--border-strong); border-left: 2px solid var(--accent-steel);
+      border-radius: var(--radius-sm); background: var(--surface);
+      padding: var(--space-4); margin-bottom: var(--space-6);
+    }
+    .aihead { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }
+    .aitag {
+      font-size: 0.6875rem; font-weight: var(--weight-semibold);
+      letter-spacing: var(--tracking-wider); text-transform: uppercase;
+      color: var(--silver-bright); background: var(--accent-steel);
+      padding: 2px 8px; border-radius: var(--radius-sm);
+    }
+    .aians { margin: 0; font-size: var(--app-base); color: var(--text-primary); line-height: var(--leading-normal); }
+    .aians.dim { color: var(--text-muted); }
+    .airesults { margin: var(--space-3) 0 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: var(--space-2); }
+    .airesults li { color: var(--text-muted); font-size: var(--app-sm); }
+    .airesults a { color: var(--silver-bright); overflow-wrap: anywhere; }
+    .airesults .meta { font-size: var(--app-xs); color: var(--text-muted); margin-left: var(--space-2); }
+    /* Model-authored TEXT, escaped like any other string and never markup. */
+    .airesults .why { display: block; color: var(--text-secondary); font-size: var(--app-xs); }
+
+    /* The standing indicator. It is here on every answer, not only at
+       opt-in, because people forget what they switched on months ago. */
+    .ainote {
+      display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+      margin: var(--space-4) 0 0; padding-top: var(--space-3);
+      border-top: 1px solid var(--border);
+      font-size: var(--app-xs); color: var(--text-muted);
+    }
+    .aioffbtn {
+      background: none; border: 0; padding: 0; font: inherit; cursor: pointer;
+      color: var(--silver-dim); text-decoration: underline; text-underline-offset: 3px;
+      min-height: 32px;
+    }
+    .aioffbtn:hover { color: var(--silver-bright); }
+    .aioffbtn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+
     h2.sec {
       font-size: var(--app-xs); font-weight: var(--weight-normal);
       letter-spacing: var(--tracking-wide); text-transform: uppercase;

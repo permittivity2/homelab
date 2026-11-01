@@ -129,6 +129,31 @@ case "$1" in
             echo "  (dpkg-reconfigure homelab-search to redo the prompts)"
         fi
 
+        # The ai: block is new in 0.2.15, and an existing config is
+        # deliberately never rewritten (just above). Without this, every
+        # already-installed host upgrades to a build that supports AI mode
+        # and has nowhere to put the key -- so turning it on would mean
+        # hand-editing YAML on three hosts, which is exactly the live
+        # one-off patch this package exists to avoid.
+        #
+        # Additive and idempotent: it appends the block from the shipped
+        # example ONLY when there is no top-level `ai:` key, and never
+        # touches a value that is already present. The appended block has
+        # enabled:false and an empty api_key, so an upgrade switches
+        # nothing on by itself.
+        if [ -f "$CONFIG_FILE" ] && ! grep -q '^ai:' "$CONFIG_FILE"; then
+            if sed -n '/^# -* AI mode$/,$p' "$SHARE_DIR/config/search.example.yml" \
+                 | grep -q '^ai:'; then
+                printf '\n' >> "$CONFIG_FILE"
+                sed -n '/^# -* AI mode$/,$p' "$SHARE_DIR/config/search.example.yml" \
+                    >> "$CONFIG_FILE"
+                echo "  added the ai: block to $CONFIG_FILE (disabled, no key)"
+            else
+                echo "  WARNING: could not find the ai: block in the shipped example;"
+                echo "           add it to $CONFIG_FILE by hand to use AI mode."
+            fi
+        fi
+
         echo "  applying migrations..."
         HOMELAB_SEARCH_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
             HOMELAB_SEARCH_CONFIG="$CONFIG_FILE" \

@@ -15,6 +15,9 @@ use Homelab::Common::SSOClient  qw(exchange_code);
 use Homelab::Search::Query;
 use Homelab::Search::Paths qw(maildir_for mailbox_dir_for drive_blob_for);
 use Homelab::Search::MailParse qw(parse_message);
+use Homelab::Search::AI;
+use Homelab::Search::AI::Client;
+use Homelab::Search::AI::Consent ();
 
 # search.mailmasker.org -- one place that searches mail and drive together.
 #
@@ -39,6 +42,7 @@ has 'mail_root';
 has 'drive_root';
 has 'query';
 has 'pg';
+has 'ai';
 
 sub startup ($self) {
     my $home = $ENV{HOMELAB_SEARCH_HOME} // '/usr/share/homelab-search';
@@ -98,6 +102,27 @@ sub startup ($self) {
                           ->username($db->{user})->password($db->{password});
     $self->pg($pg);
     $self->query(Homelab::Search::Query->new(pg => $pg, log => $self->log));
+
+    # AI mode. Constructed even when switched off, so every gate lives in
+    # one place and `enabled` is a value rather than a branch around a
+    # missing object. With no api_key the orchestrator records `disabled`
+    # and the page falls back to keyword search -- which is the shipping
+    # default: the feature is dark until a key is configured AND
+    # ai.enabled is true.
+    my $ai_cfg = $config->{ai} // {};
+    $self->ai(Homelab::Search::AI->new(
+        query  => $self->query,
+        log    => $self->log,
+        config => $ai_cfg,
+        client => Homelab::Search::AI::Client->new(
+            api_key    => $ai_cfg->{api_key},
+            model      => ($ai_cfg->{model}      // 'claude-opus-5-5'),
+            gate_model => ($ai_cfg->{gate_model} // 'claude-haiku-5-5'),
+            effort     => ($ai_cfg->{effort}     // 'low'),
+            max_tokens => ($ai_cfg->{max_tokens} // 16000),
+            log        => $self->log,
+        ),
+    ));
 
     mount_health_route($self, check => sub { $self->pg->db->query('SELECT 1'); 1 });
 
@@ -161,6 +186,7 @@ sub startup ($self) {
     $r->get('/login')           ->to('search#login_form');
     $r->get('/oauth/callback')  ->to('search#oauth_callback');
     $r->post('/logout')         ->to('search#logout');
+    $r->post('/ai/consent')     ->to('search#ai_consent');
     $r->get('/api/v1/search')   ->to('search#api_search');
     # Viewing one result. Both ids are re-resolved under the account's own
     # scope inside Query, so an id belonging to someone else does not resolve
@@ -180,8 +206,10 @@ use Mojo::Asset::File;
 use Encode qw(decode FB_DEFAULT);
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::Common::SSOClient  qw(exchange_code);
+use Mojo::Util                  qw(url_escape);
 use Homelab::Search::Paths      qw(mailbox_dir_for drive_blob_for);
 use Homelab::Search::Mime       ();
+use Homelab::Search::AI::Consent ();
 use Homelab::Search::MailParse  qw(parse_message);
 use Homelab::Search::Serve      qw(serve_mode);
 
@@ -333,12 +361,43 @@ sub _run ($c, $acct, $f) {
     return ($mail, $drive);
 }
 
+# Is AI mode even offerable here? Three separate things, and the page has
+# to tell them apart: the operator switched it on, a key is configured, and
+# THIS person has agreed to the current wording.
+sub _ai_state ($c, $acct) {
+    my $cfg = $c->app->config->{ai} // {};
+    my $on  = ($cfg->{enabled} && length($cfg->{api_key} // '')) ? 1 : 0;
+    my %s = (available => $on, consented => 0, notice => Homelab::Search::AI::Consent::notice_body());
+    return \%s unless $on && $acct;
+    $s{consented} = Homelab::Search::AI::Consent::state_for(
+        $c->app->query, $acct->{account_id})->{consented};
+    return \%s;
+}
+
 sub index ($c) {
     my ($email, $acct) = _scope($c);
     return $c->redirect_to('/login') unless $email;
 
     my $f = _filters($c);
     my ($mail, $drive) = _run($c, $acct, $f);
+
+    # AI runs only when asked for, and only on top of a real question. The
+    # keyword results above are computed either way, which is what makes
+    # the deterministic fallback free: every failure path below simply
+    # renders them without an AI block.
+    my $ai_state = _ai_state($c, $acct);
+    my $ai;
+    if ($ai_state->{available} && $acct && $c->param('ai') && length($f->{q} // '')) {
+        $ai = eval {
+            $c->app->ai->answer($acct->{account_id}, $f->{q});
+        };
+        if (!$ai) {
+            # A bug in the AI path must not take the search page down with
+            # it. Logged loudly, invisible to the user beyond the notice.
+            $c->app->log->error("ai: answer() died: $@");
+            $ai = { state => 'api_error', answer => '', results => [] };
+        }
+    }
 
     return $c->render(
         template   => 'index',
@@ -347,12 +406,50 @@ sub index ($c) {
         f          => $f,
         mail       => $mail,
         drive      => $drive,
+        ai         => $ai,
+        ai_state   => $ai_state,
         mailboxes  => ($acct ? $c->app->query->mailboxes($acct->{account_id}) : []),
         counts     => ($acct ? $c->app->query->counts($acct->{account_id})    : {}),
         mime_cats  => Homelab::Search::Mime::categories(),
         mime_groups => _mime_groups($acct ? $c->app->query->mime_facets($acct->{account_id}) : []),
         searched   => _searched($f),
     );
+}
+
+# Turning AI mode on or off. A POST, because it changes something.
+#
+# THE CONSENT IS ENFORCED HERE AND IN AI.pm, not in the template. Hiding a
+# toggle is a UI nicety; the gate that matters is that answer() re-checks
+# consent itself, so calling /?ai=1 directly with a valid session and no
+# consent gets `not_consented` and nothing else.
+sub ai_consent ($c) {
+    my ($email, $acct) = _scope($c);
+    return $c->redirect_to('/login') unless $email;
+    return $c->redirect_to('/') unless $acct;
+
+    # Turning something privacy-affecting OFF is never harder than turning
+    # it on: no confirmation, no second step, same endpoint.
+    my $granted = $c->param('granted') ? 1 : 0;
+
+    # The hash recorded is of the notice THIS PAGE rendered. A client that
+    # posts a stale hash agreed to wording we are no longer showing, so it
+    # is refused rather than silently upgraded.
+    if ($granted) {
+        my $seen = $c->param('notice_sha256') // '';
+        my $want = Homelab::Search::AI::Consent::notice_sha256();
+        if (lc $seen ne $want) {
+            $c->app->log->warn("ai: consent posted for stale notice by $email");
+            return $c->redirect_to('/?ai_notice=stale');
+        }
+    }
+
+    Homelab::Search::AI::Consent::record(
+        $c->app->query, $acct->{account_id}, $granted, $c->req->headers->user_agent);
+
+    my $q = $c->param('q') // '';
+    return $c->redirect_to($granted && length $q
+        ? '/?ai=1&q=' . url_escape($q)
+        : (length $q ? '/?q=' . url_escape($q) : '/'));
 }
 
 # The account's own leaf types, grouped for the picker.

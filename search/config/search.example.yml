@@ -104,3 +104,59 @@ server:
   # In the runtime directory systemd creates for this unit, because the
   # service runs as vmail and /var/lib/homelab belongs to homelab.
   pid_file: /run/homelab-search/hypnotoad.pid
+
+# ---------------------------------------------------------------- AI mode
+#
+# OFF BY DEFAULT AND DARK WITHOUT A KEY. The feature needs BOTH enabled:true
+# and a non-empty api_key; with either missing the orchestrator records the
+# attempt as `disabled` and the page serves ordinary keyword results. That
+# is also the admin kill switch: set enabled:false and restart, and AI mode
+# is gone fleet-wide without touching anything else.
+#
+# THE KEY IS A SECRET IN A 0640 root:homelab FILE, like every other service
+# credential here. Said plainly: this process holds both the mail mount and
+# the API key. That is inherent to running a model over someone's mailbox,
+# not a flaw in this config -- it is why these three hosts belong in the
+# same tier as the dovecot nodes.
+ai:
+  enabled: false
+  api_key: ""
+
+  # claude-opus-5-5 is the current Opus. Pinned, never a floating alias: a
+  # model change alters cost, latency and the cached prompt prefix, and
+  # should be a deliberate edit rather than something that happens to you.
+  model: claude-opus-5-5
+  # The topic gate. A classification is not hard work, and this is ~40x
+  # cheaper than asking Opus whether a question is on topic.
+  gate_model: claude-haiku-5-5
+  # Opus 5.5 defaults to medium. "Pick the right 20 of these 200 rows" is
+  # not high-effort work; raise it only with a measurement.
+  effort: low
+  max_tokens: 16000
+  # Structured final answers. If the API ever rejects json_schema alongside
+  # tools, this is the single line to turn off -- the parser already
+  # tolerates a plain-text object.
+  structured_output: true
+
+  # Caps, enforced in Postgres BEFORE any call. The key is the
+  # organisation's, so one person's curiosity spends everyone's budget.
+  rate_window_s: 60
+  rate_max: 10
+  # Micro-dollars: 20_000_000 = $20.00 per account per calendar month.
+  month_budget_micros: 20000000
+  cache_ttl_s: 86400
+
+  # Price list, in MICRO-DOLLARS PER MILLION TOKENS, so 4000000 = $4.00/MTok.
+  # Here rather than in code because prices change; a recorded cost is
+  # computed when the call is made and never re-priced afterwards.
+  prices:
+    claude-opus-5-5:
+      input_micros_per_mtok: 4000000
+      output_micros_per_mtok: 20000000
+      cache_read_micros_per_mtok: 200000
+      cache_write_micros_per_mtok: 5000000
+    claude-haiku-5-5:
+      input_micros_per_mtok: 100000
+      output_micros_per_mtok: 500000
+      cache_read_micros_per_mtok: 10000
+      cache_write_micros_per_mtok: 125000

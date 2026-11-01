@@ -25,6 +25,21 @@ has 'log';
 #     though row-level security already does. That is not redundancy for its
 #     own sake: RLS is the backstop for a mistake in this file, and this file
 #     is the backstop for a mistake in the policies. Neither alone.
+# The PUBLIC form of _scoped, for AI mode's own tables.
+#
+# ai_consent, ai_requests and ai_cache carry an account_id and an RLS
+# policy WITH CHECK, so a write through a bare $db is refused -- correctly:
+# the GUC is what says who is asking, and without it the policy has nothing
+# to compare against. Rather than let the AI code open its own connections
+# and set the GUC itself (a second place for the account scope to be
+# forgotten, which is exactly what §1c of the plan exists to prevent), it
+# borrows this one.
+#
+# Writes commit; the transaction wrapper is what makes `set_config(...,
+# true)` apply at all, since a transaction-local setting outside a
+# transaction lasts for one statement.
+sub scoped ($self, $account_id, $cb) { return $self->_scoped($account_id, $cb) }
+
 sub _scoped ($self, $account_id, $cb) {
     # Refuse to scope to anything that is not an account id. Setting the GUC
     # to '' or undef does not fail here -- it fails later, inside the RLS
@@ -257,6 +272,58 @@ sub message ($self, $account_id, $message_id) {
               JOIN search.accounts a ON a.account_id = m.account_id
               JOIN search.domains  d ON d.domain_id  = a.domain_id
              WHERE m.message_id = ? AND m.account_id = ?}, $message_id, $account_id)->hash;
+    });
+}
+
+# How much of this account has been indexed, as two monotonic numbers.
+#
+# These are the AI response cache's key, so that a cached answer can never
+# outlive the data it described -- new mail or a new upload moves a
+# watermark, the key changes, and the old entry is simply never looked up
+# again. No invalidation hook to forget.
+#
+# max() over a serial primary key, not count(*): a count goes DOWN on a
+# delete and can return to a value it held before, which would resurrect a
+# stale entry. Both measured at well under a millisecond on the largest
+# account (0.13 ms / 0.08 ms over 27k and 30k rows).
+sub watermarks ($self, $account_id) {
+    return $self->_scoped($account_id, sub ($db) {
+        my $r = $db->query(q{
+            SELECT coalesce((SELECT max(message_id)    FROM search.messages    WHERE account_id = ?), 0) AS mail,
+                   coalesce((SELECT max(drive_item_id) FROM search.drive_items WHERE account_id = ?), 0) AS drive
+        }, $account_id, $account_id)->hash;
+        return { mail => $r->{mail} + 0, drive => $r->{drive} + 0 };
+    });
+}
+
+# The ALREADY-EXTRACTED text of one item, for AI mode's get_excerpt.
+#
+# Deliberately not message()/drive_item() with an extra column: those two
+# exist to serve the BYTES from disk and are called on the download path.
+# This one never touches the filesystem -- it reads what the indexer already
+# parsed, which is the only thing that should ever be fed to a model. A
+# request for a mail body here cannot be turned into a read of an arbitrary
+# path, because there is no path in it.
+#
+# Scoped like everything else: an id belonging to another account returns
+# undef because the row is not visible, not because of a check here.
+sub excerpt ($self, $account_id, $kind, $id) {
+    return undef unless defined $id && $id =~ /\A\d+\z/;
+    return undef unless $kind eq 'mail' || $kind eq 'file';
+    return $self->_scoped($account_id, sub ($db) {
+        return $db->query(q{
+            SELECT m.message_id AS id, m.subject AS title, b.body_text
+              FROM search.messages m
+              LEFT JOIN search.message_bodies b
+                     ON b.message_id = m.message_id AND b.account_id = m.account_id
+             WHERE m.message_id = ? AND m.account_id = ?}, $id, $account_id)->hash
+            if $kind eq 'mail';
+        return $db->query(q{
+            SELECT i.drive_item_id AS id, i.file_name AS title, x.body_text
+              FROM search.drive_items i
+              LEFT JOIN search.drive_item_text x
+                     ON x.drive_item_id = i.drive_item_id AND x.account_id = i.account_id
+             WHERE i.drive_item_id = ? AND i.account_id = ?}, $id, $account_id)->hash;
     });
 }
 

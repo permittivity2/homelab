@@ -152,13 +152,20 @@
       </section>
 
       <div class="fsec-foot">
-        %# Rendered and disabled on purpose: the product has to be useful
-        %# with the model switched off, so this only says the other mode is
-        %# coming.
-        <label class="box aioff" title="Not available yet"><input type="checkbox" disabled><span>AI search <span class="hint">(coming)</span></span></label>
-        %# An <a>, not a button, so clearing a filter works without
-        %# JavaScript. There was previously no way back out except emptying
-        %# each control by hand.
+%# AI mode's control, in three states, because they are three different
+%# situations and one of them is not the user's fault:
+%#   not available  -- no key configured, or the operator's kill switch
+%#   available, no consent yet -- ticking it opens the notice
+%#   consented      -- a plain checkbox, and a standing reminder of what it does
+% if (!$ai_state->{available}) {
+        <label class="box aioff" title="Not configured on this server"><input type="checkbox" disabled><span>AI search <span class="hint">(off)</span></span></label>
+% } elsif (!$ai_state->{consented}) {
+        %# No name attribute: this box never submits. It opens the notice,
+        %# because consent is a decision and a misclick is not one.
+        <label class="box"><input type="checkbox" id="aiAsk"><span>AI search <span class="hint">(explains first)</span></span></label>
+% } else {
+        <label class="box"><input type="checkbox" name="ai" value="1" id="aiOn"<%= $c->param('ai') ? ' checked' : '' %>><span>AI search</span></label>
+% }
         <a class="clear" id="clearAll" href="<%= clear_href($f->{q}) %>">Clear all filters</a>
       </div>
     </div>
@@ -378,6 +385,95 @@
 })();
 </script>
 
+%# ---------------------------------------------------------------- consent
+%#
+%# A <dialog>, shown only when AI mode is available and this person has not
+%# agreed to the CURRENT wording. Rendered in the page rather than fetched,
+%# so the words are in the HTML a reader can inspect.
+%#
+%# The hash of the notice goes back with the POST. The server compares it
+%# with the notice it is serving now and refuses a mismatch, so a stale tab
+%# cannot record agreement to wording we have since changed.
+% if ($ai_state->{available} && !$ai_state->{consented}) {
+<dialog class="consent" id="aiConsent">
+  <form method="post" action="/ai/consent">
+    <h2>AI search sends your data to Anthropic, a third party.</h2>
+    <div class="cbody">
+% for my $para (split /\n\n/, $ai_state->{notice}) {
+%   next unless length $para;
+%   # The FIRST paragraph is the heading above; it is not repeated here.
+%   next if $para =~ /\Aai search sends your data/i;
+      <p><%= $para %></p>
+% }
+    </div>
+    <input type="hidden" name="notice_sha256" value="<%= Homelab::Search::AI::Consent::notice_sha256() %>">
+    <input type="hidden" name="q" value="<%= $f->{q} %>">
+    <div class="cacts">
+      %# Cancel is a plain formmethod=dialog button: it closes and records
+      %# nothing. Declining must never be a request.
+      <button type="button" class="btn" id="aiCancel">Cancel</button>
+      <button type="submit" class="btn btn-primary" name="granted" value="1">I understand — turn on AI search</button>
+    </div>
+  </form>
+</dialog>
+% }
+
+%# ------------------------------------------------------------ the answer
+%#
+%# NOTHING HERE IS MODEL-AUTHORED MARKUP. `answer` and `why` are plain
+%# strings escaped by Mojolicious like any other text, and every row was
+%# re-resolved from its id against this account's own scope before it
+%# reached this template. A model that invents an id renders nothing.
+% if ($ai) {
+%   my %msg = (
+%     off_topic        => 'I can only search your email and files.',
+%     not_consented    => 'AI search needs your agreement first.',
+%     rate_limited     => 'That is a lot of questions at once — give it a minute.',
+%     budget_exhausted => 'This month\'s AI budget is used up. Normal search still works.',
+%     refusal          => 'The model declined to answer that one.',
+%     no_tool_call     => 'I could not turn that into a search of your mail or files.',
+%     timeout          => 'That took too long. Here are the keyword results instead.',
+%     api_error        => 'AI search is unavailable right now. Here are the keyword results.',
+%     disabled         => 'AI search is switched off on this server.',
+%   );
+<section class="aibox" aria-label="AI answer">
+  <div class="aihead">
+    <span class="aitag">AI</span>
+%   if ($ai->{state} eq 'cached') {
+    <span class="hint">from an earlier identical question</span>
+%   }
+  </div>
+%   if ($ai->{state} eq 'answered' || $ai->{state} eq 'cached') {
+  <p class="aians"><%= $ai->{answer} %></p>
+%     if (@{ $ai->{results} }) {
+  <ol class="airesults">
+%       for my $r (@{ $ai->{results} }) {
+    <li>
+%         if ($r->{kind} eq 'mail') {
+      <a href="/mail/<%= $r->{message_id} %>/download"><%= length($r->{subject} // '') ? $r->{subject} : '(no subject)' %></a>
+      <span class="meta"><%= $r->{mailbox} %></span>
+%         } else {
+      <a href="/drive/<%= $r->{drive_item_id} %>/<% if (viewable($r->{mime_type})) { %>view" target="_blank" rel="noopener noreferrer<% } else { %>download<% } %>"><%= $r->{file_name} %></a>
+      <span class="meta"><%= $r->{mime_type} %> · <%= human_size($r->{size_bytes}) %></span>
+%         }
+%         if (length($r->{why} // '')) {
+      <span class="why"><%= $r->{why} %></span>
+%         }
+    </li>
+%       }
+  </ol>
+%     }
+%   } else {
+  <p class="aians dim"><%= $msg{ $ai->{state} } // 'AI search did not run.' %></p>
+%   }
+  <form class="ainote" method="post" action="/ai/consent">
+    <span>AI search on · your question and parts of your mail and files are sent to Anthropic.</span>
+    <input type="hidden" name="q" value="<%= $f->{q} %>">
+    <button type="submit" name="granted" value="0" class="aioffbtn">Turn off</button>
+  </form>
+</section>
+% }
+
 % if (($counts->{messages} // 0) || ($counts->{drive_items} // 0)) {
 <p class="counts"><%= $counts->{messages} // 0 %> messages and <%= $counts->{drive_items} // 0 %> files indexed for you.</p>
 % }
@@ -459,4 +555,28 @@
   </div>
 % }
 
+% }
+
+%# The consent dialog is opened by the checkbox, and the checkbox is cleared
+%# again on cancel so the page never looks as though something was agreed to.
+%# With JavaScript off the <dialog> stays closed and the box does nothing --
+%# which is the correct failure: no consent is recorded either way.
+% if ($ai_state->{available} && !$ai_state->{consented}) {
+<script>
+(function () {
+  var ask = document.getElementById('aiAsk'),
+      dlg = document.getElementById('aiConsent');
+  if (!ask || !dlg || !dlg.showModal) return;
+  ask.addEventListener('change', function () {
+    if (ask.checked) dlg.showModal();
+  });
+  var cancel = document.getElementById('aiCancel');
+  if (cancel) cancel.addEventListener('click', function () {
+    ask.checked = false;
+    dlg.close();
+  });
+  // Esc closes a <dialog> natively; untick on the way out for the same reason.
+  dlg.addEventListener('close', function () { ask.checked = false; });
+})();
+</script>
 % }

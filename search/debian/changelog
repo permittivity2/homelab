@@ -1,3 +1,100 @@
+homelab-search (0.2.18) unstable; urgency=medium
+
+  * Release v0.2.18
+
+ -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 23:13:40 -0500
+
+homelab-search (0.2.18) unstable; urgency=medium
+
+  * Fix a 500 when AI mode returned results: _resolve declared 'my
+    (@out, $dropped) = ((), 0)', and in a list assignment the array is
+    greedy - @out swallowed the 0, so every answer began with the
+    integer 0 where the template expected a row, and the drop counter
+    was undef. Declared separately, with a regression test over the
+    whole id-resolution path.
+
+ -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 23:13:40 -0500
+
+homelab-search (0.2.17) unstable; urgency=medium
+
+  * Release v0.2.17
+
+ -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 23:10:18 -0500
+
+homelab-search (0.2.17) unstable; urgency=medium
+
+  * Fix: AI mode's own writes bypassed the account scope. ai_consent,
+    ai_requests and ai_cache have RLS policies WITH CHECK, so an insert
+    through a bare database handle is refused - correctly, since the GUC
+    saying who is asking was never set. Consent and accounting now run
+    inside Query::scoped, the same wrapper every index read uses, so
+    there is one place that establishes the account scope rather than
+    two.
+
+ -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 23:10:18 -0500
+
+homelab-search (0.2.16) unstable; urgency=medium
+
+  * Release v0.2.16
+
+ -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 23:06:50 -0500
+
+homelab-search (0.2.16) unstable; urgency=medium
+
+  * Fix a 500 on the signed-in search page: the consent lookup runs on
+    every render and bound its hash as bytea, which Mojo::Pg rejects
+    with 'Cannot bind a reference' (and a bare scalar arrives as 47
+    bytes, not 32). Migration 006 converts the column to 64 hex
+    characters, which needs no driver type hint and can be checked
+    against sha256sum by hand.
+  * Consent notice expanded, per Silver Linings: PII is not stripped
+    before sending; all users share one Anthropic workspace, which makes
+    a request hard to attribute but is explicitly NOT anonymity because
+    the contents carry names and addresses; the channel is encrypted end
+    to end; and prompt caching is disclosed, accurately - the cached
+    prefix is this service's fixed instructions, not the question or the
+    mail.
+  * Fix an escaped attribute in the AI result list: rel=noopener
+    noreferrer was emitted through <%= %> and came out as
+    rel=&quot;...&quot;, so the one attribute target=_blank requires was
+    not applied.
+
+ -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 23:06:50 -0500
+
+homelab-search (0.2.15) unstable; urgency=medium
+
+  * Release v0.2.15
+
+ -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 23:01:12 -0500
+
+homelab-search (0.2.15) unstable; urgency=medium
+
+  * AI mode (plan phase 3): an optional natural-language search over the
+    person's own mail and files, off by default and dark without an API
+    key.
+  * Consent is recorded against a HASH of the notice text, so rewording
+    it asks everyone again instead of carrying them onto new terms.
+    Append-only grant/revoke log; turning it off is one POST with no
+    confirmation.
+  * Six server-side gates in cost order: kill switch, consent, rate
+    limit, month budget, response cache, then a cheap Haiku topic gate
+    before any Opus call.
+  * The model returns ids, never markup. Every id is re-resolved under
+    the account's own RLS scope before rendering, so an invented or
+    borrowed id renders nothing.
+  * Tool results are fenced and labelled as untrusted: anyone can email
+    this person, and that text reaches the model looking like everything
+    else.
+  * Migration 005 adds six tables. The three carrying an account_id get
+    RLS with WITH CHECK, unlike the read-only index tables, because the
+    app writes its own records - a cross-account write is a policy
+    violation, not a filed row.
+  * Prices are built into the client as well as the config: the first
+    hand-written ai: block on the fleet had no prices, which made every
+    request cost 0 and the monthly budget unenforceable.
+
+ -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 23:01:01 -0500
+
 homelab-search (0.2.14) unstable; urgency=medium
 
   * Release v0.2.14
