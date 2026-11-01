@@ -1,3 +1,29 @@
+homelab-search (0.2.34) unstable; urgency=medium
+
+  * AI search is a button beside Search, not a checkbox buried at the foot
+    of the filter panel. It reads as what it is - a second way to run this
+    search - rather than a mode you tick once and then forget is on.
+  * It submits `ai=1` as a named submit button, so the flag rides along
+    with that button and no other. No script, no hidden field, and nothing
+    to remember to untick afterwards.
+  * Both buttons appear again at the bottom of the open filter panel, since
+    setting a filter is the moment you want to search and on a phone the
+    real buttons have scrolled off the top. They sit inside the <details>,
+    so "only while the panel is open" is the element's own behaviour rather
+    than a rule the script has to keep - and it still holds with the script
+    off.
+  * The three AI states survive the change: not configured is a disabled
+    button, not-yet-consented opens the notice instead of searching (and
+    carries no name, so it cannot submit `ai=1` even with the script off),
+    and consented searches.
+  * Styled with the steel accent the AI answer badge already uses, outlined
+    rather than filled: plain Search stays the primary action, and it is
+    the one that costs nothing per press.
+  * The search row wraps on a phone - field on one line, both buttons on
+    the next - and goes back to one line at 560px.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 11:45:20 -0600
+
 homelab-search (0.2.33) unstable; urgency=medium
 
   * AI mode cites every match instead of a sample. Raising the row caps in

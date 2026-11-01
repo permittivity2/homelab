@@ -26,6 +26,23 @@
            aria-label="Search your email and files"
            placeholder="Search your email and files">
     <button class="btn btn-primary" type="submit">Search</button>
+    %#  AI SEARCH IS A BUTTON, not a mode you leave switched on. A named
+    %#  submit button sends its name only when it is the button that
+    %#  submitted, so `ai=1` rides along with this one and not the other --
+    %#  no script, no hidden field, and nothing to forget to untick.
+    %#
+    %#  Three states, because they are three different situations and one of
+    %#  them is not the user's fault. The no-consent button OPENS THE NOTICE
+    %#  instead of searching: consent is a decision, and a misclick is not
+    %#  one. It carries no `name`, so even if the script is off it cannot
+    %#  submit `ai=1` -- and the server re-checks consent regardless.
+% if (!$ai_state->{available}) {
+    <button class="btn btn-ai" type="button" disabled title="Not configured on this server">AI Search</button>
+% } elsif (!$ai_state->{consented}) {
+    <button class="btn btn-ai ai-ask" type="button">AI Search</button>
+% } else {
+    <button class="btn btn-ai" type="submit" name="ai" value="1">AI Search</button>
+% }
   </div>
 
   <details class="filters"<%= $filters_on ? ' open' : '' %>>
@@ -173,21 +190,32 @@
       </section>
 
       <div class="fsec-foot">
-%# AI mode's control, in three states, because they are three different
-%# situations and one of them is not the user's fault:
-%#   not available  -- no key configured, or the operator's kill switch
-%#   available, no consent yet -- ticking it opens the notice
-%#   consented      -- a plain checkbox, and a standing reminder of what it does
-% if (!$ai_state->{available}) {
-        <label class="box aioff" title="Not configured on this server"><input type="checkbox" disabled><span>AI search <span class="hint">(off)</span></span></label>
-% } elsif (!$ai_state->{consented}) {
-        %# No name attribute: this box never submits. It opens the notice,
-        %# because consent is a decision and a misclick is not one.
-        <label class="box"><input type="checkbox" id="aiAsk"><span>AI search <span class="hint">(explains first)</span></span></label>
-% } else {
-        <label class="box"><input type="checkbox" name="ai" value="1" id="aiOn"<%= $c->param('ai') ? ' checked' : '' %>><span>AI search</span></label>
-% }
         <a class="clear" id="clearAll" href="<%= clear_href($f->{q}) %>">Clear all filters</a>
+      </div>
+
+      %#  BOTH BUTTONS AGAIN, at the bottom of the open panel. Setting a
+      %#  filter is the moment you want to search, and the only buttons were
+      %#  back above a panel tall enough to have scrolled them off a phone.
+      %#
+      %#  They are INSIDE the <details>, so "visible only while the panel is
+      %#  open" is the element's own behaviour rather than a rule the script
+      %#  has to maintain -- and with the script off it still holds.
+      %#
+      %#  Written out a second time rather than captured in a block: a
+      %#  Mojolicious `<%%= %%>` escapes, so markup returned from one arrives
+      %#  on the page as visible angle brackets. Duplicated markup is the
+      %#  cheaper mistake.
+      <div class="panel-actions">
+% if (!$ai_state->{available}) {
+        <button class="btn btn-primary" type="submit">Search</button>
+        <button class="btn btn-ai" type="button" disabled title="Not configured on this server">AI Search</button>
+% } elsif (!$ai_state->{consented}) {
+        <button class="btn btn-primary" type="submit">Search</button>
+        <button class="btn btn-ai ai-ask" type="button">AI Search</button>
+% } else {
+        <button class="btn btn-primary" type="submit">Search</button>
+        <button class="btn btn-ai" type="submit" name="ai" value="1">AI Search</button>
+% }
       </div>
     </div>
   </details>
@@ -649,26 +677,26 @@
 
 % }
 
-%# The consent dialog is opened by the checkbox, and the checkbox is cleared
-%# again on cancel so the page never looks as though something was agreed to.
-%# With JavaScript off the <dialog> stays closed and the box does nothing --
-%# which is the correct failure: no consent is recorded either way.
+%# The consent dialog is opened by the AI Search button. There are two of
+%# them -- one beside the search box, one at the foot of the open filter
+%# panel -- so this binds a CLASS rather than an id: duplicate ids are
+%# invalid, and querying all of them means adding a third button somewhere
+%# needs no change here.
+%#
+%# Both are type=button and carry no `name`, so with JavaScript off they do
+%# nothing at all. That is the correct failure: nothing is searched and no
+%# consent is recorded, rather than a silent AI search nobody agreed to.
 % if ($ai_state->{available} && !$ai_state->{consented}) {
 <script>
 (function () {
-  var ask = document.getElementById('aiAsk'),
-      dlg = document.getElementById('aiConsent');
-  if (!ask || !dlg || !dlg.showModal) return;
-  ask.addEventListener('change', function () {
-    if (ask.checked) dlg.showModal();
+  var asks = document.querySelectorAll('.ai-ask'),
+      dlg  = document.getElementById('aiConsent');
+  if (!asks.length || !dlg || !dlg.showModal) return;
+  Array.prototype.forEach.call(asks, function (b) {
+    b.addEventListener('click', function () { dlg.showModal(); });
   });
   var cancel = document.getElementById('aiCancel');
-  if (cancel) cancel.addEventListener('click', function () {
-    ask.checked = false;
-    dlg.close();
-  });
-  // Esc closes a <dialog> natively; untick on the way out for the same reason.
-  dlg.addEventListener('close', function () { ask.checked = false; });
+  if (cancel) cancel.addEventListener('click', function () { dlg.close(); });
 })();
 </script>
 % }

@@ -22,15 +22,47 @@
     .wrap { max-width: 1100px; margin: 0 auto; padding: var(--space-4) var(--space-3) var(--space-8); }
 
     /* The one question the page asks. */
-    .askrow { display: flex; gap: var(--space-2); }
+    /* Two buttons now, so this wraps: on a 360px phone the field takes the
+       first line and Search / AI Search share the second, rather than
+       squeezing a search box down to a few visible characters. One line
+       again from 560px, where all three fit. */
+    .askrow { display: flex; flex-wrap: wrap; gap: var(--space-2); }
     .askrow input {
-      flex: 1 1 auto; min-width: 0;
+      flex: 1 1 100%; min-width: 0;
       background: var(--black-primary); color: var(--text-primary);
       border: 1px solid var(--border); border-radius: var(--radius-sm);
       /* 16px: anything smaller makes iOS Safari zoom the page on focus. */
       padding: 0 12px; font-size: 16px; min-height: 44px;
     }
-    .askrow button { flex: 0 0 auto; min-height: 44px; padding: 0 var(--space-4); }
+    .askrow button { flex: 1 1 auto; min-height: 44px; padding: 0 var(--space-4); }
+
+    /* AI SEARCH. Steel is already this feature's colour -- the AI badge on
+       an answer uses it -- so the button that asks and the block that
+       answers read as one thing.
+
+       Outlined, not filled. Plain Search stays the primary action: two
+       solid buttons side by side say "pick one" without saying which, and
+       the cheap, private, always-correct one should look like the default.
+       It is also the one that costs nothing per press. */
+    .btn-ai {
+      background: transparent; color: var(--silver-bright);
+      border: 1px solid var(--accent-steel); border-radius: var(--radius-sm);
+      font-weight: var(--weight-semibold); font-size: var(--app-sm);
+      cursor: pointer; transition: background var(--transition-fast);
+      white-space: nowrap;
+    }
+    .btn-ai:hover:not(:disabled) { background: var(--accent-steel); }
+    .btn-ai:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+    .btn-ai:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* The same two buttons at the foot of the open filter panel. Setting a
+       filter is the moment you want to search, and on a phone the panel is
+       tall enough that the real buttons have scrolled off the top. */
+    .panel-actions {
+      display: flex; flex-wrap: wrap; gap: var(--space-2);
+      margin-top: var(--space-3);
+    }
+    .panel-actions button { flex: 1 1 auto; min-height: 44px; padding: 0 var(--space-4); }
 
     .searchbar { margin-bottom: var(--space-4); }
 
@@ -320,6 +352,11 @@
     @media (min-width: 560px) {
       .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .leafwrap { column-count: 2; }
+      /* Field and both buttons on one line, and the buttons back to their
+         own width rather than splitting the row between them. */
+      .askrow input  { flex: 1 1 auto; }
+      .askrow button { flex: 0 0 auto; }
+      .panel-actions button { flex: 0 0 auto; }
     }
 
     /* Wider screens only: the exact-type list in three columns, the result
