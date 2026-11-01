@@ -1,3 +1,28 @@
+homelab-search (0.2.33) unstable; urgency=medium
+
+  * AI mode cites every match instead of a sample. Raising the row caps in
+    0.2.32 did not reach the page on its own: the tool fed the model 100
+    photos and it cited 25 of them, calling the rest "only part of the full
+    set". Nothing had ever told it the result list was the deliverable
+    rather than a courtesy, so it was being economical with the one thing
+    the person actually asked for.
+  * `answer` stays one or two sentences. That is where brevity belongs.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 11:27:14 -0600
+
+homelab-search (0.2.32) unstable; urgency=medium
+
+  * AI mode returns up to 100 results per search instead of 25, and 300
+    per answer instead of 60. "photos with jeff" matches 128 photos and
+    the old cap handed the model a quarter of them.
+  * The whole-answer cap is raised with it on purpose: it clamps every
+    individual call, so raising only the per-call number would have
+    changed nothing after the first search.
+  * CONTRACT_VERSION bumped, so answers cached from a quarter of the
+    matches are retired rather than served again.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 11:25:35 -0600
+
 homelab-search (0.2.31) unstable; urgency=medium
 
   * Find the people tagged in photos. "photos with jeff" returned nothing

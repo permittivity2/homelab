@@ -26,8 +26,13 @@ use constant {
     # Hard caps. These bound the bill and the context, and they are enforced
     # here rather than in the prompt, because a prompt is a request and a
     # constant is not.
-    MAX_ROWS          => 60,     # across the whole conversation
-    MAX_ROWS_PER_CALL => 25,
+    # 25 was too tight to answer "photos with Jeff" over 128 of them: the
+    # model got a quarter of the set and said so. Raised to 100 per call,
+    # and MAX_ROWS with it -- the whole-conversation cap clamps every call
+    # through $room, so leaving it at 60 would have made the new per-call
+    # number a lie after the first search.
+    MAX_ROWS          => 300,    # across the whole conversation
+    MAX_ROWS_PER_CALL => 100,
     MAX_EXCERPT_BYTES => 8192,
     MAX_SNIPPET_CHARS => 300,
 };

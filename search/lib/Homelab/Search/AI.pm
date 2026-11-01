@@ -56,7 +56,14 @@ use constant {
     # 1: shipped prompt and three tools.
     # 2: search_drive gained `person`; drive rows carry `matched` and
     #    `people_tagged`; the prompt says a photo's empty snippet is normal.
-    CONTRACT_VERSION => 2,
+    # 3: row caps raised 25 -> 100 per call, 60 -> 300 per answer. A cached
+    #    answer built from a quarter of the matches is a worse answer to
+    #    the same question, which is what this version exists to retire.
+    # 4: cite every match, not a sample. Raising the caps alone did not
+    #    reach the page: the tool fed the model 100 rows and it cited 25
+    #    of them, because nothing had ever told it the result list was the
+    #    deliverable rather than a courtesy.
+    CONTRACT_VERSION => 4,
 };
 
 my $JSON = JSON::PP->new->canonical(1)->utf8(0);
@@ -97,8 +104,11 @@ discard it. Read `matched` on each result for why it came back.
 ANSWERING. Search before you answer; do not guess. Cite every result you
 mention by its kind and id exactly as the tool returned them -- the server
 resolves those ids itself and silently drops any it cannot. Never invent an
-id. Keep `answer` to one or two plain sentences ABOUT the results: what you
-found and why it matches. Do not write markup, links or images; the page is
+id. Cite EVERY result that answers the question, not a sample of them: the
+page is a result list and the person wants the whole list. `answer` is where
+you are brief; `results` is not, and trimming it for tidiness throws away
+the thing they asked for. Keep `answer` to one or two plain sentences ABOUT
+the results: what you found and why it matches. Do not write markup, links or images; the page is
 built by the server from the ids you return.
 SYS
 
