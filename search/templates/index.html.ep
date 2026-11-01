@@ -67,6 +67,29 @@
         </div>
       </section>
 
+      %# PERSON, which is SHARED -- and that is not a tidy-up, it is where
+      %# "photos with Jeff" went missing. One `person` parameter has always
+      %# driven two different lookups: mail participants on the mail side,
+      %# and an indexed join through the tagged faces of the owner's own
+      %# photos on the file side. It sat in the Email-only section under the
+      %# label "From or to", so the file half was both mislabelled and
+      %# `hidden` the moment Email was unticked -- the one state in which a
+      %# person is searching only their photos.
+      %#
+      %# Shared, like Type, which also means something different per source.
+      <section class="fsec">
+        <h3 class="fsec-h">Person</h3>
+        <div class="fields">
+          <div class="field">
+            <label class="lab" for="person">Name or address</label>
+            <input type="text" id="person" name="person" value="<%= $f->{person} %>" placeholder="e.g. Dana Whitfield">
+          </div>
+        </div>
+        <p class="note" id="personNote"><span id="personNoteMail">On email, matches
+          <em>from</em>, <em>to</em> and <em>cc</em>.</span><span id="personNoteDrive">
+          On files, matches the people <em>tagged in your photos</em>.</span></p>
+      </section>
+
       %# TYPE. Chips rather than checkboxes: fourteen 18px boxes is a lot of
       %# small targets, and a filled chip reads across the panel where a tick
       %# does not.
@@ -126,10 +149,6 @@
       <section class="fsec" data-when="mail" id="secMail"<%= $want_mail ? '' : ' hidden' %>>
         <h3 class="fsec-h">Email only</h3>
         <div class="fields">
-          <div class="field">
-            <label class="lab" for="person">From or to</label>
-            <input type="text" id="person" name="person" value="<%= $f->{person} %>" placeholder="name or address">
-          </div>
           <div class="field">
             <label class="lab" for="mailbox">Mailbox</label>
             <select id="mailbox" name="mailbox">
@@ -217,6 +236,11 @@
     // Email unticked, where it is simply untrue.
     var nm = $('#typeNoteMail');
     if (nm) nm.hidden = !(m || none);
+    // Same rule for the Person note: each half is true of one source, so
+    // each half appears only when that source is in play.
+    var pm = $('#personNoteMail'), pd = $('#personNoteDrive');
+    if (pm) pm.hidden = !(m || none);
+    if (pd) pd.hidden = !(d || none);
     // The exact-type list is account data and depends on the sources, so
     // it has to be recomputed whenever they change.
     applyScope();
@@ -572,6 +596,29 @@
 %# there is something to show, so a text file gains no empty row. GPS is
 %# here because this is the owner's own page -- it is filtered out of what
 %# AI mode sends to a third party, not out of what they can see themselves.
+%# Who is in the photo, and the tag tree its owner filed it under. Before
+%# the metadata list, because on a photo it is the most human thing there
+%# is -- and because a photo matched on a name showed no reason at all once
+%# people were normalized out of the metadata rows.
+% if (my $ft = $drive_faces->{ $d->{drive_item_id} }) {
+%   my @named = grep { length($_->{display_name} // '') } @{ $ft->{faces} || [] };
+%   my $unnamed = scalar(@{ $ft->{faces} || [] }) - scalar(@named);
+%   my %seen; my @who = grep { !$seen{$_}++ } map { $_->{display_name} } @named;
+% if (@who || $unnamed) {
+      <div class="who faces"><strong>People:</strong> <% my $first = 1; %><% for my $w (@who) { %><%= $first ? '' : ', ' %><% $first = 0; %><a href="<%= personal_href($w, 'drive') %>"><%= $w %></a><% } %><% if ($unnamed) { %><%= @who ? ' · ' : '' %><em><%= $unnamed %> untagged face<%= $unnamed == 1 ? '' : 's' %></em><% } %></div>
+% }
+%#  The People BRANCH of the tag tree is dropped, because digiKam writes a
+%#  `People|<name>` tag for every face it names -- so showing both printed
+%#  the same four names twice in a row. A strict de-duplication of what is
+%#  already on the line above, not an opinion about anyone's own tags.
+%   my %tseen;
+%   my @paths = grep { !$tseen{$_}++ }
+%               grep { $_ !~ m{\APeople(?:\||\z)} }
+%               map  { $_->{path} } @{ $ft->{tags} || [] };
+%   if (@paths) {
+      <div class="who tags"><strong>Tags:</strong> <%= join ' · ', map { my $t = $_; $t =~ s/\|/ › /g; $t } @paths %></div>
+%   }
+% }
 % if (my $md = $drive_meta->{ $d->{drive_item_id} }) {
       <dl class="meta-kv">
 %   for my $kv (@$md) {

@@ -1,3 +1,50 @@
+homelab-search (0.2.31) unstable; urgency=medium
+
+  * Find the people tagged in photos. "photos with jeff" returned nothing
+    over 109 photos tagged with his name, and the index was right the
+    whole time - all three surfaces that should have asked for him were
+    unable to.
+  * AI mode: search_drive gained a `person` parameter. The query layer has
+    supported an indexed join through the tagged faces since the people
+    tables landed; the tool schema never exposed it and the filter was
+    hardcoded empty, so AI mode could only ever match a name as free text
+    inside a file. A name is written in the tagging, not in the image.
+  * AI mode: a drive result now says WHY it came back. A photo has no body
+    text, so its snippet is empty - the model was handed a list of bare
+    filenames, correctly refused to claim they were connected to anyone,
+    and said so: "untitled scans that have nothing linking them to him".
+    Each row now carries `matched` and the number of tagged faces, and the
+    envelope echoes the filter that produced it.
+  * Still no names. The count of tagged faces was always the shareable
+    half of this; who they are stays in search.people, which nothing in
+    the AI path reads. The only name in a request is the one the person
+    typed into their own search box.
+  * The results page shows who is in a photo again, with each name a link
+    to everything else they appear in. This used to arrive inside the
+    generic metadata list, because tagged people were one joined string in
+    a metadata row; normalizing them into search.people and
+    search.photo_faces was right and moved the fact out of the one place
+    every consumer read from. faces_and_tags_for was written for this and
+    then never called by anything.
+  * The People branch of the tag tree is dropped from the Tags line, since
+    digiKam writes a `People|<name>` tag per named face and the names were
+    printing twice in a row.
+  * The person filter is now a shared control called "Person" instead of a
+    text box labelled "From or to" inside the Email-only section. One
+    parameter has always driven two lookups - mail participants, and
+    photo faces - so the file half was both mislabelled and hidden exactly
+    when Email was unticked, which is the one state in which somebody is
+    searching only their photos. Its note names what it matches per
+    source, like the Type note.
+  * A cached AI answer no longer outlives the contract that produced it.
+    The cache key covered the data moving but not the prompt or the tool
+    schemas, so this fix would have been invisible: a retry of the same
+    question would have served the old wrong answer from cache in 25 ms.
+    CONTRACT_VERSION joins the key, the same way extractor_version already
+    retires the indexer's own work (migration 012).
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 11:14:28 -0600
+
 homelab-search (0.2.30) unstable; urgency=medium
 
   * Drop exact types from the picker that cannot match the chosen

@@ -281,6 +281,11 @@
     .hit .subj { font-size: var(--app-base); color: var(--text-primary); overflow-wrap: anywhere; }
     .hit .meta { font-size: var(--app-xs); color: var(--text-muted); }
     .hit .who  { font-size: var(--app-sm); color: var(--silver-dim); overflow-wrap: anywhere; }
+    /* People and tags under a photo. The label carries the weight so the
+       names read as content rather than as another grey metadata row. */
+    .hit .who strong { color: var(--text-secondary); font-weight: 600; }
+    .hit .who.tags { color: var(--text-muted); font-size: var(--app-xs); }
+    .hit .who em { color: var(--text-muted); font-style: normal; }
     .hit .snip {
       font-size: var(--app-sm); color: var(--text-muted); margin-top: 4px; overflow: hidden;
       display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;

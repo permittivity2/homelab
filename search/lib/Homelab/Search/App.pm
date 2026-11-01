@@ -174,6 +174,15 @@ sub startup ($self) {
         return '/?q=' . url_escape($q);
     });
 
+    # "Everything else with this person in it", from the name under a
+    # photo. The one control for this used to be a text box labelled
+    # "From or to" in the Email-only section, so the quickest way to ask
+    # the question was to not know it was possible.
+    $self->helper(personal_href => sub ($c, $name, $src) {
+        return '#' unless defined $name && length $name;
+        return '/?person=' . url_escape($name) . '&src=' . url_escape($src // 'drive');
+    });
+
     # Metadata as a person reads it. 40.166 is a duration of 0:40, 0.0125
     # is an exposure of 1/80, and 1.8 is f/1.8 -- the index stores the
     # number because that is what sorts and filters, and this is the only
@@ -451,6 +460,19 @@ sub index ($c) {
         drive_meta => (($acct && @$drive)
             ? $c->app->query->metadata_for($acct->{account_id},
                   [ map { $_->{drive_item_id} } @$drive ], 'all')
+            : {}),
+        # Who is in the photo, and where its owner filed it.
+        #
+        # This used to arrive in drive_meta, because tagged people were one
+        # joined string in a metadata row. Normalizing them into
+        # search.people and search.photo_faces was right, and it moved the
+        # fact out of the one place every consumer read from -- so the page
+        # silently stopped showing it, and a photo matched on a name gave no
+        # hint why. faces_and_tags_for was written for this and then never
+        # called by anything.
+        drive_faces => (($acct && @$drive)
+            ? $c->app->query->faces_and_tags_for($acct->{account_id},
+                  [ map { $_->{drive_item_id} } @$drive ])
             : {}),
         searched   => _searched($f),
     );

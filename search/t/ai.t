@@ -284,6 +284,44 @@ isnt Digest::SHA::sha256_hex($body . ' '), notice_sha256(),
     # sensitive. GPS was unmarked by migration 008; a tagged NAME was not.
     unlike $text, qr/people\.names|Ada Lovelace/,
         'a tagged person\'s name never appears in a tool result';
+
+    # And neither does the tag tree, which is hand-built place names and
+    # sometimes a street address.
+    unlike $text, qr/Utah|Places/, 'nor does the tag tree';
+
+    # WHY A ROW CAME BACK. Without this the model is handed a filename, an
+    # empty snippet and nothing else -- which is what made "photos with
+    # Jeff" answer "nothing links these to him" over 109 photos that were
+    # tagged with his name. The count is the shareable half; the names are
+    # not sent.
+    like $text, qr/people_tagged/, 'the number of tagged faces is reported';
+    like $text, qr/"people_tagged"\s*:\s*3/, '...and counts the unnamed face too';
+    like $text, qr/matched/, 'and every row says why it came back';
+}
+
+# --------------------------------------- a person reaches the face index
+# search_drive used to hardcode person => '', so the indexed join through
+# the tagged faces was unreachable from AI mode even though the query
+# layer had supported it all along.
+{
+    my $q = MetaQuery->new(
+        drive => [ { drive_item_id => 7, file_name => 'scan0012.jpg',
+                     mime_type => 'image/jpeg', size_bytes => 100 } ],
+    );
+    my ($text) = run_tool($q, 20, 'search_drive',
+                          { person => 'jeff' }, { rows_used => 0 });
+
+    is $q->{saw_filter}{person}, 'jeff', 'the person reaches the query filter';
+    like $text, qr/face in this photo is tagged/,
+        'and the row says the match was a face tag, which an empty snippet cannot';
+    like $text, qr/"person"\s*:\s*"jeff"/,
+        'the applied filter is echoed, so a narrow result set is not read as an empty corpus';
+
+    # The name in the filter is the one the person typed into their own
+    # search box, and it is the only name in the payload: the echo is
+    # their own word coming back, not a third party being identified.
+    unlike $text, qr/Ada Lovelace|Grace Hopper/,
+        'echoing the filter does not leak who is actually in the photo';
 }
 
 done_testing;
@@ -305,7 +343,21 @@ sub drive_item   { return $_[0]{drive_item} }
 package MetaQuery;
 sub new { my ($c,%a)=@_; return bless {%a}, $c }
 sub search_mail  { return [] }
-sub search_drive { return $_[0]{drive} // [] }
+sub search_drive {
+    my ($self, $acct, $f) = @_;
+    $self->{saw_filter} = $f;
+    return $self->{drive} // [];
+}
+# Two named faces and one the owner never named, so the count and the
+# "untagged" half are both exercised.
+sub faces_and_tags_for {
+    my ($self, $acct, $ids) = @_;
+    $self->{asked_faces} = 1;
+    return { 7 => { faces => [ { display_name => 'Ada Lovelace' },
+                               { display_name => 'Grace Hopper' },
+                               { display_name => undef } ],
+                    tags  => [ { path => 'Places|Earth|USA|Utah' } ] } };
+}
 sub metadata_for {
     my ($self, $acct, $ids, $vis) = @_;
     $self->{on_meta}->($vis) if $self->{on_meta};

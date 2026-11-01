@@ -71,12 +71,20 @@ my $DEFS = [
             "Search the signed-in person's own uploaded files. Returns matching "
           . "files with an id, name, folder, type, size, date and a short "
           . "snippet of their text. Use this for anything about documents, "
-          . "photos or other files.",
+          . "photos or other files. A photo has no text, so its snippet is "
+          . "empty and that is normal -- `matched` on each result tells you "
+          . "why the file came back.",
         strict      => JSON::PP::true,
         input_schema => {
             type       => 'object',
             properties => {
                 query    => { type => 'string', description => 'Words to match in the file name and contents.' },
+                person   => { type => 'string',
+                              description => 'Someone tagged in a photo, matched against the names the '
+                                           . 'owner gave the faces in their own photo library. USE THIS, '
+                                           . 'not `query`, for "photos with Dana" or "pictures of Dana" '
+                                           . '-- a name is almost never written inside an image, so '
+                                           . '`query` is the wrong instrument for a person.' },
                 from     => { type => 'string', description => 'Earliest date, YYYY-MM-DD.' },
                 to       => { type => 'string', description => 'Latest date, YYYY-MM-DD.' },
                 type     => { type => 'string',
@@ -160,7 +168,12 @@ sub _mail_filter ($in) {
 sub _drive_filter ($in) {
     my %f = (
         q       => $in->{query} // '',
-        person  => '', mailbox => '', mime => '',
+        # The ONLY name that reaches this filter is one the person typed into
+        # their own search box, and it is matched server-side against their
+        # own photo library. Nobody's name is sent back out: see the `matched`
+        # note below.
+        person  => $in->{person} // '',
+        mailbox => '', mime => '',
         from    => $in->{from}  // '',
         to      => $in->{to}    // '',
         type_in => (defined $in->{type} && length $in->{type} ? [ $in->{type} ] : []),
@@ -225,12 +238,34 @@ sub run_tool ($query, $account_id, $name, $input, $budget) {
         # A photo's coordinates are the most revealing thing the index
         # holds; the owner sees them on the page, and they do not leave
         # the building.
-        my $meta = $query->metadata_for($account_id,
-                       [ map { $_->{drive_item_id} } @$rows ], 'safe');
+        my @ids = map { $_->{drive_item_id} } @$rows;
+        my $meta = $query->metadata_for($account_id, @ids ? \@ids : [], 'safe');
+
+        # WHY A ROW CAME BACK, which a photo cannot say for itself.
+        #
+        # A photo has no body text, so its snippet is empty -- and the model
+        # is told to say why each result matches and not to guess. Handed a
+        # list of bare filenames it did the right thing and dropped them:
+        # "untitled scans that have nothing linking them to him". The match
+        # was real; the evidence for it was simply not in the payload.
+        #
+        # COUNTS, NOT NAMES. The number of tagged faces was always the
+        # shareable half of this (007 kept people.count unflagged while the
+        # names were the sensitive part), and it is enough: with a person
+        # filter applied every row IS a face-tag match, so the filter itself
+        # carries the meaning and no third party has to be named to a third
+        # party. Who they are stays in search.people, which nothing here
+        # reads.
+        my $ft = @ids ? $query->faces_and_tags_for($account_id, \@ids) : {};
+        my $by_person = length($f->{person} // '') ? 1 : 0;
 
         return (_fence({
             source  => 'files',
             count   => scalar @$rows,
+            # Echoed so the model can tell a narrow result set from an empty
+            # corpus, and so `matched` below is interpretable.
+            filters => { ($by_person ? (person => $f->{person}) : ()),
+                         (length($f->{q} // '') ? (query => $f->{q}) : ()) },
             results => [ map { my $r = $_; {
                 id      => $r->{drive_item_id},
                 name    => _clip($r->{file_name}, 200),
@@ -239,6 +274,10 @@ sub run_tool ($query, $account_id, $name, $input, $budget) {
                 bytes   => $r->{size_bytes},
                 date    => substr($r->{content_created_at} // $r->{uploaded_at} // '', 0, 10),
                 snippet => _clip($r->{snippet}, MAX_SNIPPET_CHARS),
+                matched => ($by_person ? 'a face in this photo is tagged with a name matching `person`'
+                                       : 'the file name, its contents or its metadata'),
+                (do { my $n = scalar @{ $ft->{ $r->{drive_item_id} }{faces} // [] };
+                      $n ? (people_tagged => $n) : () }),
                 (@{ $meta->{ $r->{drive_item_id} } // [] }
                     ? (details => { map { $_->{key_name} => $_->{value} }
                                     @{ $meta->{ $r->{drive_item_id} } } })
