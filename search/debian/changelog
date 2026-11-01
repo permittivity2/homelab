@@ -1,3 +1,22 @@
+homelab-search (0.2.40) unstable; urgency=medium
+
+  * Fix a tag link returning no results. Clicking "Arizona" filtered the
+    page, opened the panel to show the filter, and found nothing - because
+    the query was never run.
+  * ROOT CAUSE, and it is the interesting part: "is anything being asked
+    for" existed TWICE. _searched in the controller decides whether to run
+    a query at all; the template derived its own near-copy to decide
+    whether to open the filter panel. They had different members, and
+    0.2.39 added `tag` to the template's copy only. Everything downstream
+    of the tag filter was correct, which is why the symptom pointed
+    squarely at the thing that was fine.
+  * There is one list now. The template is handed `filters_on` instead of
+    deriving it, and the two questions differ by exactly one documented
+    thing: a narrowed source is a reason to show the panel but not a reason
+    to run a query. Verified on the reported url: 0 files before, 50 after.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 12:51:14 -0600
+
 homelab-search (0.2.39) unstable; urgency=medium
 
   * The metadata chip is "Dimensions", not "Size" - the byte size is

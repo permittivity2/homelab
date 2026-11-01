@@ -14,11 +14,14 @@
 %#
 %# The disclosure opens automatically when a filter is actually in use, so a
 %# narrowed search never hides why it is narrowed.
-% my $filters_on = (length($f->{person}) || length($f->{from}) || length($f->{to})
-%                || length($f->{mailbox}) || length($f->{mime})
-%                || @{ $f->{type_in} // [] } || @{ $f->{type_ex} // [] }
-%                || length($f->{tag} // '')
-%                || $f->{has_attachments} || $f->{in_trash} || $f->{source} ne 'both') ? 1 : 0;
+%#
+%# $filters_on ARRIVES FROM THE CONTROLLER and is not re-derived here. The
+%# near-copy that used to live on this line had different members from the
+%# controller's own list, and the day they disagreed a tag link filtered
+%# the page, opened the panel to show the filter, and returned nothing --
+%# because the controller's copy had never heard of tags and so never ran
+%# the query. One list, in App.pm, with the one deliberate difference
+%# documented there.
 %#
 %# ...BUT ONLY AS THE OPENING GUESS. The rule above is right the first time
 %# and wrong every time after, because a filter STICKS: the form re-renders

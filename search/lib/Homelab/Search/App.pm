@@ -412,14 +412,36 @@ sub _filters ($c) {
 
 # Did the user actually ask for anything? An empty form is a landing page,
 # not a search for everything.
+# IS ANYTHING BEING ASKED FOR -- and there is exactly ONE list of that now.
+#
+# There were two. This one decides whether to run a query at all, and the
+# template derived its own near-copy to decide whether to open the filter
+# panel. They had different members, which is a bug waiting to be written,
+# and it was: `tag` was added to the template's copy and not this one, so a
+# tag link filtered the page, opened the panel to show the filter, and
+# returned nothing -- because the query never ran. The symptom pointed at
+# the tag filter, which was fine.
+#
+# So the template no longer derives anything; it is handed `filters_on`
+# from here. The two questions differ by exactly one documented thing, and
+# that difference lives in one place:
+#
+#   searched   -- is there anything to run a query FOR
+#   filters_on -- plus "and is the source narrowed", which is not a reason
+#                 to run a query but is a reason to show the panel
 sub _searched ($f) {
     return 1 if length($f->{q} // '') || length($f->{person} // '')
+             || length($f->{tag} // '')
              || length($f->{from} // '') || length($f->{to} // '')
              || length($f->{mime} // '') || length($f->{mailbox} // '')
              || $f->{in_trash} || $f->{has_attachments}
              || $f->{min_size} || $f->{max_size}
              || @{ $f->{type_in} // [] } || @{ $f->{type_ex} // [] };
     return 0;
+}
+
+sub _filters_on ($f) {
+    return (_searched($f) || ($f->{source} // 'both') ne 'both') ? 1 : 0;
 }
 
 sub _run ($c, $acct, $f) {
@@ -510,6 +532,7 @@ sub index ($c) {
                   [ map { $_->{drive_item_id} } @$drive ])
             : {}),
         searched   => _searched($f),
+        filters_on => _filters_on($f),
     );
 }
 
