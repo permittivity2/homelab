@@ -683,8 +683,43 @@
 %   }
 % }
 % if (my $md = $drive_meta->{ $d->{drive_item_id} }) {
+%   #  PAIRS THAT ARE ONE FACT. A latitude without its longitude is not a
+%   #  place, and a width without a height is not a size -- so each pair
+%   #  gets one chip instead of two labels and two values spending four on
+%   #  one thing, which on a phone was most of the row.
+%   #
+%   #  Collapsed only when BOTH halves are present. A lone half falls
+%   #  through to the loop below and keeps its own row rather than
+%   #  disappearing, which is the failure worth guarding: the pair is an
+%   #  optimistic reading of data that came out of a stranger's file.
+%   my %by = map { $_->{key_name} => $_ } @$md;
+%   my ($lat, $lon) = @by{'gps.latitude', 'gps.longitude'};
+%   my ($w,   $h)   = @by{'media.width',  'media.height'};
+%   my %hide;
+%   @hide{'gps.latitude', 'gps.longitude'} = (1, 1) if $lat && $lon;
+%   @hide{'media.width',  'media.height'}  = (1, 1) if $w   && $h;
       <dl class="meta-kv">
+%   if ($lat && $lon) {
+%     my ($la, $lo) = (meta_value($lat), meta_value($lon));
+        <dt>Lat/Long</dt>
+        %#  The link is written as literal markup, NOT through <%%= %%>, which
+        %#  escapes -- that silently dropped a rel= once already, and
+        %#  `noreferrer` is the half that matters here: without it Google
+        %#  receives this page's full url, which carries the search query
+        %#  and any person filter in it. The coordinates go only because
+        %#  the owner clicked.
+        <dd><a href="https://www.google.com/maps/search/?api=1&amp;query=<%= $la %>,<%= $lo %>" target="_blank" rel="noopener noreferrer" title="Open in Google Maps"><%= $la %>/<%= $lo %></a></dd>
+%   }
+%   if ($w && $h) {
+        %#  One key pair for both, so this covers video as well as stills.
+        %#  &times; rather than the letter x: it is the separator every
+        %#  camera and spec sheet uses for dimensions, and it does not read
+        %#  as part of the number next to tabular digits.
+        <dt>Size</dt>
+        <dd><%= meta_value($w) %>&times;<%= meta_value($h) %></dd>
+%   }
 %   for my $kv (@$md) {
+%     next if $hide{ $kv->{key_name} };
         <dt><%= $kv->{label} %></dt>
         <dd><%= meta_value($kv) %></dd>
 %   }

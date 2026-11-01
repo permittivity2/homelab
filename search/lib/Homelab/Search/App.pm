@@ -149,11 +149,28 @@ sub startup ($self) {
     });
     # Postgres hands back '2026-01-01 10:00:00+00'; the page wants the day and
     # the time, not the fractional seconds or the offset.
+    # NO SECONDS. Nobody scans a result list or a photo's details to the
+    # second, and it is three characters of noise on every row.
+    #
+    # Done HERE rather than at the one place it was noticed, because a
+    # photo shows the same instant twice -- the taken-at date becomes the
+    # file's content_created_at, so it is both the headline date and the
+    # "Taken" chip. Trimming one would have rendered one timestamp two
+    # different ways on one line.
+    #
+    # The pattern needs HH:MM in front of the seconds it removes. A bare
+    # `:\d\d$` would turn an already-secondless '14:30' into '14'.
     $self->helper(short_date => sub ($c, $ts) {
         return '' unless defined $ts && length $ts;
         my $t = "$ts";
         $t =~ s/\.\d+//;
-        $t =~ s/[+-]\d\d(?::?\d\d)?\z//;
+        # THE OFFSET IS ONLY AN OFFSET AFTER A TIME. Unanchored, the old
+        # pattern ate the '-19' off a date-only '2026-09-19' and returned
+        # '2026-09' -- the day, silently gone. Every column feeding this is
+        # timestamptz so Postgres always sends a time and it never showed,
+        # but one of these values comes out of a stranger's EXIF.
+        $t =~ s/(\d{2}:\d{2}(?::\d{2})?)\s*(?:[+-]\d{2}(?::?\d{2})?|Z)\z/$1/;
+        $t =~ s/([T ]\d{2}:\d{2}):\d{2}\z/$1/;
         $t =~ s/\s+\z//;
         return $t;
     });
