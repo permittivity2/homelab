@@ -406,6 +406,10 @@ sub _filters ($c) {
     # thing that displays it.
     $f{tag} = $c->param('tag') // '';
     $f{tag} =~ s/\A\s+|\s+\z//g;
+    # Files another account has shared with this one. Default 'include':
+    # they are results like any other, labelled with whose they are.
+    $f{shared} = $c->param('shared') // 'include';
+    $f{shared} = 'include' unless $f{shared} =~ /\A(?:include|exclude|only)\z/;
     # Source arrives two ways, and both have to keep working.
     #
     # `source=both|mail|drive` is the WIRE contract -- homelab-cli sends it,
@@ -459,6 +463,10 @@ sub _filters ($c) {
 #   filters_on -- plus "and is the source narrowed", which is not a reason
 #                 to run a query but is a reason to show the panel
 sub _searched ($f) {
+    # 'only' asks a question on its own -- "what has been shared with me" is
+    # a search even with an empty box. 'exclude' narrows an existing one and
+    # is not, by itself, a reason to run anything.
+    return 1 if ($f->{shared} // '') eq 'only';
     return 1 if length($f->{q} // '') || length($f->{person} // '')
              || length($f->{tag} // '')
              || length($f->{from} // '') || length($f->{to} // '')
@@ -470,6 +478,7 @@ sub _searched ($f) {
 }
 
 sub _filters_on ($f) {
+    return 1 if ($f->{shared} // 'include') ne 'include';
     return (_searched($f) || ($f->{source} // 'both') ne 'both') ? 1 : 0;
 }
 
@@ -484,7 +493,11 @@ sub _run ($c, $acct, $f) {
     # seeing the page.
     return ($mail, $drive) unless _searched($f);
     $mail  = $c->app->query->search_mail($acct->{account_id}, $f)  if $f->{source} ne 'drive';
-    $drive = $c->app->query->search_drive($acct->{account_id}, $f) if $f->{source} ne 'mail';
+    # search_drive_all, not search_drive: own files plus anything another
+    # account has shared with this one, resolved live against drive.shares
+    # on every request so a revoked share stops matching immediately.
+    $drive = $c->app->query->search_drive_all($acct->{account_id}, $acct->{email}, $f)
+        if $f->{source} ne 'mail';
     return ($mail, $drive);
 }
 
@@ -516,7 +529,7 @@ sub index ($c) {
     my $ai;
     if ($ai_state->{available} && $acct && $c->param('ai') && length($f->{q} // '')) {
         $ai = eval {
-            $c->app->ai->answer($acct->{account_id}, $f->{q});
+            $c->app->ai->answer($acct->{account_id}, $f->{q}, email => $acct->{email});
         };
         if (!$ai) {
             # A bug in the AI path must not take the search page down with
@@ -536,9 +549,9 @@ sub index ($c) {
         ai         => $ai,
         ai_state   => $ai_state,
         mailboxes  => ($acct ? $c->app->query->mailboxes($acct->{account_id}) : []),
-        counts     => ($acct ? $c->app->query->counts($acct->{account_id})    : {}),
+        counts     => ($acct ? $c->app->query->counts($acct->{account_id}, $acct->{email}) : {}),
         mime_cats  => Homelab::Search::Mime::categories(),
-        mime_groups => _mime_groups($acct ? $c->app->query->mime_facets($acct->{account_id}) : []),
+        mime_groups => _mime_groups($acct ? $c->app->query->mime_facets($acct->{account_id}, $acct->{email}) : []),
         # Per-type metadata for the file results on this page, in ONE query
         # rather than one per row. 'all' here, not 'safe': this is the
         # owner's own page, and the sensitive filter exists for what leaves
@@ -754,7 +767,7 @@ sub mail_download ($c) {
 sub drive_metadata ($c) {
     my ($email, $acct) = _scope($c);
     return $c->render(text => 'not logged in', status => 401) unless $email && $acct;
-    my $i = $c->app->query->drive_item($acct->{account_id}, $c->stash('id'))
+    my $i = $c->app->query->visible_drive_item($acct->{account_id}, $acct->{email}, $c->stash('id'))
         or return $c->render(text => 'not found', status => 404);
 
     my $path = eval { drive_blob_for($c->app->drive_root, $i->{file_uuid}) };
@@ -777,7 +790,12 @@ sub drive_download ($c) { return _drive_serve($c, 1) }
 sub _drive_serve ($c, $force_download) {
     my ($email, $acct) = _scope($c);
     return $c->render(text => 'not logged in', status => 401) unless $email && $acct;
-    my $i = $c->app->query->drive_item($acct->{account_id}, $c->stash('id'))
+    # visible_drive_item, not drive_item: their own file, or one another
+    # account has shared with them. It is the ENTIRE boundary -- drive_blob_for
+    # takes a uuid and has no notion of an account, so an item resolved here
+    # is an item served, and there is deliberately no second check below to
+    # forget.
+    my $i = $c->app->query->visible_drive_item($acct->{account_id}, $acct->{email}, $c->stash('id'))
         or return $c->render(text => 'not found', status => 404);
 
     my $path = eval { drive_blob_for($c->app->drive_root, $i->{file_uuid}) };

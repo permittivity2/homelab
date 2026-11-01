@@ -157,6 +157,10 @@ if [ "$VERIFY_ONLY" = 1 ] || [ "$REINDEX" = 1 ]; then
         && ok "runtime role can read drive.files" \
         || bad "runtime role cannot read drive.files -- drive indexing will find nothing"
 
+    on "$PRIMARY" "sudo -u postgres psql -d homelab -Atc \"SELECT has_table_privilege('homelab_search_runtime','drive.shares','SELECT')\"" 2>/dev/null | grep -q t \
+        && ok "runtime role can read drive.shares" \
+        || bad "runtime role cannot read drive.shares -- shared files will not be searchable"
+
     TBL=$(on "$PRIMARY" "sudo -u postgres psql -d homelab -Atc \"SELECT count(*) FROM information_schema.tables WHERE table_schema='search'\"" 2>/dev/null)
     [ "${TBL:-0}" -ge 18 ] && ok "$TBL tables in the search schema" || bad "only ${TBL:-0} tables in the search schema"
 
@@ -287,20 +291,26 @@ else
     fi
 fi
 
-step "   grant the runtime role READ access to drive's two tables"
+step "   grant the runtime role READ access to drive's three tables"
 note "The indexer drives the drive half from drive's own tables (exact, and it"
 note "keeps the never-enumerate-the-blob-store rule). Each app's role is scoped"
 note "to its own schema, so without this the indexer gets 'permission denied for"
 note "schema drive' -- which is correct behaviour, not a bug to route around."
-note "SELECT on exactly two tables, nothing wider. Same shape as the existing"
+note "drive.shares is the third: a file another account has shared with you"
+note "is searchable, and the share is resolved LIVE on every request rather"
+note "than copied into the index -- because a copy lags by an indexer pass,"
+note "and for a REVOKED share that lag is the window in which an un-shared"
+note "file is still findable. Nothing to copy, nothing to go stale."
+note "SELECT on exactly three tables, nothing wider. Same shape as the existing"
 note "homelab-audit-grant-queue-insert cross-feature grant."
-if on "$PRIMARY" "sudo -u postgres psql -d homelab -Atc \"SELECT has_table_privilege('homelab_search_runtime','drive.files','SELECT')\"" 2>/dev/null | grep -q t; then
+if on "$PRIMARY" "sudo -u postgres psql -d homelab -Atc \"SELECT has_table_privilege('homelab_search_runtime','drive.shares','SELECT')\"" 2>/dev/null | grep -q t; then
     ok "already granted (idempotent)"
 elif on "$PRIMARY" "sudo -u postgres psql -d homelab -v ON_ERROR_STOP=1 -q -c \"
         GRANT USAGE ON SCHEMA drive TO homelab_search_runtime;
         GRANT SELECT ON drive.files TO homelab_search_runtime;
-        GRANT SELECT ON drive.folders TO homelab_search_runtime;\"" >/dev/null 2>&1; then
-    ok "granted SELECT on drive.files and drive.folders"
+        GRANT SELECT ON drive.folders TO homelab_search_runtime;
+        GRANT SELECT ON drive.shares TO homelab_search_runtime;\"" >/dev/null 2>&1; then
+    ok "granted SELECT on drive.files, drive.folders and drive.shares"
 else
     bad "could not grant drive read access"
 fi

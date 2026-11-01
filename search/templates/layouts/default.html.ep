@@ -335,6 +335,10 @@
     /* People and tags under a photo. The label carries the weight so the
        names read as content rather than as another grey metadata row. */
     .hit .who strong { color: var(--text-secondary); font-weight: 600; }
+    /* A borrowed result. Steel, the accent already used for "this is not
+       the ordinary case", so whose file it is reads at a glance. */
+    .hit .who.shared { color: var(--silver-bright); }
+    .hit .who.shared strong { color: var(--accent-steel); }
     /* The label once, then one branch per line beside it -- a two-column
        grid rather than inline flow, so a second branch starts under the
        first instead of running on behind a separator. With one branch,

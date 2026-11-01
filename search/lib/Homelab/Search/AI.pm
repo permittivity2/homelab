@@ -219,27 +219,28 @@ sub _norm ($self, $q) {
     return $n;
 }
 
-sub _cache_get ($self, $db, $account_id, $norm, $wm) {
+sub _cache_get ($self, $db, $account_id, $norm, $wm, $fp) {
     my $row = $db->query(
         'SELECT cache_id, answer FROM search.ai_cache
           WHERE account_id = ? AND query_norm = ? AND mail_watermark = ? AND drive_watermark = ?
-            AND contract_version = ? AND expires_at > now()',
-        $account_id, $norm, $wm->{mail}, $wm->{drive}, CONTRACT_VERSION)->hash
+            AND contract_version = ? AND share_fp = ? AND expires_at > now()',
+        $account_id, $norm, $wm->{mail}, $wm->{drive}, CONTRACT_VERSION, $fp)->hash
         or return undef;
     $db->query('UPDATE search.ai_cache SET hits = hits + 1 WHERE cache_id = ?', $row->{cache_id});
     return eval { $JSON->decode($row->{answer}) };
 }
 
-sub _cache_put ($self, $db, $account_id, $norm, $wm, $answer) {
+sub _cache_put ($self, $db, $account_id, $norm, $wm, $fp, $answer) {
     my $ttl = $self->config->{cache_ttl_s} // 86_400;
     $db->query(
         'INSERT INTO search.ai_cache
             (account_id, query_norm, mail_watermark, drive_watermark, contract_version,
-             answer, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?::jsonb, now() + make_interval(secs => ?))
-         ON CONFLICT (account_id, query_norm, mail_watermark, drive_watermark, contract_version)
+             share_fp, answer, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, now() + make_interval(secs => ?))
+         ON CONFLICT (account_id, query_norm, mail_watermark, drive_watermark,
+                      contract_version, share_fp)
          DO UPDATE SET answer = EXCLUDED.answer, expires_at = EXCLUDED.expires_at',
-        $account_id, $norm, $wm->{mail}, $wm->{drive}, CONTRACT_VERSION,
+        $account_id, $norm, $wm->{mail}, $wm->{drive}, CONTRACT_VERSION, $fp,
         $JSON->encode($answer), $ttl);
     return;
 }
@@ -440,7 +441,12 @@ sub answer ($self, $account_id, $q, %opt) {
     return $fail->('budget_exhausted') if $lim->{over_budget};
 
     my $wm = $self->query->watermarks($account_id);
-    if (my $hit = $scope->(sub ($db) { $self->_cache_get($db, $account_id, $norm, $wm) })) {
+    # Shares are the third thing that can change the right answer, and the
+    # watermarks cannot see them: granting or revoking creates and removes
+    # no index row, so max(drive_item_id) does not move. Without this a
+    # revoked share would go on being described by a cached answer.
+    my $fp = $self->query->share_fingerprint($opt{email});
+    if (my $hit = $scope->(sub ($db) { $self->_cache_get($db, $account_id, $norm, $wm, $fp) })) {
         # Re-resolved even on a cache hit: the entry stores ids, and the
         # rows behind them may have been deleted since it was written.
         my ($rows, $dropped) = $self->_resolve($account_id, $hit);
@@ -479,7 +485,7 @@ sub answer ($self, $account_id, $q, %opt) {
     my ($rows, $dropped) = $self->_resolve($account_id, $run->{parsed});
     $scope->(sub ($db) {
         $self->_record($db, $account_id, 'answered', query => $q, %acct);
-        $self->_cache_put($db, $account_id, $norm, $wm, $run->{parsed});
+        $self->_cache_put($db, $account_id, $norm, $wm, $fp, $run->{parsed});
     });
 
     # An id that did not resolve is worth knowing about: it is either a

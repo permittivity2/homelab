@@ -181,6 +181,159 @@ sub search_mail ($self, $account_id, $f) {
 }
 
 # ------------------------------------------------------------------ drive
+# ---------------------------------------------------- what is shared with me
+#
+# THE RULE SEARCH HAS TO INVENT. Drive does not have one: every
+# authenticated route there is `WHERE user_email = ?`, and no authenticated
+# route consults drive.shares at all. Cross-account access in drive is
+# bearer-of-token on the unauthenticated /s/:token routes, so
+# `shared_with_email` is a notification address and a list filter, never a
+# check. What follows is therefore STRICTER than drive, deliberately -- it
+# is what drive's own notification email already promises the recipient.
+#
+# RESOLVED LIVE, NEVER COPIED. The settled pattern in this schema is to
+# carry a drive fact across at index time, as `searchable` does, and
+# migrations/010 argues for it. That argument does not survive this case:
+# a carried fact lags by one indexer pass, and for a REVOKED share the lag
+# is the window in which an un-shared file is still searchable by someone
+# else. Nothing here is written down, so there is nothing to go stale.
+#
+# Returns [{ owner_account_id, owner_email, drive_file_id }, ...].
+sub shared_files ($self, $account_id, $email) {
+    return [] unless defined $email && length $email;
+
+    # ONE INDEXED PROBE for the overwhelmingly common case. Every account
+    # that has been shared nothing -- which is almost all of them, always --
+    # pays shares_shared_with_idx and stops here, before any recursion.
+    # A MISSING GRANT MUST NOT TAKE SEARCH DOWN. drive.shares lives in
+    # another app's schema and is reachable only by an explicit
+    # GRANT SELECT. Deploying this package before that grant is applied --
+    # which is exactly what happened the first time -- made every
+    # authenticated search 500, because this is on the render path of the
+    # main page, the facets, the counts and the serving routes.
+    #
+    # So a permission error degrades: no shared results, loudly logged,
+    # the rest of search untouched. ONLY a permission error. Any other
+    # failure propagates, because turning a real database fault into
+    # "nothing is shared with you" would be the same leak-shaped silence
+    # this feature exists to avoid, pointed the other way.
+    return [] if ($self->{_no_share_grant} // 0);
+
+    my $db = $self->pg->db;
+    my $live = eval { $db->query(q{
+        SELECT s.file_id, s.folder_id
+          FROM drive.shares s
+          LEFT JOIN drive.files   f ON f.id = s.file_id
+          LEFT JOIN drive.folders d ON d.id = s.folder_id
+         -- NOT NULL FIRST, and it is the clause that matters most: one
+         -- table holds both kinds of share, and a NULL recipient means a
+         -- PUBLIC LINK. Without this, every public link in the system
+         -- would be published into every account's search results.
+         WHERE s.shared_with_email IS NOT NULL
+           AND lower(s.shared_with_email) = lower(?)
+         -- The remaining five are drive's own _live_share predicate
+         -- (drive/lib/Homelab/Drive/App.pm:2036), copied so the two can be
+         -- diffed. Keep them in that order and in that shape.
+           AND s.revoked_at IS NULL
+           AND (s.expires_at IS NULL OR s.expires_at > now())
+           AND (s.file_id   IS NULL OR f.deleted_at IS NULL)
+           AND (s.folder_id IS NULL OR d.deleted_at IS NULL)}, $email)->hashes };
+    if (my $err = $@) {
+        die $err unless $err =~ /permission denied/i;
+        $self->{_no_share_grant} = 1;
+        $self->log->error(
+            'search: cannot read drive.shares -- files shared with this '
+          . 'account will NOT be searchable. Run: GRANT SELECT ON '
+          . 'drive.shares TO homelab_search_runtime') if $self->log;
+        return [];
+    }
+    return [] unless @$live;
+
+    my @file_ids   = grep { defined } map { $_->{file_id} }   @$live;
+    my @folder_ids = grep { defined } map { $_->{folder_id} } @$live;
+
+    # A FOLDER SHARE IS THE WHOLE SUBTREE. drive settled this deliberately
+    # (App.pm:2320) after a first cut that listed only the top level and so
+    # hid content the owner believed they had shared.
+    #
+    # deleted_at IS NULL in BOTH the seed and the recursive step, exactly as
+    # drive's _share_tree_sql has it: trashing an intermediate folder prunes
+    # its entire subtree, even where a descendant's own deleted_at is null.
+    # Testing only the file's own folder would over-grant.
+    #
+    # UNION, not UNION ALL: cycles are impossible by construction today and
+    # this does not loop forever if that ever stops being true.
+    my @rows;
+    if (@folder_ids) {
+        push @rows, @{ $db->query(q{
+            WITH RECURSIVE share_tree AS (
+                SELECT id FROM drive.folders
+                 WHERE id = ANY(?) AND deleted_at IS NULL
+                UNION
+                SELECT c.id FROM drive.folders c
+                  JOIN share_tree t ON c.parent_folder_id = t.id
+                 WHERE c.deleted_at IS NULL
+            )
+            SELECT f.id AS drive_file_id, lower(f.user_email) AS owner_email
+              FROM drive.files f
+             WHERE f.folder_id IN (SELECT id FROM share_tree)
+               AND f.deleted_at IS NULL},
+            '{' . join(',', @folder_ids) . '}')->hashes->@* };
+    }
+    if (@file_ids) {
+        push @rows, @{ $db->query(q{
+            SELECT f.id AS drive_file_id, lower(f.user_email) AS owner_email
+              FROM drive.files f
+             WHERE f.id = ANY(?) AND f.deleted_at IS NULL},
+            '{' . join(',', @file_ids) . '}')->hashes->@* };
+    }
+    return [] unless @rows;
+
+    # Owner email -> account id, the same mapping the indexer uses. An owner
+    # with no indexed account has nothing in the index to find, so dropping
+    # them here is correct rather than a silent failure.
+    my %acct;
+    for my $e (do { my %s; grep { !$s{$_}++ } map { $_->{owner_email} } @rows }) {
+        my $a = $self->account_for($e) or next;
+        $acct{$e} = $a->{account_id};
+    }
+
+    # A share pointing back at the asker is not a share. Drive refuses to
+    # create one, but a renamed address could leave one behind, and scoping
+    # a "shared" pass to the asker's own account would quietly bypass the
+    # searchable flag they set on their own files.
+    my %seen;
+    return [ grep { $_->{owner_account_id}
+                    && $_->{owner_account_id} != $account_id
+                    && !$seen{ $_->{drive_file_id} }++ }
+             map  { { %$_, owner_account_id => $acct{ $_->{owner_email} } } } @rows ];
+}
+
+# A fingerprint of this account's live shares, for the AI answer cache.
+#
+# The cache key is (account, query, watermarks, contract). Watermarks are
+# max(drive_item_id) per account and DO NOT MOVE when a share is granted or
+# revoked -- so without this a revoked share would keep being described by
+# a cached answer for the rest of the TTL. Any grant, revoke or expiry
+# changes one of these three numbers.
+sub share_fingerprint ($self, $email) {
+    return '0:0:0' unless defined $email && length $email;
+    return '0:0:0' if ($self->{_no_share_grant} // 0);
+    my $r = eval { $self->pg->db->query(q{
+        SELECT count(*)::text AS n,
+               coalesce(max(id), 0)::text AS hi,
+               coalesce(extract(epoch from max(coalesce(revoked_at, created_at)))::bigint, 0)::text AS mt
+          FROM drive.shares
+         WHERE shared_with_email IS NOT NULL
+           AND lower(shared_with_email) = lower(?)}, $email)->hash };
+    if (my $err = $@) {
+        die $err unless $err =~ /permission denied/i;
+        $self->{_no_share_grant} = 1;
+        return '0:0:0';
+    }
+    return join ':', $r->{n}, $r->{hi}, $r->{mt};
+}
+
 sub search_drive ($self, $account_id, $f) {
     my ($from, $to) = _date_bounds($f);
     my $q     = $f->{q}     // '';
@@ -260,6 +413,20 @@ sub search_drive ($self, $account_id, $f) {
     }
     push @where, 'i.size_bytes >= ?' and push @where_bind, $f->{min_size} if $f->{min_size};
     push @where, 'i.size_bytes <= ?' and push @where_bind, $f->{max_size} if $f->{max_size};
+    # THE SHARED-PASS ALLOWLIST. Only ever set by search_drive_all, and only
+    # for a pass that is scoped to somebody ELSE's account -- so this is the
+    # clause standing between "the files they shared with me" and "their
+    # whole drive". It is an explicit id set computed from drive.shares, not
+    # a predicate a caller can widen, and an empty set never gets here:
+    # search_drive_all does not open a pass without one.
+    if (my $ids = $f->{file_ids}) {
+        die "Homelab::Search::Query: refusing an empty shared-file allowlist\n"
+            unless ref $ids eq 'ARRAY' && @$ids;
+        die "Homelab::Search::Query: non-numeric id in the shared-file allowlist\n"
+            if grep { !defined || !/\A[0-9]+\z/ } @$ids;
+        push @where, 'i.drive_file_id = ANY(?)';
+        push @where_bind, '{' . join(',', @$ids) . '}';
+    }
 
     my $sql = qq{
         SELECT i.drive_item_id, i.drive_file_id, i.file_uuid::text AS file_uuid,
@@ -279,6 +446,105 @@ sub search_drive ($self, $account_id, $f) {
     _assert_binds($sql, \@final);
 
     return $self->_scoped($account_id, sub ($db) { $db->query($sql, @final)->hashes });
+}
+
+# ------------------------------------------- own files plus borrowed ones
+#
+# TWO QUESTIONS, NOT ONE WIDER QUESTION. The first pass is the ordinary
+# account-scoped search, unchanged. Then, per owner who has shared
+# something with this account, a SECOND pass scoped to THAT OWNER with an
+# explicit allowlist of the file ids the share resolves to.
+#
+# Scoping each borrowed pass to its owner is what makes the rest of the
+# schema work untouched: row-level security stays a flat
+# `account_id = one GUC` on every table, the composite foreign keys still
+# hold, and metadata_for / faces_and_tags_for / excerpt resolve a borrowed
+# photo's text, people and tags correctly because they are reading inside
+# the account that owns them. Widening the policies instead would have
+# meant five of them, and one that recurses into the table it guards.
+#
+# The allowlist is the boundary. It comes from drive.shares via
+# shared_files and never from a request parameter, and search_drive itself
+# refuses an empty one -- so a bug that produced no ids fails loudly rather
+# than running an unrestricted query inside someone else's account.
+#
+# $f->{shared} is 'include' (default), 'exclude' or 'only'.
+sub search_drive_all ($self, $account_id, $email, $f) {
+    my $mode = $f->{shared} // 'include';
+    my @rows;
+    push @rows, @{ $self->search_drive($account_id, $f) } unless $mode eq 'only';
+    return \@rows if $mode eq 'exclude';
+
+    my $shared = $self->shared_files($account_id, $email);
+    if (@$shared) {
+        my %by_owner;
+        push @{ $by_owner{ $_->{owner_account_id} }{ids} }, $_->{drive_file_id} for @$shared;
+        $by_owner{ $_->{owner_account_id} }{email} = $_->{owner_email} for @$shared;
+
+        for my $owner (sort keys %by_owner) {
+            # offset is deliberately dropped for a borrowed pass: paging is
+            # applied to the MERGED list below, and an offset applied twice
+            # would silently skip rows.
+            my %g = (%$f, file_ids => $by_owner{$owner}{ids}, offset => 0);
+            delete $g{shared};
+            my $got = $self->search_drive($owner, \%g);
+            $_->{shared_by} = $by_owner{$owner}{email} for @$got;
+            push @rows, @$got;
+        }
+    }
+
+    # Re-sort the merged list the way a single pass would have ordered it,
+    # then page. Borrowed rows are not pinned below owned ones: a result is
+    # ranked on how well it matches, which is the only thing the person
+    # asking cares about.
+    my $ranked = length($f->{q} // '');
+    @rows = sort {
+        ($ranked ? ($b->{rank} // 0) <=> ($a->{rank} // 0) : 0)
+          || (($b->{content_created_at} // $b->{uploaded_at} // '')
+              cmp ($a->{content_created_at} // $a->{uploaded_at} // ''))
+    } @rows;
+
+    my $off   = $f->{offset} || 0;
+    my $limit = $f->{limit}  || 50;
+    return [] if $off >= @rows;
+    my $end = $off + $limit - 1;
+    $end = $#rows if $end > $#rows;
+    return [ @rows[$off .. $end] ];
+}
+
+# One item the asking account may SEE -- its own, or one shared with it.
+#
+# This is the whole boundary for serving bytes. Paths::drive_blob_for takes
+# a uuid and has no account notion, so an item resolved here is an item
+# served; there is no second check further down and there should not be a
+# second place to forget one.
+sub visible_drive_item ($self, $account_id, $email, $id) {
+    my $own = $self->drive_item($account_id, $id);
+    return $own if $own;
+
+    my $shared = $self->shared_files($account_id, $email);
+    return undef unless @$shared;
+    my %ok = map { $_->{drive_file_id} => $_ } @$shared;
+
+    # Resolved in the OWNER's scope, then checked against the allowlist --
+    # both, not either. The scope makes the row visible at all; the
+    # allowlist is what stops a borrowed id from reaching the rest of that
+    # owner's drive.
+    for my $owner (do { my %s; grep { !$s{$_}++ } map { $_->{owner_account_id} } @$shared }) {
+        my $row = $self->drive_item($owner, $id) or next;
+        next unless $row->{drive_file_id} && $ok{ $row->{drive_file_id} };
+        # THE OWNER'S PRIVATE FLAG WINS, even here. search_drive filters on
+        # `searchable` so a Private file never appears in results -- but
+        # this path takes an id, and without the same test a borrowed id
+        # would open a file its owner had marked unsearchable. Not applied
+        # to the own-item branch above: the owner may always open their
+        # own, which is the point of the flag meaning "hide from search"
+        # rather than "lock".
+        next unless $row->{searchable};
+        $row->{shared_by} = $ok{ $row->{drive_file_id} }{owner_email};
+        return $row;
+    }
+    return undef;
 }
 
 # Placeholder count must equal bind count. Postgres would reject a mismatch
@@ -466,7 +732,12 @@ sub drive_item ($self, $account_id, $drive_item_id) {
     return $self->_scoped($account_id, sub ($db) {
         $db->query(q{
             SELECT i.drive_item_id, i.file_uuid::text AS file_uuid, i.file_name,
-                   i.size_bytes, i.deleted_at,
+                   i.size_bytes, i.deleted_at, i.searchable,
+                   -- drive_file_id is what a share is expressed in, so
+                   -- visible_drive_item cannot check its allowlist without
+                   -- it. The dates are here because the raw-metadata page
+                   -- prints them and was rendering a blank line instead.
+                   i.drive_file_id, i.content_created_at, i.uploaded_at,
                    t.type || '/' || t.subtype AS mime_type
               FROM search.drive_items i
               LEFT JOIN search.mime_types t USING (mime_type_id)
@@ -489,13 +760,18 @@ sub mailboxes ($self, $account_id) {
     });
 }
 
-sub counts ($self, $account_id) {
-    return $self->_scoped($account_id, sub ($db) {
+sub counts ($self, $account_id, $email = undef) {
+    my $c = $self->_scoped($account_id, sub ($db) {
         $db->query(q{
             SELECT (SELECT count(*) FROM search.messages    WHERE account_id = ?) AS messages,
                    (SELECT count(*) FROM search.drive_items WHERE account_id = ? AND deleted_at IS NULL) AS drive_items},
             $account_id, $account_id)->hash;
     });
+    # Counted SEPARATELY, not added in. "37,433 files indexed for you" would
+    # be a lie about whose they are, and the number people check this line
+    # for is how much of their own is in.
+    $c->{shared_items} = scalar @{ $self->shared_files($account_id, $email) };
+    return $c;
 }
 
 # The leaf types THIS account actually has, for the granular half of the
@@ -514,7 +790,47 @@ sub counts ($self, $account_id) {
 #
 # Drive's side honours `searchable`, so a type that exists only inside a
 # folder marked private does not appear in the picker either.
-sub mime_facets ($self, $account_id) {
+sub mime_facets ($self, $account_id, $email = undef) {
+    my $own = $self->_mime_facets_scoped($account_id, undef);
+
+    # Types that exist only among borrowed files still have to be offered,
+    # or the picker quietly cannot narrow to them: an account owning three
+    # text files and holding seven thousand shared photos would be shown no
+    # way to ask for a photo. Counted per owner, under that owner's scope,
+    # restricted to the same allowlist the search uses.
+    my $shared = $self->shared_files($account_id, $email);
+    return $own unless @$shared;
+
+    my %by_owner;
+    push @{ $by_owner{ $_->{owner_account_id} } }, $_->{drive_file_id} for @$shared;
+
+    my %merged;
+    for my $r (@$own) { $merged{ $r->{mime} } = { %$r } }
+    for my $owner (sort keys %by_owner) {
+        for my $r (@{ $self->_mime_facets_scoped($owner, $by_owner{$owner}) }) {
+            my $m = $merged{ $r->{mime} } ||= { mime => $r->{mime}, n => 0, drive_n => 0, mail_n => 0 };
+            $m->{$_} += $r->{$_} for qw(n drive_n);
+        }
+    }
+    return [ sort { $b->{n} <=> $a->{n} || $a->{mime} cmp $b->{mime} } values %merged ];
+}
+
+# One account's facets. $ids restricts to an allowlist of drive file ids and
+# drops the mail half, which is what a borrowed pass wants: another
+# account's attachments are not shared by sharing a file.
+sub _mime_facets_scoped ($self, $account_id, $ids) {
+    if ($ids) {
+        return [] unless @$ids;
+        return $self->_scoped($account_id, sub ($db) {
+            $db->query(q{
+                SELECT t.type || '/' || t.subtype AS mime, count(*)::bigint AS n,
+                       count(*)::bigint AS drive_n, 0::bigint AS mail_n
+                  FROM search.drive_items i JOIN search.mime_types t USING (mime_type_id)
+                 WHERE i.account_id = ? AND i.deleted_at IS NULL AND i.searchable
+                   AND i.drive_file_id = ANY(?)
+                 GROUP BY 1}, $account_id, '{' . join(',', @$ids) . '}')->hashes;
+        });
+    }
     return $self->_scoped($account_id, sub ($db) {
         $db->query(q{
             SELECT type || '/' || subtype AS mime,

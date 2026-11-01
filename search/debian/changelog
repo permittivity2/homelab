@@ -1,3 +1,64 @@
+homelab-search (0.3.1) unstable; urgency=medium
+
+  * A missing GRANT on drive.shares degrades instead of taking search
+    down. 0.3.0 deployed before the grant was applied and every
+    authenticated search 500'd - share resolution sits on the render path
+    of the main page, the facets, the counts and the serving routes, so
+    one unreadable table took all of them with it.
+  * Only a permission error is swallowed, once per process, with a log
+    line naming the exact GRANT to run. Any other database error still
+    propagates: turning a real fault into "nothing is shared with you"
+    would be this feature's own failure mode pointed the other way.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 14:10:05 -0600
+
+homelab-search (0.3.0) unstable; urgency=medium
+
+  * Files another account has shared with you are searchable. A folder
+    share brings its whole subtree, as drive intends.
+  * RESOLVED LIVE, NEVER COPIED. The settled pattern here is to carry a
+    drive fact across at index time, as `searchable` does. That does not
+    survive this case: a carried fact lags by one indexer pass, and for a
+    REVOKED share the lag is the window in which an un-shared file is
+    still findable by someone else. Every request reads drive.shares, so
+    revocation takes effect on the next search with no indexer pass.
+  * Drive has no identity-based access rule to mirror - every
+    authenticated route there is `WHERE user_email = ?` and none consults
+    drive.shares; cross-account access is bearer-of-token on the
+    unauthenticated /s/:token routes. So this invents the rule, and is
+    deliberately STRICTER than drive: it is what drive's own notification
+    email already promises the recipient.
+  * A PUBLIC LINK IS NEVER SEARCHABLE. One table holds both kinds of
+    share, told apart only by shared_with_email being NULL, and there is
+    a live public link in the system right now. That clause has its own
+    assertion.
+  * Two questions, not one wider question: the ordinary account-scoped
+    search, then one pass per owner scoped to THAT owner with an explicit
+    allowlist of the file ids the share resolves to. Row-level security,
+    all five policies and every composite foreign key are untouched, and a
+    borrowed photo's text, people and tags resolve correctly because they
+    are read inside the account that owns them.
+  * The allowlist is the boundary, and it is a fence: search_drive refuses
+    an empty one rather than running unrestricted inside someone else's
+    account, and refuses a non-numeric id.
+  * The owner's Private flag still wins - for the grantee too, including
+    when a borrowed id is resolved directly rather than through a search.
+  * The AI answer cache gains a share fingerprint. Watermarks are
+    max(drive_item_id) and do not move when a share is granted or revoked,
+    so without it a revoked share would go on being described by a cached
+    answer for the rest of the TTL (migration 014).
+  * New index on (account_id, drive_file_id): a share is expressed in
+    drive file ids and that column had no index at all (migration 013).
+  * Results say "Shared by <owner>"; a "Shared with me" control in
+    Files-only includes (default), excludes, or shows only those; the
+    count line and the exact-type picker both account for them, so an
+    account owning three text files and holding seven thousand shared
+    photos is still offered a way to ask for a photo.
+  * Needs GRANT SELECT ON drive.shares TO homelab_search_runtime - added
+    to the orchestrator with its own verify probe.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 14:08:03 -0600
+
 homelab-search (0.2.44) unstable; urgency=medium
 
   * The disclosure is "Specs" and now holds the dimensions and the

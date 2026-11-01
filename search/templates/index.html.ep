@@ -226,6 +226,19 @@
           </div>
         </div>
         <p class="note">Matches that tag and everything filed under it.</p>
+
+        %#  Files another account has shared with this one. Included by
+        %#  default: they are results like any other and say whose they are.
+        %#  "Only" is a question in its own right -- "what has been shared
+        %#  with me" -- so it searches with an empty box, which is why
+        %#  _searched in App.pm treats it as a search and 'exclude' as a
+        %#  narrowing of one.
+        <div class="chips" id="sharedChips" role="group" aria-label="Shared files">
+% my $sh = $f->{shared} // 'include';
+          <label class="chip"><input type="radio" name="shared" value="include"<%= $sh eq 'include' ? ' checked' : '' %>><span>Include shared</span></label>
+          <label class="chip"><input type="radio" name="shared" value="exclude"<%= $sh eq 'exclude' ? ' checked' : '' %>><span>Mine only</span></label>
+          <label class="chip"><input type="radio" name="shared" value="only"<%= $sh eq 'only' ? ' checked' : '' %>><span>Shared with me only</span></label>
+        </div>
         <label class="box"><input type="checkbox" id="inTrash" name="in_trash" value="1"<%= $f->{in_trash} ? ' checked' : '' %>><span>Search the trash instead</span></label>
       </section>
 
@@ -507,6 +520,10 @@
     if (p && !p.disabled && p.value.trim()) bits.push('person: ' + p.value.trim());
     var tg = $('#tag');
     if (tg && !tg.disabled && tg.value.trim()) bits.push('tag: ' + tg.value.trim());
+    var sh = $('input[name=shared]:checked');
+    if (sh && sh.value && sh.value !== 'include') {
+      bits.push(sh.nextElementSibling.textContent.trim().toLowerCase());
+    }
     var mb = $('#mailbox');
     if (mb && !mb.disabled && mb.value) {
       bits.push(mb.options[mb.selectedIndex].text.replace(/\s*\(\d+\)\s*$/, ''));
@@ -617,7 +634,8 @@
 % }
 
 % if (($counts->{messages} // 0) || ($counts->{drive_items} // 0)) {
-<p class="counts"><%= $counts->{messages} // 0 %> messages and <%= $counts->{drive_items} // 0 %> files indexed for you.</p>
+<p class="counts"><%= $counts->{messages} // 0 %> messages and <%= $counts->{drive_items} // 0 %> files indexed for you<%
+   %><% if (($counts->{shared_items} // 0) > 0) { %>, plus <%= commify($counts->{shared_items}) %> shared with you<% } %>.</p>
 % }
 
 % unless ($account) {
@@ -681,6 +699,12 @@
         <span class="subj"><a class="dl" href="/drive/<%= $d->{drive_item_id} %>/download" title="Download <%= $d->{file_name} %>">Download</a><% if ($viewable) { %><a href="/drive/<%= $d->{drive_item_id} %>/view" target="_blank" rel="noopener noreferrer"><%= $d->{file_name} %></a><% } else { %><a href="/drive/<%= $d->{drive_item_id} %>/download"><%= $d->{file_name} %></a><% } %></span>
         <span class="meta"><%= $mime %> · <%= human_size($d->{size_bytes}) %> · <%= short_date($d->{content_created_at} // $d->{uploaded_at}) %></span>
       </div>
+%#  WHOSE FILE THIS IS. Only present on a borrowed row, so an unlabelled
+%#  result is always your own -- the absence carries meaning, which is why
+%#  owned rows get no "shared by you" counterpart.
+% if (length($d->{shared_by} // '')) {
+      <div class="who shared"><strong>Shared by</strong> <%= $d->{shared_by} %></div>
+% }
 % if (length($d->{folder_path} // '')) {
       <div class="who">in <%= $d->{folder_path} %></div>
 % }
