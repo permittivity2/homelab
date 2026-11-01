@@ -28,7 +28,7 @@ use constant {
     # the version it was extracted with, so "which files predate this
     # extractor" is an indexed comparison and the re-index is incremental
     # rather than a full rebuild.
-    EXTRACTOR_VERSION => 5,
+    EXTRACTOR_VERSION => 6,
 
     # Generous on purpose. ExifTool reads HEADERS, not the file -- a 564 MB
     # video in this corpus is parsed in milliseconds -- and Archive::Zip
@@ -154,6 +154,7 @@ my %TAG = (
     RegionPersonDisplayName => 'people.names',
     PersonInImage           => 'people.names',
     Keywords                => 'image.keywords',
+    # HierarchicalSubject is NOT here: it becomes a tag tree, not a string.
     XPKeywords              => 'image.keywords',
     ImageDescription        => 'image.description',
     'Caption-Abstract'      => 'image.description',
@@ -264,6 +265,7 @@ sub _zip_members ($path) {
     # truncated zip is a normal thing to be sent, so that is a log line per
     # hostile upload and a warning in every test run -- output people learn
     # to scroll past. The status below is the part we act on.
+    no warnings 'once';
     local $Archive::Zip::ErrorHandler = sub { };
     my $zip = Archive::Zip->new;
     # read() returns a status rather than dying, and a corrupt archive is a
@@ -361,6 +363,14 @@ sub extract ($mime, $path, %opt) {
                                                |timed|interval|pano(?:rama)?|night)\z/xi) {
                 delete $out{'image.keywords'};
             }
+            # FACES AND THE TAG TREE come back STRUCTURED, under keys the
+            # caller stores in their own tables rather than as flat
+            # key/value metadata. Both are repeating groups -- several
+            # faces, several tag paths -- and cramming them into one text
+            # column is the thing this replaced.
+            $out{_faces} = _faces($info);
+            $out{_tags}  = _tags($info);
+
             # The count is derived rather than read: no standard provides
             # one, and it is the part that may be shared.
             if (defined $out{'people.names'}) {
@@ -387,6 +397,81 @@ sub extract ($mime, $path, %opt) {
         return {};
     }
     return \%out;
+}
+
+# TAGGED FACES, as structured records rather than a joined string.
+#
+# The three standards all return INDEX-ALIGNED PARALLEL ARRAYS: face N is
+# RegionName[N] with the box at RegionArea{X,Y,W,H}[N]. That alignment is
+# the whole format -- read the name list on its own and you have thrown
+# away which box belongs to whom, and a photo with two people becomes two
+# names and no faces.
+#
+# The area is a FRACTION of the image (0..1), with x,y the CENTRE of the
+# box, per the Metadata Working Group spec. Stored as given: pixels would
+# bake in the dimensions at tag time, and a resized copy would move every
+# box.
+#
+# A region can legitimately have no name -- digiKam writes unnamed boxes
+# for "unknown person" -- so those are kept with a null name rather than
+# dropped. A region can also be a pet or a focus point, which is what
+# region_type distinguishes.
+sub _faces ($info) {
+    my $as = sub ($v) { return () unless defined $v; return ref $v eq 'ARRAY' ? @$v : ($v) };
+
+    # Whichever standard wrote the names, they align with the same boxes.
+    my @names = $as->($info->{RegionName});
+    @names    = $as->($info->{RegionPersonDisplayName}) unless @names;
+    @names    = $as->($info->{PersonInImage})           unless @names;
+    return [] unless @names;
+
+    my @type = $as->($info->{RegionType});
+    my @x    = $as->($info->{RegionAreaX});
+    my @y    = $as->($info->{RegionAreaY});
+    my @w    = $as->($info->{RegionAreaW});
+    my @h    = $as->($info->{RegionAreaH});
+
+    my @out;
+    for my $i (0 .. $#names) {
+        my $name = _text($names[$i]);
+        my %f = (
+            name => $name,
+            type => (_text($type[$i] // '') // 'Face'),
+        );
+        # A box only counts if all four parts are there and in range; a
+        # half-written region is no region.
+        my @box = map { _num($_) } ($x[$i], $y[$i], $w[$i], $h[$i]);
+        if (4 == grep { defined && $_ >= 0 && $_ <= 1 } @box) {
+            @f{qw(x y w h)} = @box;
+        }
+        next unless defined $f{name} || defined $f{x};
+        push @out, \%f;
+    }
+    return \@out;
+}
+
+# HIERARCHICAL TAGS, the tree a person built by hand in their photo
+# manager: "Places|Earth|USA|Utah|Moab|Arches National Park".
+#
+# This is the most valuable text in the file and the flat Keywords field
+# throws away everything about it -- Keywords holds only the leaf, so
+# "Moab" is findable and "Utah" is not, even though the person filed it
+# under Utah themselves.
+#
+# The separator is '|' in digiKam, Lightroom and the XMP-lr spec. Returned
+# as paths; the caller turns them into a tree.
+sub _tags ($info) {
+    my $as = sub ($v) { return () unless defined $v; return ref $v eq 'ARRAY' ? @$v : ($v) };
+    my (@out, %seen);
+    for my $raw ($as->($info->{HierarchicalSubject})) {
+        my $path = _text($raw) or next;
+        $path =~ s{\s*\|\s*}{|}g;
+        $path =~ s{\A\|+|\|+\z}{}g;
+        next unless length $path;
+        next if $seen{lc $path}++;
+        push @out, $path;
+    }
+    return \@out;
 }
 
 # The best "when was this actually made" we can offer, for

@@ -217,6 +217,41 @@ sub search_drive ($self, $account_id, $f) {
     # uploaded_at rather than silently excluding the whole existing corpus.
     push @where, 'coalesce(i.content_created_at, i.uploaded_at) >= ?::date'      and push @where_bind, $from if $from;
     push @where, 'coalesce(i.content_created_at, i.uploaded_at) <  (?::date + 1)' and push @where_bind, $to   if $to;
+    # Photos of a named person: an indexed join through the face table,
+    # not a LIKE over a joined string -- which is what made "Jeff" also
+    # match "Jefferson".
+    if (length($f->{person} // '')) {
+        push @where, q{EXISTS (SELECT 1 FROM search.photo_faces pf
+                                 JOIN search.people pp ON pp.person_id = pf.person_id
+                                WHERE pf.drive_item_id = i.drive_item_id
+                                  AND pf.account_id = i.account_id
+                                  AND pp.display_name ILIKE ?)};
+        push @where_bind, '%' . $f->{person} . '%';
+    }
+    # A tag matches the node AND everything under it, so "Utah" finds the
+    # photo its owner filed under Places|Earth|USA|Utah|Moab|Arches.
+    #
+    # MATCHED AGAINST THE LEAF'S PATH, not against the tag node. A photo is
+    # linked only to the most specific tag it carries -- the ancestors
+    # exist as rows but nothing points at them -- so asking "which tag node
+    # is named Utah" finds the node and then no photo. Asking instead
+    # "which photo's tag path contains Utah as a segment" is the question
+    # that has the answer.
+    #
+    # Four patterns because a segment can sit anywhere: the whole path, the
+    # start, the end, or the middle. The leading wildcards cost an index
+    # scan, which is irrelevant here -- this runs over an account's tag
+    # list, which is tens of rows, not its photos.
+    if (length($f->{tag} // '')) {
+        my $tg = $f->{tag};
+        push @where, q{EXISTS (SELECT 1 FROM search.photo_tags pt
+                                 JOIN search.tags tg ON tg.tag_id = pt.tag_id
+                                WHERE pt.drive_item_id = i.drive_item_id
+                                  AND pt.account_id = i.account_id
+                                  AND (tg.path ILIKE ? OR tg.path ILIKE ?
+                                    OR tg.path ILIKE ? OR tg.path ILIKE ?))};
+        push @where_bind, $tg, "$tg|%", "%|$tg", "%|$tg|%";
+    }
     push @where, 'i.size_bytes >= ?' and push @where_bind, $f->{min_size} if $f->{min_size};
     push @where, 'i.size_bytes <= ?' and push @where_bind, $f->{max_size} if $f->{max_size};
 
@@ -293,6 +328,62 @@ sub watermarks ($self, $account_id) {
                    coalesce((SELECT max(drive_item_id) FROM search.drive_items WHERE account_id = ?), 0) AS drive
         }, $account_id, $account_id)->hash;
         return { mail => $r->{mail} + 0, drive => $r->{drive} + 0 };
+    });
+}
+
+# Who appears in this account's photos, with counts. The list a person
+# wants before they search: "show me everyone I have tagged".
+sub people ($self, $account_id) {
+    return $self->_scoped($account_id, sub ($db) {
+        return $db->query(q{
+            SELECT p.person_id, p.display_name, count(f.face_id)::int AS photos
+              FROM search.people p
+              LEFT JOIN search.photo_faces f ON f.person_id = p.person_id
+             WHERE p.account_id = ?
+             GROUP BY 1, 2 ORDER BY 3 DESC, 2}, $account_id)->hashes;
+    });
+}
+
+# The tag tree, with how many photos sit at or under each node. Ordered by
+# path so the caller can render it as a tree without a second query.
+sub tags ($self, $account_id) {
+    return $self->_scoped($account_id, sub ($db) {
+        return $db->query(q{
+            SELECT t.tag_id, t.path, t.name, t.parent_id,
+                   (SELECT count(*) FROM search.photo_tags pt
+                     JOIN search.tags d ON d.tag_id = pt.tag_id
+                    WHERE pt.account_id = t.account_id
+                      AND (d.path = t.path OR d.path LIKE t.path || '|%'))::int AS photos
+              FROM search.tags t
+             WHERE t.account_id = ?
+             ORDER BY t.path}, $account_id)->hashes;
+    });
+}
+
+# Faces and tags for a set of items, for display under each result.
+sub faces_and_tags_for ($self, $account_id, $ids) {
+    return {} unless $ids && @$ids;
+    my @ids = grep { defined && /\A\d+\z/ } @$ids;
+    return {} unless @ids;
+    my $ph = join ',', ('?') x @ids;
+    return $self->_scoped($account_id, sub ($db) {
+        my %out;
+        my $f = $db->query(qq{
+            SELECT f.drive_item_id, f.person_id, p.display_name,
+                   f.area_x, f.area_y, f.area_w, f.area_h
+              FROM search.photo_faces f
+              LEFT JOIN search.people p ON p.person_id = f.person_id
+             WHERE f.account_id = ? AND f.drive_item_id IN ($ph)
+             ORDER BY f.drive_item_id, p.display_name NULLS LAST},
+            $account_id, @ids)->hashes;
+        push @{ $out{ $_->{drive_item_id} }{faces} }, $_ for @$f;
+        my $g = $db->query(qq{
+            SELECT pt.drive_item_id, t.tag_id, t.path, t.name
+              FROM search.photo_tags pt JOIN search.tags t USING (tag_id)
+             WHERE pt.account_id = ? AND pt.drive_item_id IN ($ph)
+             ORDER BY pt.drive_item_id, t.path}, $account_id, @ids)->hashes;
+        push @{ $out{ $_->{drive_item_id} }{tags} }, $_ for @$g;
+        return \%out;
     });
 }
 

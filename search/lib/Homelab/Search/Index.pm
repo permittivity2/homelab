@@ -134,6 +134,47 @@ sub mime_type_id ($self, $db, $mime) {
 # Extract's catalogue, so the label and the sensitive flag have ONE
 # definition -- the module that produces the value also says what it is
 # called and whether it may leave the building.
+# A person in this account's photos. Case-insensitively unique: photo
+# managers are inconsistent about capitalisation and "jeff gardner" and
+# "Jeff Gardner" are one person, not two.
+sub person_id ($self, $db, $account_id, $name) {
+    return undef unless defined $name && length $name;
+    return $self->_cached("person:$account_id", lc $name, sub {
+        return $self->_get_or_create($db, 'search.people', 'person_id',
+            'account_id = ? AND lower(display_name) = lower(?)', [$account_id, $name],
+            'INSERT INTO search.people (account_id, display_name) VALUES (?, ?)
+             ON CONFLICT (account_id, lower(display_name)) DO UPDATE
+                SET display_name = search.people.display_name
+             RETURNING person_id', [$account_id, $name]);
+    });
+}
+
+# A node in the tag tree, interning EVERY ANCESTOR on the way down.
+#
+# "Places|Earth|USA|Utah|Moab" creates five rows, each pointing at its
+# parent, so "everything in Utah" is a real query rather than a string
+# guess. Called once per distinct path per process and then cached, so the
+# repeated walk costs nothing after the first photo.
+sub tag_id ($self, $db, $account_id, $path) {
+    return undef unless defined $path && length $path;
+    return $self->_cached("tag:$account_id", $path, sub {
+        my (@seg) = grep { length } split /\|/, $path;
+        return undef unless @seg;
+        my ($parent, $sofar);
+        for my $seg (@seg) {
+            $sofar = defined $sofar ? "$sofar|$seg" : $seg;
+            $parent = $self->_get_or_create($db, 'search.tags', 'tag_id',
+                'account_id = ? AND path = ?', [$account_id, $sofar],
+                'INSERT INTO search.tags (account_id, parent_id, name, path)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT (account_id, path) DO UPDATE SET name = EXCLUDED.name
+                 RETURNING tag_id', [$account_id, $parent, $seg, $sofar]);
+            return undef unless $parent;
+        }
+        return $parent;
+    });
+}
+
 sub metadata_key_id ($self, $db, $key_name) {
     return undef unless defined $key_name && length $key_name;
     return $self->_cached('metakey', $key_name, sub {
@@ -503,9 +544,16 @@ sub index_drive_item ($self, %a) {
         my @meta_terms;
         if ($meta) {
             for my $key (sort keys %$meta) {
+                next if $key =~ /\A_/;
                 next unless ($META_KEY{$key}{value_kind} // '') eq 'text';
                 push @meta_terms, $meta->{$key};
             }
+            # A tagged name and a tag path are the most searchable text a
+            # photo has. The path goes in with its separators turned into
+            # spaces, so "Utah", "Moab" and "Arches" each match the photo
+            # their owner filed under all three.
+            push @meta_terms, grep { defined } map { $_->{name} } @{ $meta->{_faces} // [] };
+            push @meta_terms, map { my $p = $_; $p =~ tr/|/ /; $p } @{ $meta->{_tags} // [] };
         }
 
         if (defined $text || @meta_terms) {
@@ -522,6 +570,39 @@ sub index_drive_item ($self, %a) {
                 $id, $account_id, $body, $src, $trunc);
         }
 
+        # Faces and tags: replaced wholesale for this item, for the same
+        # reason the metadata is -- a re-extraction is the authority on
+        # what this photo now carries, and a face or tag removed in the
+        # photo manager must disappear here too.
+        #
+        # The people and tags THEMSELVES are not deleted: they belong to
+        # the account, not to one photo, and a person who happens to be
+        # untagged from their last photo should not silently vanish from
+        # the account's list mid-re-index.
+        if ($meta && ($meta->{_faces} || $meta->{_tags})) {
+            $db->query('DELETE FROM search.photo_faces WHERE drive_item_id = ?', $id);
+            $db->query('DELETE FROM search.photo_tags  WHERE drive_item_id = ?', $id);
+
+            for my $f (@{ $meta->{_faces} // [] }) {
+                my $pid = defined $f->{name}
+                        ? $self->person_id($db, $account_id, $f->{name}) : undef;
+                $db->query(
+                    'INSERT INTO search.photo_faces
+                        (drive_item_id, account_id, person_id, region_type,
+                         area_x, area_y, area_w, area_h)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    $id, $account_id, $pid, ($f->{type} // 'Face'),
+                    @{$f}{qw(x y w h)});
+            }
+            for my $path (@{ $meta->{_tags} // [] }) {
+                my $tid = $self->tag_id($db, $account_id, $path) or next;
+                $db->query(
+                    'INSERT INTO search.photo_tags (drive_item_id, account_id, tag_id)
+                     VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+                    $id, $account_id, $tid);
+            }
+        }
+
         # Per-type metadata. Replaced wholesale rather than merged: a
         # re-extraction is the authority on what this file now has, and a
         # key that disappeared (a tag removed from the map, a file
@@ -530,6 +611,9 @@ sub index_drive_item ($self, %a) {
         if ($meta) {
             $db->query('DELETE FROM search.drive_metadata WHERE drive_item_id = ?', $id);
             for my $key (sort keys %$meta) {
+                # _faces and _tags are structured and go to their own
+                # tables below, not into the flat key/value store.
+                next if $key =~ /\A_/;
                 my $kid = $self->metadata_key_id($db, $key) or next;
                 my $kind = $META_KEY{$key}{value_kind};
                 my @cols = $kind eq 'num' ? ('value_num',  $meta->{$key})

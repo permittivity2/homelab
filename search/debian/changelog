@@ -1,3 +1,46 @@
+homelab-search (0.2.26) unstable; urgency=medium
+
+  * Fix ancestor tag search. A photo is linked only to the most specific
+    tag it carries - the ancestors exist as rows but nothing points at
+    them - so matching on the tag NODE found 'Utah' and then no photos,
+    while 'Moab' and 'Arches National Park' worked. Matching instead on
+    whether the photo's tag PATH contains the term as a segment is the
+    question that has an answer; every level of the tree now resolves.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:24:31 -0500
+
+homelab-search (0.2.25) unstable; urgency=medium
+
+  * Normalize photo people and the tag tree (migration 009). 007 stored
+    tagged people as one text value - 'Ada Lovelace, Grace Hopper' in a
+    single column - which is a repeating group in a field, and
+    inconsistent with this schema's own treatment of mail participants.
+    Four tables now: people, photo_faces (one row per tagged region,
+    with its bounding box), tags (the hierarchy, with parent_id and a
+    materialized path), and photo_tags.
+  * Reading HierarchicalSubject, which is the tag tree a person built by
+    hand in their photo manager - Places|Earth|USA|Utah|Moab|Arches
+    National Park. The flat Keywords field holds only the leaf, so Moab
+    was findable and Utah was not, even though they filed it under Utah
+    themselves.
+  * Face regions come back as INDEX-ALIGNED PARALLEL ARRAYS: face N is
+    RegionName[N] with the box at RegionArea{X,Y,W,H}[N]. Reading the
+    name list alone throws away which box belongs to whom. Areas are
+    stored as fractions of the image, as the spec defines them, so a
+    resized copy does not move every box.
+  * Person and tag filters on drive search: an indexed join rather than
+    a LIKE over a joined string, which also matched Jefferson when you
+    searched Jeff. A tag matches the node and everything under it.
+  * Names and tag paths feed the search vector, so Utah, Moab and Arches
+    each match the photo filed under all three.
+  * Migration gotcha worth recording: FORCE ROW LEVEL SECURITY subjects
+    the table OWNER to its policies, so a migration touching account-
+    scoped data matches zero rows unless it sets the indexer GUC first.
+    The dry run caught it as a foreign-key failure on the dependent
+    delete.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:20:48 -0500
+
 homelab-search (0.2.24) unstable; urgency=medium
 
   * GPS is no longer withheld from AI mode (migration 008). A product
