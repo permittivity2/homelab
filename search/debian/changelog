@@ -1,3 +1,31 @@
+homelab-search (0.2.42) unstable; urgency=medium
+
+  * A tag path that is an ancestor of another on the same photo is no
+    longer printed. One shot of Arches arrived carrying Utah, Utah|Moab
+    and Utah|Moab|Arches National Park and printed all three, which read
+    as one chain stuttering its way across the row.
+  * This is the photo's own data, not an indexing fault: digiKam writes
+    the whole chain as separate entries, and 456 of the 5,389 tagged
+    photos here are like that. Dropping the short ones loses nothing now
+    that every segment is its own link - "Utah" is still right there,
+    clickable, inside the long path.
+  * STRICT PREFIX ONLY, at a segment boundary. A branch that diverges is a
+    different place and keeps its own line, so Utah|Moab|Arches alongside
+    Landscape Arch|West Side|Bottom stays two entries. The trailing '|' in
+    the test is the whole correctness of it: without it, Utah would also
+    swallow a sibling tag named "Utah Valley".
+  * Surviving branches get one line each. The old run-on used a middot
+    between paths and a chevron between segments, and at this size those
+    are the same squiggle - which is most of why the repetition was hard
+    to read. Seven tagged photos in eight now show a single line; 582
+    show two.
+  * 0.2.41 went to the apt repo carrying a placeholder changelog - a
+    scripting slip on my side - and reprepro will not replace a published
+    version with different content, so it is superseded by this and
+    reached no node.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 13:17:39 -0600
+
 homelab-search (0.2.40) unstable; urgency=medium
 
   * Fix a tag link returning no results. Clicking "Arizona" filtered the

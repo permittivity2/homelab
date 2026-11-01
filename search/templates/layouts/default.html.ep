@@ -335,7 +335,17 @@
     /* People and tags under a photo. The label carries the weight so the
        names read as content rather than as another grey metadata row. */
     .hit .who strong { color: var(--text-secondary); font-weight: 600; }
-    .hit .who.tags { color: var(--text-muted); font-size: var(--app-xs); }
+    /* The label once, then one branch per line beside it -- a two-column
+       grid rather than inline flow, so a second branch starts under the
+       first instead of running on behind a separator. With one branch,
+       which is 88% of them, it is still a single line. */
+    .hit .who.tags {
+      color: var(--text-muted); font-size: var(--app-xs);
+      display: grid; grid-template-columns: auto minmax(0, 1fr);
+      gap: 2px var(--space-2); align-items: baseline;
+    }
+    .hit .who.tags strong  { grid-column: 1; grid-row: 1; }
+    .hit .who.tags .tagpath { grid-column: 2; }
     .hit .who em { color: var(--text-muted); font-style: normal; }
     .hit .snip {
       font-size: var(--app-sm); color: var(--text-muted); margin-top: 4px; overflow: hidden;

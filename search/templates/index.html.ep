@@ -707,22 +707,39 @@
 %#  the same four names twice in a row. A strict de-duplication of what is
 %#  already on the line above, not an opinion about anyone's own tags.
 %   my %tseen;
-%   my @paths = grep { !$tseen{$_}++ }
-%               grep { $_ !~ m{\APeople(?:\||\z)} }
-%               map  { $_->{path} } @{ $ft->{tags} || [] };
+%   my @all = grep { !$tseen{$_}++ }
+%             grep { $_ !~ m{\APeople(?:\||\z)} }
+%             map  { $_->{path} } @{ $ft->{tags} || [] };
+%#  AN ANCESTOR OF A PATH ALREADY HERE ADDS NOTHING, so it is dropped.
+%#
+%#  This is the photo's own data, not a bug in the index: digiKam writes
+%#  the whole chain as separate entries, so one shot of Arches arrives
+%#  carrying Utah, Utah|Moab and Utah|Moab|Arches. 456 of the 5,389 tagged
+%#  photos here are like that, and they printed as three near-identical
+%#  chains that read as one stuttering line.
+%#
+%#  Dropping the short ones loses nothing now that every SEGMENT is its own
+%#  link -- "Utah" is still right there, clickable, inside the long path.
+%#  Only a STRICT PREFIX goes: a branch that diverges is a different place
+%#  and keeps its own line.
+%#
+%#  The trailing '|' in the test is the whole correctness of it. Without
+%#  it, 'Places|Earth|USA|Utah' would also swallow a sibling tag named
+%#  'Utah Valley', which is somewhere else entirely.
+%   my @paths = grep { my $p = $_; !grep { index($_, "$p|") == 0 } @all } @all;
 %#  EVERY SEGMENT IS ITS OWN FILTER, not just the leaf. The hierarchy is
 %#  the whole value of these tags -- the flat Keywords field already holds
 %#  the leaf, so "Moab" was findable and "Utah" was not, even though its
 %#  owner filed it under Utah themselves. A tag filter matches the node AND
 %#  everything under it, so clicking Utah here is "every photo from Utah".
 %   if (@paths) {
+      %#  One line per branch. The old run-on used '·' between paths and
+      %#  '›' between segments, and at this size those are the same
+      %#  squiggle -- three paths read as one chain that kept repeating
+      %#  itself, which is how this got reported.
       <div class="who tags"><strong>Tags:</strong>
-%     my $firstpath = 1;
 %     for my $path (@paths) {
-%       if (!$firstpath) {
-        ·
-%       }
-%       $firstpath = 0;
+        <span class="tagpath">
 %       my $firstseg = 1;
 %       for my $seg (split /\|/, $path) {
 %         if (!$firstseg) {
@@ -731,6 +748,7 @@
 %         $firstseg = 0;
         <a href="<%= filter_href('tag', $seg, 'drive') %>"><%= $seg %></a>
 %       }
+        </span>
 %     }
       </div>
 %   }
