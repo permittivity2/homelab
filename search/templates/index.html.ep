@@ -769,6 +769,10 @@
 %   my %hide;
 %   @hide{'gps.latitude', 'gps.longitude'} = (1, 1) if $lat && $lon;
 %   @hide{'media.width',  'media.height'}  = (1, 1) if $w   && $h;
+%#  %hide has to apply here too: width and height are collapsed into the
+%#  Dimensions chip below, and without this they also appeared under it as
+%#  two more rows -- the very duplication the pair exists to remove.
+%   my @spec = grep { spec_key($_->{key_name}) && !$hide{ $_->{key_name} } } @$md;
       <dl class="meta-kv">
 %   if ($lat && $lon) {
 %     my ($la, $lo) = (meta_value($lat), meta_value($lon));
@@ -781,42 +785,40 @@
         %#  the owner clicked.
         <dd><a href="https://www.google.com/maps/search/?api=1&amp;query=<%= $la %>,<%= $lo %>" target="_blank" rel="noopener noreferrer" title="Open in Google Maps"><%= $la %>/<%= $lo %></a></dd>
 %   }
-%   if ($w && $h) {
-        %#  One key pair for both, so this covers video as well as stills.
-        %#  &times; rather than the letter x: it is the separator every
-        %#  camera and spec sheet uses for dimensions, and it does not read
-        %#  as part of the number next to tabular digits.
-        %#  "Dimensions", not "Size": the byte size is already on the
-        %#  headline a line above, and two chips called Size on one row is
-        %#  a question the reader has to stop and answer.
-        <dt>Dimensions</dt>
-        <dd><%= meta_value($w) %>&times;<%= meta_value($h) %></dd>
-%   }
 %   for my $kv (@$md) {
 %     next if $hide{ $kv->{key_name} };
-%     next if camera_key($kv->{key_name});
+%     next if spec_key($kv->{key_name});
         <dt><%= $kv->{label} %></dt>
         <dd><%= meta_value($kv) %></dd>
 %   }
       </dl>
-%#  CAMERA SETTINGS, FOLDED AWAY. Make, model, exposure, aperture, focal
-%#  length, ISO and orientation are eight chips that pushed the things
-%#  anyone scans for -- the name, who is in it, where it was taken -- down
-%#  the row. They are worth having and they are not worth having open.
+%#  SPECS, FOLDED AWAY -- how the file was RECORDED, as against what it
+%#  is OF. Dimensions, orientation and the camera row were a dozen chips
+%#  pushing the name, the people and the place down past them. Worth
+%#  having; not worth having open. The coordinates and Taken stay outside:
+%#  those are what somebody is scanning the row for.
 %#
 %#  A <details>, so it costs no script and the open one stays open while
 %#  you read it. Rendered only when the file actually carries some, so a
 %#  scan or a text file gains no empty disclosure.
-%   my @cam = grep { camera_key($_->{key_name}) } @$md;
-%   if (@cam) {
-      <details class="cam">
-        <summary>Camera Info</summary>
+%   if (@spec || ($w && $h)) {
+      <details class="specs">
+        <summary>Specs</summary>
         <dl class="meta-kv">
-%     for my $kv (@cam) {
+%     if ($w && $h) {
+          %#  &times; rather than the letter x: it is the separator every
+          %#  camera and spec sheet uses, and it does not read as part of
+          %#  the number next to tabular digits. "Dimensions" rather than
+          %#  "Size", because the byte size is already on the headline.
+          <dt>Dimensions</dt>
+          <dd><%= meta_value($w) %>&times;<%= meta_value($h) %></dd>
+%     }
+%     for my $kv (@spec) {
           <dt><%= $kv->{label} %></dt>
           <dd><%= meta_value($kv) %></dd>
 %     }
         </dl>
+        <p class="rawlink"><a href="/drive/<%= $d->{drive_item_id} %>/metadata" target="_blank" rel="noopener noreferrer">All raw metadata &rarr;</a></p>
       </details>
 %   }
 % }

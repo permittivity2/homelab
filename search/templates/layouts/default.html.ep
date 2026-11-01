@@ -377,17 +377,35 @@
 
     /* Camera settings, folded. Styled like the exact-type disclosure in the
        filter panel so a twisty means the same thing in both places. */
-    details.cam { margin-top: 4px; }
-    details.cam > summary {
+    details.specs { margin-top: 4px; }
+    details.specs > summary {
       cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px;
       font-size: var(--app-xs); color: var(--silver-dim); min-height: 32px;
     }
-    details.cam > summary::-webkit-details-marker { display: none; }
-    details.cam > summary::before { content: '\25B8'; font-size: 0.8em; }
-    details.cam[open] > summary::before { content: '\25BE'; }
-    details.cam > summary:hover { color: var(--text-primary); }
-    details.cam > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-    details.cam .meta-kv { margin-top: 2px; }
+    details.specs > summary::-webkit-details-marker { display: none; }
+    details.specs > summary::before { content: '\25B8'; font-size: 0.8em; }
+    details.specs[open] > summary::before { content: '\25BE'; }
+    details.specs > summary:hover { color: var(--text-primary); }
+    details.specs > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    details.specs .meta-kv { margin-top: 2px; }
+    /* The raw-metadata page. A two-column list rather than chips: this is
+       a reference view you read down, not a row you scan across. */
+    .metah { font-size: var(--app-md); color: var(--text-primary); margin: 0 0 4px; overflow-wrap: anywhere; }
+    .crumb { font-size: var(--app-sm); margin: 0 0 var(--space-3); }
+    .crumb a { color: var(--silver-dim); }
+    .mgroup { margin-top: var(--space-4); }
+    .meta-kv.raw {
+      display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr);
+      gap: 2px var(--space-3); font-size: var(--app-xs); align-items: baseline;
+    }
+    .meta-kv.raw dt { text-transform: none; letter-spacing: normal; font-size: var(--app-xs); }
+    .meta-kv.raw dd { margin: 0; }
+    @media (max-width: 559px) { .meta-kv.raw { grid-template-columns: minmax(0, 1fr); gap: 0 0; }
+                                .meta-kv.raw dd { margin-bottom: 4px; } }
+
+    .rawlink { margin: 6px 0 0; font-size: var(--app-xs); }
+    .rawlink a { color: var(--silver-dim); }
+    .rawlink a:hover { color: var(--text-primary); }
 
     .acts { margin-top: 8px; display: flex; flex-wrap: wrap; gap: var(--space-4); font-size: var(--app-xs); }
     .acts a { color: var(--silver-dim); min-height: 32px; display: inline-flex; align-items: center; }

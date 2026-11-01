@@ -1,3 +1,37 @@
+homelab-search (0.2.44) unstable; urgency=medium
+
+  * The disclosure is "Specs" and now holds the dimensions and the
+    orientation alongside the camera row. The split is how a file was
+    RECORDED against what it is OF - so Taken and the coordinates stay
+    outside, where somebody scanning the row can see them.
+  * Video gets the same treatment: codec, frame rate and bitrate join the
+    specs, since a codec is the same kind of fact as an ISO and leaving
+    them out while a video's dimensions went in would read as an
+    oversight. Duration stays out; how long it runs is content.
+  * NEW: "All raw metadata" per file, at /drive/:id/metadata. Everything
+    the file carries, grouped by where it lives - EXIF, XMP, IPTC,
+    MakerNotes, QuickTime atoms, the ZIP directory - because the same
+    fact often appears in several of those, sometimes disagreeing, and
+    that disagreement is usually why somebody opened the page.
+  * This is not the hard problem it sounds like: ExifTool already is the
+    one reader across every format and embedding mechanism, and it is
+    already the dependency producing the indexed fields. Asking it for
+    every group instead of a chosen few is the same call with the group
+    kept. Measured over real files: a DJI JPEG gives 161 tags in 8 groups,
+    an MP4 98, a ZIP 83, a PNG 29, a text file 15 - each in well under a
+    second.
+  * Same ownership path as serving the bytes: resolved through Query under
+    RLS, opened only for a uuid that query just returned, never
+    enumerated. Same caps as extraction - the wall-clock alarm, binary
+    left as ExifTool's own summary so an embedded preview never enters
+    the page, a per-value clip and a 600-tag ceiling. Every value is
+    somebody else's text and the template escapes it; nothing on the page
+    is built from a value.
+  * Duplicates are kept here, unlike indexing: a tag written twice with
+    two different values is exactly what this view is for.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 13:38:39 -0600
+
 homelab-search (0.2.43) unstable; urgency=medium
 
   * Camera settings fold into a "Camera Info" disclosure per photo. Make,

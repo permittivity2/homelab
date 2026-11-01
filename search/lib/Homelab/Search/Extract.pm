@@ -2,7 +2,7 @@ package Homelab::Search::Extract;
 use Mojo::Base -strict, -signatures;
 use Exporter 'import';
 
-our @EXPORT_OK = qw(extract best_created_at EXTRACTOR_VERSION keys_catalogue);
+our @EXPORT_OK = qw(extract best_created_at EXTRACTOR_VERSION keys_catalogue raw_tags);
 
 # PER-TYPE METADATA, for files whose useful facts are not in their text.
 #
@@ -470,6 +470,70 @@ sub _tags ($info) {
 sub best_created_at ($meta) {
     return $meta->{'image.taken_at'} // $meta->{'media.created_at'}
         // $meta->{'doc.created_at'};
+}
+
+# ---------------------------------------------------------------- raw dump
+#
+# EVERYTHING ExifTool can see, for the one page that shows a file's own
+# metadata. `extract` above is the opposite job -- it picks a known
+# catalogue of fields and normalizes them so they can be indexed. This
+# picks nothing and normalizes nothing.
+#
+# "Surely this is hard, there are so many formats and embedding
+# mechanisms" is the reasonable expectation and it is wrong here, because
+# that IS ExifTool: one reader over EXIF, IPTC, XMP, MakerNotes, ICC,
+# QuickTime atoms, PDF dictionaries and the rest, already a dependency,
+# already the thing producing the indexed fields. Asking it for every
+# group instead of a chosen few is the same call with Group kept.
+#
+# Returns an arrayref of [group, tag, value], ordered by the file's own
+# layout, or undef when ExifTool is absent.
+#
+# THE CAPS ARE NOT OPTIONAL. This runs over bytes from strangers and
+# renders the result into a page:
+#   * the same wall-clock alarm as extraction, because a malformed file is
+#     the normal case and a hang is the realistic failure;
+#   * PrintConv on, because this view is for a person -- 'Rotated 90 CW'
+#     rather than 6;
+#   * binary left as ExifTool's own "(Binary data N bytes)" summary, so a
+#     12 MB embedded preview or an ICC profile never enters the page;
+#   * a per-value clip and a total tag cap, because XMP can carry an
+#     arbitrarily long history and this is a page, not a file format.
+use constant { RAW_MAX_TAGS => 600, RAW_MAX_VALUE => 400 };
+
+sub raw_tags ($path) {
+    return undef unless _exiftool();
+    return undef unless defined $path && -f $path && -r _;
+
+    my @out;
+    my $ok = eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm TIMEOUT_S;
+        my $et = Image::ExifTool->new;
+        # Duplicates ON here, unlike extraction: the same tag written in
+        # two places with two values is exactly the kind of thing somebody
+        # opens this page to find out about.
+        $et->Options(PrintConv => 1, Duplicates => 1, Composite => 1,
+                     Binary => 0, Unknown => 0, Charset => 'UTF8');
+        my $info = $et->ImageInfo($path);
+        for my $tag ($et->GetTagList($info)) {
+            last if @out >= RAW_MAX_TAGS;
+            my $v = $info->{$tag};
+            # An ARRAYREF is a repeated tag -- three face names, a list of
+            # keywords. A SCALAR ref is binary that slipped past Binary=>0.
+            $v = join(', ', grep { defined && !ref } @$v) if ref $v eq 'ARRAY';
+            next if ref $v;
+            next unless defined $v && length $v;
+            $v =~ s/\s+/ /g;
+            $v = substr($v, 0, RAW_MAX_VALUE) . '…' if length $v > RAW_MAX_VALUE;
+            push @out, [ scalar $et->GetGroup($tag, 0),
+                         $et->GetDescription($tag), $v ];
+        }
+        alarm 0;
+        1;
+    };
+    alarm 0;
+    return $ok ? \@out : undef;
 }
 
 1;

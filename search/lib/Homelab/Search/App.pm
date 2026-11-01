@@ -211,23 +211,31 @@ sub startup ($self) {
              . '&src=' . url_escape($src);
     });
 
-    # WHICH FIELDS ARE CAMERA SETTINGS, listed once here rather than as a
-    # regex in the markup, so adding a key to the catalogue and deciding
-    # where it shows are the same kind of edit in the same kind of place.
+    # WHICH FIELDS ARE "SPECS", listed once here rather than as a regex in
+    # the markup, so adding a field to the catalogue and deciding where it
+    # shows are the same kind of edit in the same kind of place.
     #
-    # The split is "what the camera did" against "what the file is". Make,
-    # model, lens, exposure, aperture, focal length, ISO and orientation
-    # are a photographer's row of settings -- interesting when you want
-    # them, eight chips of noise under every photo when you do not. Taken,
-    # Dimensions and the coordinates stay out: those are facts about the
-    # picture that anyone might scan for.
-    my %CAMERA_KEY = map { $_ => 1 } qw(
+    # The split is HOW IT WAS RECORDED against WHAT IT IS OF. Dimensions,
+    # orientation and the whole camera row -- make, model, lens, exposure,
+    # aperture, focal length, ISO -- answer the first, and they were a
+    # dozen chips pushing the name, the people and the place down the row.
+    #
+    # The video equivalents go with them. A codec and a frame rate are the
+    # same kind of fact as an ISO, and leaving them outside while a video's
+    # dimensions went inside would be the sort of split that reads as an
+    # oversight. Duration stays out: how long it runs is content.
+    #
+    # Also out: Taken, and the coordinates. Those are what the picture is
+    # OF and when -- the things somebody is scanning the row for.
+    my %SPEC_KEY = map { $_ => 1 } qw(
+        media.width media.height media.bitrate
         image.camera_make image.camera_model image.lens
         image.exposure_s image.f_number image.focal_length_mm
         image.iso image.orientation
+        video.codec video.frame_rate
     );
-    $self->helper(camera_key => sub ($c, $key) {
-        return $CAMERA_KEY{ $key // '' } ? 1 : 0;
+    $self->helper(spec_key => sub ($c, $key) {
+        return $SPEC_KEY{ $key // '' } ? 1 : 0;
     });
 
     # Metadata as a person reads it. 40.166 is a duration of 0:40, 0.0125
@@ -283,6 +291,7 @@ sub startup ($self) {
     $r->get('/mail/:id/download') ->to('search#mail_download');
     $r->get('/drive/:id/view')    ->to('search#drive_view');
     $r->get('/drive/:id/download')->to('search#drive_download', force => 1);
+    $r->get('/drive/:id/metadata')->to('search#drive_metadata');
     return;
 }
 
@@ -297,6 +306,7 @@ use Homelab::Common::SSOClient  qw(exchange_code);
 use Mojo::Util                  qw(url_escape);
 use Homelab::Search::Paths      qw(mailbox_dir_for drive_blob_for);
 use Homelab::Search::Mime       ();
+use Homelab::Search::Extract    ();
 use Homelab::Search::AI::Consent ();
 use Homelab::Search::MailParse  qw(parse_message);
 use Homelab::Search::Serve      qw(serve_mode);
@@ -727,6 +737,38 @@ sub mail_download ($c) {
     $c->res->headers->content_type('message/rfc822');
     $c->res->headers->content_disposition(qq{attachment; filename="$name.eml"});
     return $c->reply->asset(Mojo::Asset::File->new(path => $path));
+}
+
+# A file's own metadata, all of it, as the file carries it.
+#
+# The indexed view beside a result is a CHOSEN catalogue -- a few dozen
+# fields normalized so they can be searched and compared. This is the
+# other question: what does this particular file actually say about
+# itself. They disagree often and usefully, because the catalogue drops
+# placeholders, converts units and prefers one of several competing tags.
+#
+# Same ownership path as serving the bytes: the id is resolved through
+# Query under RLS, and the blob is only opened for a uuid that query just
+# returned. The store is never enumerated and the path never comes from
+# the request.
+sub drive_metadata ($c) {
+    my ($email, $acct) = _scope($c);
+    return $c->render(text => 'not logged in', status => 401) unless $email && $acct;
+    my $i = $c->app->query->drive_item($acct->{account_id}, $c->stash('id'))
+        or return $c->render(text => 'not found', status => 404);
+
+    my $path = eval { drive_blob_for($c->app->drive_root, $i->{file_uuid}) };
+    my ($why, $status) = _unservable($c, $path, 'file');
+    return $c->render(text => $why, status => $status) if $why;
+
+    # Every value here is attacker-supplied text -- a filename, an XMP
+    # comment and a MakerNote are all things somebody else chose. It is
+    # escaped by the template on the way out and the page is served under
+    # the same hardened headers as everything else.
+    _harden($c);
+    my $rows = Homelab::Search::Extract::raw_tags($path);
+    return $c->render(template => 'metadata', item => $i, rows => $rows,
+                      email => $email);
 }
 
 sub drive_view ($c) { return _drive_serve($c, 0) }

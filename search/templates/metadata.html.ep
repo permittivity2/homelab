@@ -1,0 +1,47 @@
+% layout 'default';
+% title 'Metadata';
+%# A file's own metadata, in full, exactly as it carries it.
+%#
+%# EVERY VALUE HERE IS SOMEBODY ELSE'S TEXT -- a filename, an XMP comment,
+%# a MakerNote. It is rendered with <%= %>, which escapes, and nothing on
+%# this page is built from a value. That is the whole of the defence and
+%# it is enough, because there is no path by which a tag becomes markup.
+<p class="crumb"><a href="/">&larr; Back to search</a></p>
+
+<h1 class="metah"><%= $item->{file_name} %></h1>
+<p class="counts"><%= $item->{mime_type} %> · <%= human_size($item->{size_bytes}) %>
+  · <%= short_date($item->{content_created_at} // $item->{uploaded_at}) %></p>
+
+% if (!defined $rows) {
+<p class="empty">This file's metadata could not be read. That is the normal
+  outcome for a type with none to carry, and for one whose bytes do not
+  match what they claim to be.</p>
+% } elsif (!@$rows) {
+<p class="empty">This file carries no metadata.</p>
+% } else {
+
+%# GROUPED BY WHERE THE VALUE LIVES, because that is the interesting part
+%# of a raw view: the same fact often appears in EXIF, in XMP and in the
+%# maker's own block, sometimes disagreeing, and flattening them would
+%# hide exactly what someone opened this page to see.
+% my (@order, %by);
+% for my $r (@$rows) {
+%   push @order, $r->[0] unless $by{ $r->[0] };
+%   push @{ $by{ $r->[0] } }, $r;
+% }
+<p class="note">Read straight from the file, not from the index &mdash; the
+  indexed fields beside a result are a chosen, normalized subset, so the two
+  will differ. <%= scalar @$rows %> tags in <%= scalar @order %> groups.</p>
+
+% for my $g (@order) {
+<section class="mgroup">
+  <h2 class="sec"><%= $g %></h2>
+  <dl class="meta-kv raw">
+%   for my $r (@{ $by{$g} }) {
+    <dt><%= $r->[1] %></dt>
+    <dd><%= $r->[2] %></dd>
+%   }
+  </dl>
+</section>
+% }
+% }
