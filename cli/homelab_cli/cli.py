@@ -1550,6 +1550,34 @@ def cmd_drive_trash(args):
     return 0
 
 
+def cmd_drive_private(args):
+    """Mark a file or folder as not appearing in search results.
+
+    "Private" here means EXACTLY ONE THING: it stops coming back from a
+    search. The item is not hidden, not deleted and not unindexed -- it
+    stays in the folder listing, it still downloads, and homelab-search
+    still holds its text. A folder's setting covers everything inside it,
+    so clearing a file's own flag will not un-hide it if a folder above it
+    is private.
+    """
+    session = _require_session(args)
+    if not session:
+        return 1
+    kind = "folder" if args.folder else "file"
+    on = not args.off
+    try:
+        result = _client(args).drive_set_private(
+            session["token"], args.id, kind=kind, private=on)
+    except ApiError as e:
+        _emit_error(args, f"Could not change privacy: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(result.get("notice")
+          or f"{kind.capitalize()} {args.id} is now {'private' if on else 'searchable'}")
+    return 0
+
+
 def cmd_drive_restore(args):
     session = _require_session(args)
     if not session:
@@ -2520,6 +2548,15 @@ def build_parser():
 
     p = drive_sub.add_parser("trash", help="List items in Trash (soft-deleted, recoverable)")
     p.set_defaults(func=cmd_drive_trash)
+
+    p = drive_sub.add_parser(
+        "private",
+        help="Keep a file or folder out of search results (it stays listed and downloadable)")
+    p.add_argument("id", help="File id (or folder id with --folder)")
+    p.add_argument("--folder", action="store_true", help="The id is a folder id, not a file id")
+    p.add_argument("--off", action="store_true",
+                   help="Make it searchable again instead of private")
+    p.set_defaults(func=cmd_drive_private)
 
     p = drive_sub.add_parser("restore", help="Restore an item from Trash by id")
     p.add_argument("id", help="File id to restore (or folder id with --folder)")

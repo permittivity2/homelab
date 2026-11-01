@@ -1,3 +1,17 @@
+homelab-drive (0.1.63) unstable; urgency=medium
+
+  * Any file or folder can be marked private - not returned by search -
+    from the UI or the API (migration 014 adds the per-file flag). A
+    lock button on each folder and a Make private button on each file;
+    the /api/v1 twins are what homelab-cli reaches through the gateway.
+  * Private means exactly one thing: it stops coming back from a search.
+    The item is not hidden, deleted or unindexed - it stays in the
+    listing, still downloads, and homelab-search still holds its text.
+    The response says so rather than implying otherwise, and says the
+    change takes effect on the next index pass.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:26:08 -0600
+
 homelab-drive (0.1.62) unstable; urgency=medium
 
   * Add Search to the account menu, and a per-folder exclude_from_search

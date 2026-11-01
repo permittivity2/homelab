@@ -1,3 +1,12 @@
+homelab-cli (0.6.9) unstable; urgency=medium
+
+  * New: homelab-cli drive private <id> [--folder] [--off]. Keeps a file
+    or folder out of search results; it stays listed and downloadable. A
+    folder's setting covers everything inside it, so clearing a file's
+    own flag will not un-hide it inside a private folder.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:26:26 -0600
+
 homelab-cli (0.6.8) unstable; urgency=medium
 
   * Release v0.6.8

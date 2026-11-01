@@ -193,6 +193,14 @@ sub startup ($self) {
     # anyone with the link. Both kinds get a token: the requirement is that
     # the link can be copied again at any time, so it cannot be something
     # only the public flavour has.
+    # Mark a file or folder non-searchable. Browser and JSON, same handler,
+    # same shape as share above -- the /api/v1 twin is what homelab-cli
+    # reaches through the gateway.
+    $r->post('/files/:id/private')          ->to('drive#set_private', target => 'file');
+    $r->post('/api/v1/files/:id/private')   ->to('drive#set_private', target => 'file',   api => 1);
+    $r->post('/folders/:id/private')        ->to('drive#set_private', target => 'folder');
+    $r->post('/api/v1/folders/:id/private') ->to('drive#set_private', target => 'folder', api => 1);
+
     $r->post('/files/:id/share')          ->to('drive#create_share', target => 'file');
     $r->post('/api/v1/files/:id/share')   ->to('drive#create_share', target => 'file');
     $r->post('/folders/:id/share')        ->to('drive#create_share', target => 'folder');
@@ -1055,7 +1063,8 @@ sub index ($c) {
     my @folder_bind       = defined $folder_id ? ($folder_id) : ();
 
     my $subfolders = $c->app->pg->db->query(
-        "SELECT id, name FROM drive.folders WHERE user_email = ? AND $subfolder_filter AND deleted_at IS NULL ORDER BY name",
+        "SELECT id, name, exclude_from_search FROM drive.folders
+          WHERE user_email = ? AND $subfolder_filter AND deleted_at IS NULL ORDER BY name",
         $email, @folder_bind,
     )->hashes;
 
@@ -1072,7 +1081,7 @@ sub index ($c) {
     # string (no regex trimming needed, unlike the old plain-offset
     # version of this field).
     my $files = $c->app->pg->db->query(
-        "SELECT id, filename, size_bytes, mime_type, uploaded_at,
+        "SELECT id, filename, size_bytes, mime_type, uploaded_at, exclude_from_search,
                 to_char(uploaded_at, 'YYYY-MM-DD HH24:MI:SS TZ') AS uploaded_at_display
          FROM drive.files
          WHERE user_email = ? AND $file_filter AND deleted_at IS NULL ORDER BY uploaded_at DESC",
@@ -2040,6 +2049,63 @@ sub _note_share_access ($c, $id) {
 
 # POST /files/:id/share | /folders/:id/share
 # body: shared_with (optional -- omit for a public link), expires_days (optional)
+# Mark a file or folder as not appearing in search results.
+#
+# THE FILE IS NOT HIDDEN, DELETED OR UNINDEXED. It stays in the folder
+# listing, it still downloads, and homelab-search still holds its text and
+# metadata. It simply stops coming back from a search -- so a document
+# somebody thinks of as private does not surface by its contents while
+# they are looking for something else, or on a shared screen.
+#
+# Nothing happens in search until the indexer next passes over the file;
+# its discovery re-queues anything whose searchability disagrees with
+# what drive says, so that is the next pass rather than some later
+# accident. The response says so rather than implying it is instant.
+sub set_private ($c) {
+    my ($email, undef, $jti) = _current_auth($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+
+    my $target = $c->stash('target');
+    my $id     = $c->param('id');
+    # Absent means ON: the button in the UI is "make private", and a bare
+    # POST from a form with no checkbox should do the obvious thing.
+    my $raw = $c->param('private');
+    my $on  = (defined $raw && $raw =~ /\A(?:0|false|no|off)\z/i) ? 0 : 1;
+
+    my ($table, $label_col) = $target eq 'file'
+        ? ('drive.files', 'filename') : ('drive.folders', 'name');
+    # Someone else's id is a 404, not a 403 -- a 403 would confirm it exists.
+    my $row = $c->app->pg->db->query(
+        "SELECT id, $label_col AS label FROM $table
+          WHERE id = ? AND user_email = ? AND deleted_at IS NULL", $id, $email)->hash;
+    return $c->render(json => { error => 'not found' }, status => 404) unless $row;
+
+    $c->app->pg->db->query(
+        "UPDATE $table SET exclude_from_search = ? WHERE id = ? AND user_email = ?",
+        $on, $id, $email);
+
+    enqueue(
+        $c->app->pg->db, actor_email => $email, affected_user => $email, jti => $jti,
+        action => ($on ? "$target.private.on" : "$target.private.off"),
+        resource_type => "drive.$target", resource_id => $id,
+        source_service => 'homelab-drive',
+        ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+    );
+
+    if ($c->stash('api')) {
+        return $c->render(json => {
+            id => $row->{id} + 0, name => $row->{label}, kind => $target,
+            private => ($on ? \1 : \0),
+            notice  => $on
+                ? 'Marked private. It stops appearing in search on the next index pass; '
+                . 'it is not hidden, deleted or unindexed.'
+                : 'No longer private. It will appear in search again on the next index pass.',
+        });
+    }
+    my $back = $target eq 'folder' ? '/' : ($c->param('folder_id') || '');
+    return $c->redirect_to(length $back && $back ne '/' ? "/folders/$back" : '/');
+}
+
 sub create_share ($c) {
     my $email = _current_email($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;

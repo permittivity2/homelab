@@ -335,6 +335,15 @@ class Client:
             body["parent_folder_id"] = parent_folder_id
         return self._request("POST", "/api/v1/drive/folders", headers=self._auth(token), json=body)
 
+    def drive_set_private(self, token, item_id, kind="file", private=True):
+        # "Private" means NOT RETURNED BY SEARCH. The item is not hidden,
+        # deleted or unindexed -- it stays in the folder listing and still
+        # downloads. A folder's setting covers everything inside it.
+        path = "files" if kind == "file" else "folders"
+        return self._request(
+            "POST", f"/api/v1/drive/{path}/{item_id}/private",
+            headers=self._auth(token), data={"private": "1" if private else "0"})
+
     def drive_delete_folder(self, token, folder_id):
         return self._request("DELETE", f"/api/v1/drive/folders/{folder_id}", headers=self._auth(token))
 

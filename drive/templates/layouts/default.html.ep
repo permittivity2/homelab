@@ -215,6 +215,12 @@
     .drive-search .askrow { max-width: 560px; }
   }
 
+  /* "Private" means NOT RETURNED BY SEARCH -- the item is still listed
+     here and still downloads. The lock is state, so it has to be legible
+     at a glance in a long listing rather than decorative. */
+  .priv-form { display: inline; }
+  .is-private { color: var(--warning); border-color: var(--warning); }
+  .file-actions .is-private { font-weight: var(--weight-semibold); }
   .size-toggle { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--app-xs); color: var(--text-muted); cursor: pointer; user-select: none; margin-left: auto; }
   .size-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
   .size-toggle .switch { position: relative; width: 32px; height: 17px; background: var(--surface-hover); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); flex-shrink: 0; transition: background-color var(--transition-fast); }

@@ -355,6 +355,16 @@
         <a href="/folders/<%= $f->{id} %>">📁 <%= $f->{name} %></a>
         <button type="button" class="icon-btn share-btn" title="Share folder"
                 data-kind="folders" data-id="<%= $f->{id} %>" data-name="<%= $f->{name} %>">🔗</button>
+        %# Private = not returned by search. NOT hidden, deleted or
+        %# unindexed -- it stays in this listing and still downloads.
+        <form method="post" action="/folders/<%= $f->{id} %>/private" class="priv-form">
+          <input type="hidden" name="private" value="<%= $f->{exclude_from_search} ? 0 : 1 %>">
+          <button type="submit" class="icon-btn<%= $f->{exclude_from_search} ? ' is-private' : '' %>"
+                  title="<%= $f->{exclude_from_search}
+                             ? 'Private: hidden from search. Click to make searchable again.'
+                             : 'Hide this folder and everything in it from search' %>"><%=
+                  $f->{exclude_from_search} ? '🔒' : '🔓' %></button>
+        </form>
         <form method="post" action="/folders/<%= $f->{id} %>/delete"
               onsubmit="return confirm('Move \'<%= $f->{name} %>\' and everything inside it to Trash?')">
           <button type="submit" class="icon-btn" title="Delete folder">✕</button>
@@ -443,6 +453,15 @@
         <td class="file-actions">
           <button type="button" class="share-btn" data-kind="files"
                   data-id="<%= $f->{id} %>" data-name="<%= $f->{filename} %>">Share</button>
+          <form method="post" action="/files/<%= $f->{id} %>/private" class="priv-form">
+            <input type="hidden" name="private" value="<%= $f->{exclude_from_search} ? 0 : 1 %>">
+            <input type="hidden" name="folder_id" value="<%= $current_folder_id // '' %>">
+            <button type="submit" class="<%= $f->{exclude_from_search} ? 'is-private' : '' %>"
+                    title="<%= $f->{exclude_from_search}
+                               ? 'Private: hidden from search. Click to make searchable again.'
+                               : 'Hide this file from search' %>"><%=
+                    $f->{exclude_from_search} ? 'Private 🔒' : 'Make private' %></button>
+          </form>
           <form method="post" action="/files/<%= $f->{id} %>/delete"
                 onsubmit="return confirm('Move <%= $f->{filename} %> to Trash?')">
             <button type="submit">Delete</button>

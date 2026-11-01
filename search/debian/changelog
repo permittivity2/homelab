@@ -1,3 +1,12 @@
+homelab-search (0.2.28) unstable; urgency=medium
+
+  * Honour drive's per-file exclude_from_search as well as the folder
+    flag. Effective non-searchability is the OR of a file's own flag and
+    every folder above it, so clearing a file's flag does not un-hide it
+    inside a private folder.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:26:11 -0600
+
 homelab-search (0.2.27) unstable; urgency=medium
 
   * Honour drive's exclude_from_search flag (migration 010). Files in a

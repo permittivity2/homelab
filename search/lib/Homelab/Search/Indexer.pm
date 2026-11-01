@@ -277,7 +277,8 @@ sub _discover_drive ($self) {
                 SELECT c.id FROM drive.folders c JOIN excluded e ON c.parent_folder_id = e.id
             )
             SELECT id FROM drive.files
-             WHERE folder_id IN (SELECT id FROM excluded)})->hashes } // [];
+             WHERE exclude_from_search
+                OR folder_id IN (SELECT id FROM excluded)})->hashes } // [];
     my %want_hidden = map { $_->{id} => 1 } @$exdrive;
     my $idx_state = eval {
         $self->index->_tx(sub ($db) {
@@ -618,8 +619,9 @@ sub _do_drive_batch ($self, $row) {
                f.mime_type, f.uploaded_at, f.deleted_at,
                $created AS content_created_at,
                fo.name AS folder_name,
-               (f.folder_id IS NOT NULL
-                AND f.folder_id IN (SELECT id FROM excluded)) AS excluded
+               (f.exclude_from_search
+                OR (f.folder_id IS NOT NULL
+                    AND f.folder_id IN (SELECT id FROM excluded))) AS excluded
           FROM drive.files f
           LEFT JOIN drive.folders fo ON fo.id = f.folder_id
          WHERE f.id IN ($ph)}, @$ids)->hashes;
