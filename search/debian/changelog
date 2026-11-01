@@ -1,3 +1,29 @@
+homelab-search (0.2.35) unstable; urgency=medium
+
+  * The filter panel remembers whether you left it open instead of
+    re-deriving it from whether a filter is set. The old rule - open the
+    panel whenever something is filtering, so a narrowed search never hides
+    why it is narrowed - is right the first time and wrong every time
+    after, because a filter sticks: the form re-renders what is set, so the
+    condition keeps firing. Unticking Email once reopened the panel on
+    every search until you cleared it, which is indistinguishable from "it
+    always opens".
+  * It also fixes the opposite case, introduced in 0.2.34 along with the
+    panel's own Search buttons: searching from inside an open panel with no
+    filters set snapped it shut, because the open state was never carried
+    across the request.
+  * `fopen` rides along in a hidden field that the <details> toggle event
+    keeps in sync, and wins when present. Absent - a first visit, a
+    bookmarked url, a People link, or a browser with the script off - the
+    old derived behaviour still applies, so a narrowed search arriving from
+    elsewhere still shows its own reason. The field renders with the state
+    actually shown, so a script-off submit round-trips rather than flips.
+  * "Clear all filters" now keeps the panel open. It only exists inside the
+    open panel, and letting the fallback decide meant the panel slammed
+    shut at the moment you cleared it to set something else.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 11:59:55 -0600
+
 homelab-search (0.2.34) unstable; urgency=medium
 
   * AI search is a button beside Search, not a checkbox buried at the foot

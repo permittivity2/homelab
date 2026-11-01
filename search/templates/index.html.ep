@@ -18,6 +18,24 @@
 %                || length($f->{mailbox}) || length($f->{mime})
 %                || @{ $f->{type_in} // [] } || @{ $f->{type_ex} // [] }
 %                || $f->{has_attachments} || $f->{in_trash} || $f->{source} ne 'both') ? 1 : 0;
+%#
+%# ...BUT ONLY AS THE OPENING GUESS. The rule above is right the first time
+%# and wrong every time after, because a filter STICKS: the form re-renders
+%# whatever is set, so the condition keeps firing. Untick Email once and the
+%# panel reopens on every search from then until you clear it -- which reads
+%# as "it always opens", because from the outside it is indistinguishable.
+%#
+%# It also got the opposite case wrong once the panel grew its own Search
+%# buttons: searching from inside an open panel with nothing set snapped it
+%# shut, since the open state was never carried across the request.
+%#
+%# So the state is REMEMBERED. `fopen` rides along in a hidden field the
+%# toggle keeps in sync, and it wins when present. Absent -- a first visit,
+%# a bookmarked url, a People link, or any browser with the script off --
+%# the derived guess above still applies, so a narrowed search arriving from
+%# somewhere else still shows its own reason.
+% my $fopen = $c->param('fopen');
+% my $panel_open = (defined $fopen && length $fopen) ? ($fopen eq '1' ? 1 : 0) : $filters_on;
 % my $want_mail  = $f->{source} ne 'drive';
 % my $want_drive = $f->{source} ne 'mail';
 <form class="searchbar" method="get" action="/">
@@ -45,7 +63,11 @@
 % }
   </div>
 
-  <details class="filters"<%= $filters_on ? ' open' : '' %>>
+  %#  Outside the <details> on purpose: this is the panel's own state, not
+  %#  one of the filters in it.
+  <input type="hidden" name="fopen" id="fopen" value="<%= $panel_open %>">
+
+  <details class="filters" id="filterPanel"<%= $panel_open ? ' open' : '' %>>
     <summary><span>Filters</span><span class="sum-active" id="sumActive"></span></summary>
 
     <div class="panel">
@@ -231,6 +253,19 @@
 %# in step -- the shared half is the source sections, the date presets and
 %# the chip/exact-type pairing.
 <script>
+%# Its own IIFE, deliberately. The big one below bails out early if the two
+%# source checkboxes are missing, and the panel remembering whether it was
+%# open has nothing to do with them.
+(function () {
+  'use strict';
+  var panel = document.getElementById('filterPanel'),
+      field = document.getElementById('fopen');
+  if (!panel || !field) return;
+  // `toggle` fires on both open and close, so this is the whole mechanism.
+  panel.addEventListener('toggle', function () {
+    field.value = panel.open ? '1' : '0';
+  });
+})();
 (function () {
   'use strict';
   var $  = function (s, r) { return (r || document).querySelector(s); };

@@ -169,9 +169,15 @@ sub startup ($self) {
 
     # "Clear all filters" is an <a>, so it has to work with the script off.
     # It keeps the query and drops everything else.
+    # Clearing the filters keeps the panel open, because the only place this
+    # link exists is inside the open panel. Dropping fopen here would let the
+    # derived fallback decide, and with every filter just cleared that means
+    # closed -- so the panel you were working in would slam shut at the exact
+    # moment you cleared it to set something else.
     $self->helper(clear_href => sub ($c, $q) {
-        return '/' unless defined $q && length $q;
-        return '/?q=' . url_escape($q);
+        my $keep = 'fopen=1';
+        return "/?$keep" unless defined $q && length $q;
+        return '/?q=' . url_escape($q) . "&$keep";
     });
 
     # "Everything else with this person in it", from the name under a
