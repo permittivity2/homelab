@@ -312,6 +312,25 @@
     .hit .t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .hit .subj { font-size: var(--app-base); color: var(--text-primary); overflow-wrap: anywhere; }
     .hit .meta { font-size: var(--app-xs); color: var(--text-muted); }
+    /* The file name is a link but should not look pasted in -- it is the
+       heading of its own result, so it keeps the subject's colour and earns
+       an underline on hover rather than wearing one all the time. */
+    .hit .subj a { color: inherit; text-decoration: none; }
+    .hit .subj a:hover { text-decoration: underline; text-underline-offset: 2px; }
+    .hit .subj a:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+
+    /* Download, immediately left of the name. Deliberately quieter and
+       smaller: the name is the thing you came for. The padding is a tap
+       target -- two links share this line, and on a phone a mis-tap here
+       means a download you did not ask for. */
+    .hit .subj a.dl {
+      font-size: var(--app-xs); color: var(--silver-dim);
+      text-transform: uppercase; letter-spacing: var(--tracking-wide);
+      padding: 4px 8px; margin: 0 6px 0 -8px; border-radius: var(--radius-sm);
+      white-space: nowrap;
+    }
+    .hit .subj a.dl:hover { color: var(--text-primary); background: var(--surface-hover); text-decoration: none; }
+
     .hit .who  { font-size: var(--app-sm); color: var(--silver-dim); overflow-wrap: anywhere; }
     /* People and tags under a photo. The label carries the weight so the
        names read as content rather than as another grey metadata row. */

@@ -1,3 +1,40 @@
+homelab-search (0.2.39) unstable; urgency=medium
+
+  * The metadata chip is "Dimensions", not "Size" - the byte size is
+    already on the headline a line above, and two chips called Size on one
+    row is a question the reader has to stop and answer.
+  * The FILE NAME is the link now, and "Open" is gone. Where the name goes
+    still follows `viewable`, the same function the server uses to decide
+    what it will serve inline, so a download-only type - html, svg, where
+    serving inline from this origin would be stored XSS against the search
+    session - gets a name that downloads rather than one that opens. The AI
+    result list on the same page already worked this way, so the keyword
+    list was the inconsistent half.
+  * "Download" moved to immediately left of the name, quieter and smaller,
+    with padding for a tap target since two links now share that line. The
+    actions row is reduced to the caveats ("download only", "in trash") and
+    is skipped entirely when there are none, instead of leaving an empty
+    div under every result.
+  * EVERY SEGMENT OF A TAG PATH IS A FILTER, not just the leaf. Clicking
+    "Arizona" under a photo searches that node and everything filed below
+    it - 1,428 photos where the leaf "Sedona" gives 656. The hierarchy is
+    the whole value of these tags: the flat Keywords field already holds
+    the leaf, so Sedona was findable and Arizona was not, even though its
+    owner filed it there.
+  * The `tag` filter has existed in the query layer since the tag tables
+    landed with nothing able to ask for it - the same gap `person` had, and
+    found the same way: by wiring up the thing that displays it. _filters
+    now parses it, it counts toward whether the panel opens, and it has a
+    visible "Photo tag" control in Files-only, so a tag arriving from a
+    click is something you can see, edit and clear.
+  * One filter_href helper for both the people and the tag links, rather
+    than a second copy of the same two lines.
+  * The closed-panel summary says "person: Dana" instead of "to/from Dana",
+    which stopped being true when that box also started matching the faces
+    tagged in a photo, and it names an active tag filter too.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 12:20:18 -0600
+
 homelab-search (0.2.38) unstable; urgency=medium
 
   * Dates lose the seconds: "2026-09-19 02:24", not "...02:24:46". Nobody

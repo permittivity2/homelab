@@ -197,13 +197,18 @@ sub startup ($self) {
         return '/?q=' . url_escape($q) . "&$keep";
     });
 
-    # "Everything else with this person in it", from the name under a
-    # photo. The one control for this used to be a text box labelled
-    # "From or to" in the Email-only section, so the quickest way to ask
-    # the question was to not know it was possible.
-    $self->helper(personal_href => sub ($c, $name, $src) {
-        return '#' unless defined $name && length $name;
-        return '/?person=' . url_escape($name) . '&src=' . url_escape($src // 'drive');
+    # "Everything else with this in it", from a name or a tag shown under a
+    # result. Both of those filters existed in the query layer with no way
+    # to reach them: the one control for a person was a box labelled "From
+    # or to" in the Email-only section, and a tag had no control at all. The
+    # quickest way to ask either question was to not know it was possible.
+    #
+    # One helper rather than one per filter, because the next one would
+    # otherwise be a third copy of the same two lines.
+    $self->helper(filter_href => sub ($c, $name, $value, $src = 'drive') {
+        return '#' unless defined $value && length $value;
+        return '/?' . url_escape($name) . '=' . url_escape($value)
+             . '&src=' . url_escape($src);
     });
 
     # Metadata as a person reads it. 40.166 is a duration of 0:40, 0.0125
@@ -365,6 +370,13 @@ sub _filters ($c) {
         my $v = $c->param($k);
         $f{$k} = $v if defined $v && $v =~ /\A\d+\z/ && $v > 0;
     }
+    # ONE SEGMENT of the tag tree the owner built in their photo manager,
+    # matching that node and everything filed under it. search_drive has
+    # supported this since the tag tables landed and nothing could ask for
+    # it -- the same gap `person` had, found the same way: by wiring up the
+    # thing that displays it.
+    $f{tag} = $c->param('tag') // '';
+    $f{tag} =~ s/\A\s+|\s+\z//g;
     # Source arrives two ways, and both have to keep working.
     #
     # `source=both|mail|drive` is the WIRE contract -- homelab-cli sends it,

@@ -17,6 +17,7 @@
 % my $filters_on = (length($f->{person}) || length($f->{from}) || length($f->{to})
 %                || length($f->{mailbox}) || length($f->{mime})
 %                || @{ $f->{type_in} // [] } || @{ $f->{type_ex} // [] }
+%                || length($f->{tag} // '')
 %                || $f->{has_attachments} || $f->{in_trash} || $f->{source} ne 'both') ? 1 : 0;
 %#
 %# ...BUT ONLY AS THE OPENING GUESS. The rule above is right the first time
@@ -208,6 +209,20 @@
 
       <section class="fsec" data-when="drive" id="secDrive"<%= $want_drive ? '' : ' hidden' %>>
         <h3 class="fsec-h">Files only</h3>
+        %#  A tag arriving from a click needs somewhere to BE. Without a
+        %#  control the page filters on something invisible, with nothing to
+        %#  edit and nothing to clear but "Clear all filters" -- which is the
+        %#  "a narrowed search hides why it is narrowed" problem this panel
+        %#  exists to avoid. Files-only because the tag tree comes from a
+        %#  photo manager; the section's own script disables it when Files is
+        %#  unticked, so it can never be submitted off-screen.
+        <div class="fields">
+          <div class="field">
+            <label class="lab" for="tag">Photo tag</label>
+            <input type="text" id="tag" name="tag" value="<%= $f->{tag} %>" placeholder="e.g. Utah">
+          </div>
+        </div>
+        <p class="note">Matches that tag and everything filed under it.</p>
         <label class="box"><input type="checkbox" id="inTrash" name="in_trash" value="1"<%= $f->{in_trash} ? ' checked' : '' %>><span>Search the trash instead</span></label>
       </section>
 
@@ -483,8 +498,12 @@
               : fromEl.value ? 'since ' + fromEl.value : 'until ' + toEl.value);
     }
 
+    // "to/from" was true when this box was mail-only. It now also matches
+    // the faces tagged in a photo, so the summary says the plain thing.
     var p = $('#person');
-    if (p && !p.disabled && p.value.trim()) bits.push('to/from ' + p.value.trim());
+    if (p && !p.disabled && p.value.trim()) bits.push('person: ' + p.value.trim());
+    var tg = $('#tag');
+    if (tg && !tg.disabled && tg.value.trim()) bits.push('tag: ' + tg.value.trim());
     var mb = $('#mailbox');
     if (mb && !mb.disabled && mb.value) {
       bits.push(mb.options[mb.selectedIndex].text.replace(/\s*\(\d+\)\s*$/, ''));
@@ -496,7 +515,7 @@
     sumActive.textContent = bits.join(', ');
   }
 
-  ['#person', '#mailbox', '#hasAtt', '#inTrash', '#from', '#to'].forEach(function (s) {
+  ['#person', '#tag', '#mailbox', '#hasAtt', '#inTrash', '#from', '#to'].forEach(function (s) {
     var el = $(s); if (el) el.addEventListener('change', summarize);
   });
 
@@ -646,7 +665,17 @@
 %   my $viewable = viewable($mime);
     <div class="hit">
       <div class="t">
-        <span class="subj"><%= $d->{file_name} %></span>
+        %#  THE NAME IS THE LINK, which is what every file list anywhere
+        %#  does and what the AI result list on this same page was already
+        %#  doing -- so this half of the page was the inconsistent one.
+        %#
+        %#  Where it goes still follows `viewable`, the same function the
+        %#  server uses to decide what it will serve inline, so the link
+        %#  offered and the response given cannot disagree. A type that is
+        %#  download-only -- html, svg: serving those inline from this
+        %#  origin is stored XSS against the search session -- gets a name
+        %#  that downloads, not one that opens.
+        <span class="subj"><a class="dl" href="/drive/<%= $d->{drive_item_id} %>/download" title="Download <%= $d->{file_name} %>">Download</a><% if ($viewable) { %><a href="/drive/<%= $d->{drive_item_id} %>/view" target="_blank" rel="noopener noreferrer"><%= $d->{file_name} %></a><% } else { %><a href="/drive/<%= $d->{drive_item_id} %>/download"><%= $d->{file_name} %></a><% } %></span>
         <span class="meta"><%= $mime %> · <%= human_size($d->{size_bytes}) %> · <%= short_date($d->{content_created_at} // $d->{uploaded_at}) %></span>
       </div>
 % if (length($d->{folder_path} // '')) {
@@ -668,7 +697,7 @@
 %   my $unnamed = scalar(@{ $ft->{faces} || [] }) - scalar(@named);
 %   my %seen; my @who = grep { !$seen{$_}++ } map { $_->{display_name} } @named;
 % if (@who || $unnamed) {
-      <div class="who faces"><strong>People:</strong> <% my $first = 1; %><% for my $w (@who) { %><%= $first ? '' : ', ' %><% $first = 0; %><a href="<%= personal_href($w, 'drive') %>"><%= $w %></a><% } %><% if ($unnamed) { %><%= @who ? ' · ' : '' %><em><%= $unnamed %> untagged face<%= $unnamed == 1 ? '' : 's' %></em><% } %></div>
+      <div class="who faces"><strong>People:</strong> <% my $first = 1; %><% for my $w (@who) { %><%= $first ? '' : ', ' %><% $first = 0; %><a href="<%= filter_href('person', $w, 'drive') %>"><%= $w %></a><% } %><% if ($unnamed) { %><%= @who ? ' · ' : '' %><em><%= $unnamed %> untagged face<%= $unnamed == 1 ? '' : 's' %></em><% } %></div>
 % }
 %#  The People BRANCH of the tag tree is dropped, because digiKam writes a
 %#  `People|<name>` tag for every face it names -- so showing both printed
@@ -678,8 +707,29 @@
 %   my @paths = grep { !$tseen{$_}++ }
 %               grep { $_ !~ m{\APeople(?:\||\z)} }
 %               map  { $_->{path} } @{ $ft->{tags} || [] };
+%#  EVERY SEGMENT IS ITS OWN FILTER, not just the leaf. The hierarchy is
+%#  the whole value of these tags -- the flat Keywords field already holds
+%#  the leaf, so "Moab" was findable and "Utah" was not, even though its
+%#  owner filed it under Utah themselves. A tag filter matches the node AND
+%#  everything under it, so clicking Utah here is "every photo from Utah".
 %   if (@paths) {
-      <div class="who tags"><strong>Tags:</strong> <%= join ' · ', map { my $t = $_; $t =~ s/\|/ › /g; $t } @paths %></div>
+      <div class="who tags"><strong>Tags:</strong>
+%     my $firstpath = 1;
+%     for my $path (@paths) {
+%       if (!$firstpath) {
+        ·
+%       }
+%       $firstpath = 0;
+%       my $firstseg = 1;
+%       for my $seg (split /\|/, $path) {
+%         if (!$firstseg) {
+        ›
+%         }
+%         $firstseg = 0;
+        <a href="<%= filter_href('tag', $seg, 'drive') %>"><%= $seg %></a>
+%       }
+%     }
+      </div>
 %   }
 % }
 % if (my $md = $drive_meta->{ $d->{drive_item_id} }) {
@@ -715,7 +765,10 @@
         %#  &times; rather than the letter x: it is the separator every
         %#  camera and spec sheet uses for dimensions, and it does not read
         %#  as part of the number next to tabular digits.
-        <dt>Size</dt>
+        %#  "Dimensions", not "Size": the byte size is already on the
+        %#  headline a line above, and two chips called Size on one row is
+        %#  a question the reader has to stop and answer.
+        <dt>Dimensions</dt>
         <dd><%= meta_value($w) %>&times;<%= meta_value($h) %></dd>
 %   }
 %   for my $kv (@$md) {
@@ -725,18 +778,19 @@
 %   }
       </dl>
 % }
+%# Both links moved onto the title line, so this row is now ONLY the
+%# caveats -- and it is skipped entirely when there are none, rather than
+%# leaving an empty div and its margin under every result.
+% if (!$viewable || $d->{deleted_at}) {
       <div class="acts">
-% if ($viewable) {
-        <a href="/drive/<%= $d->{drive_item_id} %>/view" target="_blank" rel="noopener noreferrer">Open</a>
-% }
-        <a href="/drive/<%= $d->{drive_item_id} %>/download">Download</a>
-% unless ($viewable) {
+%   unless ($viewable) {
         <span class="hint">download only</span>
-% }
-% if ($d->{deleted_at}) {
+%   }
+%   if ($d->{deleted_at}) {
         <span class="hint">in trash</span>
-% }
+%   }
       </div>
+% }
     </div>
 % }
 % unless (@$drive) {
