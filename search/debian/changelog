@@ -1,3 +1,47 @@
+homelab-search (0.2.21) unstable; urgency=medium
+
+  * Release v0.2.21
+
+ -- Gardner <gardner@homelab>  Sun, 01 Nov 2026 00:15:19 -0500
+
+homelab-search (0.2.21) unstable; urgency=medium
+
+  * Drop camera factory placeholders from image descriptions. Every DJI
+    photo in this corpus carries ImageDescription 'default', which put
+    an identical meaningless line under 82 photos; Olympus and several
+    phones stamp their own. Matched on the whole value and only for
+    descriptions, so a photo actually captioned 'default' keeps its
+    caption and a keyword is left alone.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 00:15:19 -0500
+
+homelab-search (0.2.20) unstable; urgency=medium
+
+  * Release v0.2.20
+
+ -- Gardner <gardner@homelab>  Sun, 01 Nov 2026 00:13:10 -0500
+
+homelab-search (0.2.20) unstable; urgency=medium
+
+  * Index the people tagged in a photo, plus keywords and descriptions.
+    All three face-tagging standards are read - MWG Regions (Lightroom,
+    digiKam, Picasa), Microsoft People Tags, and IPTC Extension
+    PersonInImage - so whichever application wrote the tags, the names
+    land in one key. Round-tripped against all three.
+  * people.names is SENSITIVE, like GPS: a name attached to a photo is
+    PII about somebody who is not the account holder and never agreed to
+    anything. The owner searches it; it is never sent to a third party.
+    people.count is not sensitive, so 'photos with people in them' stays
+    answerable without naming anyone.
+  * Fix: _text refused arrayrefs, which is exactly what a multi-face
+    photo returns - three tagged faces is three RegionNames. It would
+    have silently dropped the tagged photos and kept the untagged ones.
+  * EXTRACTOR_VERSION 1 -> 2, which re-queues every drive file through
+    the existing work queue. This is the first real exercise of that
+    mechanism.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 00:13:10 -0500
+
 homelab-search (0.2.19) unstable; urgency=medium
 
   * Release v0.2.19

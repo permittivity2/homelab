@@ -28,7 +28,7 @@ use constant {
     # the version it was extracted with, so "which files predate this
     # extractor" is an indexed comparison and the re-index is incremental
     # rather than a full rebuild.
-    EXTRACTOR_VERSION => 1,
+    EXTRACTOR_VERSION => 3,
 
     # Generous on purpose. ExifTool reads HEADERS, not the file -- a 564 MB
     # video in this corpus is parsed in milliseconds -- and Archive::Zip
@@ -81,6 +81,20 @@ my @KEYS = (
     [ 'image.exposure_s',       'Exposure',         'num',  0 ],
     [ 'image.focal_length_mm',  'Focal length',     'num',  0 ],
 
+    # PEOPLE. A name attached to a photo is PII about somebody who is not
+    # the account holder and never agreed to anything -- arguably more
+    # sensitive than the coordinates, which only say where the owner was.
+    # Sensitive, therefore, on the same mechanism: stored, searchable by
+    # the owner, never sent to a third party.
+    #
+    # A count is not identifying on its own, so "photos with people in
+    # them" stays answerable by AI mode while the names do not leave.
+    [ 'people.names',           'People',           'text', 1 ],
+    [ 'people.count',           'People count',     'num',  0 ],
+
+    [ 'image.keywords',         'Keywords',         'text', 0 ],
+    [ 'image.description',      'Description',      'text', 0 ],
+
     [ 'gps.latitude',           'Latitude',         'num',  1 ],
     [ 'gps.longitude',          'Longitude',        'num',  1 ],
     [ 'gps.altitude_m',         'Altitude',         'num',  1 ],
@@ -132,6 +146,17 @@ my %TAG = (
     FNumber          => 'image.f_number',
     ExposureTime     => 'image.exposure_s',
     FocalLength      => 'image.focal_length_mm',
+    # Face tagging has three standards in the wild and a photo may carry
+    # any of them: MWG Regions (Lightroom, digiKam, Picasa), Microsoft's
+    # People Tags, and IPTC Extension's PersonInImage. All three are read;
+    # whichever the writing application used, the names end up in one key.
+    RegionName              => 'people.names',
+    RegionPersonDisplayName => 'people.names',
+    PersonInImage           => 'people.names',
+    Keywords                => 'image.keywords',
+    XPKeywords              => 'image.keywords',
+    ImageDescription        => 'image.description',
+    'Caption-Abstract'      => 'image.description',
     GPSLatitude      => 'gps.latitude',
     GPSLongitude     => 'gps.longitude',
     GPSAltitude      => 'gps.altitude_m',
@@ -188,6 +213,15 @@ sub _num ($v) {
 
 sub _text ($v) {
     return undef unless defined $v;
+    # Several of these tags are naturally multi-valued -- three faces in a
+    # photo is three RegionNames -- and ExifTool hands those back as an
+    # arrayref. Returning undef for a ref (the previous behaviour) would
+    # have silently dropped exactly the photos that were tagged.
+    if (ref $v eq 'ARRAY') {
+        my @parts = grep { defined && length } map { ref $_ ? () : $_ } @$v;
+        return undef unless @parts;
+        $v = join ', ', @parts;
+    }
     return undef if ref $v;
     $v =~ s/\0//g;
     $v =~ s/\s+/ /g;
@@ -196,9 +230,29 @@ sub _text ($v) {
     return length($v) > MAX_TEXT ? substr($v, 0, MAX_TEXT) . '…' : $v;
 }
 
+# Camera factory placeholders, which are not descriptions of anything.
+#
+# Every DJI photo in this corpus carries ImageDescription 'default'; Olympus
+# stamps 'OLYMPUS DIGITAL CAMERA' and several phones write
+# 'Exif_JPEG_PICTURE'. Indexing those puts an identical, meaningless line
+# under 82 photos and makes a real description harder to spot.
+#
+# Matched on the WHOLE value and only for the description field, so a photo
+# a person actually captioned "default" keeps its caption. This is a short
+# list of known strings, deliberately not a cleverness that guesses.
+my %PLACEHOLDER = map { lc($_) => 1 } (
+    'default', 'olympus digital camera', 'exif_jpeg_picture',
+    'exif_jpeg_420', 'samsungcamera', 'digital camera', 'camera',
+);
+
 sub _coerce ($key, $v) {
     my $kind = $KIND{$key} // 'text';
-    return $kind eq 'num' ? _num($v) : $kind eq 'at' ? _at($v) : _text($v);
+    return _num($v) if $kind eq 'num';
+    return _at($v)  if $kind eq 'at';
+    my $text = _text($v);
+    return undef if defined $text && $key eq 'image.description'
+                 && $PLACEHOLDER{ lc $text };
+    return $text;
 }
 
 # ------------------------------------------------------------------- zip
@@ -281,6 +335,12 @@ sub extract ($mime, $path, %opt) {
                 if defined $info->{CompressorID};
             if ($mime =~ m{^(?:video|audio)/} && exists $out{'doc.created_at'}) {
                 $out{'media.created_at'} = delete $out{'doc.created_at'};
+            }
+            # The count is derived rather than read: no standard provides
+            # one, and it is the part that may be shared.
+            if (defined $out{'people.names'}) {
+                my @n = split /\s*,\s*/, $out{'people.names'};
+                $out{'people.count'} = scalar @n if @n;
             }
             # A photo is not a document. Dropping these keeps doc.* meaning
             # "this file is a document", so a search for an author or a

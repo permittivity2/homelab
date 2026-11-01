@@ -29,8 +29,12 @@ ok !grep({ !length $_->{label} } @$cat), 'every key has a human label';
 # The sensitive set is the thing AI mode filters on, so assert exactly what
 # is in it rather than that it is non-empty.
 my @sensitive = sort map { $_->{key_name} } grep { $_->{sensitive} } @$cat;
-is_deeply \@sensitive, [qw(gps.altitude_m gps.latitude gps.longitude)],
-    'the sensitive set is the GPS trio and nothing else';
+is_deeply \@sensitive, [qw(gps.altitude_m gps.latitude gps.longitude people.names)],
+    'the sensitive set is the GPS trio plus the names of tagged people';
+# A count of people is not identifying, so it stays shareable -- "photos
+# with people in them" remains answerable without naming anyone.
+ok !grep({ $_->{key_name} eq 'people.count' && $_->{sensitive} } @$cat),
+    'a people COUNT is not sensitive, only the names are';
 
 my %dup;
 $dup{ $_->{key_name} }++ for @$cat;
@@ -103,6 +107,37 @@ is best_created_at({ 'image.taken_at' => '2019-01-01 00:00:00',
    '2019-01-01 00:00:00', 'a photo\'s taken-at beats a document date';
 is best_created_at({}), undef, 'and nothing is nothing';
 
+# Camera placeholders: 'default' under 82 photos is noise, not a caption.
+{
+    no warnings 'once';
+    my $c = \&Homelab::Search::Extract::_coerce;
+    is $c->('image.description', 'default'), undef, "DJI's 'default' is dropped";
+    is $c->('image.description', 'OLYMPUS DIGITAL CAMERA'), undef, 'so is the Olympus stamp';
+    is $c->('image.description', 'Sunset over the lake'), 'Sunset over the lake',
+        'a real caption survives';
+    # Matched on the WHOLE value, so a caption that merely contains the word
+    # is not thrown away.
+    is $c->('image.description', 'the default setting was wrong'),
+        'the default setting was wrong', 'a caption containing the word survives';
+    # And only for descriptions: a keyword "default" is the user's own tag.
+    is $c->('image.keywords', 'default'), 'default', 'keywords are left alone';
+}
+
 cmp_ok EXTRACTOR_VERSION, '>=', 1, 'the extractor is versioned, so a re-index can be incremental';
+
+# ------------------------------------------------------ multi-valued tags
+# Three faces in a photo is three RegionNames, and ExifTool returns those
+# as an arrayref. Returning undef for a ref -- the first behaviour here --
+# would have silently dropped exactly the photos that had been tagged.
+{
+    no warnings 'once';
+    my $text = \&Homelab::Search::Extract::_text;
+    is $text->(['Ada', 'Grace', 'Alan']), 'Ada, Grace, Alan', 'an array of names is joined';
+    is $text->(['Ada']),      'Ada',  'a single-element array is still a name';
+    is $text->([]),           undef,  'an empty array is nothing';
+    is $text->([undef, '']),  undef,  'and so is an array of nothings';
+    is $text->('Ada'),        'Ada',  'a plain string is unchanged';
+    is $text->({ a => 1 }),   undef,  'a hashref is still refused';
+}
 
 done_testing;
