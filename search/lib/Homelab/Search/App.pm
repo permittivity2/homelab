@@ -211,6 +211,25 @@ sub startup ($self) {
              . '&src=' . url_escape($src);
     });
 
+    # WHICH FIELDS ARE CAMERA SETTINGS, listed once here rather than as a
+    # regex in the markup, so adding a key to the catalogue and deciding
+    # where it shows are the same kind of edit in the same kind of place.
+    #
+    # The split is "what the camera did" against "what the file is". Make,
+    # model, lens, exposure, aperture, focal length, ISO and orientation
+    # are a photographer's row of settings -- interesting when you want
+    # them, eight chips of noise under every photo when you do not. Taken,
+    # Dimensions and the coordinates stay out: those are facts about the
+    # picture that anyone might scan for.
+    my %CAMERA_KEY = map { $_ => 1 } qw(
+        image.camera_make image.camera_model image.lens
+        image.exposure_s image.f_number image.focal_length_mm
+        image.iso image.orientation
+    );
+    $self->helper(camera_key => sub ($c, $key) {
+        return $CAMERA_KEY{ $key // '' } ? 1 : 0;
+    });
+
     # Metadata as a person reads it. 40.166 is a duration of 0:40, 0.0125
     # is an exposure of 1/80, and 1.8 is f/1.8 -- the index stores the
     # number because that is what sorts and filters, and this is the only

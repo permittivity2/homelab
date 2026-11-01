@@ -794,10 +794,31 @@
 %   }
 %   for my $kv (@$md) {
 %     next if $hide{ $kv->{key_name} };
+%     next if camera_key($kv->{key_name});
         <dt><%= $kv->{label} %></dt>
         <dd><%= meta_value($kv) %></dd>
 %   }
       </dl>
+%#  CAMERA SETTINGS, FOLDED AWAY. Make, model, exposure, aperture, focal
+%#  length, ISO and orientation are eight chips that pushed the things
+%#  anyone scans for -- the name, who is in it, where it was taken -- down
+%#  the row. They are worth having and they are not worth having open.
+%#
+%#  A <details>, so it costs no script and the open one stays open while
+%#  you read it. Rendered only when the file actually carries some, so a
+%#  scan or a text file gains no empty disclosure.
+%   my @cam = grep { camera_key($_->{key_name}) } @$md;
+%   if (@cam) {
+      <details class="cam">
+        <summary>Camera Info</summary>
+        <dl class="meta-kv">
+%     for my $kv (@cam) {
+          <dt><%= $kv->{label} %></dt>
+          <dd><%= meta_value($kv) %></dd>
+%     }
+        </dl>
+      </details>
+%   }
 % }
 %# Both links moved onto the title line, so this row is now ONLY the
 %# caveats -- and it is skipped entirely when there are none, rather than

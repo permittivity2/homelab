@@ -1,3 +1,19 @@
+homelab-search (0.2.43) unstable; urgency=medium
+
+  * Camera settings fold into a "Camera Info" disclosure per photo. Make,
+    model, lens, exposure, aperture, focal length, ISO and orientation are
+    eight chips that pushed the things anyone actually scans for - the
+    name, who is in it, where it was taken - down the row.
+  * What stays out: Taken, Dimensions, the coordinates and the altitude.
+    Those are facts about the picture rather than settings on the camera.
+  * A <details>, so it costs no script, and it is rendered only when the
+    file carries some - a scan or a text file gains no empty disclosure.
+  * The key set lives in App.pm next to the other display helpers, not as
+    a regex in the markup, so adding a field to the catalogue and deciding
+    where it shows are the same kind of edit in the same kind of place.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 13:31:03 -0600
+
 homelab-search (0.2.42) unstable; urgency=medium
 
   * A tag path that is an ancestor of another on the same photo is no

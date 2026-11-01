@@ -375,6 +375,20 @@
                     text-underline-offset: 2px; }
     .meta-kv dd a:hover { color: var(--text-primary); }
 
+    /* Camera settings, folded. Styled like the exact-type disclosure in the
+       filter panel so a twisty means the same thing in both places. */
+    details.cam { margin-top: 4px; }
+    details.cam > summary {
+      cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px;
+      font-size: var(--app-xs); color: var(--silver-dim); min-height: 32px;
+    }
+    details.cam > summary::-webkit-details-marker { display: none; }
+    details.cam > summary::before { content: '\25B8'; font-size: 0.8em; }
+    details.cam[open] > summary::before { content: '\25BE'; }
+    details.cam > summary:hover { color: var(--text-primary); }
+    details.cam > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    details.cam .meta-kv { margin-top: 2px; }
+
     .acts { margin-top: 8px; display: flex; flex-wrap: wrap; gap: var(--space-4); font-size: var(--app-xs); }
     .acts a { color: var(--silver-dim); min-height: 32px; display: inline-flex; align-items: center; }
     .empty { color: var(--text-muted); padding: var(--space-6) 0; }
