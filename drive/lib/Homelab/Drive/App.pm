@@ -1304,6 +1304,21 @@ sub _generate_image_derivatives ($c, $path, $uuid, $mime_type) {
             my $img = Image::Magick->new;
             my $err = $img->Read($path);
             die "$err\n" if $err;
+            # ROTATE THE PIXELS BEFORE RESIZING.
+            #
+            # A phone held sideways writes landscape pixels plus an EXIF
+            # Orientation tag saying "turn this 90 degrees". A browser
+            # honours that tag on the ORIGINAL file, which is why a
+            # downloaded photo looks right -- but Thumbnail() strips
+            # metadata by design, so the derivative comes out landscape
+            # with no tag left to correct it. The result is a sideways
+            # thumbnail and a sideways lightbox for 38% of the photos in
+            # this store, with nothing the browser can do about it.
+            #
+            # AutoOrient bakes the rotation into the pixels and resets the
+            # tag, so the derivative is right however it is later served.
+            # A no-op for images that are already upright.
+            $img->AutoOrient();
             $img->Thumbnail(geometry => $geometry);
             $img->Set(quality => $quality);
             $err = $img->Write("jpeg:$dest");

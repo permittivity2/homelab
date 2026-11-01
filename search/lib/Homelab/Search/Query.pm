@@ -505,16 +505,29 @@ sub counts ($self, $account_id) {
 # is built so that cannot happen by accident. Both sides are unioned because
 # the picker is shared: a type may exist only as an attachment, or only on
 # drive, and either way a person should be able to pick it.
+#
+# The two sides are also counted SEPARATELY, because which side a type
+# lives on decides whether it can match at all. With "Files" unticked,
+# offering MP4 video -- a type this account has only on drive -- is
+# offering a filter that provably returns nothing, with no hint why. The
+# picker uses drive_n/mail_n to drop exactly those.
+#
+# Drive's side honours `searchable`, so a type that exists only inside a
+# folder marked private does not appear in the picker either.
 sub mime_facets ($self, $account_id) {
     return $self->_scoped($account_id, sub ($db) {
         $db->query(q{
-            SELECT type || '/' || subtype AS mime, sum(n)::bigint AS n FROM (
-                SELECT t.type, t.subtype, count(*) AS n
+            SELECT type || '/' || subtype AS mime,
+                   sum(n)::bigint       AS n,
+                   sum(drive_n)::bigint AS drive_n,
+                   sum(mail_n)::bigint  AS mail_n
+              FROM (
+                SELECT t.type, t.subtype, count(*) AS n, count(*) AS drive_n, 0 AS mail_n
                   FROM search.drive_items i JOIN search.mime_types t USING (mime_type_id)
-                 WHERE i.account_id = ? AND i.deleted_at IS NULL
+                 WHERE i.account_id = ? AND i.deleted_at IS NULL AND i.searchable
                  GROUP BY 1, 2
                 UNION ALL
-                SELECT t.type, t.subtype, count(*) AS n
+                SELECT t.type, t.subtype, count(*) AS n, 0 AS drive_n, count(*) AS mail_n
                   FROM search.attachments a JOIN search.mime_types t USING (mime_type_id)
                  WHERE a.account_id = ?
                  GROUP BY 1, 2

@@ -1,3 +1,35 @@
+homelab-search (0.2.30) unstable; urgency=medium
+
+  * Drop exact types from the picker that cannot match the chosen
+    sources. With Files unticked it still offered MP4 video, Excel and
+    PowerPoint - types this account holds only on drive, so the filter
+    provably returned nothing and said nothing about why; with Email
+    unticked it offered GIF, Calendar and Word, which here exist only as
+    attachments. mime_facets now counts the two sides separately and the
+    picker uses that.
+  * The CHIPS are deliberately not filtered this way. A chip is a family
+    in the taxonomy, not a fact about this account - a video attachment
+    could arrive tomorrow, and hiding Videos because none has yet would
+    be wrong. The exact types ARE account facts, so only they react.
+  * The note claimed 'on email, a type matches the message attachments'
+    even with Email unticked, where it is untrue. It now follows the
+    selection. Also: the picker honours the searchable flag, so a type
+    present only inside a private folder no longer appears in it.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 02:35:05 -0600
+
+homelab-search (0.2.29) unstable; urgency=medium
+
+  * Actually retire the flat people.* metadata keys (migration 011,
+    extractor v7). 009 deleted them when the normalized
+    people/photo_faces tables replaced them, and they came straight
+    back: the key list in Extract still named them, and the indexer
+    interns a key the first time it sees one - so the same fact lived in
+    a face row AND a joined string, 2,059 rows of each. Deleting rows is
+    not retiring a key; the catalogue is what creates them.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 02:05:16 -0600
+
 homelab-search (0.2.28) unstable; urgency=medium
 
   * Honour drive's per-file exclude_from_search as well as the folder

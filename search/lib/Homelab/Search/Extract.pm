@@ -28,7 +28,7 @@ use constant {
     # the version it was extracted with, so "which files predate this
     # extractor" is an indexed comparison and the re-index is incremental
     # rather than a full rebuild.
-    EXTRACTOR_VERSION => 6,
+    EXTRACTOR_VERSION => 7,
 
     # Generous on purpose. ExifTool reads HEADERS, not the file -- a 564 MB
     # video in this corpus is parsed in milliseconds -- and Archive::Zip
@@ -81,16 +81,14 @@ my @KEYS = (
     [ 'image.exposure_s',       'Exposure',         'num',  0 ],
     [ 'image.focal_length_mm',  'Focal length',     'num',  0 ],
 
-    # PEOPLE. A name attached to a photo is PII about somebody who is not
-    # the account holder and never agreed to anything -- arguably more
-    # sensitive than the coordinates, which only say where the owner was.
-    # Sensitive, therefore, on the same mechanism: stored, searchable by
-    # the owner, never sent to a third party.
-    #
-    # A count is not identifying on its own, so "photos with people in
-    # them" stays answerable by AI mode while the names do not leave.
-    [ 'people.names',           'People',           'text', 1 ],
-    [ 'people.count',           'People count',     'num',  0 ],
+    # NO people.* KEYS HERE. Tagged people are structured rows in
+    # search.people / search.photo_faces (migration 009), not a joined
+    # string in the key/value store. They lived here briefly and migration
+    # 009 deleted them -- but the catalogue still listed them, so the
+    # indexer interned them straight back and the data existed in two
+    # places at once, which is the exact duplication 009 removed. The
+    # catalogue is what re-creates a key, so the catalogue is where a
+    # retirement has to land.
 
     [ 'image.keywords',         'Keywords',         'text', 0 ],
     [ 'image.description',      'Description',      'text', 0 ],
@@ -150,9 +148,8 @@ my %TAG = (
     # any of them: MWG Regions (Lightroom, digiKam, Picasa), Microsoft's
     # People Tags, and IPTC Extension's PersonInImage. All three are read;
     # whichever the writing application used, the names end up in one key.
-    RegionName              => 'people.names',
-    RegionPersonDisplayName => 'people.names',
-    PersonInImage           => 'people.names',
+    # Region tags are read by _faces() into structured records, not mapped
+    # to a flat key -- see the note in the catalogue above.
     Keywords                => 'image.keywords',
     # HierarchicalSubject is NOT here: it becomes a tag tree, not a string.
     XPKeywords              => 'image.keywords',
@@ -371,12 +368,6 @@ sub extract ($mime, $path, %opt) {
             $out{_faces} = _faces($info);
             $out{_tags}  = _tags($info);
 
-            # The count is derived rather than read: no standard provides
-            # one, and it is the part that may be shared.
-            if (defined $out{'people.names'}) {
-                my @n = split /\s*,\s*/, $out{'people.names'};
-                $out{'people.count'} = scalar @n if @n;
-            }
             # A photo is not a document. Dropping these keeps doc.* meaning
             # "this file is a document", so a search for an author or a
             # page count never matches a JPEG whose EXIF happened to carry

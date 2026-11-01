@@ -520,7 +520,11 @@ sub _mime_groups ($facets) {
         # identical rows with different counts is worse than no friendly
         # name at all.
         my $named = Homelab::Search::Mime::friendly_set([ map { $_->{mime} } @$list ]);
-        $named->[$_]{n} = $list->[$_]{n} for 0 .. $#$list;
+        # Per-source counts ride along so the picker can drop a type that
+        # cannot match the sources currently ticked.
+        for my $i (0 .. $#$list) {
+            $named->[$i]{$_} = $list->[$i]{$_} for qw(n drive_n mail_n);
+        }
         push @groups, { key => $cat->{key}, label => $cat->{label}, rows => $named };
     }
     return \@groups;

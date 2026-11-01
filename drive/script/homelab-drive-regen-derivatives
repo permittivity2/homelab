@@ -1,0 +1,122 @@
+#!/usr/bin/env perl
+# Rebuild thumbnail and slideshow derivatives from the original files.
+#
+# WHY THIS EXISTS. Derivatives are generated once, at upload, and never
+# revisited -- so a change to how they are made does not reach the images
+# already on disk. The first such change was AutoOrient: before it, a
+# photo taken with the phone sideways produced a sideways thumbnail and a
+# sideways lightbox, because Thumbnail() strips the EXIF orientation tag
+# that a browser would otherwise have used to correct it.
+#
+# Not a postinst step: regenerating thousands of images on every package
+# upgrade would be absurd. A tool that is run deliberately, and is worth
+# keeping for the next time the generator changes.
+use strict;
+use warnings;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+use Getopt::Long;
+use File::Path qw(make_path);
+use Image::Magick;
+use Homelab::Common::Config qw(load_config);
+use Homelab::Common::DB qw(runtime_pg);
+
+my ($dry, $all, $limit, $help) = (0, 0, 0, 0);
+GetOptions('dry-run' => \$dry, 'all' => \$all, 'limit=i' => \$limit, 'help' => \$help)
+    or die "bad options\n";
+if ($help) {
+    print <<'USAGE';
+homelab-drive-regen-derivatives [--all] [--dry-run] [--limit N]
+
+  Rebuilds the thumbnail and slideshow images from each original.
+
+  By default only ROTATED images are touched -- the ones whose EXIF says
+  the camera was held sideways or upside down, which are the ones a
+  pre-AutoOrient derivative got wrong. --all rebuilds every image, which
+  is what you want after any other change to how derivatives are made.
+
+  --dry-run  report what would change and touch nothing
+  --limit N  stop after N files, for a cautious first pass
+USAGE
+    exit 0;
+}
+
+my $config  = load_config('HOMELAB_DRIVE_CONFIG', '/etc/homelab/drive/config.yml');
+my $pg      = runtime_pg(%{ $config->{database} });
+my $storage = $config->{storage_path} // '/var/lib/homelab/drive-storage';
+my $img_cfg = $config->{images} // {};
+my %variant = (
+    thumbnails => [$img_cfg->{thumbnail_geometry} // '200x200>',   $img_cfg->{thumbnail_quality} // 80],
+    slideshow  => [$img_cfg->{slideshow_geometry}  // '1280x1280>', $img_cfg->{slideshow_quality} // 82],
+);
+
+my $rows = $pg->db->query(
+    q{SELECT uuid::text AS uuid, filename FROM drive.files
+       WHERE deleted_at IS NULL AND mime_type LIKE 'image/%' ORDER BY id})->hashes;
+printf "%d image(s) in drive\n", scalar @$rows;
+
+my ($seen, $done, $skipped, $failed) = (0, 0, 0, 0);
+for my $r (@$rows) {
+    last if $limit && $done >= $limit;
+    my $src = "$storage/$r->{uuid}";
+    unless (-f $src) { $skipped++; next }
+
+    # DECODE ONCE AND REUSE IT.
+    #
+    # The obvious shape is Ping() to read the header cheaply, then Read()
+    # only the files that need work. Ping() SEGFAULTS the interpreter on
+    # these files -- Read on the same path is fine, so it is the binding,
+    # not the image. Decoding once and keeping the object is also simply
+    # better: the rotated files needed the decode anyway, and the upright
+    # ones would have cost a probe regardless.
+    my $img = Image::Magick->new;
+    my $rerr = $img->Read($src);
+    if ($rerr) { warn "  $r->{filename}: $rerr\n"; $skipped++; next }
+
+    my $orient  = $img->Get('orientation') // '';
+    my $rotated = ($orient ne '' && $orient ne 'TopLeft' && $orient ne 'Undefined');
+    unless ($all || $rotated) { $seen++; undef $img; next }
+
+    $seen++;
+    if ($dry) {
+        printf "  would rebuild %-44s (%s)\n", $r->{filename}, ($orient || 'no tag');
+        $done++;
+        undef $img;
+        next;
+    }
+
+    # Rotate once, then derive both sizes from the corrected image.
+    $img->AutoOrient();
+
+    my $ok = 1;
+    for my $subdir (sort keys %variant) {
+        my ($geometry, $quality) = @{ $variant{$subdir} };
+        my $dir = "$storage/.$subdir";
+        make_path($dir) unless -d $dir;
+        my $dest = "$dir/$r->{uuid}.jpg";
+        # Written to a temp name and renamed, so a reader never sees a
+        # half-written derivative and a crash leaves the old one intact.
+        my $tmp = "$dest.regen.$$";
+        eval {
+            # Cloned per variant: Thumbnail() resizes in place, so deriving
+            # the 1280px slideshow from an already-200px thumbnail would
+            # produce a blurry upscale.
+            my $i = $img->Clone();
+            $i->Thumbnail(geometry => $geometry);
+            $i->Set(quality => $quality);
+            my $e = $i->Write("jpeg:$tmp"); die "$e\n" if $e;
+            rename $tmp, $dest or die "rename: $!\n";
+            1;
+        } or do {
+            warn "  $r->{filename} ($subdir): $@";
+            unlink $tmp if -f $tmp;
+            $ok = 0;
+        };
+    }
+    undef $img;
+    $ok ? $done++ : $failed++;
+    printf "  %d rebuilt...\n", $done if $done % 200 == 0;
+}
+
+printf "examined %d, rebuilt %d, skipped %d (no blob or unreadable), failed %d%s\n",
+    $seen, $done, $skipped, $failed, ($dry ? '  [DRY RUN]' : '');

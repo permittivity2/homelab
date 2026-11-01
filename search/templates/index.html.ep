@@ -105,7 +105,8 @@
             <div class="leafgroup" data-group="<%= $g->{key} %>">
               <h5><%= $g->{label} %></h5>
 % for my $r (@{ $g->{rows} }) {
-              <label class="leaf" title="<%= $r->{mime} %>"><input type="checkbox"<% if (!$named{$r->{mime}}++) { %> name="type_in"<% } %> value="<%= $r->{mime} %>" data-mime="<%= $r->{mime} %>"<%= $tin{$r->{mime}} ? ' checked' : '' %>><span class="m"><%= $r->{label} %><% if (length $r->{ext}) { %> <em class="ext"><%= $r->{ext} %></em><% } %><% if ($r->{qualify}) { %> <em class="qual"><%= $r->{qualify} %></em><% } %></span><span class="n"><%= commify($r->{n}) %></span></label>
+              <label class="leaf" title="<%= $r->{mime} %>"><input type="checkbox"<% if (!$named{$r->{mime}}++) { %> name="type_in"<% } %> value="<%= $r->{mime} %>" data-mime="<%= $r->{mime} %>"
+                     data-drive="<%= $r->{drive_n} // 0 %>" data-mail="<%= $r->{mail_n} // 0 %>"<%= $tin{$r->{mime}} ? ' checked' : '' %>><span class="m"><%= $r->{label} %><% if (length $r->{ext}) { %> <em class="ext"><%= $r->{ext} %></em><% } %><% if ($r->{qualify}) { %> <em class="qual"><%= $r->{qualify} %></em><% } %></span><span class="n"><%= commify($r->{n}) %></span></label>
 % }
             </div>
 % }
@@ -114,8 +115,9 @@
         </details>
 % }
 
-        <p class="note">Nothing selected searches every type. On email, a type
-          matches the message&rsquo;s <em>attachments</em>.</p>
+        <p class="note" id="typeNote">Nothing selected searches every type.
+          <span id="typeNoteMail">On email, a type matches the message&rsquo;s
+          <em>attachments</em>.</span></p>
       </section>
 
       %# Each source's own controls live with that source. "Has attachments"
@@ -211,6 +213,13 @@
     if (srcNote) srcNote.hidden = !none;
     showSection(secMail,  m || none);
     showSection(secDrive, d || none);
+    // The note claimed "on email, a type matches attachments" even with
+    // Email unticked, where it is simply untrue.
+    var nm = $('#typeNoteMail');
+    if (nm) nm.hidden = !(m || none);
+    // The exact-type list is account data and depends on the sources, so
+    // it has to be recomputed whenever they change.
+    applyScope();
     summarize();
   }
   [srcMail, srcDrive].forEach(function (c) { c.addEventListener('change', syncSource); });
@@ -295,6 +304,29 @@
     summarize();
   }
 
+  // Can this exact type match ANYTHING, given the sources ticked?
+  //
+  // The exact-type list is built from what this account actually holds,
+  // and a type may exist only on drive or only as a mail attachment. With
+  // "Files" unticked, offering MP4 video -- a type this account has only
+  // on drive -- is offering a filter that provably returns nothing, and
+  // says nothing about why.
+  //
+  // The CHIPS above are deliberately NOT filtered this way. A chip is a
+  // family in the taxonomy, not a fact about this account: a video
+  // attachment could arrive tomorrow, and hiding "Videos" because none
+  // has arrived yet would be wrong. The exact types ARE account facts,
+  // so only they react.
+  function reachable(inp) {
+    var m = srcMail.checked, d = srcDrive.checked;
+    if (!m && !d) return true;                       // neither ticked means both
+    var inDrive = (parseInt(inp.getAttribute('data-drive'), 10) || 0) > 0;
+    var inMail  = (parseInt(inp.getAttribute('data-mail'),  10) || 0) > 0;
+    // A type with no counts at all predates this and is left alone.
+    if (!inDrive && !inMail) return true;
+    return (d && inDrive) || (m && inMail);
+  }
+
   function applyScope() {
     if (!$('#specific')) return;
     var on = activeChips(), shown = [];
@@ -304,8 +336,9 @@
         var inp = lab.querySelector('input');
         // A ticked type stays visible even out of scope. Hiding a filter that
         // is still doing work is the whole bug this pass is about.
-        var vis = !on.length || inp.checked ||
-                  on.some(function (c) { return matches(c, inp.value); });
+        var vis = inp.checked ||
+                  (reachable(inp) && (!on.length ||
+                   on.some(function (c) { return matches(c, inp.value); })));
         lab.hidden = !vis;
         if (vis) { any = true; if (shown.indexOf(inp.value) === -1) shown.push(inp.value); }
       });

@@ -1,3 +1,34 @@
+homelab-drive (0.1.65) unstable; urgency=medium
+
+  * Fix a segfault in the new regeneration tool: Image::Magick's Ping()
+    crashes the interpreter on these files, while Read() on the same
+    path is fine - so it is the binding, not the image. It now decodes
+    once and reuses the object, which is better anyway: rotated files
+    needed the decode regardless, and upright ones would have cost a
+    probe either way. Each variant is cloned from the corrected image,
+    so the 1280px slideshow is not an upscale of the 200px thumbnail.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:54:27 -0600
+
+homelab-drive (0.1.64) unstable; urgency=medium
+
+  * Rotate photos correctly in thumbnails, the lightbox and slideshows.
+    A phone held sideways writes landscape pixels plus an EXIF
+    Orientation tag; a browser honours that tag on the original, which
+    is why a downloaded photo looks right - but ImageMagick's
+    Thumbnail() strips metadata by design, so the derivative came out
+    landscape with no tag left to correct it. AutoOrient now bakes the
+    rotation into the pixels before resizing.
+  * 2,285 of the 6,064 photos carrying orientation data - 38 percent -
+    were displaying sideways or upside down in all three places. New
+    homelab-drive-regen-derivatives rebuilds them from the originals; it
+    defaults to only the rotated ones, takes --all for any future change
+    to how derivatives are made, and has --dry-run and --limit. Not a
+    postinst step: regenerating thousands of images on every upgrade
+    would be absurd.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 01:52:01 -0600
+
 homelab-drive (0.1.63) unstable; urgency=medium
 
   * Any file or folder can be marked private - not returned by search -

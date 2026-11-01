@@ -29,17 +29,25 @@ ok !grep({ !length $_->{label} } @$cat), 'every key has a human label';
 # The sensitive set is the thing AI mode filters on, so assert exactly what
 # is in it rather than that it is non-empty.
 my @sensitive = sort map { $_->{key_name} } grep { $_->{sensitive} } @$cat;
-# GPS was moved OUT of the sensitive set as a product decision (migration
-# 008): coordinates without a face carry little alone, and all requests
-# share one Anthropic workspace. A name still identifies a third party
-# directly, and the people tagged in somebody's photos never saw the
-# consent notice, so that one stays.
-is_deeply \@sensitive, ['people.names'],
-    'only a tagged name is withheld from the third party; GPS is not';
-# A count of people is not identifying, so it stays shareable -- "photos
-# with people in them" remains answerable without naming anyone.
-ok !grep({ $_->{key_name} eq 'people.count' && $_->{sensitive} } @$cat),
-    'a people COUNT is not sensitive, only the names are';
+# The sensitive set is now EMPTY, and that is not a regression -- it is
+# the two changes underneath it meeting:
+#
+#   * GPS was moved out deliberately (migration 008): coordinates without
+#     a face carry little alone and all requests share one workspace.
+#   * people.names left this catalogue altogether (migration 009/011).
+#     Tagged people are rows in search.people / search.photo_faces now,
+#     and Query::metadata_for -- the only thing AI mode's drive tool
+#     calls -- reads drive_metadata and nothing else.
+#
+# So a name does not reach a third party because it is NOT IN THE TABLE
+# the model is shown, which is a stronger guarantee than a flag on a row:
+# there is no filter left to forget. t/ai.t asserts that end of it.
+is_deeply \@sensitive, [],
+    'no flat metadata key is sensitive any more -- see the note above';
+ok !grep({ $_->{key_name} =~ /^people\./ } @$cat),
+    'and no people.* key survives in the catalogue, which is what kept '
+  . 'recreating them after the migrations deleted the rows';
+
 
 my %dup;
 $dup{ $_->{key_name} }++ for @$cat;
