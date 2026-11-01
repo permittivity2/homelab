@@ -4,6 +4,7 @@ use Mojo::Base 'Mojolicious', -signatures;
 use Mojo::URL;
 use Mojo::Pg;
 use Mojo::Asset::File;
+use Mojo::Util qw(url_escape);
 use Encode qw(decode FB_DEFAULT);
 
 use Homelab::Common::Config   qw(load_config);
@@ -132,6 +133,22 @@ sub startup ($self) {
         return $t;
     });
 
+    # 30419 is harder to read than 30,419, and the exact-type list is a
+    # column of counts whose whole job is to be compared at a glance.
+    $self->helper(commify => sub ($c, $n) {
+        return '' unless defined $n;
+        my $s = reverse "$n";
+        $s =~ s/(\d{3})(?=\d)/$1,/g;
+        return scalar reverse $s;
+    });
+
+    # "Clear all filters" is an <a>, so it has to work with the script off.
+    # It keeps the query and drops everything else.
+    $self->helper(clear_href => sub ($c, $q) {
+        return '/' unless defined $q && length $q;
+        return '/?q=' . url_escape($q);
+    });
+
     # The template asks the SAME function the server uses, rather than
     # re-deriving the rule in markup.
     $self->helper(viewable => sub ($c, $mime) {
@@ -256,8 +273,26 @@ sub _filters ($c) {
         my $v = $c->param($k);
         $f{$k} = $v if defined $v && $v =~ /\A\d+\z/ && $v > 0;
     }
-    $f{source} = ($c->param('source') // 'both');
-    $f{source} = 'both' unless $f{source} =~ /\A(?:both|mail|drive)\z/;
+    # Source arrives two ways, and both have to keep working.
+    #
+    # `source=both|mail|drive` is the WIRE contract -- homelab-cli sends it,
+    # /api/v1/search documents it, and a bookmarked URL carries it. The form
+    # sends `src` instead, repeatable, one value per ticked checkbox, because
+    # "search email, files, or both" is two yes/no answers and modelling it
+    # as a three-option <select> hid the answer inside a control you had to
+    # read before you could tell why half the panel was greyed out.
+    #
+    # Neither ticked means BOTH, deliberately: that is also exactly what a
+    # browser with JavaScript off sends when you clear both boxes, and a
+    # search over nothing at all is never what was meant. The page says so
+    # in as many words rather than silently correcting it.
+    my %src = map { $_ => 1 } grep { /\A(?:mail|drive)\z/ } @{ $c->every_param('src') };
+    if (keys %src == 1) { ($f{source}) = keys %src }
+    elsif (keys %src)   { $f{source} = 'both' }
+    else {
+        $f{source} = ($c->param('source') // 'both');
+        $f{source} = 'both' unless $f{source} =~ /\A(?:both|mail|drive)\z/;
+    }
 
     # Type include/exclude. Repeatable, and capped at 40 tokens each purely
     # to bound the generated boolean -- a request with 5,000 of them should
@@ -315,9 +350,43 @@ sub index ($c) {
         mailboxes  => ($acct ? $c->app->query->mailboxes($acct->{account_id}) : []),
         counts     => ($acct ? $c->app->query->counts($acct->{account_id})    : {}),
         mime_cats  => Homelab::Search::Mime::categories(),
-        mime_facets => ($acct ? $c->app->query->mime_facets($acct->{account_id}) : []),
+        mime_groups => _mime_groups($acct ? $c->app->query->mime_facets($acct->{account_id}) : []),
         searched   => _searched($f),
     );
+}
+
+# The account's own leaf types, grouped for the picker.
+#
+# Built here rather than in the template because a type belongs to SEVERAL
+# categories now -- text/csv is Text and a Spreadsheet -- so this is a
+# fan-out, a per-group name collision pass and an "everything else" bucket,
+# which is three pieces of logic that have no business inside an .ep.
+#
+# A type appears under every category it belongs to. The template renders
+# only the FIRST copy with a form name, so one type is never submitted
+# twice, and the script keeps the copies ticked together.
+sub _mime_groups ($facets) {
+    my (%by_cat, @loose);
+    for my $f (@$facets) {
+        my $keys = Homelab::Search::Mime::categories_of($f->{mime});
+        if (@$keys) { push @{ $by_cat{$_} }, $f for @$keys }
+        else        { push @loose, $f }
+    }
+
+    my @groups;
+    for my $cat (@{ Homelab::Search::Mime::categories() },
+                 { key => '', label => 'Everything else' }) {
+        my $list = length $cat->{key} ? ($by_cat{ $cat->{key} } || []) : \@loose;
+        next unless @$list;
+        # friendly_set resolves names that collide WITHIN this group --
+        # image/jpeg and image/jpg are both "JPEG image .jpg", and two
+        # identical rows with different counts is worse than no friendly
+        # name at all.
+        my $named = Homelab::Search::Mime::friendly_set([ map { $_->{mime} } @$list ]);
+        $named->[$_]{n} = $list->[$_]{n} for 0 .. $#$list;
+        push @groups, { key => $cat->{key}, label => $cat->{label}, rows => $named };
+    }
+    return \@groups;
 }
 
 sub api_search ($c) {

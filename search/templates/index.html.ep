@@ -18,6 +18,8 @@
 %                || length($f->{mailbox}) || length($f->{mime})
 %                || @{ $f->{type_in} // [] } || @{ $f->{type_ex} // [] }
 %                || $f->{has_attachments} || $f->{in_trash} || $f->{source} ne 'both') ? 1 : 0;
+% my $want_mail  = $f->{source} ne 'drive';
+% my $want_drive = $f->{source} ne 'mail';
 <form class="searchbar" method="get" action="/">
   <div class="askrow">
     <input type="text" id="q" name="q" value="<%= $f->{q} %>" autofocus
@@ -27,199 +29,352 @@
   </div>
 
   <details class="filters"<%= $filters_on ? ' open' : '' %>>
-    <summary>Filters<%= $filters_on ? ' (active)' : '' %></summary>
-    <div class="fgrid">
-      <div class="field" data-only="mail">
-        <label for="person">From / to</label>
-        <input type="text" id="person" name="person" value="<%= $f->{person} %>" placeholder="name or address">
-      </div>
-      <div class="field">
-        <label for="source">Source</label>
-        <select id="source" name="source">
-% for my $s (['both','Mail and files'],['mail','Mail only'],['drive','Files only']) {
-          <option value="<%= $s->[0] %>"<%= $f->{source} eq $s->[0] ? ' selected' : '' %>><%= $s->[1] %></option>
-% }
-        </select>
-      </div>
-      <div class="field">
-        <label for="from">From date</label>
-        <input type="date" id="from" name="from" value="<%= $f->{from} %>">
-      </div>
-      <div class="field">
-        <label for="to">To date</label>
-        <input type="date" id="to" name="to" value="<%= $f->{to} %>">
-      </div>
-      <div class="field" data-only="mail">
-        <label for="mailbox">Mailbox</label>
-        <select id="mailbox" name="mailbox">
-          <option value="">Any mailbox</option>
-% for my $mb (@$mailboxes) {
-%   # Maildir++ folder names are long ('.Tax Audit.Tax Year 2020'); the full
-%   # name stays the value, only the label is shortened. An option wider than
-%   # the viewport is what made the page scroll sideways.
-%   my $lbl = $mb->{name}; $lbl =~ s/^\.//; $lbl =~ s/\./ \/ /g;
-%   $lbl = substr($lbl, 0, 22) . '…' if length($lbl) > 23;
-          <option value="<%= $mb->{name} %>"<%= $f->{mailbox} eq $mb->{name} ? ' selected' : '' %>><%= $lbl %> (<%= $mb->{n} %>)</option>
-% }
-        </select>
-      </div>
-%# File type: tick what you want, leave it empty for everything.
-%#
-%# This started as two multi-selects, include and exclude. Both halves were
-%# wrong. A <select multiple> is a power-user control -- you have to know to
-%# Ctrl-click, and on a phone it is a modal list -- and "include" beside
-%# "exclude" asks the reader to hold two opposite ideas at once to answer one
-%# question. Checkboxes say the whole thing without a legend: what is ticked
-%# is what you get, nothing ticked means no filter at all. Excluding a type
-%# is still possible through the API and homelab-cli's --exclude-type, where
-%# the reader is already holding a manual.
-%#
-%# The groups come from Homelab::Search::Mime in display order: the few
-%# people actually reach for, then the rest alphabetically.
+    <summary><span>Filters</span><span class="sum-active" id="sumActive"></span></summary>
+
+    <div class="panel">
+
+      %# SEARCH IN comes first and governs what follows, so cause and effect
+      %# are adjacent. A section that cannot apply is REMOVED below, not
+      %# dimmed: greying asks the reader to work out why something is grey
+      %# and what would bring it back, which on the drive page meant three
+      %# dead controls out of seven.
+      <section class="fsec">
+        <h3 class="fsec-h">Search in</h3>
+        <div class="row-chk">
+          <label class="box"><input type="checkbox" name="src" value="mail" id="srcMail"<%= $want_mail ? ' checked' : '' %>><span>Email</span></label>
+          <label class="box"><input type="checkbox" name="src" value="drive" id="srcDrive"<%= $want_drive ? ' checked' : '' %>><span>Files</span></label>
+        </div>
+        <p class="note warn" id="srcNote" hidden>Neither is selected, so this searches both.</p>
+      </section>
+
+      %# Most date filtering is relative, so five presets answer it in one
+      %# click. The two inputs underneath are the no-JavaScript path and the
+      %# exact-dates path at once -- nothing here is script-only.
+      <section class="fsec">
+        <h3 class="fsec-h">Date</h3>
+        <div class="chips" id="dateChips" role="group" aria-label="Date range">
+% my $custom = (length($f->{from}) || length($f->{to})) ? 1 : 0;
+          <label class="chip"><input type="radio" name="dpreset" value=""<%= $custom ? '' : ' checked' %>><span>Any time</span></label>
+          <label class="chip"><input type="radio" name="dpreset" value="7"><span>Past week</span></label>
+          <label class="chip"><input type="radio" name="dpreset" value="30"><span>Past month</span></label>
+          <label class="chip"><input type="radio" name="dpreset" value="365"><span>Past year</span></label>
+          <label class="chip"><input type="radio" name="dpreset" value="custom"<%= $custom ? ' checked' : '' %>><span>Exact dates</span></label>
+        </div>
+        <div class="daterow" id="dateRow"<%= $custom ? '' : ' hidden' %>>
+          <div class="field"><label class="lab" for="from">From</label><input type="date" id="from" name="from" value="<%= $f->{from} %>"></div>
+          <span class="sep">to</span>
+          <div class="field"><label class="lab" for="to">To</label><input type="date" id="to" name="to" value="<%= $f->{to} %>"></div>
+        </div>
+      </section>
+
+      %# TYPE. Chips rather than checkboxes: fourteen 18px boxes is a lot of
+      %# small targets, and a filled chip reads across the panel where a tick
+      %# does not.
+      %#
+      %# A chip is a SELECT-ALL for the exact types it covers, and goes half
+      %# selected when you untick one of them. That is not decoration: the
+      %# server UNIONs these tokens, so `cat:pictures` + `image/jpeg` means
+      %# all pictures, and ticking an exact type under a ticked family used
+      %# to be a silent no-op -- the panel invited you to narrow and then
+      %# widened. Chip and types are one control now.
 % my %tin = map { $_ => 1 } @{ $f->{type_in} // [] };
-%
-%# Specific types are the ones THIS account really has, grouped under the
-%# same headings as the checkboxes above them, so "Pictures" and the three
-%# image types it covers are visibly the same thing at two depths. Folded
-%# away, because most searches never need it.
-% my (%by_cat, @ungrouped);
-% for my $mf (@$mime_facets) {
-%   my $k = Homelab::Search::Mime::classify($mf->{mime});
-%   if (defined $k) { push @{ $by_cat{$k} }, $mf } else { push @ungrouped, $mf }
-% }
-% my $n_specific = scalar grep { $tin{$_->{mime}} } @$mime_facets;
-      <div class="field tfield">
-        <span class="flabel">File type</span>
-        <div class="cats">
+      <section class="fsec">
+        <h3 class="fsec-h">Type</h3>
+        <div class="chips" id="catChips">
 % for my $cat (@$mime_cats) {
-          <label class="chk"><input type="checkbox" name="type_in" value="cat:<%= $cat->{key} %>"
+          <label class="chip"><input type="checkbox" name="type_in" value="cat:<%= $cat->{key} %>"
                  data-cat="<%= $cat->{key} %>"
                  data-types="<%= join(',', @{ $cat->{types} }) %>"
                  data-mimes="<%= join(',', @{ $cat->{pairs} }) %>"
                  <%= $tin{'cat:' . $cat->{key}} ? 'checked' : '' %>><span><%= $cat->{label} %></span></label>
 % }
         </div>
-% if (@$mime_facets) {
-        <details class="specific"<%= $n_specific ? ' open' : '' %>>
-          <summary>Specific types<%= $n_specific ? " ($n_specific selected)" : '' %></summary>
+
+%# The exact types THIS account really has, grouped under the same headings
+%# as the chips. A type appears under every family it belongs to -- text/csv
+%# under Text and under Spreadsheets -- because filing it once is what hid
+%# text/calendar from anyone who ticked Calendar. Only the first copy carries
+%# a form name, so one type is never submitted twice.
+% if (@$mime_groups) {
+        <details class="specific" id="specific">
+          <summary><span id="specSum">Narrow to an exact type</span></summary>
+          <p class="note leadnote" id="specLead">Every exact type in your index. Tick a broad type above to narrow this list to just that family.</p>
           <div class="leafwrap">
-% for my $cat (@$mime_cats) {
-%   next unless $by_cat{ $cat->{key} };
-            <div class="leafgroup">
-              <h5><%= $cat->{label} %></h5>
-%   for my $mf (@{ $by_cat{ $cat->{key} } }) {
-              <label class="chk"><input type="checkbox" name="type_in" value="<%= $mf->{mime} %>"
-                     data-leaf="<%= $cat->{key} %>"<%= $tin{$mf->{mime}} ? ' checked' : '' %>><span><%= $mf->{mime} %> <em><%= $mf->{n} %></em></span></label>
-%   }
-            </div>
-% }
-% if (@ungrouped) {
-            <div class="leafgroup">
-              <h5>Other</h5>
-% for my $mf (@ungrouped) {
-              <label class="chk"><input type="checkbox" name="type_in" value="<%= $mf->{mime} %>"
-                     data-leaf=""<%= $tin{$mf->{mime}} ? ' checked' : '' %>><span><%= $mf->{mime} %> <em><%= $mf->{n} %></em></span></label>
+% my %named;
+% for my $g (@$mime_groups) {
+            <div class="leafgroup" data-group="<%= $g->{key} %>">
+              <h5><%= $g->{label} %></h5>
+% for my $r (@{ $g->{rows} }) {
+              <label class="leaf" title="<%= $r->{mime} %>"><input type="checkbox"<% if (!$named{$r->{mime}}++) { %> name="type_in"<% } %> value="<%= $r->{mime} %>" data-mime="<%= $r->{mime} %>"<%= $tin{$r->{mime}} ? ' checked' : '' %>><span class="m"><%= $r->{label} %><% if (length $r->{ext}) { %> <em class="ext"><%= $r->{ext} %></em><% } %><% if ($r->{qualify}) { %> <em class="qual"><%= $r->{qualify} %></em><% } %></span><span class="n"><%= commify($r->{n}) %></span></label>
 % }
             </div>
 % }
           </div>
+          <p class="note leafempty" id="specEmpty" hidden>Your index has nothing of that type yet.</p>
         </details>
 % }
-        <p class="fnote">Leave every box clear to search all types. On email, a
-          type matches the message's <em>attachments</em>.</p>
+
+        <p class="note">Nothing selected searches every type. On email, a type
+          matches the message&rsquo;s <em>attachments</em>.</p>
+      </section>
+
+      %# Each source's own controls live with that source. "Has attachments"
+      %# used to sit in a row at the bottom, three controls away from Mailbox
+      %# and next to a files-only option.
+      <section class="fsec" data-when="mail" id="secMail"<%= $want_mail ? '' : ' hidden' %>>
+        <h3 class="fsec-h">Email only</h3>
+        <div class="fields">
+          <div class="field">
+            <label class="lab" for="person">From or to</label>
+            <input type="text" id="person" name="person" value="<%= $f->{person} %>" placeholder="name or address">
+          </div>
+          <div class="field">
+            <label class="lab" for="mailbox">Mailbox</label>
+            <select id="mailbox" name="mailbox">
+              <option value="">Any mailbox</option>
+% for my $mb (@$mailboxes) {
+%   # Maildir++ folder names are long ('.Tax Audit.Tax Year 2020'); the full
+%   # name stays the value, only the label is shortened. An option wider than
+%   # the viewport is what made the page scroll sideways.
+%   my $lbl = $mb->{name}; $lbl =~ s/^\.//; $lbl =~ s/\./ \/ /g;
+%   $lbl = substr($lbl, 0, 22) . '…' if length($lbl) > 23;
+              <option value="<%= $mb->{name} %>"<%= $f->{mailbox} eq $mb->{name} ? ' selected' : '' %>><%= $lbl %> (<%= $mb->{n} %>)</option>
+% }
+            </select>
+          </div>
+        </div>
+        <label class="box"><input type="checkbox" id="hasAtt" name="has_attachments" value="1"<%= $f->{has_attachments} ? ' checked' : '' %>><span>Only messages with an attachment</span></label>
+      </section>
+
+      <section class="fsec" data-when="drive" id="secDrive"<%= $want_drive ? '' : ' hidden' %>>
+        <h3 class="fsec-h">Files only</h3>
+        <label class="box"><input type="checkbox" id="inTrash" name="in_trash" value="1"<%= $f->{in_trash} ? ' checked' : '' %>><span>Search the trash instead</span></label>
+      </section>
+
+      <div class="fsec-foot">
+        %# Rendered and disabled on purpose: the product has to be useful
+        %# with the model switched off, so this only says the other mode is
+        %# coming.
+        <label class="box aioff" title="Not available yet"><input type="checkbox" disabled><span>AI search <span class="hint">(coming)</span></span></label>
+        %# An <a>, not a button, so clearing a filter works without
+        %# JavaScript. There was previously no way back out except emptying
+        %# each control by hand.
+        <a class="clear" id="clearAll" href="<%= clear_href($f->{q}) %>">Clear all filters</a>
       </div>
-    </div>
-    <div class="checks">
-      <label data-only="mail"><input type="checkbox" name="has_attachments" value="1"<%= $f->{has_attachments} ? ' checked' : '' %>> Has attachments</label>
-      <label data-only="drive"><input type="checkbox" name="in_trash" value="1"<%= $f->{in_trash} ? ' checked' : '' %>> Search trash instead</label>
-      %# Rendered and disabled on purpose: the product has to be useful with
-      %# the model switched off, so this only says the other mode is coming.
-      <label class="aioff" title="Not available yet"><input type="checkbox" disabled> AI search <span class="hint">(coming)</span></label>
     </div>
   </details>
 </form>
 
-%# Grey out the filters that cannot apply to the chosen source. Mailbox,
-%# sender and "has attachments" mean nothing for a file; file type and trash
-%# mean nothing for a message. Leaving them live invites a search that
-%# silently ignores half of what was typed.
+%# EVERYTHING BELOW IS A CONVENIENCE. With the script off the form still
+%# submits exactly what is ticked, the server still ignores filters that do
+%# not apply to the chosen source, and "Clear all filters" is an ordinary
+%# link. What the script adds is that the panel stops lying to you while you
+%# are filling it in.
 %#
-%# Presentational only -- the server already ignores a filter that does not
-%# apply to the source it is querying, so a browser with JS off loses the
-%# visual cue and nothing else. Drive's own search box carries a copy of
-%# this; keep the two in step.
+%# drive/templates/index.html.ep carries a reduced copy of this. Keep the two
+%# in step -- the shared half is the source sections, the date presets and
+%# the chip/exact-type pairing.
 <script>
 (function () {
-  var src = document.getElementById('source');
-  if (!src) return;
-  function sync() {
-    var v = src.value;
-    document.querySelectorAll('[data-only]').forEach(function (el) {
-      var applies = (v === 'both') || (el.getAttribute('data-only') === v);
-      el.style.opacity = applies ? '' : '0.4';
-      el.querySelectorAll('input, select').forEach(function (c) {
-        c.disabled = !applies;
-        c.title = applies ? '' : 'Not applicable when searching ' +
-          (v === 'drive' ? 'files only' : 'mail only');
-      });
-    });
-  }
-  src.addEventListener('change', sync);
-  sync();
-})();
+  'use strict';
+  var $  = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
-// Keep the category checkboxes and the specific types underneath them
-// telling the same story.
-//
-// Both submit the same parameter, so the server sees a union either way and
-// this script is a convenience, not a requirement -- with JavaScript off the
-// boxes still filter exactly as they are ticked. What it adds: ticking
-// "Pictures" ticks the image types it covers, so you can SEE what the group
-// means, and un-ticking one of them drops the group (leaving its siblings
-// ticked) rather than silently contradicting it -- the group would otherwise
-// go on matching the type you just said you did not want.
-(function () {
-  var cats = document.querySelectorAll('input[data-cat]');
-  if (!cats.length) return;
+  var srcMail = $('#srcMail'), srcDrive = $('#srcDrive');
+  if (!srcMail || !srcDrive) return;
+  var secMail = $('#secMail'), secDrive = $('#secDrive');
+  var sumActive = $('#sumActive'), srcNote = $('#srcNote');
+  var dateRow = $('#dateRow'), fromEl = $('#from'), toEl = $('#to');
 
-  function leavesOf(cat) {
-    var types = (cat.getAttribute('data-types') || '').split(',').filter(Boolean);
-    var mimes = (cat.getAttribute('data-mimes') || '').split(',').filter(Boolean);
-    return Array.prototype.filter.call(
-      document.querySelectorAll('input[data-leaf]'),
-      function (leaf) {
-        var v = leaf.value;
-        if (mimes.indexOf(v) !== -1) return true;
-        return types.some(function (t) { return v.indexOf(t + '/') === 0 });
-      });
+  // A section that cannot apply is REMOVED, and its inputs are disabled with
+  // it so a filter that is off the screen can never be submitted. The values
+  // survive, so re-ticking Email brings your mailbox choice back rather than
+  // silently losing it.
+  function showSection(sec, on) {
+    if (!sec) return;
+    sec.hidden = !on;
+    $$('input, select', sec).forEach(function (c) { c.disabled = !on; });
   }
 
-  cats.forEach(function (cat) {
-    cat.addEventListener('change', function () {
-      leavesOf(cat).forEach(function (leaf) { leaf.checked = cat.checked });
-      count();
-    });
-  });
+  function syncSource() {
+    var m = srcMail.checked, d = srcDrive.checked, none = !m && !d;
+    // Neither ticked means both -- the same as sending no source at all,
+    // which is also what this form sends with the script off. Said out loud
+    // rather than silently corrected.
+    if (srcNote) srcNote.hidden = !none;
+    showSection(secMail,  m || none);
+    showSection(secDrive, d || none);
+    summarize();
+  }
+  [srcMail, srcDrive].forEach(function (c) { c.addEventListener('change', syncSource); });
 
-  document.querySelectorAll('input[data-leaf]').forEach(function (leaf) {
-    leaf.addEventListener('change', function () {
-      if (!leaf.checked) {
-        cats.forEach(function (cat) {
-          if (cat.checked && leavesOf(cat).indexOf(leaf) !== -1) cat.checked = false;
-        });
+  // ---- dates ---------------------------------------------------------
+  function ymd(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+           '-' + String(d.getDate()).padStart(2, '0');
+  }
+  $$('input[name=dpreset]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      var v = r.value;
+      if (dateRow) dateRow.hidden = v !== 'custom';
+      if (v === '') { fromEl.value = ''; toEl.value = ''; }
+      else if (v !== 'custom') {
+        var start = new Date();
+        start.setDate(start.getDate() - parseInt(v, 10));
+        fromEl.value = ymd(start);
+        toEl.value = '';
       }
-      count();
+      summarize();
     });
   });
 
-  // The summary carries the count because the list is collapsed by default:
-  // a filter you cannot see is a filter you forget you set.
-  function count() {
-    var sum = document.querySelector('details.specific > summary');
-    if (!sum) return;
-    var n = document.querySelectorAll('input[data-leaf]:checked').length;
-    sum.textContent = 'Specific types' + (n ? ' (' + n + ' selected)' : '');
+  // ---- broad type <-> exact type --------------------------------------
+  //
+  // TRI-STATE PARENT/CHILD. A chip is a select-all for the exact types it
+  // covers: ticking it ticks them, and unticking one of them leaves the chip
+  // HALF selected rather than switching it off.
+  //
+  // That is what makes "narrow" narrow. The server UNIONs type_in tokens, so
+  // cat:pictures + image/jpeg means "all pictures" -- ticking an exact type
+  // under a ticked family was a silent no-op, and the panel was inviting you
+  // to narrow and then widening. Chip and types are one control now.
+  //
+  // A type belongs to several families (text/csv is Text AND a Spreadsheet),
+  // so it is listed under each. Only the first copy carries a form name; the
+  // rest are kept in step here.
+  var chips  = $$('input[data-cat]');
+  var leaves = $$('.leaf input');
+  var allMimes = [];
+  leaves.forEach(function (l) { if (allMimes.indexOf(l.value) === -1) allMimes.push(l.value); });
+
+  function matches(cat, mime) {
+    var mimes = (cat.getAttribute('data-mimes') || '').split(',').filter(Boolean);
+    if (mimes.indexOf(mime) !== -1) return true;
+    var types = (cat.getAttribute('data-types') || '').split(',').filter(Boolean);
+    return types.some(function (t) { return mime.indexOf(t + '/') === 0; });
   }
+  function mimesOf(cat)  { return allMimes.filter(function (m) { return matches(cat, m); }); }
+  function copiesOf(m)   { return leaves.filter(function (l) { return l.value === m; }); }
+  function isOn(m)       { var c = copiesOf(m); return c.length ? c[0].checked : false; }
+  function setMime(m, v) { copiesOf(m).forEach(function (l) { l.checked = v; }); }
+  function labelOf(c)    { return c.nextElementSibling.textContent.trim(); }
+  function activeChips() { return chips.filter(function (c) { return c.checked || c.indeterminate; }); }
+
+  chips.forEach(function (c) {
+    c.addEventListener('change', function () {
+      var want = c.checked;
+      mimesOf(c).forEach(function (m) { setMime(m, want); });
+      // Open the drill-down when a family goes on, so the exact types it
+      // covers appear at the moment they become relevant rather than sitting
+      // behind a disclosure nobody knows has changed.
+      if (want && $('#specific')) $('#specific').open = true;
+      refreshTypes();
+    });
+  });
+  leaves.forEach(function (l) {
+    l.addEventListener('change', function () { setMime(l.value, l.checked); refreshTypes(); });
+  });
+
+  function refreshTypes() {
+    chips.forEach(function (c) {
+      var ms = mimesOf(c), on = ms.filter(isOn).length;
+      // A family with nothing indexed yet keeps whatever you set: the token
+      // still filters server-side, and recomputing it to false would make the
+      // chip impossible to tick.
+      c.checked       = ms.length ? (on === ms.length) : c.checked;
+      c.indeterminate = on > 0 && on < ms.length;
+    });
+    applyScope();
+    summarize();
+  }
+
+  function applyScope() {
+    if (!$('#specific')) return;
+    var on = activeChips(), shown = [];
+    $$('.leafgroup').forEach(function (g) {
+      var any = false;
+      $$('.leaf', g).forEach(function (lab) {
+        var inp = lab.querySelector('input');
+        // A ticked type stays visible even out of scope. Hiding a filter that
+        // is still doing work is the whole bug this pass is about.
+        var vis = !on.length || inp.checked ||
+                  on.some(function (c) { return matches(c, inp.value); });
+        lab.hidden = !vis;
+        if (vis) { any = true; if (shown.indexOf(inp.value) === -1) shown.push(inp.value); }
+      });
+      g.hidden = !any;
+    });
+
+    var n = shown.length, picked = allMimes.filter(isOn).length;
+    if ($('#specLead'))  $('#specLead').hidden  = on.length > 0;
+    if ($('#specEmpty')) $('#specEmpty').hidden = n > 0;
+    if (!$('#specSum')) return;
+    if (on.length) {
+      var names = on.map(labelOf);
+      var within = names.length <= 2 ? names.join(' and ')
+                 : names.slice(0, 2).join(', ') + ' +' + (names.length - 2) + ' more';
+      $('#specSum').textContent = 'Narrow within ' + within + ' — ' + n +
+        (n === 1 ? ' exact type' : ' exact types') + (picked ? ', ' + picked + ' ticked' : '');
+    } else {
+      $('#specSum').textContent = 'Narrow to an exact type' +
+        (picked ? ' (' + picked + ' ticked)' : '');
+    }
+  }
+
+  // ---- the summary ----------------------------------------------------
+  //
+  // It said "Filters (active)", which tells you there is something to find
+  // but not what. Naming them is the point: a narrowed search has to explain
+  // itself with the panel shut.
+  function summarize() {
+    if (!sumActive) return;
+    var bits = [];
+    var m = srcMail.checked, d = srcDrive.checked;
+    if (m !== d) bits.push(m ? 'email only' : 'files only');
+
+    // A whole family reads as its own name; a part-selected one says how much
+    // of it, because "pictures" and "3 of the 8 picture types" are different
+    // searches and the closed panel has to tell them apart.
+    var full = chips.filter(function (c) { return c.checked; }).map(labelOf);
+    var part = chips.filter(function (c) { return c.indeterminate; }).map(function (c) {
+      var ms = mimesOf(c);
+      return labelOf(c) + ' (' + ms.filter(isOn).length + ' of ' + ms.length + ')';
+    });
+    var names = full.concat(part);
+    if (names.length) {
+      bits.push(names.length <= 2 ? names.join(' + ').toLowerCase() : names.length + ' type groups');
+    } else {
+      var loose = allMimes.filter(isOn).length;
+      if (loose) bits.push(loose + (loose === 1 ? ' exact type' : ' exact types'));
+    }
+
+    var preset = $('input[name=dpreset]:checked');
+    if (preset && preset.value && preset.value !== 'custom') {
+      bits.push(preset.nextElementSibling.textContent.trim().toLowerCase());
+    } else if ((fromEl && fromEl.value) || (toEl && toEl.value)) {
+      bits.push(fromEl.value && toEl.value ? fromEl.value + ' to ' + toEl.value
+              : fromEl.value ? 'since ' + fromEl.value : 'until ' + toEl.value);
+    }
+
+    var p = $('#person');
+    if (p && !p.disabled && p.value.trim()) bits.push('to/from ' + p.value.trim());
+    var mb = $('#mailbox');
+    if (mb && !mb.disabled && mb.value) {
+      bits.push(mb.options[mb.selectedIndex].text.replace(/\s*\(\d+\)\s*$/, ''));
+    }
+    var at = $('#hasAtt'), tr = $('#inTrash');
+    if (at && !at.disabled && at.checked) bits.push('with attachment');
+    if (tr && !tr.disabled && tr.checked) bits.push('in trash');
+
+    sumActive.textContent = bits.join(', ');
+  }
+
+  ['#person', '#mailbox', '#hasAtt', '#inTrash', '#from', '#to'].forEach(function (s) {
+    var el = $(s); if (el) el.addEventListener('change', summarize);
+  });
+
+  refreshTypes();
+  syncSource();
 })();
 </script>
 

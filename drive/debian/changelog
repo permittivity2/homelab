@@ -1,3 +1,23 @@
+homelab-drive (0.1.61) unstable; urgency=medium
+
+  * Release v0.1.61
+
+ -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 22:04:10 -0500
+
+homelab-drive (0.1.61) unstable; urgency=medium
+
+  * Deep-search filter panel reset to match homelab-search: same
+    sections, same chips, same hide-don't-grey rule, plus a Clear all
+    filters reset the panel never had.
+  * Fix: the same .field label over .chk specificity bug as homelab-
+    search, and the same undefined --space-5 - which is why Has
+    attachments and Search trash sat jammed together.
+  * Type chips follow Mime.pm: 'Office documents' added, 'Documents'
+    relabelled 'Word processing'. Keys are unchanged, so a bookmarked
+    cat: token keeps working.
+
+ -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 22:03:46 -0500
+
 homelab-drive (0.1.60) unstable; urgency=medium
 
   * Release v0.1.60

@@ -1,3 +1,30 @@
+homelab-search (0.2.14) unstable; urgency=medium
+
+  * Release v0.2.14
+
+ -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 22:03:46 -0500
+
+homelab-search (0.2.14) unstable; urgency=medium
+
+  * Filter panel reset: sections instead of a flat grid, inapplicable
+    controls removed rather than greyed, source as two checkboxes, date
+    presets, and type families that reveal the exact types they cover.
+  * Fix: .field label outranked .chk, so every type checkbox rendered as
+    a tiny uppercase muted label with its box stacked above it -
+    indistinguishable from a disabled control.
+  * Fix: --space-5 and --space-10 are not defined by the shared theme,
+    so four declarations using them were invalid and dropped.
+  * Fix: ticking an exact type under a ticked family was a no-op,
+    because the server unions type_in tokens. A family is now a tri-
+    state select-all for its types.
+  * Mime: categories_of() returns every category a type belongs to, so
+    text/csv appears under Text and Spreadsheets; new 'office' super-
+    category; 'documents' relabelled 'Word processing' and no longer
+    covers PDF; friendly() gives human names for the verbose Office
+    types.
+
+ -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 22:03:29 -0500
+
 homelab-search (0.2.13) unstable; urgency=medium
 
   * Release v0.2.13

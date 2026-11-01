@@ -2,7 +2,9 @@ package Homelab::Search::Mime;
 use Mojo::Base -strict, -signatures;
 use Exporter 'import';
 
-our @EXPORT_OK = qw(categories category_label classify parse_tokens token_sql);
+our @EXPORT_OK = qw(categories category_label categories_of classify friendly
+                    friendly_set
+                    parse_tokens token_sql);
 
 # MIME filtering, in ONE place, because three callers need the same answer:
 # the mail query (matching a message's ATTACHMENT types), the drive query
@@ -32,11 +34,28 @@ our @EXPORT_OK = qw(categories category_label classify parse_tokens token_sql);
 # account's real leaf types from the index itself (Query::mime_facets). The
 # categories are the fast path, not the only path.
 #
-# Categories deliberately OVERLAP (PDF is its own entry and also a Document;
-# text/csv is Text and also a Spreadsheet). That is not a bug to normalize
-# away: include is an OR and exclude is a NOT-OR, so overlap costs nothing
-# and the alternative -- forcing every type into exactly one bucket -- means
-# arguing about where CSV goes instead of just finding the file.
+# Categories deliberately OVERLAP (PDF is its own entry and also an Office
+# document; text/csv is Text and also a Spreadsheet). That is not a bug to
+# normalize away: include is an OR and exclude is a NOT-OR, so overlap costs
+# nothing and the alternative -- forcing every type into exactly one bucket
+# -- means arguing about where CSV goes instead of just finding the file.
+#
+# The overlap is now VISIBLE, which it was not before. categories_of()
+# returns every category a type belongs to, so the picker lists text/csv
+# under Text and under Spreadsheets, and ticking either one reveals it.
+# classify() survives as "the first of those" for anything that still wants
+# a single home. The earlier single-home-only rule had a real cost: it filed
+# text/calendar under Text, because the broad `text` family is tested before
+# the exact-type lists -- so 46 of the 54 calendar entries in the live index
+# were invisible to a reader who had just ticked Calendar.
+#
+# THE KEYS ARE A WIRE CONTRACT. `cat:documents` is what homelab-cli's
+# --type takes and what a bookmarked URL carries, so a key is renamed only
+# with a reason. `documents` is now LABELLED "Word processing" and no longer
+# covers PDF: PDF has its own entry and belongs to `office`, the
+# super-category added for "anything that came out of an office suite".
+# Anyone who had bookmarked cat:documents gets word-processor files without
+# PDFs, which is the narrower and more honest reading of that name.
 
 # Order IS the display order, commonest first.
 my @CATEGORIES = (
@@ -44,9 +63,27 @@ my @CATEGORIES = (
     { key => 'pdf', featured => 1,      label => 'PDF',           pairs => [ 'application/pdf' ] },
     { key => 'text', featured => 1,     label => 'Text',          types => ['text'] },
     { key => 'videos', featured => 1,   label => 'Videos',        types => ['video'] },
-    { key => 'audio',    label => 'Audio',         types => ['audio'] },
-    { key => 'documents', featured => 1, label => 'Documents', pairs => [
+    # The super-category: everything an office suite produces, Microsoft or
+    # LibreOffice, PDF included. The narrower entries below it still exist,
+    # so "all my office files" and "just the spreadsheets" are both one tick.
+    { key => 'office', featured => 1, label => 'Office documents', pairs => [
         'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.oasis.opendocument.text',
+        'application/rtf', 'text/rtf',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.oasis.opendocument.spreadsheet',
+        'application/vnd.ms-powerpoint',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/vnd.oasis.opendocument.presentation',
+    ] },
+    { key => 'audio',    label => 'Audio',         types => ['audio'] },
+    # Key kept, label corrected: "Documents" read as though it covered every
+    # document, which is what `office` is for. This is word-processor files
+    # only, and PDF has moved out of it.
+    { key => 'documents', label => 'Word processing', pairs => [
         'application/msword',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'application/vnd.oasis.opendocument.text',
@@ -68,12 +105,19 @@ my @CATEGORIES = (
         'application/x-tar', 'application/x-7z-compressed',
         'application/x-rar-compressed', 'application/vnd.rar',
         'application/x-bzip2', 'application/x-xz',
+        # What Windows Explorer stamps on a .zip. Present in the live index
+        # and it was landing in "Other".
+        'application/x-zip-compressed',
     ] },
     { key => 'calendar', label => 'Calendar', pairs => [
         'text/calendar', 'application/ics', 'application/calendar+json',
+        'text/x-vcalendar',
     ] },
     { key => 'email', label => 'Email messages', pairs => [
         'message/rfc822', 'message/partial', 'application/vnd.ms-outlook',
+        # Outlook rights-managed message. Also in the live index, also
+        # previously ungrouped.
+        'application/x-microsoft-rpmsg-message',
     ] },
     { key => 'code', label => 'Code and data', pairs => [
         'application/json', 'application/xml', 'text/xml', 'text/html',
@@ -110,22 +154,133 @@ sub categories () {
 
 sub category_label ($key) { return ($BY_KEY{$key} || {})->{label} }
 
-# Which category a specific type belongs to, for grouping the specific-types
-# list under the same headings as the checkboxes. First match in display
-# order wins: the categories overlap on purpose (text/csv is Text and also a
-# Spreadsheet), and a thing shown twice in a list of checkboxes is a thing
-# that can be ticked twice, so a leaf is filed exactly once. Featured
-# categories come first in that order, so csv files under Text rather than
-# somewhere alphabetical is deliberate.
-sub classify ($mime) {
+# EVERY category a specific type belongs to, in display order. This is what
+# the picker groups by: a type is listed under each of its categories, so
+# ticking any one of them reveals it. The caller is responsible for keeping
+# the duplicate checkboxes in step -- the template renders only the first
+# copy with a form name, so one type is never submitted twice.
+sub categories_of ($mime) {
     my $m = lc($mime // '');
-    return undef unless $m =~ m{\A([a-z]+)/(.+)\z};
+    return [] unless $m =~ m{\A([a-z]+)/(.+)\z};
     my $type = $1;
+    my (@keys, %seen);
     for my $c (@ORDERED) {
-        return $c->{key} if grep { $_ eq $type } @{ $c->{types} || [] };
-        return $c->{key} if grep { lc($_) eq $m } @{ $c->{pairs} || [] };
+        my $hit = (grep { $_ eq $type }    @{ $c->{types} || [] })
+               || (grep { lc($_) eq $m }   @{ $c->{pairs} || [] });
+        push @keys, $c->{key} if $hit && !$seen{ $c->{key} }++;
     }
-    return undef;
+    return \@keys;
+}
+
+# The single home, for callers that want one: the first category in display
+# order. Kept because a type still has a most-obvious bucket even when it
+# has several -- application/pdf is a PDF before it is an Office document.
+sub classify ($mime) { return categories_of($mime)->[0] }
+
+# What a human calls this type, and the extension they would recognise.
+#
+# Readability, not accuracy: the real type stays one hover away in the
+# picker. application/vnd.openxmlformats-officedocument.wordprocessingml.document
+# is 71 characters and wrapped to three lines in a column, which is a worse
+# answer to "which of these is the Word file" than "Word document .docx".
+#
+# Anything unmapped falls back to itself, which is the right default --
+# image/png needs no translation, and a type nobody has seen before should
+# appear as what it is rather than as a guess.
+my %FRIENDLY = (
+    'application/pdf'  => [ 'PDF document',        '.pdf'   ],
+    'application/msword' => [ 'Word document',     '.doc'   ],
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                       => [ 'Word document',       '.docx'  ],
+    'application/vnd.oasis.opendocument.text'
+                       => [ 'LibreOffice Writer',  '.odt'   ],
+    'application/rtf'  => [ 'Rich text',           '.rtf'   ],
+    'text/rtf'         => [ 'Rich text',           '.rtf'   ],
+    'application/vnd.ms-excel' => [ 'Excel workbook', '.xls' ],
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                       => [ 'Excel workbook',      '.xlsx'  ],
+    'application/vnd.oasis.opendocument.spreadsheet'
+                       => [ 'LibreOffice Calc',    '.ods'   ],
+    'application/vnd.ms-powerpoint' => [ 'PowerPoint', '.ppt' ],
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+                       => [ 'PowerPoint',          '.pptx'  ],
+    'application/vnd.oasis.opendocument.presentation'
+                       => [ 'LibreOffice Impress', '.odp'   ],
+    'application/zip'  => [ 'ZIP archive',         '.zip'   ],
+    'application/x-zip-compressed' => [ 'ZIP archive', '.zip' ],
+    'application/gzip' => [ 'gzip archive',        '.gz'    ],
+    'application/x-gzip' => [ 'gzip archive',      '.gz'    ],
+    'application/x-tar' => [ 'tar archive',        '.tar'   ],
+    'application/x-7z-compressed' => [ '7-Zip archive', '.7z' ],
+    'application/x-rar-compressed' => [ 'RAR archive', '.rar' ],
+    'application/vnd.rar' => [ 'RAR archive',      '.rar'   ],
+    'message/rfc822'   => [ 'Email message',       '.eml'   ],
+    'application/vnd.ms-outlook' => [ 'Outlook message', '.msg' ],
+    'application/x-microsoft-rpmsg-message' => [ 'Outlook protected message', '' ],
+    'application/octet-stream' => [ 'Unrecognised binary', '' ],
+    'application/vnd.hp-hpgl' => [ 'HP plotter drawing', '.hpgl' ],
+    'application/pgp-signature' => [ 'PGP signature', '.asc' ],
+    'application/pgp-keys' => [ 'PGP key',         '.asc'   ],
+    'text/calendar'    => [ 'Calendar event',      '.ics'   ],
+    'application/ics'  => [ 'Calendar event',      '.ics'   ],
+    'text/x-vcalendar' => [ 'Calendar event',      'vCalendar' ],
+    'text/csv'         => [ 'CSV spreadsheet',     '.csv'   ],
+    'text/tab-separated-values' => [ 'Tab-separated values', '.tsv' ],
+    'text/plain'       => [ 'Plain text',          '.txt'   ],
+    'text/html'        => [ 'HTML page',           '.html'  ],
+    'text/markdown'    => [ 'Markdown',            '.md'    ],
+    'text/css'         => [ 'Stylesheet',          '.css'   ],
+    'application/json' => [ 'JSON',                '.json'  ],
+    'application/xml'  => [ 'XML',                 '.xml'   ],
+    'text/xml'         => [ 'XML',                 '.xml'   ],
+    'image/jpeg'       => [ 'JPEG image',          '.jpg'   ],
+    'image/jpg'        => [ 'JPEG image',          '.jpg'   ],
+    'image/png'        => [ 'PNG image',           '.png'   ],
+    'image/gif'        => [ 'GIF image',           '.gif'   ],
+    'image/webp'       => [ 'WebP image',          '.webp'  ],
+    'image/heic'       => [ 'HEIC photo',          '.heic'  ],
+    'image/svg+xml'    => [ 'SVG drawing',         '.svg'   ],
+    'video/mp4'        => [ 'MP4 video',           '.mp4'   ],
+    'video/quicktime'  => [ 'QuickTime video',     '.mov'   ],
+    'video/3gpp'       => [ '3GPP video',          '.3gp'   ],
+    'audio/mpeg'       => [ 'MP3 audio',           '.mp3'   ],
+    'audio/mp4'        => [ 'AAC audio',           '.m4a'   ],
+);
+
+sub friendly ($mime) {
+    my $m = lc($mime // '');
+    # A wildcard subtype is not a real type -- it is what the indexer stores
+    # for a mail part whose Content-Type gave only the top level. Saying so
+    # beats showing "image/*" and letting the reader wonder.
+    return ((ucfirst $1) . ', exact type not recorded', '') if $m =~ m{\A([a-z]+)/\*\z};
+    my $f = $FRIENDLY{$m} or return ($mime // '', '');
+    return @$f;
+}
+
+# Friendly names for a SET of types, with collisions resolved.
+#
+# Several real types share one human name: image/jpeg and image/jpg are both
+# "JPEG image", application/zip and application/x-zip-compressed are both
+# "ZIP archive", text/calendar and application/ics are both "Calendar
+# event". Two identical-looking rows with different counts is worse than no
+# friendly name at all, so where a name is not unique within the set the raw
+# type is shown beside it.
+#
+# Done by detection rather than by hand-writing "(non-standard type)" into
+# the table: the table is a maintenance surface, and a rule that notices
+# cannot fall behind the data the way a hand-written qualifier does.
+sub friendly_set ($mimes) {
+    my @rows = map { my ($l, $e) = friendly($_);
+                     { mime => $_, label => $l, ext => $e } } @{ $mimes || [] };
+    # Keyed on name AND extension, because the extension already separates
+    # most of them: "Word document .docx" and "Word document .doc" need no
+    # help, and qualifying the first would put the 71-character type back on
+    # the screen that this function exists to keep it off.
+    my %n;
+    my $key = sub ($r) { lc($r->{label}) . '|' . lc($r->{ext} // '') };
+    $n{ $key->($_) }++ for @rows;
+    $_->{qualify} = ($n{ $key->($_) } > 1 ? $_->{mime} : undef) for @rows;
+    return \@rows;
 }
 
 # A token is untrusted input and goes nowhere near SQL text, so parsing is

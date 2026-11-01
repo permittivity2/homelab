@@ -45,70 +45,159 @@
     details.filters > summary::before { content: '▸'; font-size: 0.8em; }
     details.filters[open] > summary::before { content: '▾'; }
 
-    .fgrid { display: grid; grid-template-columns: 1fr; gap: var(--space-3); margin-top: var(--space-2); }
-    .field { min-width: 0; }
-    .field label {
-      display: block; font-size: var(--app-xs); color: var(--text-muted);
-      margin-bottom: 4px; letter-spacing: var(--tracking-wide); text-transform: uppercase;
+    /* THE FILTER PANEL.
+       ------------------------------------------------------------------
+       SPECIFICITY RULE, and the reason this block was rewritten. The old
+       CSS styled control nameplates with `.field label`, which is MORE
+       specific than `.chk` (one class + one element beats one class). Every
+       file-type checkbox is a <label> inside a .field, so the nameplate rule
+       won every property it set: each checkbox rendered as a tiny uppercase
+       muted word with its box stacked ABOVE it -- pixel-identical to a
+       disabled control, which is why the whole panel read as greyed out.
+
+       Nothing here selects a bare element inside a container. Every rule
+       targets its own class, so a control added later cannot inherit
+       another's look by accident.
+
+       THREE WEIGHTS, kept distinct, because they were all the same before:
+         .fsec-h  structural -- a rule with a word on it
+         .lab     a nameplate over an input: small, quiet, sentence case
+         .box/.chip  something you ACT on: full size, primary colour
+    */
+    .panel {
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: var(--black-primary); padding: var(--space-4);
+      display: flex; flex-direction: column; gap: var(--space-6);
+      margin-top: var(--space-2);
     }
+    .fsec { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+    .fsec-h {
+      display: flex; align-items: center; gap: var(--space-3); margin: 0;
+      font-size: 0.6875rem; font-weight: var(--weight-semibold);
+      text-transform: uppercase; letter-spacing: var(--tracking-wider);
+      color: var(--text-muted); white-space: nowrap;
+    }
+    .fsec-h::after { content: ''; flex: 1 1 auto; height: 1px; background: var(--border); }
+
+    .box {
+      display: inline-flex; align-items: center; gap: 10px; min-height: 36px;
+      cursor: pointer; min-width: 0;
+      font-size: var(--app-base); color: var(--text-primary);
+    }
+    .box input {
+      width: 18px; height: 18px; flex: 0 0 auto; margin: 0;
+      accent-color: var(--accent-steel); cursor: pointer;
+    }
+    .box input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .row-chk { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); }
+
+    .lab { display: block; font-size: var(--app-xs); color: var(--text-secondary); margin-bottom: 4px; }
+    .fields { display: grid; grid-template-columns: 1fr; gap: var(--space-3); }
+    .field { min-width: 0; }
     .field input, .field select {
       width: 100%; max-width: 100%; min-width: 0;
-      background: var(--black-primary); color: var(--text-primary);
-      border: 1px solid var(--border); border-radius: var(--radius-sm);
-      padding: 0 10px; font-size: 16px; min-height: 44px;
+      background: var(--black-secondary); color: var(--text-primary);
+      border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+      padding: 0 10px; font-size: 16px; min-height: 40px; font-family: inherit;
     }
-    /* File type. A full-width block rather than a grid cell: it is a set of
-       checkboxes, not a one-line control, and squeezing it into a third of
-       the row is what made the first version unreadable. */
-    .tfield { grid-column: 1 / -1; }
-    .flabel {
-      display: block; font-size: var(--app-xs); color: var(--text-muted);
-      margin-bottom: 6px; letter-spacing: var(--tracking-wide); text-transform: uppercase;
+    .field input::placeholder { color: var(--text-muted); }
+    .field input:focus-visible, .field select:focus-visible {
+      outline: 2px solid var(--focus-ring); outline-offset: -1px;
     }
-    .cats { display: flex; flex-wrap: wrap; gap: 4px var(--space-4); }
-    .chk {
-      display: inline-flex; align-items: center; gap: 8px; min-height: 40px;
-      font-size: var(--app-sm); color: var(--text-primary); cursor: pointer; min-width: 0;
-    }
-    .chk input[type=checkbox] { width: 18px; height: 18px; flex: 0 0 auto; margin: 0; }
-    .chk span { min-width: 0; overflow-wrap: anywhere; }
-    .chk em { font-style: normal; color: var(--text-muted); }
 
-    details.specific { margin-top: var(--space-2); }
+    /* Chips. Fourteen 18px boxes is a lot of small targets, and a filled
+       chip reads across the panel where a tick does not. The real <input>
+       stays in the markup -- keyboard, screen reader, and it submits with
+       the script off -- stretched invisibly over the chip. */
+    .chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+    .chip { position: relative; display: inline-flex; min-width: 0; }
+    .chip input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+    .chip span {
+      display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px;
+      border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+      background: var(--black-secondary); font-size: var(--app-sm); color: var(--text-primary);
+      white-space: nowrap; transition: background var(--transition-fast), border-color var(--transition-fast);
+    }
+    .chip input:hover + span { background: var(--surface-hover); border-color: var(--silver-dim); }
+    .chip input:checked + span { background: var(--accent-steel); border-color: #7290a6; color: #f2f6f9; }
+    .chip input:checked + span::before { content: '\2713'; font-size: 0.85em; }
+    /* Half selected: the family is on, but you have unticked some of its
+       exact types. A different fill and an en dash, because "some of
+       Pictures" and "all of Pictures" are different searches. */
+    .chip input:indeterminate + span {
+      background: rgba(74, 93, 110, 0.42); border-color: #5e7a90; color: #e6edf2;
+    }
+    .chip input:indeterminate + span::before { content: '\2013'; font-size: 0.95em; }
+    .chip input:focus-visible + span { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+    .daterow { display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+    .daterow .field { flex: 1 1 150px; }
+    .daterow .sep { min-height: 40px; display: flex; align-items: center; font-size: var(--app-sm); color: var(--text-muted); }
+
+    .note { margin: 0; font-size: var(--app-xs); color: var(--text-muted); line-height: 1.5; }
+    .note.warn { color: var(--warning); }
+
     details.specific > summary {
-      cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px;
-      font-size: var(--app-xs); color: var(--text-muted);
-      letter-spacing: var(--tracking-wide); text-transform: uppercase; min-height: 32px;
+      cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px;
+      font-size: var(--app-xs); color: var(--text-secondary); min-height: 32px;
     }
     details.specific > summary::-webkit-details-marker { display: none; }
     details.specific > summary::before { content: '\25B8'; font-size: 0.8em; }
     details.specific[open] > summary::before { content: '\25BE'; }
+    details.specific > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+    /* Columns rather than a grid: fourteen groups of wildly different
+       heights in a 3-column grid strand the short ones in tall rows.
+       break-inside keeps a group whole. */
     .leafwrap {
-      display: grid; grid-template-columns: 1fr; gap: var(--space-3);
+      column-count: 1; column-gap: var(--space-6);
       margin-top: var(--space-2); padding: var(--space-3);
       border: 1px solid var(--border); border-radius: var(--radius-sm);
-      background: var(--black-primary);
+      background: var(--surface);
     }
-    .leafgroup { min-width: 0; }
+    .leafgroup {
+      break-inside: avoid; min-width: 0;
+      display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--space-4);
+    }
     .leafgroup h5 {
-      margin: 0 0 2px; font-size: var(--app-xs); color: var(--text-muted);
-      letter-spacing: var(--tracking-wide); text-transform: uppercase; font-weight: 600;
+      margin: 0 0 4px; font-size: 0.6875rem; font-weight: var(--weight-semibold);
+      text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--text-muted);
     }
-    .leafgroup .chk { display: flex; min-height: 36px; }
+    .leaf {
+      display: flex; align-items: flex-start; gap: 8px; min-height: 30px;
+      font-size: var(--app-sm); color: var(--text-primary); cursor: pointer;
+      line-height: 1.45; min-width: 0;
+    }
+    .leaf input {
+      width: 16px; height: 16px; flex: 0 0 auto; margin: 4px 0 0;
+      accent-color: var(--accent-steel); cursor: pointer;
+    }
+    .leaf input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .leaf .m { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+    .leaf .ext, .leaf .qual {
+      font-family: var(--font-mono); font-style: normal; font-size: 0.72rem; color: var(--text-muted);
+    }
+    .leaf .n {
+      flex: 0 0 auto; margin-left: auto; padding-left: 8px;
+      color: var(--text-muted); font-size: var(--app-xs);
+      font-variant-numeric: tabular-nums; white-space: nowrap;
+    }
+    .leadnote, .leafempty { margin-top: var(--space-2); }
 
-    .fnote {
-      grid-column: 1 / -1; margin: var(--space-2) 0 0; font-size: var(--app-xs);
-      color: var(--text-muted); line-height: 1.5;
+    .fsec-foot {
+      display: flex; flex-wrap: wrap; align-items: center;
+      justify-content: space-between; gap: var(--space-3);
+      padding-top: var(--space-2); border-top: 1px solid var(--border);
     }
-
-    .checks { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
-    .checks label {
-      display: flex; align-items: center; gap: 10px; min-height: 36px;
-      font-size: var(--app-sm); color: var(--text-muted); min-width: 0;
-    }
-    .checks input[type=checkbox] { width: 18px; height: 18px; flex: 0 0 auto; }
     .aioff { opacity: 0.5; }
     .aioff input { cursor: not-allowed; }
+    .clear {
+      font-size: var(--app-sm); color: var(--silver-dim);
+      min-height: 36px; display: inline-flex; align-items: center;
+      text-decoration: underline; text-underline-offset: 3px;
+    }
+    .clear:hover { color: var(--silver-bright); }
+    .clear:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
     .hint { font-size: var(--app-xs); color: var(--text-muted); }
 
     .counts { font-size: var(--app-xs); color: var(--text-muted); margin: 0 0 var(--space-4); }
@@ -116,7 +205,7 @@
     h2.sec {
       font-size: var(--app-xs); font-weight: var(--weight-normal);
       letter-spacing: var(--tracking-wide); text-transform: uppercase;
-      color: var(--text-muted); margin: var(--space-5) 0 var(--space-2);
+      color: var(--text-muted); margin: var(--space-6) 0 var(--space-2);
     }
     .res { border-top: 1px solid var(--border); }
     .hit { padding: var(--space-3) 0; border-bottom: 1px solid var(--border); min-width: 0; }
@@ -132,7 +221,7 @@
     }
     .acts { margin-top: 8px; display: flex; flex-wrap: wrap; gap: var(--space-4); font-size: var(--app-xs); }
     .acts a { color: var(--silver-dim); min-height: 32px; display: inline-flex; align-items: center; }
-    .empty { color: var(--text-muted); padding: var(--space-5) 0; }
+    .empty { color: var(--text-muted); padding: var(--space-6) 0; }
 
     details.pv > summary { cursor: pointer; color: var(--silver-dim); font-size: var(--app-xs); min-height: 32px; }
     details.pv iframe {
@@ -140,10 +229,15 @@
       border-radius: var(--radius-sm); margin-top: var(--space-2); background: var(--black-primary);
     }
 
-    /* Wider screens only: two columns of filters, the result date back on the
-       same line as its subject, a taller preview. */
+    @media (min-width: 560px) {
+      .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .leafwrap { column-count: 2; }
+    }
+
+    /* Wider screens only: the exact-type list in three columns, the result
+       date back on the same line as its subject, a taller preview. */
     @media (min-width: 721px) {
-      .wrap { padding: var(--space-6) var(--space-4) var(--space-10); }
+      .wrap { padding: var(--space-6) var(--space-4) var(--space-12); }
       /* The search block is centred and capped; the RESULTS below stay full
          width, because a result list wants the room and a text field does
          not. Stretching the input to 1100px just made the caret start a long
@@ -155,9 +249,8 @@
       .searchbar { max-width: 760px; margin-left: auto; margin-right: auto; }
       .askrow    { max-width: 560px; margin-left: auto; margin-right: auto; }
       .counts    { max-width: 760px; margin-left: auto; margin-right: auto; text-align: center; }
-      .fgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .leafwrap { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .checks { flex-direction: row; flex-wrap: wrap; gap: var(--space-5); }
+      .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .leafwrap { column-count: 3; }
       .hit .t { flex-direction: row; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
       .hit .meta { white-space: nowrap; }
       details.pv iframe { height: 420px; }

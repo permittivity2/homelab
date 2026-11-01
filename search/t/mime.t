@@ -2,7 +2,8 @@ use strict;
 use warnings;
 use Test::More;
 use lib 'lib';
-use Homelab::Search::Mime qw(categories category_label classify parse_tokens token_sql);
+use Homelab::Search::Mime qw(categories category_label categories_of classify
+                             friendly friendly_set parse_tokens token_sql);
 
 # ---------------------------------------------------------------- the widths
 # One mechanism, three widths. These three forms are the whole user-facing
@@ -15,11 +16,32 @@ is_deeply parse_tokens(['cat:pictures']), [['image', undef]], 'cat:pictures expa
 # exist at all, since no (type, subtype) rule produces this set.
 my $docs = parse_tokens(['cat:documents']);
 ok scalar(@$docs) >= 4, 'documents expands to several types';
-ok scalar(grep { $_->[0] eq 'application' && $_->[1] eq 'pdf' } @$docs), '...including pdf';
-ok scalar(grep { $_->[1] && $_->[1] =~ /wordprocessingml/ } @$docs),     '...and docx';
+ok scalar(grep { $_->[1] && $_->[1] =~ /wordprocessingml/ } @$docs),     '...including docx';
+# PDF deliberately LEFT this category when it was relabelled "Word
+# processing". It has its own entry and lives in the office super-category;
+# a word-processing filter that returns PDFs is the thing that made the old
+# "Documents" label read as broader than it was.
+ok !scalar(grep { $_->[0] eq 'application' && $_->[1] eq 'pdf' } @$docs),
+    'word processing no longer drags in pdf';
+
+my $office = parse_tokens(['cat:office']);
+ok scalar(grep { $_->[0] eq 'application' && $_->[1] eq 'pdf' } @$office), 'office covers pdf';
+ok scalar(grep { $_->[1] && $_->[1] =~ /wordprocessingml/ }  @$office),    '...and Word';
+ok scalar(grep { $_->[1] && $_->[1] =~ /spreadsheetml/ }     @$office),    '...and Excel';
+ok scalar(grep { $_->[1] && $_->[1] =~ /presentationml/ }    @$office),    '...and PowerPoint';
+ok scalar(grep { $_->[1] && $_->[1] =~ /opendocument/ }      @$office),    '...and LibreOffice';
+
 my $sheets = parse_tokens(['cat:spreadsheets']);
 ok scalar(grep { $_->[0] eq 'text' && $_->[1] eq 'csv' } @$sheets),
     'spreadsheets crosses into text/csv';
+
+# Types seen in the live index that used to fall through to "Other".
+for my $pair (['cat:archives', 'x-zip-compressed'], ['cat:email', 'x-microsoft-rpmsg-message'],
+              ['cat:calendar', 'x-vcalendar']) {
+    my ($tok, $want) = @$pair;
+    ok scalar(grep { ($_->[1] // '') eq $want } @{ parse_tokens([$tok]) }),
+        "$tok covers $want";
+}
 
 # ------------------------------------------------------------- real subtypes
 # Subtypes in the live corpus contain dots and plusses; a tighter pattern
@@ -84,7 +106,7 @@ is $cats->[1]{key}, 'pdf',      'then PDF';
 # instead of wherever it happened to be appended.
 my @labels = map { $_->{label} } @$cats;
 my @featured = @labels[0 .. 4];
-is_deeply \@featured, ['Pictures', 'PDF', 'Text', 'Videos', 'Documents'],
+is_deeply \@featured, ['Pictures', 'PDF', 'Text', 'Videos', 'Office documents'],
     'the featured five, in declared order';
 my @tail = @labels[5 .. $#labels];
 is_deeply \@tail, [ sort { lc($a) cmp lc($b) } @tail ],
@@ -122,6 +144,59 @@ for my $c (@$cats) {
 ok !grep({ !length($_->{label}) } @$cats), 'every group has a label';
 is category_label('videos'), 'Videos', 'labels are addressable by key';
 is category_label('nope'),   undef,    'an unknown key has no label';
+is category_label('documents'), 'Word processing',
+    'the key is the wire contract; only the label was corrected';
+
+# ------------------------------------------------------------ categories_of
+# EVERY home, not just the first. This is what the picker groups by, and
+# getting it wrong is not cosmetic: the single-home version filed
+# text/calendar under Text, so ticking Calendar revealed 8 of its 54 entries.
+is_deeply categories_of('text/csv'),   ['text', 'spreadsheets'],
+    'csv is Text and a Spreadsheet, in display order';
+is_deeply categories_of('text/html'),  ['text', 'code'],         'html is Text and Code';
+is_deeply categories_of('text/markdown'), ['text', 'code'],      'markdown is Text and Code';
+is_deeply categories_of('text/calendar'), ['text', 'calendar'],  'calendar events are reachable from Calendar';
+is_deeply categories_of('application/pdf'), ['pdf', 'office'],   'pdf is itself and an Office document';
+is_deeply categories_of('application/msword'), ['office', 'documents'],
+    'Word is an Office document and Word processing';
+is_deeply categories_of('image/png'),  ['pictures'],             'one home is still one home';
+is_deeply categories_of('application/vnd.hp-hpgl'), [],          'an unknown type has none';
+is_deeply categories_of('nonsense'),   [],                       'a non-mime has none';
+is_deeply categories_of(undef),        [],                       'undef has none';
+
+# classify is the first of those, so the old single-home callers are intact.
+is classify('text/csv'), categories_of('text/csv')->[0], 'classify is the first category_of';
+
+# Every category must claim at least one of its own declared members, or the
+# chip is drawn for a group the picker can never populate.
+for my $c (@$cats) {
+    my ($m) = (@{ $c->{pairs} }, map { "$_/x" } @{ $c->{types} });
+    ok scalar(grep { $_ eq $c->{key} } @{ categories_of($m) }),
+        "categories_of claims $c->{key} for $m";
+}
+
+# -------------------------------------------------------------- friendly
+my ($lbl, $ext) = friendly('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+is $lbl, 'Word document', 'the 71-character type has a human name';
+is $ext, '.docx',         '...and the extension a person recognises';
+is_deeply [ friendly('image/png') ], ['PNG image', '.png'], 'ordinary types too';
+is_deeply [ friendly('application/x-not-a-real-type') ], ['application/x-not-a-real-type', ''],
+    'an unmapped type falls back to itself rather than to a guess';
+is_deeply [ friendly(undef) ], ['', ''], 'undef is empty, not an error';
+like( (friendly('image/*'))[0], qr/not recorded/,
+    'a wildcard subtype says what it is instead of showing an asterisk');
+
+# friendly_set qualifies only where the name AND extension collide.
+my $set = friendly_set([qw(image/jpeg image/jpg image/png)]);
+is scalar(@$set), 3, 'one row per type';
+ok $set->[0]{qualify} && $set->[1]{qualify}, 'both JPEG spellings are qualified';
+ok !$set->[2]{qualify},                      'PNG is unambiguous and is not';
+my $words = friendly_set([
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/msword' ]);
+ok !grep({ $_->{qualify} } @$words),
+    'same name, different extension: no qualifier, so the long type stays off the screen';
+is_deeply friendly_set(undef), [], 'no list is not an error';
 
 # Every advertised group must actually expand to something, or the UI offers
 # a filter that silently does nothing.
