@@ -485,15 +485,41 @@ sub index_drive_item ($self, %a) {
             $row->{size_bytes}, $row->{content_created_at}, $row->{uploaded_at}, $row->{deleted_at},
             $row->{extractor_version});
 
-        if (defined $text) {
-            my $src = length($text) > TSV_BUDGET ? substr($text, 0, TSV_BUDGET) : $text;
+        # WHAT IS SEARCHABLE vs WHAT IS DISPLAYED, which is why these are
+        # two columns: body_text is the document (snippets, get_excerpt),
+        # tsv_source is what feeds the search vector.
+        #
+        # Every TEXT metadata value joins tsv_source. Without this a photo
+        # is unfindable by anything in it: an image has no body text at
+        # all, so a tagged person's name, the camera, the caption and a
+        # zip's member list were all stored, shown on the page, and
+        # impossible to type into the search box. "The zip with the
+        # invoice in it" is the plan's own example of what this should
+        # find, and it did not.
+        #
+        # Kind-driven rather than a list of keys: a text key added later is
+        # searchable the day it is added, and a number or a date is left
+        # out because 1920 and 2026-08-09 are filters, not search terms.
+        my @meta_terms;
+        if ($meta) {
+            for my $key (sort keys %$meta) {
+                next unless ($META_KEY{$key}{value_kind} // '') eq 'text';
+                push @meta_terms, $meta->{$key};
+            }
+        }
+
+        if (defined $text || @meta_terms) {
+            my $body = $text;
+            my $src  = join "\n", grep { defined && length } ($text, @meta_terms);
+            my $trunc = length($src) > TSV_BUDGET ? 1 : 0;
+            $src = substr($src, 0, TSV_BUDGET) if $trunc;
             $db->query(q{
                 INSERT INTO search.drive_item_text (drive_item_id, account_id, body_text, tsv_source, truncated)
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT (drive_item_id) DO UPDATE SET
                     body_text = EXCLUDED.body_text, tsv_source = EXCLUDED.tsv_source,
                     truncated = EXCLUDED.truncated},
-                $id, $account_id, $text, $src, (length($text) > TSV_BUDGET ? 1 : 0));
+                $id, $account_id, $body, $src, $trunc);
         }
 
         # Per-type metadata. Replaced wholesale rather than merged: a

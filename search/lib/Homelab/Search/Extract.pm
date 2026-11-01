@@ -28,7 +28,7 @@ use constant {
     # the version it was extracted with, so "which files predate this
     # extractor" is an indexed comparison and the re-index is incremental
     # rather than a full rebuild.
-    EXTRACTOR_VERSION => 3,
+    EXTRACTOR_VERSION => 5,
 
     # Generous on purpose. ExifTool reads HEADERS, not the file -- a 564 MB
     # video in this corpus is parsed in milliseconds -- and Archive::Zip
@@ -259,6 +259,12 @@ sub _coerce ($key, $v) {
 sub _zip_members ($path) {
     return {} unless _zip();
     my %out;
+    # Archive::Zip reports a bad archive by PRINTING to stderr through its
+    # own error handler, as well as returning a status. A corrupt or
+    # truncated zip is a normal thing to be sent, so that is a log line per
+    # hostile upload and a warning in every test run -- output people learn
+    # to scroll past. The status below is the part we act on.
+    local $Archive::Zip::ErrorHandler = sub { };
     my $zip = Archive::Zip->new;
     # read() returns a status rather than dying, and a corrupt archive is a
     # normal thing to be sent.
@@ -335,6 +341,25 @@ sub extract ($mime, $path, %opt) {
                 if defined $info->{CompressorID};
             if ($mime =~ m{^(?:video|audio)/} && exists $out{'doc.created_at'}) {
                 $out{'media.created_at'} = delete $out{'doc.created_at'};
+            }
+            # DJI writes its CAPTURE MODE into XPKeywords -- a field that
+            # exists for keywords a person chose. 'single' is one frame per
+            # shutter press (versus burst, AEB, interval, panorama) and
+            # 'smart' is SmartPhoto, where the aircraft picks HDR or
+            # Hyperlight for you. Real settings, wrong field, and nobody
+            # searches on them: the effect is a "Keywords: single" line
+            # under most of a drone library and a keywords field that is
+            # noise rather than signal.
+            #
+            # Scoped to DJI on purpose. 'single' and 'smart' are ordinary
+            # words, so a photo somebody genuinely tagged "single" on any
+            # other camera keeps its tag -- the make is what makes this a
+            # safe thing to drop rather than a guess about intent.
+            if (defined $out{'image.keywords'}
+                && ($info->{Make} // '') =~ /\bDJI\b/i
+                && $out{'image.keywords'} =~ /\A(?:single|smart|burst|aeb|hdr|hyperlight
+                                               |timed|interval|pano(?:rama)?|night)\z/xi) {
+                delete $out{'image.keywords'};
             }
             # The count is derived rather than read: no standard provides
             # one, and it is the part that may be shared.

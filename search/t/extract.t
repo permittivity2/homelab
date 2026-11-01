@@ -140,4 +140,59 @@ cmp_ok EXTRACTOR_VERSION, '>=', 1, 'the extractor is versioned, so a re-index ca
     is $text->({ a => 1 }),   undef,  'a hashref is still refused';
 }
 
+# --------------------------------- face tags and camera-mode noise
+# Needs ExifTool to WRITE the fixtures, so skipped where it is absent --
+# but these are behavioural rules someone could undo by accident, so they
+# are asserted rather than left to the live check that found them.
+SKIP: {
+    skip 'Image::ExifTool not installed', 7 unless eval { require Image::ExifTool; 1 };
+    require MIME::Base64;
+
+    # The smallest valid baseline JPEG, inline so the repository carries no
+    # binaries. ExifTool needs a real container to write tags into.
+    my $seed = fixture('seed.jpg', MIME::Base64::decode_base64(
+        '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP////////////////////////////////////'
+      . '////////////////////////////////////////////wgALCAABAAEBAREA/8QAFAAB'
+      . 'AAAAAAAAAAAAAAAAAAAACf/aAAgBAQAAAAHSzyD/2Q=='));
+
+    my $write = sub {
+        my ($name, %tags) = @_;
+        my $out = "$dir/$name";
+        my $et  = Image::ExifTool->new;
+        for my $k (sort keys %tags) {
+            my $v = $tags{$k};
+            $et->SetNewValue($k, $_, AddValue => 1) for (ref $v ? @$v : $v);
+        }
+        return $et->WriteInfo($seed, $out) ? $out : undef;
+    };
+
+    # All three face-tagging standards reach the same key.
+    for my $pair ([ RegionName              => 'MWG Regions' ],
+                  [ RegionPersonDisplayName => 'Microsoft People Tags' ],
+                  [ PersonInImage           => 'IPTC Extension' ]) {
+        my ($tag, $label) = @$pair;
+        my $f = $write->("$tag.jpg", $tag => ['Ada Lovelace', 'Grace Hopper']) or next;
+        my $m = extract('image/jpeg', $f);
+        is $m->{'people.names'}, 'Ada Lovelace, Grace Hopper', "$label lands in people.names";
+    }
+
+    # A multi-face photo gives a count, which is the shareable part.
+    my $f = $write->('counted.jpg', RegionName => ['A', 'B', 'C']);
+    is extract('image/jpeg', $f)->{'people.count'}, 3, 'the count is derived from the names'
+        if $f;
+
+    # DJI writes its CAPTURE MODE into the user keyword field. Dropped --
+    # but ONLY for DJI, because 'single' is an ordinary word and somebody
+    # else's tag is their own.
+    my $dji = $write->('dji.jpg',   Make => 'DJI', XPKeywords => 'single');
+    my $can = $write->('canon.jpg', Make => 'Canon', XPKeywords => 'single');
+    is extract('image/jpeg', $dji)->{'image.keywords'}, undef,
+        "DJI's capture mode is not a keyword" if $dji;
+    is extract('image/jpeg', $can)->{'image.keywords'}, 'single',
+        'the same word on another camera is the owner\'s own tag' if $can;
+    my $djireal = $write->('djireal.jpg', Make => 'DJI', XPKeywords => 'Montana trip');
+    is extract('image/jpeg', $djireal)->{'image.keywords'}, 'Montana trip',
+        'and a real keyword on a DJI photo survives' if $djireal;
+}
+
 done_testing;
