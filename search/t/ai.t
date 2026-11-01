@@ -279,9 +279,11 @@ isnt Digest::SHA::sha256_hex($body . ' '), notice_sha256(),
     my ($text) = run_tool($q, 20, 'search_drive', { query => 'lake' }, { rows_used => 0 });
 
     is $asked, 'safe', 'the drive tool asks for SAFE metadata, not all of it';
-    like $text, qr/image\.camera_model/, 'non-sensitive metadata does reach the model';
-    unlike $text, qr/gps\.latitude|gps\.longitude|45\.337/,
-        'and no GPS key or coordinate appears anywhere in the tool result';
+    like $text, qr/image\.camera_model/, 'non-sensitive metadata reaches the model';
+    # The fixture's "safe" view drops only what metadata_keys marks
+    # sensitive. GPS was unmarked by migration 008; a tagged NAME was not.
+    unlike $text, qr/people\.names|Ada Lovelace/,
+        'a tagged person\'s name never appears in a tool result';
 }
 
 done_testing;
@@ -310,9 +312,9 @@ sub metadata_for {
     my @all = (
         { key_name => 'image.camera_model', label => 'Camera model', kind => 'text', value => 'FC9113' },
         { key_name => 'gps.latitude',  label => 'Latitude',  kind => 'num', value => 45.3373175555556 },
-        { key_name => 'gps.longitude', label => 'Longitude', kind => 'num', value => -109.012832361111 },
+        { key_name => 'people.names',  label => 'People',    kind => 'text', value => 'Ada Lovelace' },
     );
-    @all = grep { $_->{key_name} !~ /^gps\./ } @all if ($vis // '') eq 'safe';
+    @all = grep { $_->{key_name} !~ /^people\.names$/ } @all if ($vis // '') eq 'safe';
     return { 7 => \@all };
 }
 

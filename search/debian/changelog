@@ -1,8 +1,18 @@
-homelab-search (0.2.23) unstable; urgency=medium
+homelab-search (0.2.24) unstable; urgency=medium
 
-  * Release v0.2.23
+  * GPS is no longer withheld from AI mode (migration 008). A product
+    decision: coordinates without a face carry little on their own, and
+    every request from this service shares one Anthropic workspace, so a
+    request is not labelled with whose it is. Recorded in the migration
+    with the counter-argument that was weighed and overruled - phone GPS
+    plus timestamps is a home address without a face, and within one
+    request the points are linkable to each other.
+  * people.names stays sensitive. It was not part of that decision: a
+    name identifies a third party directly, and the people tagged in
+    somebody's photos never saw the consent notice because they are not
+    users.
 
- -- Gardner <gardner@homelab>  Sun, 01 Nov 2026 00:28:35 -0500
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 00:53:21 -0500
 
 homelab-search (0.2.23) unstable; urgency=medium
 
@@ -20,12 +30,6 @@ homelab-search (0.2.23) unstable; urgency=medium
     and 2026-08-09 are filters, not search terms.
 
  -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 00:28:35 -0500
-
-homelab-search (0.2.22) unstable; urgency=medium
-
-  * Release v0.2.22
-
- -- Gardner <gardner@homelab>  Sun, 01 Nov 2026 00:26:17 -0500
 
 homelab-search (0.2.22) unstable; urgency=medium
 
@@ -47,12 +51,6 @@ homelab-search (0.2.22) unstable; urgency=medium
 
 homelab-search (0.2.21) unstable; urgency=medium
 
-  * Release v0.2.21
-
- -- Gardner <gardner@homelab>  Sun, 01 Nov 2026 00:15:19 -0500
-
-homelab-search (0.2.21) unstable; urgency=medium
-
   * Drop camera factory placeholders from image descriptions. Every DJI
     photo in this corpus carries ImageDescription 'default', which put
     an identical meaningless line under 82 photos; Olympus and several
@@ -61,12 +59,6 @@ homelab-search (0.2.21) unstable; urgency=medium
     caption and a keyword is left alone.
 
  -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 00:15:19 -0500
-
-homelab-search (0.2.20) unstable; urgency=medium
-
-  * Release v0.2.20
-
- -- Gardner <gardner@homelab>  Sun, 01 Nov 2026 00:13:10 -0500
 
 homelab-search (0.2.20) unstable; urgency=medium
 
@@ -88,12 +80,6 @@ homelab-search (0.2.20) unstable; urgency=medium
     mechanism.
 
  -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 00:13:10 -0500
-
-homelab-search (0.2.19) unstable; urgency=medium
-
-  * Release v0.2.19
-
- -- Gardner <gardner@homelab>  Sun, 01 Nov 2026 00:04:48 -0500
 
 homelab-search (0.2.19) unstable; urgency=medium
 
@@ -130,12 +116,6 @@ homelab-search (0.2.19) unstable; urgency=medium
 
 homelab-search (0.2.18) unstable; urgency=medium
 
-  * Release v0.2.18
-
- -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 23:13:40 -0500
-
-homelab-search (0.2.18) unstable; urgency=medium
-
   * Fix a 500 when AI mode returned results: _resolve declared 'my
     (@out, $dropped) = ((), 0)', and in a list assignment the array is
     greedy - @out swallowed the 0, so every answer began with the
@@ -144,12 +124,6 @@ homelab-search (0.2.18) unstable; urgency=medium
     whole id-resolution path.
 
  -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 23:13:40 -0500
-
-homelab-search (0.2.17) unstable; urgency=medium
-
-  * Release v0.2.17
-
- -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 23:10:18 -0500
 
 homelab-search (0.2.17) unstable; urgency=medium
 
@@ -162,12 +136,6 @@ homelab-search (0.2.17) unstable; urgency=medium
     two.
 
  -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 23:10:18 -0500
-
-homelab-search (0.2.16) unstable; urgency=medium
-
-  * Release v0.2.16
-
- -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 23:06:50 -0500
 
 homelab-search (0.2.16) unstable; urgency=medium
 
@@ -190,12 +158,6 @@ homelab-search (0.2.16) unstable; urgency=medium
     not applied.
 
  -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 23:06:50 -0500
-
-homelab-search (0.2.15) unstable; urgency=medium
-
-  * Release v0.2.15
-
- -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 23:01:12 -0500
 
 homelab-search (0.2.15) unstable; urgency=medium
 
@@ -224,12 +186,6 @@ homelab-search (0.2.15) unstable; urgency=medium
     request cost 0 and the monthly budget unenforceable.
 
  -- Claude <noreply@anthropic.com>  Sat, 31 Oct 2026 23:01:01 -0500
-
-homelab-search (0.2.14) unstable; urgency=medium
-
-  * Release v0.2.14
-
- -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 22:03:46 -0500
 
 homelab-search (0.2.14) unstable; urgency=medium
 
@@ -401,12 +357,6 @@ homelab-search (0.1.1) unstable; urgency=medium
   * Release v0.1.1
 
  -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 13:00:03 -0500
-
-homelab-search (0.1.0) unstable; urgency=medium
-
-  * Release v0.1.0
-
- -- Gardner <gardner@homelab>  Sat, 31 Oct 2026 12:54:46 -0500
 
 homelab-search (0.1.0) unstable; urgency=medium
 

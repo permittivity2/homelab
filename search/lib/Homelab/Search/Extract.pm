@@ -95,9 +95,9 @@ my @KEYS = (
     [ 'image.keywords',         'Keywords',         'text', 0 ],
     [ 'image.description',      'Description',      'text', 0 ],
 
-    [ 'gps.latitude',           'Latitude',         'num',  1 ],
-    [ 'gps.longitude',          'Longitude',        'num',  1 ],
-    [ 'gps.altitude_m',         'Altitude',         'num',  1 ],
+    [ 'gps.latitude',           'Latitude',         'num',  0 ],
+    [ 'gps.longitude',          'Longitude',        'num',  0 ],
+    [ 'gps.altitude_m',         'Altitude',         'num',  0 ],
 
     [ 'video.codec',            'Video codec',      'text', 0 ],
     [ 'video.frame_rate',       'Frame rate',       'num',  0 ],

@@ -29,8 +29,13 @@ ok !grep({ !length $_->{label} } @$cat), 'every key has a human label';
 # The sensitive set is the thing AI mode filters on, so assert exactly what
 # is in it rather than that it is non-empty.
 my @sensitive = sort map { $_->{key_name} } grep { $_->{sensitive} } @$cat;
-is_deeply \@sensitive, [qw(gps.altitude_m gps.latitude gps.longitude people.names)],
-    'the sensitive set is the GPS trio plus the names of tagged people';
+# GPS was moved OUT of the sensitive set as a product decision (migration
+# 008): coordinates without a face carry little alone, and all requests
+# share one Anthropic workspace. A name still identifies a third party
+# directly, and the people tagged in somebody's photos never saw the
+# consent notice, so that one stays.
+is_deeply \@sensitive, ['people.names'],
+    'only a tagged name is withheld from the third party; GPS is not';
 # A count of people is not identifying, so it stays shareable -- "photos
 # with people in them" remains answerable without naming anyone.
 ok !grep({ $_->{key_name} eq 'people.count' && $_->{sensitive} } @$cat),
