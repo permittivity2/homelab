@@ -57,6 +57,12 @@ sub introspect {
 # module's own request, not the real browser sitting behind the caller.
 # homelab-sso's authorize_submit passes the actual submitting browser's
 # own headers/remote_address through here for exactly that reason.
+#
+# Optional bearer: the caller's system-agent token. homelab-api honours
+# client_ip for its login lockout and login_attempts only when the call
+# carries one (the same rule as registration); without it the lockout
+# counts the CALLER's address, so every browser login through one SSO
+# host shared one counter. Sent only when given.
 sub login {
     my ($email, $password, %opts) = @_;
     my $api_base = $opts{api_base} // die "login(): api_base required\n";
@@ -65,7 +71,10 @@ sub login {
     $payload{client_user_agent} = $opts{client_user_agent} if defined $opts{client_user_agent};
     $payload{client_ip}         = $opts{client_ip}         if defined $opts{client_ip};
 
-    my $tx  = $UA->post("$api_base/api/v1/auth/login", json => \%payload);
+    my %headers;
+    $headers{Authorization} = "Bearer $opts{bearer}" if defined $opts{bearer} && length $opts{bearer};
+
+    my $tx  = $UA->post("$api_base/api/v1/auth/login", \%headers, json => \%payload);
     my $err = $tx->error;
     return { success => 0, error => $err->{message} // 'connection error', _status => 0 }
         if $err && !$err->{code};

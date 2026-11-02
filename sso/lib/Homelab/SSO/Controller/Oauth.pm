@@ -231,10 +231,22 @@ sub authorize_submit ($c) {
     # now -- relayed through so homelab-api's session tracking records
     # the actual browser/device, not this backend's own server-to-server
     # call to it (see Homelab::Common::AuthClient::login's own comment).
+    #
+    # bearer: this host's system_agent token, so homelab-api also COUNTS
+    # the failure against the browser's address (its 10-in-15-minutes
+    # lockout and login_attempts) rather than this SSO host's -- without
+    # it, one attacker's failures locked every browser login through this
+    # host out for 15 minutes. No credential: login still works, counted
+    # against this host as before, and the fallback is logged.
+    my $agent_token = eval { system_agent_token() };
+    $c->app->log->warn('homelab-sso: no system_agent credential on this host -- '
+        . 'login failures are counted against this host, not the browser')
+        unless $agent_token;
     my $result = login(
         $email, $password, api_base => $c->app->api_base,
         client_user_agent => $c->req->headers->user_agent,
         client_ip         => $c->tx->remote_address,
+        ($agent_token ? (bearer => $agent_token) : ()),
     );
     unless ($result->{success}) {
         my $msg = ($result->{_status} // 0) == 429

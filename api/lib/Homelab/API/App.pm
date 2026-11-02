@@ -3,6 +3,7 @@ use Mojo::Base 'Mojolicious', -signatures;
 
 use Mojo::Promise;
 use Mojo::UserAgent;
+use Socket ();
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
@@ -378,6 +379,38 @@ sub _log_attempt_p ($self, %fields) {
     );
 }
 
+# The address a login should be counted and recorded under: the
+# caller-supplied client_ip when the caller holds a live system_agent
+# session (the same trust rule as _register's, but as ONE non-blocking
+# query -- _login was made non-blocking after the stress-test collapse,
+# and _register's check is three blocking ones), otherwise the
+# connection's own address. Never fails: anything unexpected falls back
+# to the connection's address, which is today's behaviour.
+sub _client_ip_p ($self, $c, $claimed) {
+    my $own = $c->tx->remote_address;
+    return Mojo::Promise->resolve($own) unless _valid_ip($claimed);
+    my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+    return Mojo::Promise->resolve($own) unless $jwt;
+    my $payload = verify_jwt($jwt, secret => $self->config->{jwt}{secret});
+    return Mojo::Promise->resolve($own) unless $payload && $payload->{jti} && $payload->{email};
+    return $self->pg->db->query_p(
+        q{SELECT 1 FROM api.sessions s
+            JOIN api.users u       ON u.id = s.user_id AND u.email = ?
+            JOIN api.user_roles ur ON ur.user_id = u.id
+            JOIN api.roles r       ON r.id = ur.role_id AND r.name = 'system_agent'
+           WHERE s.jti = ? AND NOT s.revoked AND s.expires_at > NOW()},
+        $payload->{email}, $payload->{jti},
+    )->then(sub ($res) { return $res->hash ? $claimed : $own })
+     ->catch(sub ($err) { return $own });
+}
+
+sub _valid_ip ($ip) {
+    return 0 unless defined $ip && !ref $ip && length $ip <= 45;
+    return 1 if $ip =~ /\A(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\z/ && !grep { $_ > 255 } $1, $2, $3, $4;
+    return 1 if $ip =~ /\A[0-9A-Fa-f:.]+\z/ && $ip =~ /:/ && defined Socket::inet_pton(Socket::AF_INET6(), $ip);
+    return 0;
+}
+
 # POST /api/v1/auth/register {email, password, invite_token?}
 # Was unconditionally open (no auth required) -- this is still true by
 # default (config auth.require_invite: false), since this is a test/dev
@@ -729,7 +762,17 @@ sub _login ($self, $c) {
 
     $c->render_later;
 
-    $self->_rate_limited_p($ip)->then(sub ($limited) {
+    # A browser login arrives server-to-server from homelab-sso, so the
+    # connection's own address is the SSO host's -- and every browser
+    # login fleet-wide shared one 10-failures/15-minutes counter per SSO
+    # host (one attacker could lock everyone out), with login_attempts
+    # recording the SSO host instead of the attacker. The real address
+    # is honoured when the caller proves it is a system agent, exactly as
+    # _register already does for homelab-invite (2026-09-26).
+    $self->_client_ip_p($c, $body->{client_ip})->then(sub ($real) {
+        $ip = $real;
+        return $self->_rate_limited_p($ip);
+    })->then(sub ($limited) {
         if ($limited) {
             $c->render(json => { error => 'Too many login attempts. Please wait 15 minutes.' }, status => 429);
             return Mojo::Promise->reject($ALREADY_RENDERED);

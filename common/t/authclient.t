@@ -37,10 +37,12 @@ $app->routes->get('/api/v1/auth/introspect' => sub {
 $app->routes->post('/api/v1/auth/login' => sub {
     my $c    = shift;
     my $body = $c->req->json // {};
+    # echoes the Authorization header it got, so the test can see it
+    my $seen = $c->req->headers->authorization;
     if (($body->{email} // '') eq 'user@test.mailmasker.org' && ($body->{password} // '') eq 'correct-password') {
-        return $c->render(json => { token => 'valid-token', refresh_token => 'rt', expires_in => 900 });
+        return $c->render(json => { token => 'valid-token', refresh_token => 'rt', expires_in => 900, seen_auth => $seen });
     }
-    return $c->render(json => { error => 'invalid email or password' }, status => 401);
+    return $c->render(json => { error => 'invalid email or password', seen_auth => $seen }, status => 401);
 });
 $app->routes->post('/api/v1/auth/refresh' => sub {
     my $c    = shift;
@@ -119,6 +121,12 @@ is($login_ok->{token}, 'valid-token', 'login() returns the token');
 my $login_bad = login('user@test.mailmasker.org', 'wrong-password', api_base => $api_base);
 ok(!$login_bad->{success}, 'login() reports failure for wrong credentials, not dying');
 is($login_bad->{_status}, 401, 'login() surfaces the real HTTP status');
+
+ok(!defined $login_bad->{seen_auth}, 'login() sends no Authorization header unless asked to');
+my $login_agent = login('user@test.mailmasker.org', 'wrong-password', api_base => $api_base, bearer => 'agent-token', client_ip => '198.51.100.5');
+is($login_agent->{seen_auth}, 'Bearer agent-token', 'login() sends the caller\'s system-agent token when given (so homelab-api trusts client_ip)');
+my $login_empty = login('user@test.mailmasker.org', 'wrong-password', api_base => $api_base, bearer => '');
+ok(!defined $login_empty->{seen_auth}, 'an empty bearer sends no header');
 
 my $login_unreachable = login('user@test.mailmasker.org', 'correct-password', api_base => 'http://127.0.0.1:1');
 ok(!$login_unreachable->{success}, 'login() reports failure (not dies) on a transport failure');
