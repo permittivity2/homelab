@@ -518,8 +518,22 @@ sub _ai_state ($c, $acct) {
     my $on  = ($cfg->{enabled} && length($cfg->{api_key} // '')) ? 1 : 0;
     my %s = (available => $on, consented => 0, notice => Homelab::Search::AI::Consent::notice_body());
     return \%s unless $on && $acct;
-    $s{consented} = Homelab::Search::AI::Consent::state_for(
-        $c->app->query, $acct->{account_id})->{consented};
+
+    # WRAPPED, because this runs on EVERY signed-in render and it opens a
+    # transaction: state_for writes the notice row if it is missing, so it
+    # needs a live database even when nobody has asked for AI mode. A blip
+    # here took the whole search page down with a 500 -- the one dependency
+    # most likely to flicker, breaking the page that is supposed to degrade
+    # gracefully. A failure now means only that the AI offer is not shown;
+    # the keyword results, which are what the page is for, render regardless.
+    my $st = eval { Homelab::Search::AI::Consent::state_for(
+        $c->app->query, $acct->{account_id}) };
+    if (!$st) {
+        $c->app->log->error("ai: consent lookup failed, hiding the AI offer: $@");
+        $s{available} = 0;
+        return \%s;
+    }
+    $s{consented} = $st->{consented};
     return \%s;
 }
 

@@ -1,3 +1,49 @@
+homelab-search (0.3.6) unstable; urgency=medium
+
+  * An unreadable message directory no longer wipes a mailbox out of the
+    index. A mailbox is two directories -- `cur` holding read mail, which
+    is nearly all of it, and `new` holding the unread. _do_mailbox listed
+    both into one list and then deleted from the index anything it had not
+    seen. Three conditions skipped a directory (an unsafe path, a failed
+    stat, a failed opendir) and all three fell through to that deletion,
+    so an unreadable `cur` looked exactly like an empty one: every read
+    message was removed and the unit was recorded as a SUCCESS, with the
+    watermark advanced so discovery would not come back until that folder
+    changed again.
+  * No mail was ever at risk -- the store is mounted read-only, with the
+    server-side export read-only too -- but it disappeared from search.
+    The trigger is a momentary ESTALE or EACCES on the NAS, which is
+    routine, and likelier still because 5 of 26 account directories are
+    0700 vmail:vmail with manage-gids on the NAS.
+  * Now: a directory that exists and cannot be read fails the unit, which
+    run_unit's existing eval routes to _fail -- error recorded, attempt
+    counted, retried, parked after five. Nothing is deleted and the
+    watermark does not advance. A partial view is not evidence of
+    deletion; it is evidence of nothing.
+  * ABSENT and UNREADABLE are now distinguished, which is what the fix
+    turns on: plenty of mailboxes have only one of the two directories,
+    and failing those would have parked every single one.
+  * t/indexer.t -- the indexer's first tests, and it was the only major
+    module in this package with none, which is what the above cost. A
+    scratch maildir in a temp directory, no database and no NFS, fixtures
+    built in the test so the repository carries no binaries. The bug's
+    test was written first and failed before the fix. Also pins three
+    behaviours that were correct and undefended: an unchanged re-scan
+    writes nothing, a flag change is a one-column update rather than a
+    re-index (getting that wrong re-indexes a mailbox every time someone
+    reads their mail), and a genuinely deleted message is still removed.
+  * A database blip no longer 500s the search page. _ai_state runs on
+    every signed-in render and opens a transaction -- Consent::state_for
+    writes the notice row when absent -- so it needed a live database even
+    when nobody had asked for AI mode, outside the error handling that
+    exists to make this page degrade. A failure there now only hides the
+    AI offer; the keyword results, which are what the page is for, render
+    regardless.
+  * Removed a dead variable whose name contained Cyrillic homoglyphs
+    (`$hидden`) in a file with no `use utf8`.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 21:27:25 -0600
+
 homelab-search (0.3.5) unstable; urgency=medium
 
   * One search page asked "what is shared with me?" three times -- once

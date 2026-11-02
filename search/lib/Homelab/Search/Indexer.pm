@@ -286,7 +286,6 @@ sub _discover_drive ($self) {
                           WHERE drive_file_id IS NOT NULL AND deleted_at IS NULL})->hashes })
     } // [];
     for my $r (@$idx_state) {
-        my $hидden = 0;
         my $is_hidden = $r->{searchable} ? 0 : 1;
         my $should    = $want_hidden{ $r->{drive_file_id} } ? 1 : 0;
         push @ids, $r->{drive_file_id} if $is_hidden != $should;
@@ -488,17 +487,48 @@ sub _do_mailbox ($self, $row) {
     my @present;
     my $newest  = 0;
 
+    # Did we actually see everything? A mailbox is two directories, `cur`
+    # holding read mail -- nearly all of it -- and `new` holding the unread.
+    # @present is built from both and then used to decide what has been
+    # DELETED, so a directory we failed to enumerate must stop that decision
+    # being made at all. It used to `next` and fall through, which meant an
+    # unreadable `cur` looked exactly like an empty one and every read
+    # message was removed from the index, with the unit recorded as a
+    # success. The store is read-only so no mail was ever at risk, but it
+    # vanished from search until something unrelated touched the folder --
+    # and the trigger is a momentary ESTALE or EACCES on the NAS, which is
+    # routine.
+    #
+    # A partial view is not evidence of deletion. It is evidence of nothing.
+    my $partial = 0;
+
     for my $sub (qw(cur new)) {
         my $dir = eval {
             mailbox_dir_for($self->mail_root, $info->{domain}, $info->{local_part},
                             $info->{mailbox}, $sub)
-        } or next;
-        my @st = stat($dir) or next;
+        };
+        # Could not even work out the path: we have enumerated nothing here.
+        unless (defined $dir) { $partial = 1; next }
+
+        # ABSENT AND UNREADABLE ARE DIFFERENT THINGS, and the whole fix turns
+        # on the distinction. Plenty of mailboxes have only one of the two
+        # directories, and treating that as a failure would park every one of
+        # them. A directory that EXISTS and cannot be read is the dangerous
+        # case, and the only one that sets $partial.
+        unless (-e $dir) { next }
+
+        my @st = stat($dir);
+        unless (@st) {
+            $self->log->warn("cannot stat $dir: $!");
+            $partial = 1;
+            next;
+        }
         $newest = $st[9] if $st[9] > $newest;
 
         my $dh;
         unless (opendir($dh, $dir)) {
-            $self->log->warn("cannot read $dir: $!  -- messages here will be missed");
+            $self->log->warn("cannot read $dir: $!");
+            $partial = 1;
             next;
         }
         while (defined(my $name = readdir $dh)) {
@@ -561,6 +591,18 @@ sub _do_mailbox ($self, $row) {
             $indexed++;
         }
         closedir $dh;
+    }
+
+    # A directory we could not read means we do not know what is gone, so we
+    # neither delete nor advance the watermark -- advancing it would stop
+    # discovery coming back. Dying hands the unit to run_unit's eval, which
+    # calls _fail: the error is recorded, the attempt counted, and the unit
+    # retried and eventually parked. That is visible, which a silent wipe
+    # was not.
+    if ($partial) {
+        die "mailbox $info->{mailbox} for $info->{local_part}\@$info->{domain}: "
+          . "a message directory could not be read -- refusing to treat an "
+          . "unreadable directory as an empty one\n";
     }
 
     # Anything we previously knew and did not see is gone from the store.
