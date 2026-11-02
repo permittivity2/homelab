@@ -6,7 +6,8 @@
 # against what the apt repo PUBLISHES, and also reports the two things a
 # version check alone misses: half-configured packages (dpkg left mid-install,
 # which still reports the NEW version so a naive version diff calls it fine)
-# and failed homelab-* units.
+# and failed homelab-* units. bad-ips (not a homelab-* package, but on every
+# node since item 33) is included in all three checks.
 #
 # Exit 0 = consistent. Exit 1 = something to look at. Nothing is changed.
 #
@@ -22,7 +23,7 @@ set -uo pipefail
 
 REPO="${REPO:-http://projects.thedude.vip/apt-homelab}"
 DIST="${DIST:-unstable}"
-FIRST="${FIRST:-0}"; LAST="${LAST:-69}"   # node NN -> 10.20.2.(144+NN)
+FIRST="${FIRST:-0}"; LAST="${LAST:-72}"   # node NN -> 10.20.2.(144+NN); 70-72 = the search VMs (added 2026-10-31)
 PAR="${PAR:-20}"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
@@ -52,10 +53,10 @@ fi
 probe(){ # probe NN -> lines: NN|pkg|installed|state
   local nn="$1" ip out; ip="$(ip_of "$nn")"
   out=$(timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-    "$ip" "dpkg-query -W -f='\${Package} \${Version} \${Status}\n' 'homelab-*' 2>/dev/null \
+    "$ip" "dpkg-query -W -f='\${Package} \${Version} \${Status}\n' 'homelab-*' bad-ips 2>/dev/null \
            | grep -v 'not-installed'
            echo '--failed--'
-           systemctl list-units 'homelab-*' --state=failed --no-legend 2>/dev/null | awk '{print \$2}'" 2>/dev/null)
+           systemctl list-units 'homelab-*' bad_ips.service --state=failed --no-legend 2>/dev/null | awk '{print \$2}'" 2>/dev/null)
   if [ -z "$out" ]; then echo "$nn" >> "$TMP/unreachable"; return 0; fi
   printf '%s\n' "$out" \
   | awk -v h="$nn" '
@@ -108,6 +109,6 @@ awk -F'|' -v verbose="${VERBOSE:-0}" '
     if (removed) printf ", %d removed with config retained", removed
     printf "\n"
     if (bad) { printf "%d need attention (see above)\n", bad; exit 1 }
-    print "FLEET CONSISTENT -- every installed homelab-* package matches the published version."
+    print "FLEET CONSISTENT -- every installed homelab-* package (and bad-ips) matches the published version."
   }
 ' "$TMP/pub" "$TMP/inst"

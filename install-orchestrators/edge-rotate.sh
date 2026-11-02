@@ -8,6 +8,9 @@
 #   ./edge-rotate.sh 00 --no-updates # swap back, verify only
 #   ./edge-rotate.sh 01 --dry-run    # say what it would do
 #   ./edge-rotate.sh 01 --os-updates --no-phased   # leave phased updates alone
+#   ./edge-rotate.sh 00 --capture-reference        # re-capture the drift reference
+#                                                  # from the LIVE node (00 here), after
+#                                                  # a deliberate change to the edge
 #
 # WHY THIS IS A SCRIPT AND NOT A SEQUENCE OF COMMANDS.
 #
@@ -42,15 +45,16 @@
 # ============================================================================
 set -uo pipefail
 
-TARGET=""; DRY=0; UPDATES=1; OS_UPDATES=0; PHASED=1
+TARGET=""; DRY=0; UPDATES=1; OS_UPDATES=0; PHASED=1; CAPTURE=0
 for a in "$@"; do
     case "$a" in
         --dry-run)    DRY=1 ;;
+        --capture-reference) CAPTURE=1 ;;
         --no-updates) UPDATES=0 ;;
         --os-updates) OS_UPDATES=1 ;;
         --no-phased)  PHASED=0 ;;
         00|01|02|0|1|2) TARGET=$(printf '%02d' "$((10#$a))") ;;
-        *) echo "unknown argument '$a' (usage: edge-rotate.sh <00|01|02> [--os-updates] [--no-phased] [--no-updates] [--dry-run])"; exit 1 ;;
+        *) echo "unknown argument '$a' (usage: edge-rotate.sh <00|01|02> [--os-updates] [--no-phased] [--no-updates] [--dry-run] [--capture-reference])"; exit 1 ;;
     esac
 done
 [ -z "$TARGET" ] && { echo "which edge? (00, 01 or 02)"; exit 1; }
@@ -71,6 +75,24 @@ pve(){ ssh -o ConnectTimeout=10 "$PVE" "$@"; }
 # connection at exactly the moment it matters and reports a false failure.
 cexec(){ ssh -o ConnectTimeout=10 "$PVE" "sudo pct exec $CTID -- sh -c '$1'" 2>/dev/null; }
 
+REF=/home/gardner/claude/general/github-repos/homelab/git/install-orchestrators/.edge-reference-packages
+CREF=/home/gardner/claude/general/github-repos/homelab/git/install-orchestrators/.edge-reference-config
+# The packages, and the config files, that make an edge node an edge node.
+# One definition, used both to CHECK a node and to CAPTURE the reference.
+# /etc/nftables.conf and bad-ips' badips.d joined on 2026-11-02, after 01/02
+# turned out to have SSH open to the internet in a base firewall file this
+# check never looked at.
+packages_of(){ ssh -o ConnectTimeout=8 "$1" 'dpkg-query -W -f="\${Package} \${Version}\n" "homelab-*" bad-ips 2>/dev/null | awk "\$2 != \"\"" | sort'; }
+fingerprint(){
+    ssh -o ConnectTimeout=10 "$1" 'sudo sh -c "
+      for d in /etc/nginx/sites-available /etc/nginx/conf.d /etc/haproxy /etc/dnsdist /etc/sysctl.d /etc/nftables.d /etc/homelab /etc/systemd/network /etc/systemd/system/systemd-networkd-wait-online.service.d /usr/local/etc/badips.d; do
+        [ -d \"\$d\" ] || continue
+        find \"\$d\" -type f ! -name credential.yml ! -name \"*.key\" ! -name \"*.pem\" ! -name \".*\" ! -name \"*.bak-*\" ! -name \"*.pre-sync-*\" -print0 2>/dev/null | xargs -0 sha256sum 2>/dev/null
+      done
+      sha256sum /etc/nftables.conf 2>/dev/null
+    "' 2>/dev/null | awk '{print $2, $1}' | sort
+}
+
 step "current edge state"
 EDGES=$(pve "sudo pct list" 2>/dev/null | awk '$1 ~ /^(400|401|402)$/ {print $1" "$2}')
 [ -z "$EDGES" ] && { bad "could not read container state from pve2 ($PVE)"; exit 1; }
@@ -89,6 +111,17 @@ if [ "$RUNNING" = "$CTID" ]; then
     SWAP=0
 else
     SWAP=1
+fi
+
+if [ "$CAPTURE" = 1 ]; then
+    step "capture the drift reference from prod-homelab$TARGET"
+    [ "$SWAP" = 0 ] || { bad "prod-homelab$TARGET is not the live edge -- capture only from the node that is serving"; exit 1; }
+    packages_of "$MGMT" > "$REF.new" && [ -s "$REF.new" ] || { bad "could not read the package list"; rm -f "$REF.new"; exit 1; }
+    fingerprint "$MGMT" > "$CREF.new" && [ -s "$CREF.new" ] || { bad "could not read the config fingerprint"; rm -f "$CREF.new"; exit 1; }
+    mv -f "$REF.new" "$REF"; mv -f "$CREF.new" "$CREF"
+    ok "$(wc -l < "$REF") packages, $(wc -l < "$CREF") config files -> $REF, $CREF"
+    echo "  ${D}commit them so the next rotation compares against this state${O}"
+    exit 0
 fi
 
 if [ "$DRY" = 1 ]; then
@@ -160,19 +193,19 @@ if [ "$UPDATES" = 1 ]; then
         "$HERE/agent-reenroll.sh" "$TARGET" --force 2>&1 | sed 's/^/    /'
     fi
 
-    step "upgrade the homelab-* packages this node already has"
-    BEFORE=$(ssh -o ConnectTimeout=8 "$MGMT" 'dpkg-query -W -f="\${Package} \${Version}\n" "homelab-*" 2>/dev/null | awk "\$2 != \"\"" | sort')
+    step "upgrade the homelab-* packages (and bad-ips) this node already has"
+    BEFORE=$(packages_of "$MGMT")
     ssh -o ConnectTimeout=10 "$MGMT" '
         set -e
         sudo apt-get update -qq
-        PKGS=$(dpkg-query -W -f="\${Package} \${Status}\n" "homelab-*" 2>/dev/null \
+        PKGS=$(dpkg-query -W -f="\${Package} \${Status}\n" "homelab-*" bad-ips 2>/dev/null \
                  | awk "/install ok installed/ {print \$1}" | paste -sd" " -)
         [ -n "$PKGS" ] || { echo "no homelab-* packages installed"; exit 0; }
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --only-upgrade $PKGS 2>&1 \
           | grep -viE "^$|^\(Reading database|^Preparing|^Unpacking|^Selecting|Running kernel|^No (services|containers|user sessions|VM guests)" || true
     ' 2>&1 | sed 's/^/    /'
 
-    AFTER=$(ssh -o ConnectTimeout=8 "$MGMT" 'dpkg-query -W -f="\${Package} \${Version}\n" "homelab-*" 2>/dev/null | awk "\$2 != \"\"" | sort')
+    AFTER=$(packages_of "$MGMT")
     echo "  changed:"
     diff <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") | grep -E '^>' | sed 's/^> /    now /' || echo "    (nothing -- already current)"
 
@@ -180,7 +213,6 @@ if [ "$UPDATES" = 1 ]; then
     # The three edge nodes are meant to be identical. A package one has and
     # another does not is drift a human should see, not something to install
     # silently -- installing it here would hide how it came to differ.
-    REF=/home/gardner/claude/general/github-repos/homelab/git/install-orchestrators/.edge-reference-packages
     if [ -f "$REF" ]; then
         MISSING=$(LC_ALL=C comm -23 <(awk '{print $1}' "$REF" | LC_ALL=C sort) <(printf '%s\n' "$AFTER" | awk '{print $1}' | LC_ALL=C sort))
         [ -z "$MISSING" ] && ok "same package set as the reference" \
@@ -200,16 +232,10 @@ if [ "$UPDATES" = 1 ]; then
     #
     # Some files are MEANT to differ: each node has its own management address
     # and its own agent identity. Those are listed, not alarmed about.
-    CREF=/home/gardner/claude/general/github-repos/homelab/git/install-orchestrators/.edge-reference-config
     if [ ! -f "$CREF" ]; then
         warn "no reference config fingerprint at $CREF -- skipping"
     else
-        ssh -o ConnectTimeout=10 "$MGMT" 'sudo sh -c "
-          for d in /etc/nginx/sites-available /etc/nginx/conf.d /etc/haproxy /etc/dnsdist /etc/sysctl.d /etc/nftables.d /etc/homelab /etc/systemd/network /etc/systemd/system/systemd-networkd-wait-online.service.d; do
-            [ -d \"\$d\" ] || continue
-            find \"\$d\" -type f ! -name credential.yml ! -name \"*.key\" ! -name \"*.pem\" -print0 2>/dev/null | xargs -0 sha256sum 2>/dev/null
-          done
-        "' 2>/dev/null | awk '{print $2, $1}' | sort > /tmp/edge-config-$TARGET.$$
+        fingerprint "$MGMT" > /tmp/edge-config-$TARGET.$$
 
         # Expected to differ: anything carrying this node's own address or identity.
         EXPECTED='/etc/homelab/agent/config.yml|/etc/systemd/network/|/etc/homelab/services/'
@@ -427,6 +453,35 @@ UPGRADE
             ok "no reboot required"
         fi
     fi
+fi
+
+# ------------------------------------------------------------------ bad-ips
+# The edge is the one node that BLOCKS. A rotated-in node must be running
+# bad-ips with the live never-block list and have loaded the shared list --
+# it does that within seconds of starting, so a mismatch here is real.
+step "bad-ips (the edge is the one node that blocks)"
+BADIPS=$(ssh -o ConnectTimeout=10 "$MGMT" '
+    v=$(dpkg-query -W -f="\${Version}" bad-ips 2>/dev/null) || { echo "installed=no"; exit 0; }
+    echo "installed=$v"
+    echo "enabled=$(systemctl is-enabled bad_ips 2>/dev/null) active=$(systemctl is-active bad_ips 2>/dev/null)"
+    sudo /usr/local/sbin/bad_ips --test-config 2>/dev/null | sed -n "s/^role: */role=/p" | head -1
+    c(){ sudo nft -j list set inet badips "$1" 2>/dev/null | jq "[.nftables[] | select(.set) | .set.elem // [] | length] | add // 0"; }
+    echo "bans=$(c badipv4) feed=$(c feedv4) never=$(c never_block)"
+    echo "shared=$(sudo /usr/local/sbin/bad_ips list --limit 1 2>/dev/null | sed -n "s/^\([0-9]*\) active ban.*/\1/p")"
+' 2>/dev/null)
+bv(){ printf '%s\n' "$BADIPS" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }
+if [ "$(bv installed)" = no ] || [ -z "$BADIPS" ]; then
+    warn "bad-ips is not installed here -- run: badips-orchestrate.sh --install $TARGET"
+else
+    ok "bad-ips $(bv installed): $(bv role), enabled=$(bv enabled), active=$(bv active)"
+    [ "$(bv enabled)" = enabled ] && [ "$(bv active)" = active ] || bad "bad-ips is not running"
+    case "$(bv role)" in
+        block*watch*) ok "watch mode: reports, blocks nothing (switch on with badips-orchestrate.sh --role $TARGET block)" ;;
+        block*)
+            [ "$(bv never)" -gt 0 ] 2>/dev/null && ok "never-block loaded ($(bv never) entries)" || bad "never-block set empty or missing"
+            ok "blocking $(bv bans) addresses + $(bv feed) feed ranges (shared list: $(bv shared) active)" ;;
+        *) bad "role is '$(bv role)' -- the edge must be block (or watch)" ;;
+    esac
 fi
 
 # ------------------------------------------------------------------ verify

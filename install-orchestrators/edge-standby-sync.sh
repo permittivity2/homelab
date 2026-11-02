@@ -81,18 +81,7 @@ CERT_REF=$(ssh  -o ConnectTimeout=10 "$LIVE_IP" "sudo grep -E '^[[:space:]]+- li
 [ -z "$SITES_REF" ] && { bad "could not read sites.yml from the live edge"; exit 1; }
 ok "reference: $(echo "$SITES_REF" | wc -l) site(s), $(echo "$CERT_REF" | wc -l) certificate lineage(s)"
 
-for n in 00 01 02; do
-    [ "$n" = "$LIVE_N" ] && continue
-    CT=$((400 + 10#$n))
-    step "prod-homelab$n (pct $CT, parked)"
-
-    ROOT=$(pve "sudo zfs list -H -o mountpoint 2>/dev/null | grep -E '/subvol-$CT-disk-0$'" 2>/dev/null | head -1)
-    if [ -z "$ROOT" ] || ! pve "sudo test -d '$ROOT/etc'" 2>/dev/null; then
-        bad "cannot reach pct $CT's filesystem (dataset not mounted?) -- skipping"
-        FAILS=$((FAILS + 1)); continue
-    fi
-    ok "filesystem at $ROOT ${D}(mounted while stopped -- no boot needed)${O}"
-
+sync_sites_certs(){
     SY="$ROOT/etc/homelab/webproxy/sites.yml"
     CY="$ROOT/etc/homelab/certsync/certsync.yml"
 
@@ -103,7 +92,7 @@ for n in 00 01 02; do
 
     if [ -z "$MISS_S" ] && [ -z "$MISS_C" ]; then
         ok "already matches the live edge -- nothing to add"
-        continue
+        return
     fi
 
     [ -n "$MISS_S" ] && { warn "sites missing here:";    printf '%s\n' "$MISS_S" | sed 's/^/      /'; }
@@ -111,13 +100,13 @@ for n in 00 01 02; do
 
     if [ "$DRY" = 1 ]; then
         echo "  ${D}would append the above (and nothing else) to sites.yml / certsync.yml${O}"
-        continue
+        return
     fi
 
     # Back up once per run, so a mistake is one `cp` away from undone.
     STAMP=$(date +%Y%m%d-%H%M%S)
     pve "sudo cp -a '$SY' '$SY.pre-sync-$STAMP'; sudo cp -a '$CY' '$CY.pre-sync-$STAMP'" 2>/dev/null \
-        && ok "backed up both files (.pre-sync-$STAMP)" || { bad "could not back up -- refusing to edit"; FAILS=$((FAILS+1)); continue; }
+        && ok "backed up both files (.pre-sync-$STAMP)" || { bad "could not back up -- refusing to edit"; FAILS=$((FAILS+1)); return; }
 
     # Copy each missing site's WHOLE stanza from the live edge, rather than
     # reconstructing it: the upstream list, max_body_size and websocket flag
@@ -125,7 +114,7 @@ for n in 00 01 02; do
     # different from the one that has been serving.
     for d in $MISS_S; do
         STANZA=$(ssh -o ConnectTimeout=10 "$LIVE_IP" "sudo awk '/^[[:space:]]+- domain: $d\$/{f=1;print;next} f&&/^[[:space:]]+- domain:/{exit} f&&/^[[:space:]]+[a-z_]+:/{print;next} f{exit}' /etc/homelab/webproxy/sites.yml" 2>/dev/null)
-        if [ -z "$STANZA" ]; then bad "could not read the live stanza for $d"; FAILS=$((FAILS+1)); continue; fi
+        if [ -z "$STANZA" ]; then bad "could not read the live stanza for $d"; FAILS=$((FAILS+1)); return; fi
         printf '%s\n' "$STANZA" | pve "sudo tee -a '$SY' >/dev/null" 2>/dev/null \
             && ok "added site $d" || { bad "failed to add site $d"; FAILS=$((FAILS+1)); }
     done
@@ -150,11 +139,84 @@ for n in 00 01 02; do
     fi
     DUP=$(printf '%s\n' "$NOW_S" | uniq -d)
     [ -n "$DUP" ] && { bad "duplicate site entries introduced: $DUP"; FAILS=$((FAILS+1)); }
+}
+
+# The base firewall file (/etc/nftables.conf) is identical on the three edge
+# nodes except where it has been hand-edited; the live node's is the one that
+# is serving and therefore known-good. Found 2026-11-02: 01 and 02 still had
+# `tcp dport { 22, 80, 443, 53 }` (SSH open to the internet whenever they
+# were live) where 00 has it closed. Copied VERBATIM from the live node, in
+# place (tee keeps the file's container-mapped owner: these are unprivileged
+# containers, so a file CREATED from the host would appear as nobody inside).
+sync_base_firewall(){
+    local F="$ROOT/etc/nftables.conf" LIVE HAVE STAMP
+    LIVE=$(ssh -o ConnectTimeout=10 "$LIVE_IP" "sudo cat /etc/nftables.conf" 2>/dev/null)
+    [ -n "$LIVE" ] || { bad "could not read /etc/nftables.conf from the live edge"; FAILS=$((FAILS+1)); return; }
+    HAVE=$(pve "sudo cat '$F'" 2>/dev/null)
+    if [ "$HAVE" = "$LIVE" ]; then ok "base firewall file matches the live edge"; return; fi
+    warn "base firewall file differs from the live edge:"
+    diff <(printf '%s\n' "$HAVE") <(printf '%s\n' "$LIVE") | sed 's/^/      /'
+    [ "$DRY" = 1 ] && { echo "  ${D}would replace it with the live edge's${O}"; return; }
+    STAMP=$(date +%Y%m%d-%H%M%S)
+    pve "sudo cp -a '$F' '$F.pre-sync-$STAMP'" || { bad "could not back up -- refusing to edit"; FAILS=$((FAILS+1)); return; }
+    printf '%s\n' "$LIVE" | pve "sudo tee '$F' >/dev/null" \
+        && [ "$(pve "sudo cat '$F'" 2>/dev/null)" = "$LIVE" ] \
+        && ok "base firewall file replaced with the live edge's (backup .pre-sync-$STAMP)" \
+        || { bad "failed to replace the base firewall file"; FAILS=$((FAILS+1)); }
+}
+
+# bad-ips: the node must boot with the live edge's never-block list and role,
+# never a stale one. Only files that ALREADY exist are rewritten (in place,
+# for the ownership reason above): before bad-ips is installed on a parked
+# node there is nothing to keep in step, and the rotation pass installs it.
+sync_badips(){
+    local D_="$ROOT/usr/local/etc/badips.d" f LIVE HAVE STAMP LV PV
+    LV=$(ssh -o ConnectTimeout=10 "$LIVE_IP" "dpkg-query -W -f='\${Version}' bad-ips 2>/dev/null")
+    PV=$(pve "sudo awk '/^Package: bad-ips\$/{p=1} p&&/^Version:/{print \$2; exit}' '$ROOT/var/lib/dpkg/status'" 2>/dev/null)
+    if [ -z "$PV" ]; then
+        if [ -n "$LV" ]; then warn "bad-ips is not installed here yet (live edge has $LV) -- install it in the rotation pass"
+        else ok "bad-ips: not installed on either node"; fi
+        return
+    fi
+    [ "$PV" = "$LV" ] && ok "bad-ips $PV, same as the live edge" \
+        || warn "bad-ips $PV here, $LV on the live edge -- edge-rotate.sh upgrades it when this node is rotated in"
+    STAMP=$(date +%Y%m%d-%H%M%S)
+    for f in 94-role.conf 95-fleet.conf 96-fleet-db.conf; do
+        LIVE=$(ssh -o ConnectTimeout=10 "$LIVE_IP" "sudo cat /usr/local/etc/badips.d/$f" 2>/dev/null)
+        HAVE=$(pve "sudo cat '$D_/$f'" 2>/dev/null)
+        if [ -z "$LIVE" ]; then warn "bad-ips $f: not on the live edge"; continue; fi
+        if ! pve "sudo test -f '$D_/$f'" 2>/dev/null; then
+            bad "bad-ips $f missing here (re-run badips-orchestrate.sh --install for this node while it is live)"; FAILS=$((FAILS+1)); continue
+        fi
+        if [ "$HAVE" = "$LIVE" ]; then ok "bad-ips $f matches"; continue; fi
+        [ "$DRY" = 1 ] && { warn "bad-ips $f differs -- would copy the live edge's"; continue; }
+        pve "sudo cp -a '$D_/$f' '$D_/.$f.pre-sync-$STAMP'" \
+            && printf '%s\n' "$LIVE" | pve "sudo tee '$D_/$f' >/dev/null" \
+            && ok "bad-ips $f copied from the live edge" \
+            || { bad "failed to copy bad-ips $f"; FAILS=$((FAILS+1)); }
+    done
+}
+
+for n in 00 01 02; do
+    [ "$n" = "$LIVE_N" ] && continue
+    CT=$((400 + 10#$n))
+    step "prod-homelab$n (pct $CT, parked)"
+
+    ROOT=$(pve "sudo zfs list -H -o mountpoint 2>/dev/null | grep -E '/subvol-$CT-disk-0$'" 2>/dev/null | head -1)
+    if [ -z "$ROOT" ] || ! pve "sudo test -d '$ROOT/etc'" 2>/dev/null; then
+        bad "cannot reach pct $CT's filesystem (dataset not mounted?) -- skipping"
+        FAILS=$((FAILS + 1)); continue
+    fi
+    ok "filesystem at $ROOT ${D}(mounted while stopped -- no boot needed)${O}"
+
+    sync_sites_certs
+    sync_base_firewall
+    sync_badips
 done
 
 step "result"
 if [ "$FAILS" = 0 ]; then
-    echo "  ${G}the parked edge nodes carry the same sites and lineages as the live one.${O}"
+    echo "  ${G}the parked edge nodes match the live one: sites, lineages, base firewall, bad-ips config.${O}"
     echo "  ${D}The vhost and its certificate materialise on that node's next boot:"
     echo "   certsync installs the lineage, apply-sites generates the vhost. Prove it"
     echo "   by rotating to the node (edge-rotate.sh 01) and checking the hostname"
