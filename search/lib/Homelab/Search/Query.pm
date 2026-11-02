@@ -265,7 +265,7 @@ sub shared_files ($self, $account_id, $email) {
     # this does not loop forever if that ever stops being true.
     my @rows;
     if (@folder_ids) {
-        push @rows, @{ $db->query(q{
+        push @rows, $db->query(q{
             WITH RECURSIVE share_tree AS (
                 SELECT id FROM drive.folders
                  WHERE id = ANY(?) AND deleted_at IS NULL
@@ -278,14 +278,14 @@ sub shared_files ($self, $account_id, $email) {
               FROM drive.files f
              WHERE f.folder_id IN (SELECT id FROM share_tree)
                AND f.deleted_at IS NULL},
-            '{' . join(',', @folder_ids) . '}')->hashes->@* };
+            '{' . join(',', @folder_ids) . '}')->hashes->@*;
     }
     if (@file_ids) {
-        push @rows, @{ $db->query(q{
+        push @rows, $db->query(q{
             SELECT f.id AS drive_file_id, lower(f.user_email) AS owner_email
               FROM drive.files f
              WHERE f.id = ANY(?) AND f.deleted_at IS NULL},
-            '{' . join(',', @file_ids) . '}')->hashes->@* };
+            '{' . join(',', @file_ids) . '}')->hashes->@*;
     }
     return [] unless @rows;
 
@@ -457,11 +457,18 @@ sub search_drive ($self, $account_id, $f) {
 #
 # Scoping each borrowed pass to its owner is what makes the rest of the
 # schema work untouched: row-level security stays a flat
-# `account_id = one GUC` on every table, the composite foreign keys still
-# hold, and metadata_for / faces_and_tags_for / excerpt resolve a borrowed
-# photo's text, people and tags correctly because they are reading inside
-# the account that owns them. Widening the policies instead would have
-# meant five of them, and one that recurses into the table it guards.
+# `account_id = one GUC` on every table and the composite foreign keys
+# still hold. Widening the policies instead would have meant five of them,
+# and one that recurses into the table it guards.
+#
+# The corollary, which cost a round of live verification to notice: a
+# borrowed row's CHILD rows -- its metadata, its tagged people, its tag
+# paths -- also carry the owner's account_id, so looking them up in the
+# asking account returns nothing at all. Not an error; RLS matches zero
+# rows and the page renders a photo with no camera, no people and no
+# tags. metadata_for_rows / faces_and_tags_for_rows below exist for
+# exactly that, and every caller that has a mixed-owner row list must use
+# them rather than the single-account forms.
 #
 # The allowlist is the boundary. It comes from drive.shares via
 # shared_files and never from a request parameter, and search_drive itself
@@ -488,7 +495,13 @@ sub search_drive_all ($self, $account_id, $email, $f) {
             my %g = (%$f, file_ids => $by_owner{$owner}{ids}, offset => 0);
             delete $g{shared};
             my $got = $self->search_drive($owner, \%g);
-            $_->{shared_by} = $by_owner{$owner}{email} for @$got;
+            # Both the email (shown on the page) and the account id (used
+            # to resolve this row's metadata, people and tags back in the
+            # scope that owns them -- see metadata_for_rows).
+            for my $r (@$got) {
+                $r->{shared_by}            = $by_owner{$owner}{email};
+                $r->{shared_by_account_id} = $owner;
+            }
             push @rows, @$got;
         }
     }
@@ -510,6 +523,45 @@ sub search_drive_all ($self, $account_id, $email, $f) {
     my $end = $off + $limit - 1;
     $end = $#rows if $end > $#rows;
     return [ @rows[$off .. $end] ];
+}
+
+# ---------------------------------------------- mixed-owner row lists
+#
+# A result list from search_drive_all may hold rows from several accounts:
+# the asker's own, plus one group per owner who has shared something. Every
+# child table is under the same `account_id = current_setting(...)` policy
+# as its parent, so one query in the asker's scope can only ever resolve
+# the asker's own rows -- the borrowed ones come back empty and the page
+# quietly loses the camera, the people and the tag paths.
+#
+# So: group the ids by the account that owns them, one scoped query per
+# group, merge. Keyed on drive_item_id, which is unique across accounts
+# (it is a BIGSERIAL), so the merged hash cannot collide.
+sub _ids_by_owner ($self, $account_id, $rows) {
+    my %g;
+    push @{ $g{ $_->{shared_by_account_id} // $account_id } }, $_->{drive_item_id}
+        for grep { defined $_->{drive_item_id} } @$rows;
+    return \%g;
+}
+
+sub metadata_for_rows ($self, $account_id, $rows, $visibility = 'all') {
+    my $g = $self->_ids_by_owner($account_id, $rows);
+    my %out;
+    for my $owner (sort keys %$g) {
+        my $m = $self->metadata_for($owner, $g->{$owner}, $visibility);
+        @out{ keys %$m } = values %$m;
+    }
+    return \%out;
+}
+
+sub faces_and_tags_for_rows ($self, $account_id, $rows) {
+    my $g = $self->_ids_by_owner($account_id, $rows);
+    my %out;
+    for my $owner (sort keys %$g) {
+        my $m = $self->faces_and_tags_for($owner, $g->{$owner});
+        @out{ keys %$m } = values %$m;
+    }
+    return \%out;
 }
 
 # One item the asking account may SEE -- its own, or one shared with it.

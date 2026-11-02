@@ -145,4 +145,96 @@ use Homelab::Search::Query;
         'any other error still propagates';
 }
 
+# --------------------------------------------------- the double dereference
+# `@{ $db->query(...)->hashes->@* }` is a dereference twice over: the
+# postfix ->@* already flattens the collection to a list, and wrapping that
+# in @{ BLOCK } evaluates the block in SCALAR context, so the block yields
+# the row COUNT and Perl then tries to use that integer as a reference:
+#
+#     Can't use string ("6934") as an ARRAY ref while "strict refs" in use
+#
+# It shipped in 0.3.1 and survived 442 tests because shared_files returned
+# early for every account until the GRANT existed -- the subtree query had
+# never once run with rows in it. Every assertion above this point is a
+# regex over the source, which is the only kind of test this file can hold
+# without a live Postgres, and a regex cannot see a runtime context bug.
+#
+# So the guard is a lint, applied to the whole library rather than to the
+# one function, because the mistake is a general one and the next instance
+# will be somewhere else.
+{
+    my @bad;
+    for my $f (glob 'lib/Homelab/Search/*.pm lib/Homelab/Search/*/*.pm') {
+        open my $fh, '<', $f or next;
+        while (my $line = <$fh>) {
+            push @bad, "$f:$." if $line =~ /\@\{.*->\@\*/;
+        }
+    }
+    is_deeply \@bad, [],
+        'no @{ ... ->@* } anywhere: dereferencing a flattened list puts it '
+      . 'in scalar context and hands you the count instead of the rows';
+}
+
+# ------------------------------------------- the borrowed row's child rows
+# Finding a shared file is half the job. Its metadata, its tagged people
+# and its tag paths live in search.drive_metadata / photo_faces /
+# photo_tags, all of which carry the OWNER's account_id under the same RLS
+# policy -- so a lookup in the asking account matches zero rows and the
+# page renders a borrowed photo with no camera, no people and no tags.
+#
+# That is what the live check found after the headline requirement already
+# worked: 0 metadata values for the grantee, 65 for the owner, same five
+# photos. Nothing failed; the rows were simply invisible.
+{
+    my $qsrc = do { open my $fh, '<', 'lib/Homelab/Search/Query.pm' or die $!;
+                    local $/; <$fh> };
+    like $qsrc, qr/sub metadata_for_rows/,
+        'there is an owner-aware metadata lookup';
+    like $qsrc, qr/sub faces_and_tags_for_rows/,
+        '...and an owner-aware people/tags lookup';
+    like $qsrc, qr/\$r->\{shared_by_account_id\} = \$owner/,
+        'a borrowed row carries the owner ACCOUNT, not just the owner email, '
+      . 'because that is what the child lookups have to be scoped to';
+
+    # The page must use them. Asking in the asker's own account is not an
+    # error, which is exactly why this needs asserting rather than noticing.
+    my $asrc = do { open my $fh, '<', 'lib/Homelab/Search/App.pm' or die $!;
+                    local $/; <$fh> };
+    like $asrc, qr/metadata_for_rows\(/,       'the page uses the owner-aware metadata lookup';
+    like $asrc, qr/faces_and_tags_for_rows\(/, 'the page uses the owner-aware people/tags lookup';
+    unlike $asrc, qr/query->metadata_for\(/,
+        '...and not the single-account form, which silently drops borrowed rows';
+    unlike $asrc, qr/query->faces_and_tags_for\(/,
+        '...likewise for people and tags';
+}
+
+# ------------------------------------------------- AI mode sees shares too
+# The plan said "AI mode needs no tool change", and that was wrong in two
+# places: the tool called the own-only search_drive, and _resolve hydrated
+# citations with the own-only drive_item -- so even once the tool returned
+# shared rows, every citation of one would have been dropped as
+# unresolvable and the answer would have described files the page did not
+# list. Live, before the fix: plain search found 6,934 shared photos and
+# AI mode answered "I couldn't find any photos from Arches National Park".
+{
+    my $tsrc = do { open my $fh, '<', 'lib/Homelab/Search/AI/Tools.pm' or die $!;
+                    local $/; <$fh> };
+    like $tsrc, qr/search_drive_all\(\$account_id, \$email/,
+        'the drive tool answers from shared files as well as owned ones';
+    unlike $tsrc, qr/\$query->search_drive\(/,
+        '...and no longer from the own-only pass';
+
+    my $aisrc = do { open my $fh, '<', 'lib/Homelab/Search/AI.pm' or die $!;
+                     local $/; <$fh> };
+    like $aisrc, qr/visible_drive_item\(\$account_id, \$email, \$id\)/,
+        'a cited file is hydrated through the share-aware lookup';
+    unlike $aisrc, qr/query->drive_item\(/,
+        '...not the own-only one, which would drop every shared citation';
+
+    # $email must not reach the model. It is a positional Perl argument to
+    # run_tool and nothing else; t/ai.t asserts the schemas separately.
+    unlike $tsrc, qr/description => '[^']*\bemail\b[^']*(?:shared|grantee)/,
+        'the email is plumbing, not a tool parameter';
+}
+
 done_testing;

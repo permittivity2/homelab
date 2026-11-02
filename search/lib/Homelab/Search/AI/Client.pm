@@ -18,7 +18,15 @@ use constant API_VERSION => '2026-10-21';
 # array form pairs with -06-01, and crossing them is a 400.
 use constant BETA_FALLBACK => 'server-side-fallback-2026-07-01';
 
-has ua        => sub { Mojo::UserAgent->new->connect_timeout(10)->request_timeout(120) };
+# INACTIVITY as well as request: Mojo's inactivity_timeout defaults to 40
+# seconds, so setting only request_timeout(120) bought nothing -- a
+# non-streaming generation that thinks for 40 seconds without sending a
+# byte was killed well short of the ceiling this line looks like it sets.
+# A grantee searching across thousands of shared files is exactly the
+# question slow enough to hit it.
+has ua        => sub { Mojo::UserAgent->new->connect_timeout(10)
+                                          ->inactivity_timeout(120)
+                                          ->request_timeout(120) };
 has api_key   => undef;
 has model     => 'claude-opus-5-5';
 has gate_model=> 'claude-haiku-5-5';
@@ -67,7 +75,16 @@ sub call ($self, $payload) {
         return { ok => 0, kind => 'transport', error => $e, latency_ms => $ms };
     }
 
-    my $res = $tx->result;
+    # ->result CROAKS on a transport error rather than returning one, so
+    # without this eval a timeout escaped `call` entirely and reached the
+    # request handler as an exception -- past every `ok => 0` branch below,
+    # which exist precisely so a failed call degrades into a message.
+    my $res = eval { $tx->result };
+    if (!$res) {
+        my $e = $@ || 'no result';
+        chomp $e;
+        return { ok => 0, kind => 'transport', error => $e, latency_ms => $ms };
+    }
     if ($res->is_error) {
         # The API's own error JSON is the useful part; the status alone is
         # not. Logged, never shown to the user.

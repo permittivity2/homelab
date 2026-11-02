@@ -1,3 +1,63 @@
+homelab-search (0.3.4) unstable; urgency=medium
+
+  * AI search no longer dies at 40 seconds. The client set
+    request_timeout(120) but left inactivity_timeout at Mojo's 40-second
+    default, so the 120-second ceiling was never 120 seconds: a
+    non-streaming generation that thinks for 40 seconds without sending a
+    byte was killed well short of it. A grantee searching across
+    thousands of shared files is exactly the question slow enough to
+    reach that, and it did.
+  * ...and when it died it died loudly. Mojo's ->result CROAKS on a
+    transport error rather than returning one, so the timeout escaped
+    `call` as an exception, past every ok=>0 branch written to turn a
+    failed call into a message for the person asking. Both faults
+    pre-date shares; the shared-file pass is just the first question slow
+    enough to find them.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 18:54:51 -0600
+
+homelab-search (0.3.3) unstable; urgency=medium
+
+  * A shared photo now shows its camera, its people and its tag paths.
+    Those live in drive_metadata / photo_faces / photo_tags, every row
+    carrying the OWNER's account_id under the same RLS policy as its
+    parent -- so looking them up in the asking account matched zero rows
+    and a borrowed photo rendered bare. Nothing failed; the rows were
+    simply invisible. New metadata_for_rows / faces_and_tags_for_rows
+    group a mixed-owner result list by the account that owns each row and
+    run one scoped query per group.
+  * AI mode answers from shared files. The plan had said AI mode needed
+    no change; it needed two. The drive tool called the own-only
+    search_drive, and _resolve hydrated citations with the own-only
+    drive_item -- so even once the tool returned shared rows, every
+    citation of one would have been dropped as unresolvable and the
+    answer would have described files the page did not list. Measured
+    before the fix: plain search found 6,934 shared photos while AI mode
+    answered "I couldn't find any photos from Arches National Park".
+  * CONTRACT_VERSION 4 -> 5, which retires exactly that cached answer.
+    The share fingerprint in the cache key could not: the grantee's
+    shares had not changed, only what the tool does with them.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 18:51:26 -0600
+
+homelab-search (0.3.2) unstable; urgency=medium
+
+  * Shared-file resolution actually returns its rows. The subtree query
+    wrote `@{ $db->query(...)->hashes->@* }`, which dereferences twice:
+    the postfix ->@* already flattens the collection to a list, and
+    wrapping that in @{ BLOCK } evaluates the block in scalar context, so
+    the block yielded the row count and Perl refused to use that integer
+    as a reference -- "Can't use string (6934) as an ARRAY ref".
+  * Why 442 tests did not catch it: until the GRANT on drive.shares was
+    applied, shared_files returned early for every account, so the
+    subtree query had never once executed with rows in it. t/shares.t is
+    necessarily a set of regexes over the source -- there is no live
+    Postgres in the unit suite -- and a regex cannot see a runtime
+    context bug. The new guard is therefore a lint over the whole
+    library, not an assertion about this one function.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 18:42:18 -0600
+
 homelab-search (0.3.1) unstable; urgency=medium
 
   * A missing GRANT on drive.shares degrades instead of taking search

@@ -63,7 +63,13 @@ use constant {
     #    reach the page: the tool fed the model 100 rows and it cited 25
     #    of them, because nothing had ever told it the result list was the
     #    deliverable rather than a courtesy.
-    CONTRACT_VERSION => 4,
+    # 5: search_drive answers from files SHARED WITH this person, not only
+    #    the ones they own. The share fingerprint in the key does not cover
+    #    this: the grantee's shares had not changed, so their cached "I
+    #    couldn't find any photos from Arches National Park" -- correct
+    #    under the old contract, wrong under this one -- would have gone on
+    #    being served while 6,934 shared photos sat in the index.
+    CONTRACT_VERSION => 5,
 };
 
 my $JSON = JSON::PP->new->canonical(1)->utf8(0);
@@ -281,7 +287,7 @@ sub _gate ($self, $q) {
 
 # --------------------------------------------------------------- the loop
 
-sub _converse ($self, $account_id, $q, $today) {
+sub _converse ($self, $account_id, $email, $q, $today) {
     my $cl     = $self->client;
     my $budget = { rows_used => 0 };
     my @messages = ( { role => 'user', content =>
@@ -334,7 +340,7 @@ sub _converse ($self, $account_id, $q, $today) {
             my @results;
             for my $u (@$uses) {
                 $calls++;
-                my ($text) = run_tool($self->query, $account_id,
+                my ($text) = run_tool($self->query, $account_id, $email,
                                       $u->{name}, $u->{input}, $budget);
                 push @results, { type => 'tool_result', tool_use_id => $u->{id}, content => $text };
             }
@@ -382,7 +388,7 @@ sub _parse_answer ($self, $text) {
 # dropped, and is counted. A general-knowledge answer resolves to zero ids
 # and renders an empty block. Even total gate failure cannot put another
 # account's row on the page.
-sub _resolve ($self, $account_id, $parsed) {
+sub _resolve ($self, $account_id, $email, $parsed) {
     # Declared separately on purpose. `my (@out, $dropped) = ((), 0)` looks
     # equivalent and is not: in a list assignment the array is greedy, so
     # @out swallows the 0 and $dropped is undef. The symptom was an answer
@@ -396,8 +402,12 @@ sub _resolve ($self, $account_id, $parsed) {
         my $id   = $r->{id};
         if (!$kind || !defined $id || $id !~ /\A\d+\z/) { $dropped++; next }
 
+        # visible_drive_item, not drive_item: the model is now shown files
+        # shared with this person, so it can cite one -- and the own-only
+        # lookup would drop every such citation as unresolvable, which
+        # reads on the page as an answer about files that are not listed.
         my $row = $kind eq 'mail' ? $self->query->message($account_id, $id)
-                                  : $self->query->drive_item($account_id, $id);
+                                  : $self->query->visible_drive_item($account_id, $email, $id);
         if (!$row) { $dropped++; next }
 
         # `why` is model-authored TEXT. It is carried as a plain string and
@@ -449,7 +459,7 @@ sub answer ($self, $account_id, $q, %opt) {
     if (my $hit = $scope->(sub ($db) { $self->_cache_get($db, $account_id, $norm, $wm, $fp) })) {
         # Re-resolved even on a cache hit: the entry stores ids, and the
         # rows behind them may have been deleted since it was written.
-        my ($rows, $dropped) = $self->_resolve($account_id, $hit);
+        my ($rows, $dropped) = $self->_resolve($account_id, $opt{email}, $hit);
         $scope->(sub ($db) { $self->_record($db, $account_id, 'cached', query => $q,
                        latency_ms => int((Time::HiRes::time() - $start) * 1000)) });
         return { state => 'cached', answer => $hit->{answer}, results => $rows,
@@ -467,7 +477,7 @@ sub answer ($self, $account_id, $q, %opt) {
         return { state => 'off_topic', answer => '', results => [] };
     }
 
-    my $run = $self->_converse($account_id, $q, $opt{today} // _today());
+    my $run = $self->_converse($account_id, $opt{email}, $q, $opt{today} // _today());
     my $cost = $gate_cost + $self->client->cost_micros(
         $cfg->{prices} // {}, $self->client->model, $run->{usage} // {});
     my %acct = (
@@ -482,7 +492,7 @@ sub answer ($self, $account_id, $q, %opt) {
         return { state => $run->{state}, answer => '', results => [] };
     }
 
-    my ($rows, $dropped) = $self->_resolve($account_id, $run->{parsed});
+    my ($rows, $dropped) = $self->_resolve($account_id, $opt{email}, $run->{parsed});
     $scope->(sub ($db) {
         $self->_record($db, $account_id, 'answered', query => $q, %acct);
         $self->_cache_put($db, $account_id, $norm, $wm, $fp, $run->{parsed});

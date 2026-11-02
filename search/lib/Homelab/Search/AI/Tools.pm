@@ -201,7 +201,11 @@ sub _drive_filter ($in) {
 # orchestrator can enforce the whole-conversation row cap -- they are NOT
 # what gets rendered. Every id the model later cites is re-resolved against
 # the account's own scope before anything reaches the page.
-sub run_tool ($query, $account_id, $name, $input, $budget) {
+# $email is here only because sharing is resolved from the signed-in
+# address, not from the account id -- drive.shares records who a thing was
+# shared WITH by email. It never reaches a tool schema and so never
+# reaches the model; t/ai.t asserts that separately.
+sub run_tool ($query, $account_id, $email, $name, $input, $budget) {
     $input = {} unless ref $input eq 'HASH';
     my $room = MAX_ROWS - ($budget->{rows_used} // 0);
     return (_fence({ error => 'result limit reached for this answer' }), [])
@@ -230,7 +234,9 @@ sub run_tool ($query, $account_id, $name, $input, $budget) {
     if ($name eq 'search_drive') {
         my $f = _drive_filter($input);
         $f->{limit} = $room if $room < $f->{limit};
-        my $rows = $query->search_drive($account_id, $f);
+        # _all, not the own-only pass: a file someone shared with this
+        # person is a file they can open, so AI mode answers from it too.
+        my $rows = $query->search_drive_all($account_id, $email, $f);
         $budget->{rows_used} += scalar @$rows;
 
         # Per-type metadata, so "photos from the DJI" and "videos over a
@@ -244,7 +250,7 @@ sub run_tool ($query, $account_id, $name, $input, $budget) {
         # holds; the owner sees them on the page, and they do not leave
         # the building.
         my @ids = map { $_->{drive_item_id} } @$rows;
-        my $meta = $query->metadata_for($account_id, @ids ? \@ids : [], 'safe');
+        my $meta = $query->metadata_for_rows($account_id, $rows, 'safe');
 
         # WHY A ROW CAME BACK, which a photo cannot say for itself.
         #
@@ -261,7 +267,7 @@ sub run_tool ($query, $account_id, $name, $input, $budget) {
         # carries the meaning and no third party has to be named to a third
         # party. Who they are stays in search.people, which nothing here
         # reads.
-        my $ft = @ids ? $query->faces_and_tags_for($account_id, \@ids) : {};
+        my $ft = @ids ? $query->faces_and_tags_for_rows($account_id, $rows) : {};
         my $by_person = length($f->{person} // '') ? 1 : 0;
 
         return (_fence({

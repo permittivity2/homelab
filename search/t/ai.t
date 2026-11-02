@@ -127,7 +127,7 @@ for my $d (@$defs) {
         mailbox    => 'INBOX', snippet => '<script>alert(1)</script>',
     } ]);
     my $budget = { rows_used => 0 };
-    my ($text) = run_tool($q, 20, 'search_mail', { query => 'x' }, $budget);
+    my ($text) = run_tool($q, 20, 'owner@example.org', 'search_mail', { query => 'x' }, $budget);
 
     like $text, qr/BEGIN UNTRUSTED DATA/, 'the payload is fenced';
     like $text, qr/END UNTRUSTED DATA/,   '...on both sides';
@@ -153,7 +153,7 @@ for my $d (@$defs) {
 {
     my $q = FakeQuery->new(mail => [ map { { message_id => $_, subject => "s$_" } } 1 .. 25 ]);
     my $budget = { rows_used => MAX_ROWS };
-    my ($text, $ids) = run_tool($q, 20, 'search_mail', {}, $budget);
+    my ($text, $ids) = run_tool($q, 20, 'owner@example.org', 'search_mail', {}, $budget);
     like $text, qr/result limit reached/, 'at the cap the tool returns nothing further';
     is scalar @$ids, 0, '...and no ids';
 }
@@ -161,7 +161,7 @@ for my $d (@$defs) {
 # An unknown tool name is answered, not thrown: the loop must survive a
 # model asking for something that does not exist.
 {
-    my ($text) = run_tool(FakeQuery->new, 20, 'rm_rf', {}, { rows_used => 0 });
+    my ($text) = run_tool(FakeQuery->new, 20, 'owner@example.org', 'rm_rf', {}, { rows_used => 0 });
     like $text, qr/no such tool/, 'an unknown tool is a result, not an exception';
 }
 
@@ -169,12 +169,12 @@ for my $d (@$defs) {
 # reaches the database.
 {
     for my $bad ('1; DROP TABLE search.messages', '../../etc/passwd', '', undef) {
-        my ($text) = run_tool(FakeQuery->new, 20, 'get_excerpt',
+        my ($text) = run_tool(FakeQuery->new, 20, 'owner@example.org', 'get_excerpt',
                               { kind => 'mail', id => $bad }, { rows_used => 0 });
         like $text, qr/id must be an integer/,
             'get_excerpt rejects a non-integer id: ' . (defined $bad ? $bad : 'undef');
     }
-    my ($text) = run_tool(FakeQuery->new, 20, 'get_excerpt',
+    my ($text) = run_tool(FakeQuery->new, 20, 'owner@example.org', 'get_excerpt',
                           { kind => 'shell', id => 1 }, { rows_used => 0 });
     like $text, qr/unknown kind/, 'get_excerpt takes only mail or file';
 }
@@ -184,7 +184,7 @@ for my $d (@$defs) {
 {
     my $big = 'x' x (MAX_EXCERPT_BYTES * 3);
     my $q = FakeQuery->new(excerpt => { id => 1, title => 't', body_text => $big });
-    my ($text) = run_tool($q, 20, 'get_excerpt', { kind => 'mail', id => 1 }, { rows_used => 0 });
+    my ($text) = run_tool($q, 20, 'owner@example.org', 'get_excerpt', { kind => 'mail', id => 1 }, { rows_used => 0 });
     like $text, qr/truncated at/, 'an oversized excerpt is truncated';
     cmp_ok length($text), '<', MAX_EXCERPT_BYTES * 2, '...to something near the cap';
 }
@@ -231,7 +231,7 @@ isnt Digest::SHA::sha256_hex($body . ' '), notice_sha256(),
     my $q  = ResolveQuery->new(ok => 5);
     my $ai = Homelab::Search::AI->new(query => $q);
 
-    my ($rows, $dropped) = $ai->_resolve(20, { results => [
+    my ($rows, $dropped) = $ai->_resolve(20, 'owner@example.org', { results => [
         { kind => 'mail', id => 5,    why => 'matches' },   # resolves
         { kind => 'mail', id => 99,   why => 'another account' },
         { kind => 'file', id => 99,   why => 'also not yours' },
@@ -249,18 +249,18 @@ isnt Digest::SHA::sha256_hex($body . ' '), notice_sha256(),
     is $rows->[0]{kind}, 'mail', 'the kind is carried through for the template';
     is $rows->[0]{why},  'matches', 'and the model-authored reason rides along as plain text';
 
-    my ($none, $alldropped) = $ai->_resolve(20, { results => [] });
+    my ($none, $alldropped) = $ai->_resolve(20, 'owner@example.org', { results => [] });
     is scalar @$none, 0, 'an empty result list renders nothing';
     is $alldropped, 0,   'and drops nothing';
 
     # A general-knowledge answer cites no ids, so it renders an empty block
     # even if every other gate failed.
-    my ($no_ids) = $ai->_resolve(20, {});
+    my ($no_ids) = $ai->_resolve(20, 'owner@example.org', {});
     is scalar @$no_ids, 0, 'an answer with no results key renders nothing at all';
 
     # `why` is model-authored and must be bounded, or a model can push
     # arbitrary length into the page.
-    my ($long) = $ai->_resolve(20, { results =>
+    my ($long) = $ai->_resolve(20, 'owner@example.org', { results =>
         [ { kind => 'mail', id => 5, why => 'z' x 5000 } ] });
     cmp_ok length($long->[0]{why}), '<=', 200, 'a model-authored reason is truncated';
 }
@@ -276,7 +276,7 @@ isnt Digest::SHA::sha256_hex($body . ' '), notice_sha256(),
                      mime_type => 'image/jpeg', size_bytes => 100 } ],
         on_meta => sub { $asked = $_[0] },   # records the visibility argument
     );
-    my ($text) = run_tool($q, 20, 'search_drive', { query => 'lake' }, { rows_used => 0 });
+    my ($text) = run_tool($q, 20, 'owner@example.org', 'search_drive', { query => 'lake' }, { rows_used => 0 });
 
     is $asked, 'safe', 'the drive tool asks for SAFE metadata, not all of it';
     like $text, qr/image\.camera_model/, 'non-sensitive metadata reaches the model';
@@ -308,7 +308,7 @@ isnt Digest::SHA::sha256_hex($body . ' '), notice_sha256(),
         drive => [ { drive_item_id => 7, file_name => 'scan0012.jpg',
                      mime_type => 'image/jpeg', size_bytes => 100 } ],
     );
-    my ($text) = run_tool($q, 20, 'search_drive',
+    my ($text) = run_tool($q, 20, 'owner@example.org', 'search_drive',
                           { person => 'jeff' }, { rows_used => 0 });
 
     is $q->{saw_filter}{person}, 'jeff', 'the person reaches the query filter';
@@ -324,7 +324,26 @@ isnt Digest::SHA::sha256_hex($body . ' '), notice_sha256(),
         'echoing the filter does not leak who is actually in the photo';
 }
 
+# -------------------------------------------------------- client timeouts
+# request_timeout alone is a trap: Mojo's inactivity_timeout defaults to 40
+# seconds, so a 120-second ceiling was never 120 seconds. A real grantee
+# search across thousands of shared files died at 40 with the exception
+# escaping `call` altogether, because ->result croaks on a transport error
+# instead of returning one -- straight past every ok=>0 branch written to
+# turn a failed call into a message.
+{
+    my $src = do { open my $fh, '<', 'lib/Homelab/Search/AI/Client.pm' or die $!;
+                   local $/; <$fh> };
+    like $src, qr/inactivity_timeout\(120\)/,
+        'the inactivity timeout is set, not left at its 40-second default';
+    like $src, qr/request_timeout\(120\)/, 'and the request ceiling matches it';
+    like $src, qr/my \$res = eval \{ \$tx->result \}/,
+        'a transport error is caught rather than croaking out of call()';
+    like $src, qr/kind => 'transport'/, '...and reported as a transport failure';
+}
+
 done_testing;
+
 
 # ---------------------------------------------------------------------------
 # A Query stand-in. The real one needs Postgres; these tests are about the
@@ -333,6 +352,11 @@ package FakeQuery;
 sub new          { my ($class, %a) = @_; return bless { %a }, $class }
 sub search_mail  { return $_[0]{mail}  // [] }
 sub search_drive { return $_[0]{drive} // [] }
+# The tool layer calls the _all form, which is the one that adds the
+# shared-file pass; the own-only form stays for the paths that still use it.
+sub search_drive_all { return $_[0]{drive} // [] }
+sub metadata_for_rows        { return {} }
+sub faces_and_tags_for_rows  { return {} }
 sub excerpt      { return $_[0]{excerpt} }
 sub message      { return $_[0]{message} }
 sub drive_item   { return $_[0]{drive_item} }
@@ -343,23 +367,24 @@ sub drive_item   { return $_[0]{drive_item} }
 package MetaQuery;
 sub new { my ($c,%a)=@_; return bless {%a}, $c }
 sub search_mail  { return [] }
-sub search_drive {
-    my ($self, $acct, $f) = @_;
+sub search_drive_all {
+    my ($self, $acct, $email, $f) = @_;
     $self->{saw_filter} = $f;
+    $self->{saw_email}  = $email;
     return $self->{drive} // [];
 }
 # Two named faces and one the owner never named, so the count and the
 # "untagged" half are both exercised.
-sub faces_and_tags_for {
-    my ($self, $acct, $ids) = @_;
+sub faces_and_tags_for_rows {
+    my ($self, $acct, $rows) = @_;
     $self->{asked_faces} = 1;
     return { 7 => { faces => [ { display_name => 'Ada Lovelace' },
                                { display_name => 'Grace Hopper' },
                                { display_name => undef } ],
                     tags  => [ { path => 'Places|Earth|USA|Utah' } ] } };
 }
-sub metadata_for {
-    my ($self, $acct, $ids, $vis) = @_;
+sub metadata_for_rows {
+    my ($self, $acct, $rows, $vis) = @_;
     $self->{on_meta}->($vis) if $self->{on_meta};
     my @all = (
         { key_name => 'image.camera_model', label => 'Camera model', kind => 'text', value => 'FC9113' },
@@ -374,4 +399,8 @@ sub metadata_for {
 package ResolveQuery;
 sub new        { my ($c,%a)=@_; return bless {%a}, $c }
 sub message    { my ($s,$acct,$id)=@_; return $id eq $s->{ok} ? { message_id=>$id, subject=>'s' } : undef }
-sub drive_item { my ($s,$acct,$id)=@_; return undef }
+# visible_drive_item, which is what _resolve now calls: the model may
+# cite a file shared with this person, and the own-only lookup would have
+# dropped every such citation.
+sub visible_drive_item { my ($s,$acct,$email,$id)=@_; return undef }
+sub drive_item         { my ($s,$acct,$id)=@_; return undef }

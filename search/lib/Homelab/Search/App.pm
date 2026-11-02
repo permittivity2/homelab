@@ -556,9 +556,11 @@ sub index ($c) {
         # rather than one per row. 'all' here, not 'safe': this is the
         # owner's own page, and the sensitive filter exists for what leaves
         # the building, not for what they can already see.
+        # _rows, not the bare id list: a borrowed row's metadata belongs
+        # to the account that shared it, and asking for it in this account
+        # returns nothing rather than failing.
         drive_meta => (($acct && @$drive)
-            ? $c->app->query->metadata_for($acct->{account_id},
-                  [ map { $_->{drive_item_id} } @$drive ], 'all')
+            ? $c->app->query->metadata_for_rows($acct->{account_id}, $drive, 'all')
             : {}),
         # Who is in the photo, and where its owner filed it.
         #
@@ -570,8 +572,7 @@ sub index ($c) {
         # hint why. faces_and_tags_for was written for this and then never
         # called by anything.
         drive_faces => (($acct && @$drive)
-            ? $c->app->query->faces_and_tags_for($acct->{account_id},
-                  [ map { $_->{drive_item_id} } @$drive ])
+            ? $c->app->query->faces_and_tags_for_rows($acct->{account_id}, $drive)
             : {}),
         searched   => _searched($f),
         filters_on => _filters_on($f),
