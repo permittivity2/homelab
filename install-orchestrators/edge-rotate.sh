@@ -244,6 +244,46 @@ if [ "$UPDATES" = 1 ]; then
     sleep 5
     ssh -o ConnectTimeout=8 "$MGMT" 'sudo journalctl -u homelab-certsync -n 6 --no-pager 2>/dev/null | tail -5' | sed 's/^/    /'
 
+    # VHOSTS GO STALE FOR THE SAME REASON THE CERTIFICATES DO, and this was
+    # missed the first time round: a parked node has also missed every SITE
+    # added while it was off.
+    #
+    # Nothing generates a vhost at boot. homelab-webproxy-pull.timer refreshes
+    # the UPSTREAMS of sites that already exist; apply-sites -- the only thing
+    # that turns a sites.yml entry into an nginx vhost -- runs at package
+    # install. So a site added to sites.yml on a parked node stays invisible
+    # until something invokes it, which nothing did.
+    #
+    # Measured: 01 booted with search.mailmasker.org in sites.yml AND its
+    # certificate installed by the certsync call above (17 lineages), and
+    # served nothing for that hostname -- 16 vhosts, HTTP 000 from the
+    # internet, while it was the live edge. Running apply-sites wired the
+    # existing certificate with no certbot call and the hostname answered
+    # immediately.
+    #
+    # Idempotent by design: every site that already has HTTPS is skipped, so
+    # on a node that is in step this prints a list of skips and changes
+    # nothing. It is the sites half of the same "a parked node is behind"
+    # argument, and it belongs next to it.
+    step "vhosts (a parked node has missed every site added while it was off)"
+    SITES_BEFORE=$(ssh -o ConnectTimeout=8 "$MGMT" 'ls /etc/nginx/sites-enabled/ 2>/dev/null | wc -l' 2>/dev/null)
+    APPLY=$(ssh -o ConnectTimeout=30 "$MGMT" 'sudo /usr/bin/homelab-webproxy-apply-sites 2>&1' 2>/dev/null)
+    NEWSITES=$(printf '%s\n' "$APPLY" | grep -E 'configuring |is live over HTTPS' | sed 's/^/      /')
+    SITES_AFTER=$(ssh -o ConnectTimeout=8 "$MGMT" 'ls /etc/nginx/sites-enabled/ 2>/dev/null | wc -l' 2>/dev/null)
+    if [ -n "$NEWSITES" ]; then
+        warn "site(s) this node was missing have just been built (${SITES_BEFORE:-?} -> ${SITES_AFTER:-?} vhosts):"
+        printf '%s\n' "$NEWSITES"
+    else
+        ok "no site was missing (${SITES_AFTER:-?} vhosts, all already configured)"
+    fi
+    if printf '%s\n' "$APPLY" | grep -qiE 'WARNING|certbot failed'; then
+        warn "apply-sites reported a problem:"
+        printf '%s\n' "$APPLY" | grep -iE 'WARNING|certbot failed' | sed 's/^/      /'
+    fi
+    ssh -o ConnectTimeout=8 "$MGMT" 'sudo nginx -t' >/dev/null 2>&1 \
+        && ok "nginx config still valid after apply-sites" \
+        || bad "nginx config is INVALID after apply-sites -- look before leaving this node live"
+
     if [ "$OS_UPDATES" = 0 ]; then
         step "pending OS updates (reported, NOT applied)"
         echo "  Pass --os-updates to apply them. Left alone by default because a"

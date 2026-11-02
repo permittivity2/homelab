@@ -112,6 +112,12 @@ else
     probe_http https://invite.mailmasker.org/setup/mail "410"
     probe_http https://static.mailmasker.org/           "200 301 302"
     probe_http https://mailmasker.org/                  "200 301 302"
+    # search is here because its ABSENCE is what this list failed to catch:
+    # the hostname was provisioned onto the live edge while 01 and 02 were
+    # parked, and a rotation verified "clean" on a node that served nothing
+    # for it. A probe list shorter than the site list can only ever confirm
+    # the sites someone remembered.
+    probe_http https://search.mailmasker.org/           "200 301 302"
     # Mail ingress: haproxy binds *:25/587/143/993 on this node.
     #
     # :25 CANNOT be probed from offsite -- its provider blocks outbound port 25
