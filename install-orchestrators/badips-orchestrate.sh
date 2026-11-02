@@ -458,13 +458,12 @@ do_publish(){ # DEB -- publishes THIS file (the one the proving ground tested), 
           --exclude='*.pem' --exclude='id_rsa*' --exclude='*_rsa' --exclude='secring*' \
         && ok "published to prod-homelab45" || { bad "rsync to prod-homelab45 failed"; return; }
     [ -d "$TOP/../bad-ips/git/website" ] && rsync -rlq "$TOP/../bad-ips/git/website/" "$REPO_HOST:/var/www/projects.thedude.vip/bad-ips/" 2>/dev/null
-    # what the FLEET sees, through the repo's own index
-    if rsh 12 "curl -fsS --max-time 20 http://projects.thedude.vip/apt-homelab/dists/unstable/main/binary-amd64/Packages" 2>/dev/null \
-         | awk '/^Package: bad-ips$/{p=1} p&&/^Version:/{print $2; exit}' | grep -qx "$v"; then
-        ok "the fleet's repo index now offers bad-ips $v"
-    else
-        bad "the fleet's repo index does not show bad-ips $v yet"
-    fi
+    # what the FLEET sees -- asked of apt on a fleet node, through the same
+    # cache (aptcacher) every install will go through
+    local cand
+    cand="$(rsh 12 "sudo apt-get update -qq >/dev/null 2>&1; apt-cache policy bad-ips | awk '/Candidate:/{print \$2}'" 2>/dev/null)"
+    if [ "$cand" = "$v" ]; then ok "the fleet's apt (through the cache) now offers bad-ips $v"
+    else bad "the fleet's apt offers bad-ips '${cand:-nothing}', not $v"; fi
 }
 
 do_rollout(){
