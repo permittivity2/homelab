@@ -10,6 +10,10 @@
 #       already built into ~/apt-repo-homelab), --db, --deploy-web, --install,
 #       --static-realip, then edge-standby-sync.sh (closes SSH on the parked
 #       edges). Blocking stays OFF: the edge only watches until --role 00 block.
+#   ./badips-orchestrate.sh --continue
+#       the rest of --rollout after the database step (--deploy-web,
+#       --install, --static-realip, edge-standby-sync.sh, verify), for when
+#       the first three steps are already done. Stops at the first problem.
 #   ./badips-orchestrate.sh --db
 #       once: the shared ban list's login + schema in the fleet database, and
 #       the login registered with pgbouncer 09/10/11. Safe to re-run: an
@@ -305,7 +309,9 @@ do_proving_ground(){
 # ============================================================================
 # --install / --role / --verify / --static-realip
 # ============================================================================
-all_nodes(){ local i; for i in $(seq "$FIRST" "$LAST"); do nn "$i"; done; }
+# One per line: nn() prints no newline, and run together the numbers made ONE
+# bogus node "000102...72" (found in the first --rollout, 2026-11-02).
+all_nodes(){ local i; for i in $(seq "$FIRST" "$LAST"); do printf '%02d\n' "$i"; done; }
 
 do_install(){
     local deb="$1"; shift
@@ -398,8 +404,12 @@ deploy_node(){ # NN -> prints a status line; returns non-zero on a problem
     rsh "$1" "
         export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
         sudo -E apt-get update -qq >/tmp/badips-deploy-web.log 2>&1 || { echo 'apt-get update failed'; exit 1; }
+        before=\$(dpkg-query -W -f='\${Package}=\${Version} ' $WEB_PKGS 2>/dev/null)
         sudo -E apt-get install -y -qq --only-upgrade $WEB_PKGS >>/tmp/badips-deploy-web.log 2>&1 || { echo 'upgrade failed (see /tmp/badips-deploy-web.log)'; exit 1; }
+        after=\$(dpkg-query -W -f='\${Package}=\${Version} ' $WEB_PKGS 2>/dev/null)
         r=''
+        # nothing upgraded (already current, e.g. a re-run): no restarts
+        [ \"\$before\" = \"\$after\" ] && { echo \"\$(echo \$after | sed 's/homelab-//g') | already current, nothing restarted\"; exit 0; }
         for u in \$(systemctl list-units 'homelab-*' --type=service --state=running --no-legend | awk '{print \$1}'); do
             systemctl cat \"\$u\" 2>/dev/null | grep -q '^ExecStart=/usr/bin/hypnotoad' || continue
             sudo systemctl restart \"\$u\" && r=\"\$r \${u%.service}\"
@@ -466,18 +476,22 @@ do_publish(){ # DEB -- publishes THIS file (the one the proving ground tested), 
     else bad "the fleet's apt offers bad-ips '${cand:-nothing}', not $v"; fi
 }
 
+do_continue(){
+    do_deploy_web;             [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped during the web deploy${O}"; return; }
+    do_install "";             [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped after installing${O}"; return; }
+    do_static_realip;          [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped at the static host${O}"; return; }
+    say "parked edge nodes: base firewall (closes SSH) and bad-ips config"
+    "$HERE/edge-standby-sync.sh" 2>&1 | sed 's/^/  /'; [ "${PIPESTATUS[0]}" -eq 0 ] || FAILS=$((FAILS + 1))
+    [ "$FAILS" -eq 0 ] && do_verify
+}
+
 do_rollout(){
     local deb="$1" v
     v="$(dpkg-deb -f "$deb" Version 2>/dev/null)" || die "cannot read $deb"
     do_proving_ground "$deb";  [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped after the proving ground${O}"; return; }
     do_publish "$deb";         [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped after publishing${O}"; return; }
     do_db;                     [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped after the database step${O}"; return; }
-    do_deploy_web;             [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped during the web deploy${O}"; return; }
-    do_install "";             [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped after installing${O}"; return; }
-    do_static_realip;          [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped at the static host${O}"; return; }
-    say "parked edge nodes: base firewall (closes SSH) and bad-ips config"
-    "$HERE/edge-standby-sync.sh" 2>&1 | sed 's/^/  /' || FAILS=$((FAILS + 1))
-    [ "$FAILS" -eq 0 ] && do_verify
+    do_continue
 }
 
 # ============================================================================
@@ -500,6 +514,7 @@ case "$cmd" in
     --deploy-web)     do_deploy_web ;;
     --publish)        [ -n "$DEB" ] || die "--publish needs --deb FILE"; do_publish "$DEB" ;;
     --rollout)        [ -n "$DEB" ] || die "--rollout needs --deb FILE"; do_rollout "$DEB" ;;
+    --continue)       do_continue ;;
     --print-config)   [ ${#args[@]} -eq 1 ] || die "usage: --print-config NN"
                       load_site; BADIPS_DB_PASSWORD='********'
                       r="$(role_for "$(nn "${args[0]}")")"
