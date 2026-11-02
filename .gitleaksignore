@@ -21,3 +21,6 @@
 # repeated string, so there is no literal left to flag.
 2c2a90bee0bd0a4e4a523c57fc198a7b02134bd7:common/t/setuptoken.t:generic-api-key:14
 aeb9d6f358079f004c2d0a866030af68328fb69e:invite/t/setup.t:generic-api-key:30
+# api/t/login-client-ip.t's test JWT secret, the same false positive; the
+# current tree derives it (join of a repeated string). Retires the one hit.
+0dadddc9bbc7f0a044a4b03b9c919f8be8a95f19:api/t/login-client-ip.t:generic-api-key:28
