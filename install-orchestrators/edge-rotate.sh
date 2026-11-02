@@ -305,7 +305,15 @@ UPGRADE
         sleep 5
         case "$(cexec 'systemctl is-active edge-os-upgrade')" in
             activating|active) ok "upgrade running, detached" ;;
-            *) bad "the upgrade unit is not running -- see 'journalctl -u edge-os-upgrade' on the node" ;;
+            *)  # Not running is not the same as not run. With nothing to
+                # upgrade the unit finishes well inside the 5 seconds above,
+                # and reporting that as a failure is how a clean run looks
+                # broken -- it did, on all three nodes, every one of which
+                # had 0 packages pending.
+                case "$(cexec 'systemctl show edge-os-upgrade -p Result --value')" in
+                    success) ok "upgrade unit already finished (nothing pending)" ;;
+                    *) bad "the upgrade unit is not running and did not succeed -- see 'journalctl -u edge-os-upgrade' on the node" ;;
+                esac ;;
         esac
 
         echo -n "  upgrading (sshd will restart part-way through; polling via the hypervisor)"
