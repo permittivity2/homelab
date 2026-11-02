@@ -25,6 +25,21 @@ server {
 
     client_max_body_size 25m;
 
+    # The real visitor, not the edge. The edge (homelab-webproxy) appends
+    # the visitor's address to X-Forwarded-For; it is believed ONLY from
+    # the edge nodes themselves (prod-homelab00/01/02 and their shared
+    # service address .140). With this, this vhost's access log and PHP's
+    # REMOTE_ADDR (what Roundcube itself logs) name the visitor; without
+    # it every webmail request looked like it came from the edge.
+    # Roundcube's ip_check is off (its default), so a visitor whose
+    # address changes mid-session (a phone) is not logged out by this.
+    set_real_ip_from 10.50.2.140;
+    set_real_ip_from 10.50.2.144;
+    set_real_ip_from 10.50.2.145;
+    set_real_ip_from 10.50.2.146;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
     location / {
         try_files $uri $uri/ /index.php$is_args$args;
     }

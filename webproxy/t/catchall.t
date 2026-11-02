@@ -20,6 +20,9 @@ like($c, qr/^\s*listen\s+\[::\]:80\s+default_server\s*;/m, 'and on IPv6');
 like($c, qr/^\s*return\s+404\s*;/m, 'unknown Host gets a flat 404');
 like($c, qr/^\s*server_tokens\s+off\s*;/m, 'no nginx version advertised to an accidental caller');
 unlike($c, qr/\broot\b|\bindex\b|try_files/, 'serves no files -- that is what produced the Welcome page');
+like($c, qr{^\s*access_log\s+/var/log/nginx/catchall\.log\s*;}m, 'logs to its own catchall.log (bad-ips counts floods there, never real sites)');
+my @logs = $c =~ /^\s*access_log\b/mg;
+is(scalar(@logs), 1, 'one access_log, in the :80 server only (the :443 one never sees a request)');
 
 # --- :443 ---
 like($c, qr/^\s*listen\s+443\s+ssl\s+default_server\s*;/m, 'claims the :443 default_server');

@@ -4,7 +4,7 @@ use Exporter 'import';
 use Time::HiRes ();
 use Mojo::IOLoop;
 
-our @EXPORT_OK = qw(mount_health_route mount_metrics_route);
+our @EXPORT_OK = qw(mount_health_route mount_metrics_route mount_request_log);
 
 # Mounts a standard GET /health route on a Mojolicious app — the
 # one-line-but-copy-pasted-everywhere endpoint every feature used to
@@ -25,7 +25,35 @@ sub mount_health_route {
         return $c->render(text => 'unhealthy', status => 503);
     });
 
+    # Before the metrics setup: that one returns early on hosts without a
+    # textfile directory, and the request log must not depend on it.
+    mount_request_log($app);
     mount_metrics_route($app, %opts);
+}
+
+# One log line per request that reached this app from OUTSIDE the fleet --
+# through the edge (which sets X-Forwarded-For) or through homelab-api's
+# gateway (which overwrites it with the real client) -- naming the real
+# visitor's address (MOJO_REVERSE_PROXY=1 makes remote_address that).
+# Internal service-to-service calls and the agents' own check-ins carry no
+# X-Forwarded-For and are not logged, so the log is not drowned in them.
+#
+#   request 198.51.100.7 GET /api/v1/drive/files 200 12ms
+sub mount_request_log {
+    my ($app) = @_;
+    $app->hook(before_dispatch => sub ($c) {
+        $c->stash(_hl_rl_t0 => [Time::HiRes::gettimeofday]);
+    });
+    $app->hook(after_dispatch => sub ($c) {
+        return unless defined $c->req->headers->header('X-Forwarded-For');
+        my $path = $c->req->url->path->to_string // '';
+        return if $path eq '/health';
+        my $t0 = $c->stash('_hl_rl_t0');
+        $path = substr($path, 0, 200) . '...' if length $path > 200;
+        $c->app->log->info(sprintf 'request %s %s %s %d %s',
+            $c->tx->remote_address // '-', $c->req->method // '-', $path, $c->res->code // 0,
+            $t0 ? int(1000 * Time::HiRes::tv_interval($t0)) . 'ms' : '-');
+    });
 }
 
 # Per-app HTTP metrics for a Mojolicious app, exported via node_exporter's
