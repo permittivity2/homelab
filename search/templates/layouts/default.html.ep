@@ -250,6 +250,15 @@
       font-weight: var(--weight-semibold); color: var(--silver-bright);
       line-height: var(--leading-tight);
     }
+    /* Shown only when the wording changed while the dialog was open, so a
+       refused agreement says why instead of silently reappearing. */
+    dialog.consent .cstale {
+      margin: 0 0 var(--space-4); padding: var(--space-3);
+      font-size: var(--app-sm); line-height: var(--leading-normal);
+      color: var(--silver-bright); border-radius: var(--radius-sm);
+      border: 1px solid var(--amber-dim, #7a5c1a);
+      background: var(--amber-faint, rgba(122, 92, 26, 0.18));
+    }
     dialog.consent .cbody p {
       margin: 0 0 var(--space-3); font-size: var(--app-sm);
       color: var(--text-secondary); line-height: var(--leading-normal);

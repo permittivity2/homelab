@@ -342,7 +342,42 @@ isnt Digest::SHA::sha256_hex($body . ' '), notice_sha256(),
     like $src, qr/kind => 'transport'/, '...and reported as a transport failure';
 }
 
+# -------------------------------------------------- the nudge must be a USER turn
+# `messages` accepts only `user` and `assistant`; the system prompt is a
+# TOP-LEVEL parameter, which Client::call passes beside `messages`. The nudge
+# used `role => 'system'` inside messages, which is a 400 -- so it did not
+# nudge, it failed the request, and every no_tool_call was reported to the
+# person as "AI search is unavailable right now" rather than "I could not
+# turn that into a search of your mail or files". Rare path, never seen live.
+{
+    my $src = do { open my $fh, '<', 'lib/Homelab/Search/AI.pm' or die $!;
+                   local $/; <$fh> };
+    my ($conv) = $src =~ /(sub _converse.*?\n\}\n)/s;
+    unlike $conv, qr/role\s*=>\s*'system'/,
+        'no message in the conversation carries a system role';
+    like $conv, qr/\$nudged = 1;.*?role\s*=>\s*'user'/s,
+        'the nudge is a user turn, which is a role the API accepts';
+}
+
+# ------------------------------------------- a refused consent says why
+# The server refuses to record agreement to wording it is no longer
+# serving and redirects with ai_notice=stale. Nothing read that parameter,
+# so the dialog just reappeared and the click looked like it did nothing.
+{
+    my $tpl = do { open my $fh, '<', 'templates/index.html.ep' or die $!;
+                   local $/; <$fh> };
+    like $tpl, qr/ai_notice.*?eq 'stale'/s,
+        'the page reads the stale-notice flag the server redirects with';
+    like $tpl, qr/agreement was not recorded/,
+        '...and says so, rather than silently re-showing the dialog';
+
+    my $lay = do { open my $fh, '<', 'templates/layouts/default.html.ep' or die $!;
+                   local $/; <$fh> };
+    like $lay, qr/dialog\.consent \.cstale/, '...and the notice is styled';
+}
+
 done_testing;
+
 
 
 # ---------------------------------------------------------------------------

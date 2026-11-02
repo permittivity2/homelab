@@ -1,3 +1,27 @@
+homelab-search (0.3.8) unstable; urgency=medium
+
+  * The no-tool-call nudge is a USER turn, not a system one, so it now
+    nudges instead of failing the request. `messages` accepts only `user`
+    and `assistant`; the system prompt is a TOP-LEVEL parameter, which
+    Client::call passes beside `messages`. A system role inside messages
+    is a 400 -- so when the model answered without searching, the retry
+    that was supposed to say "search first" killed the request instead,
+    and the person was told "AI search is unavailable right now" rather
+    than "I could not turn that into a search of your mail or files".
+    Never observed live because the path is rare: it needs the model to
+    answer with no tool call and no results.
+  * Refusing a stale consent now says why. The server will not record
+    agreement to wording it is no longer serving -- a tab left open
+    across a wording change -- and redirected with `ai_notice=stale`,
+    which NOTHING read. The dialog simply reappeared, so the click looked
+    like it had done nothing at all. It now explains that the wording
+    changed and the agreement was not recorded.
+  * Both were found by reading the code for Phase 4 rather than by
+    anything failing, which is the second time that exercise has paid
+    for itself this evening.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 21:53:43 -0600
+
 homelab-search (0.3.7) unstable; urgency=medium
 
   * A renamed or deleted mail folder no longer lingers in the index

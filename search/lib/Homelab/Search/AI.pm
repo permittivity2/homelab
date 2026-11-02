@@ -355,7 +355,15 @@ sub _converse ($self, $account_id, $email, $q, $today) {
         if (!$calls && !$nudged && !($parsed && @{ $parsed->{results} // [] })) {
             $nudged = 1;
             push @messages, { role => 'assistant', content => $body->{content} };
-            push @messages, { role => 'system',
+            # A USER turn, not a system one. `messages` accepts only `user`
+            # and `assistant`; the system prompt is a TOP-LEVEL parameter
+            # (Client::call passes `system` beside `messages`). A system role
+            # in here is a 400, so the nudge did not nudge -- it failed the
+            # request, and every no_tool_call was reported to the person as
+            # "AI search is unavailable right now" instead of "I could not
+            # turn that into a search of your mail or files". The path is
+            # rare, which is why it was never seen.
+            push @messages, { role => 'user',
                               content => 'Search before answering: call search_mail or '
                                        . 'search_drive, then cite what you found.' };
             next;

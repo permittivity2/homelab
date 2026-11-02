@@ -557,6 +557,14 @@
 <dialog class="consent" id="aiConsent">
   <form method="post" action="/ai/consent">
     <h2>AI search sends your data to Anthropic, a third party.</h2>
+%# A stale post lands back here. The server refuses to record agreement to
+%# wording it is no longer serving, and redirected with ai_notice=stale --
+%# which NOTHING read, so the dialog simply reappeared and the person was
+%# given no reason why their click did nothing.
+% if (($c->param('ai_notice') // '') eq 'stale') {
+    <p class="cstale">The wording changed while this page was open, so your
+      agreement was not recorded. Please read it again below.</p>
+% }
     <div class="cbody">
 % for my $para (split /\n\n/, $ai_state->{notice}) {
 %   next unless length $para;
