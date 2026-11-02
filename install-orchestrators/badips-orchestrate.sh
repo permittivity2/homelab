@@ -4,6 +4,12 @@
 # WORKSTATION. Every step is workstation -> node over ssh; no node ever ssh's
 # to another (the fleet's no-guest-to-guest-trust rule).
 #
+#   ./badips-orchestrate.sh --rollout --deb FILE
+#       everything below that can run today, in order, stopping at the first
+#       problem: --proving-ground, publish (bad-ips + the homelab packages
+#       already built into ~/apt-repo-homelab), --db, --deploy-web, --install,
+#       --static-realip, then edge-standby-sync.sh (closes SSH on the parked
+#       edges). Blocking stays OFF: the edge only watches until --role 00 block.
 #   ./badips-orchestrate.sh --db
 #       once: the shared ban list's login + schema in the fleet database, and
 #       the login registered with pgbouncer 09/10/11. Safe to re-run: an
@@ -360,7 +366,8 @@ do_verify(){
                             case "$st" in *"enabled=disabled"*"table=no"*) ;; *) bad "prod-homelab$n: role off but service or table present" ;; esac ;;
         esac
         case " $EDGES " in *" $n "*)
-            rsh "$n" 'c(){ sudo nft -j list set inet badips "$1" 2>/dev/null | jq "[.nftables[] | select(.set) | .set.elem // [] | length] | add // 0"; }
+            rsh "$n" 'sudo nft list table inet badips >/dev/null 2>&1 && command -v jq >/dev/null || exit 0
+                      c(){ sudo nft -j list set inet badips "$1" 2>/dev/null | jq "[.nftables[] | select(.set) | .set.elem // [] | length] | add // 0"; }
                       echo "    blocking: $(c badipv4) addresses, $(c feedv4) + $(c feedv6) feed ranges; never-block $(c never_block) + $(c never_block_v6)"
                       sudo nft list chain inet badips preroute_block 2>/dev/null | grep -E "counter packets [1-9]" | sed "s/^\s*/    drops: /"' ;;
         esac
@@ -432,6 +439,49 @@ do_deploy_web(){
 }
 
 # ============================================================================
+# --publish / --rollout
+# ============================================================================
+REPO_DIR="$HOME/apt-repo-homelab"
+REPO_HOST=10.20.2.189                                   # prod-homelab45
+REPO_PATH=/var/www/projects.thedude.vip/apt-homelab/
+
+do_publish(){ # DEB -- publishes THIS file (the one the proving ground tested), never a rebuild
+    local deb="$1" v; v="$(dpkg-deb -f "$deb" Version 2>/dev/null)" || die "cannot read $deb"
+    say "publishing bad-ips $v (and every package already built into $REPO_DIR) to the fleet repo"
+    if reprepro -b "$REPO_DIR" list unstable bad-ips 2>/dev/null | grep -q " $v\$"; then
+        ok "bad-ips $v is already in $REPO_DIR"
+    else
+        reprepro -b "$REPO_DIR" includedeb unstable "$deb" >/tmp/badips-publish.log 2>&1 \
+            && ok "added the tested $(basename "$deb") to $REPO_DIR" || { bad "reprepro includedeb failed (see /tmp/badips-publish.log)"; return; }
+    fi
+    rsync -rlq "$REPO_DIR/" "$REPO_HOST:$REPO_PATH" --exclude=conf --exclude=db --exclude=vendor --exclude=REPREPRO.md \
+          --exclude='*.pem' --exclude='id_rsa*' --exclude='*_rsa' --exclude='secring*' \
+        && ok "published to prod-homelab45" || { bad "rsync to prod-homelab45 failed"; return; }
+    [ -d "$TOP/../bad-ips/git/website" ] && rsync -rlq "$TOP/../bad-ips/git/website/" "$REPO_HOST:/var/www/projects.thedude.vip/bad-ips/" 2>/dev/null
+    # what the FLEET sees, through the repo's own index
+    if rsh 12 "curl -fsS --max-time 20 http://projects.thedude.vip/apt-homelab/dists/unstable/main/binary-amd64/Packages" 2>/dev/null \
+         | awk '/^Package: bad-ips$/{p=1} p&&/^Version:/{print $2; exit}' | grep -qx "$v"; then
+        ok "the fleet's repo index now offers bad-ips $v"
+    else
+        bad "the fleet's repo index does not show bad-ips $v yet"
+    fi
+}
+
+do_rollout(){
+    local deb="$1" v
+    v="$(dpkg-deb -f "$deb" Version 2>/dev/null)" || die "cannot read $deb"
+    do_proving_ground "$deb";  [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped after the proving ground${O}"; return; }
+    do_publish "$deb";         [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped after publishing${O}"; return; }
+    do_db;                     [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped after the database step${O}"; return; }
+    do_deploy_web;             [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped during the web deploy${O}"; return; }
+    do_install "";             [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped after installing${O}"; return; }
+    do_static_realip;          [ "$FAILS" -eq 0 ] || { echo; echo "${R}stopped at the static host${O}"; return; }
+    say "parked edge nodes: base firewall (closes SSH) and bad-ips config"
+    "$HERE/edge-standby-sync.sh" 2>&1 | sed 's/^/  /' || FAILS=$((FAILS + 1))
+    [ "$FAILS" -eq 0 ] && do_verify
+}
+
+# ============================================================================
 cmd="${1:-}"; shift || true
 DEB=""
 args=()
@@ -449,6 +499,8 @@ case "$cmd" in
     --verify)         do_verify "${args[@]}" ;;
     --static-realip)  do_static_realip ;;
     --deploy-web)     do_deploy_web ;;
+    --publish)        [ -n "$DEB" ] || die "--publish needs --deb FILE"; do_publish "$DEB" ;;
+    --rollout)        [ -n "$DEB" ] || die "--rollout needs --deb FILE"; do_rollout "$DEB" ;;
     --print-config)   [ ${#args[@]} -eq 1 ] || die "usage: --print-config NN"
                       load_site; BADIPS_DB_PASSWORD='********'
                       r="$(role_for "$(nn "${args[0]}")")"
