@@ -1,3 +1,30 @@
+homelab-search (0.3.5) unstable; urgency=medium
+
+  * One search page asked "what is shared with me?" three times -- once
+    for the results, once for the counts, once for the file-type facets
+    -- rebuilding the whole list each time. With a 6,934-file share that
+    was ~75ms of a 116ms render spent re-answering a question already
+    answered microseconds earlier. Now resolved once per request.
+  * Deliberately NOT cached across requests, though the share
+    fingerprint is cheap and would catch both a grant and a revoke.
+    Three other things change what is shared with you while touching no
+    row in drive.shares: a share passing its expires_at, a file added to
+    a shared folder, and a file trashed inside one. A fingerprint-keyed
+    cache would serve a confidently stale allowlist. A request is the
+    widest window in which nothing is expected to change.
+  * The share fingerprint gained a fourth number, and this one is a
+    correctness fix rather than a speed one. The first three move when
+    somebody DOES something -- grant, revoke. A share passing its
+    expires_at is nobody doing anything, so the fingerprint sat still
+    while the share stopped being live, and an AI answer describing its
+    files stayed cached for the rest of the TTL. The live search path
+    always got expiry right; only the cache could lag. The fourth number
+    counts the shares live at read time, so an expiry moves it.
+    Migration 015 moves the column default to match, which retires the
+    answers computed under the three-number contract.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 19:27:46 -0600
+
 homelab-search (0.3.4) unstable; urgency=medium
 
   * AI search no longer dies at 40 seconds. The client set

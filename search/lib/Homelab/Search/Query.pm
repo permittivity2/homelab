@@ -199,7 +199,37 @@ sub search_mail ($self, $account_id, $f) {
 # else. Nothing here is written down, so there is nothing to go stale.
 #
 # Returns [{ owner_account_id, owner_email, drive_file_id }, ...].
+#
+# MEMOIZED FOR ONE REQUEST, and only one. Rendering a single search page
+# asks this three times -- once for the results, once for the counts, once
+# for the file-type facets -- and each pass rebuilt the whole list. With a
+# 6,934-file share that was ~75ms of a 116ms render spent re-answering a
+# question already answered microseconds earlier.
+#
+# NOT across requests, which looks tempting because share_fingerprint is
+# cheap and would catch a grant or a revoke. It would not catch the other
+# three things that change what is shared with you:
+#
+#   * a share passing its expires_at -- no row changes at all, time does;
+#   * a file ADDED to a shared folder, which the grantee should now see;
+#   * a file trashed in a shared folder, which they should now not.
+#
+# None of those touch drive.shares, so a fingerprint-keyed cache would
+# serve a confidently stale allowlist. A request is short enough that
+# nothing is expected to change inside it, which makes this window the
+# only safe one.
 sub shared_files ($self, $account_id, $email) {
+    my $key = lc($email // '');
+    return $self->{_shared_req}{$key} if $self->{_shared_req}{$key};
+    return $self->{_shared_req}{$key} = $self->_resolve_shared_files($account_id, $email);
+}
+
+# Dropped at the start of every request by the before_dispatch hook in
+# App.pm. A long-lived Query object with no such hook would be a cache
+# that never expires, which is the bug this is shaped to avoid.
+sub forget_shares ($self) { delete $self->{_shared_req}; return $self }
+
+sub _resolve_shared_files ($self, $account_id, $email) {
     return [] unless defined $email && length $email;
 
     # ONE INDEXED PROBE for the overwhelmingly common case. Every account
@@ -314,24 +344,35 @@ sub shared_files ($self, $account_id, $email) {
 # The cache key is (account, query, watermarks, contract). Watermarks are
 # max(drive_item_id) per account and DO NOT MOVE when a share is granted or
 # revoked -- so without this a revoked share would keep being described by
-# a cached answer for the rest of the TTL. Any grant, revoke or expiry
-# changes one of these three numbers.
+# a cached answer for the rest of the TTL.
+#
+# FOUR numbers, not three. The first three move on a grant (count, max id)
+# and on a revoke (max timestamp). None of them moves when a share passes
+# its `expires_at`: no row is written, time simply passes, and this query
+# does not filter on liveness. An expired share is no longer shared, so a
+# cached answer describing its files is exactly the staleness this whole
+# design exists to prevent -- the live search path already gets expiry
+# right, and only the answer cache could lag. Hence the fourth: a count of
+# the shares that are live AT THIS MOMENT, which falls by one the instant
+# an expiry passes.
 sub share_fingerprint ($self, $email) {
-    return '0:0:0' unless defined $email && length $email;
-    return '0:0:0' if ($self->{_no_share_grant} // 0);
+    return '0:0:0:0' unless defined $email && length $email;
+    return '0:0:0:0' if ($self->{_no_share_grant} // 0);
     my $r = eval { $self->pg->db->query(q{
         SELECT count(*)::text AS n,
                coalesce(max(id), 0)::text AS hi,
-               coalesce(extract(epoch from max(coalesce(revoked_at, created_at)))::bigint, 0)::text AS mt
+               coalesce(extract(epoch from max(coalesce(revoked_at, created_at)))::bigint, 0)::text AS mt,
+               count(*) FILTER (WHERE revoked_at IS NULL
+                                  AND (expires_at IS NULL OR expires_at > now()))::text AS live
           FROM drive.shares
          WHERE shared_with_email IS NOT NULL
            AND lower(shared_with_email) = lower(?)}, $email)->hash };
     if (my $err = $@) {
         die $err unless $err =~ /permission denied/i;
         $self->{_no_share_grant} = 1;
-        return '0:0:0';
+        return '0:0:0:0';
     }
-    return join ':', $r->{n}, $r->{hi}, $r->{mt};
+    return join ':', $r->{n}, $r->{hi}, $r->{mt}, $r->{live};
 }
 
 sub search_drive ($self, $account_id, $f) {

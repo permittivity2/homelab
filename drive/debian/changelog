@@ -1,3 +1,21 @@
+homelab-drive (0.1.66) unstable; urgency=medium
+
+  * Index drive.shares the way it is actually queried. 011 indexed
+    shared_with_email as stored, which is right for drive's own "Shared
+    with me" list. homelab-search resolves the same question
+    case-insensitively -- people and photo managers are inconsistent
+    about case, and "Huuvola@" and "huuvola@" are one person -- so its
+    predicate is lower(shared_with_email) = lower($1), and a btree on
+    the bare column cannot serve that. Measured on the live cluster
+    before this: Seq Scan, "Rows Removed by Filter: 7".
+  * Free at seven shares; not free later. That lookup is on the render
+    path of every authenticated search page -- results, counts and
+    file-type facets -- and it degrades with the number of shares in the
+    WHOLE SYSTEM rather than per user, which is the kind of slope nobody
+    notices until it is steep. Migration 015, additive and idempotent.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 19:30:42 -0600
+
 homelab-drive (0.1.65) unstable; urgency=medium
 
   * Fix a segfault in the new regeneration tool: Image::Magick's Ping()

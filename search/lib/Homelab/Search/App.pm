@@ -103,6 +103,15 @@ sub startup ($self) {
     $self->pg($pg);
     $self->query(Homelab::Search::Query->new(pg => $pg, log => $self->log));
 
+    # The Query object lives for the whole process, so its share
+    # memoization has to be dropped per request or it would be a cache
+    # that never expires. One render asks "what is shared with me?" three
+    # times -- results, counts, facets -- and that is the window the cache
+    # is for; anything wider goes stale on an expiry, or on a file added
+    # to or trashed inside a shared folder, none of which touch
+    # drive.shares. See Query::shared_files.
+    $self->hook(before_dispatch => sub ($c) { $c->app->query->forget_shares });
+
     # AI mode. Constructed even when switched off, so every gate lives in
     # one place and `enabled` is a value rather than a branch around a
     # missing object. With no api_key the orchestrator records `disabled`

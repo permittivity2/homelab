@@ -19,7 +19,7 @@ use Homelab::Search::Query;
 {
     my $src = do { open my $fh, '<', 'lib/Homelab/Search/Query.pm' or die $!;
                    local $/; <$fh> };
-    my ($sql) = $src =~ /(sub shared_files .*?return \[\] unless \@\$live;)/s;
+    my ($sql) = $src =~ /(sub _resolve_shared_files .*?return \[\] unless \@\$live;)/s;
     ok $sql, 'shared_files is where the share predicate lives';
 
     # THE ONE THAT MATTERS MOST. drive.shares holds two different things:
@@ -130,7 +130,7 @@ use Homelab::Search::Query;
 {
     my $src = do { open my $fh, '<', 'lib/Homelab/Search/Query.pm' or die $!;
                    local $/; <$fh> };
-    my ($fn) = $src =~ /(sub shared_files.*?\n\}\n)/s;
+    my ($fn) = $src =~ /(sub _resolve_shared_files.*?\n\}\n)/s;
     like $fn, qr/die \$err unless \$err =~ \/permission denied\/i/,
         'a permission error degrades to no shared results';
     like $fn, qr/\$self->\{_no_share_grant\}/,
@@ -235,6 +235,97 @@ use Homelab::Search::Query;
     # run_tool and nothing else; t/ai.t asserts the schemas separately.
     unlike $tsrc, qr/description => '[^']*\bemail\b[^']*(?:shared|grantee)/,
         'the email is plumbing, not a tool parameter';
+}
+
+# ---------------------------------------------- memoized for ONE request
+# Rendering one search page asks "what is shared with me?" three times --
+# results, counts, file-type facets -- and each pass rebuilt the whole
+# list. With a 6,934-file share that was ~75ms of a 116ms render.
+#
+# The window matters more than the saving. A cache keyed on
+# share_fingerprint would survive across requests and look correct,
+# because a grant and a revoke both move the fingerprint. Three other
+# things change what is shared with you and move nothing in drive.shares:
+# a share passing its expires_at, a file added to a shared folder, and a
+# file trashed inside one. A request is the widest safe window.
+{
+    package CountingQuery;
+    our @ISA = ('Homelab::Search::Query');
+    sub new { return bless { resolved => 0 }, shift }
+    sub _resolve_shared_files {
+        my $self = shift;
+        $self->{resolved}++;
+        return [ { drive_file_id => 1, owner_account_id => 9, owner_email => 'o@x.org' } ];
+    }
+}
+{
+    my $q = CountingQuery->new;
+    $q->shared_files(3, 'grantee@example.org') for 1 .. 3;
+    is $q->{resolved}, 1, 'three asks inside one request cost one resolution';
+
+    # Case-insensitively the same person, so still one resolution: the
+    # memo key is lowercased because the predicate is.
+    $q->shared_files(3, 'Grantee@Example.org');
+    is $q->{resolved}, 1, '...and a differently-cased address is the same key';
+
+    $q->shared_files(3, 'someone-else@example.org');
+    is $q->{resolved}, 2, 'a different address is a different question';
+
+    $q->forget_shares;
+    $q->shared_files(3, 'grantee@example.org');
+    is $q->{resolved}, 3, 'and the next request resolves again, rather than '
+                        . 'trusting a cache that cannot see an expiry';
+}
+
+# The hook is what makes "one request" true. Without it the Query object
+# outlives every request and the memo above becomes permanent.
+{
+    my $asrc = do { open my $fh, '<', 'lib/Homelab/Search/App.pm' or die $!;
+                    local $/; <$fh> };
+    like $asrc, qr/hook\(before_dispatch => sub .*\{ \$c->app->query->forget_shares \}\)/,
+        'the share memo is dropped at the start of every request';
+}
+
+# ------------------------------------------------- expiry moves the fingerprint
+# The AI answer cache keys on this. Three numbers covered a grant (count,
+# max id) and a revoke (max timestamp) -- every one of them written by
+# somebody doing something. An expires_at passing is not written by
+# anyone, so the fingerprint sat still while the share stopped being live
+# and a cached answer went on describing its files. The live search path
+# always got expiry right; only the cache could lag.
+{
+    my $src = do { open my $fh, '<', 'lib/Homelab/Search/Query.pm' or die $!;
+                   local $/; <$fh> };
+    my ($fn) = $src =~ /(sub share_fingerprint.*?\n\}\n)/s;
+    like $fn, qr/count\(\*\) FILTER \(WHERE revoked_at IS NULL/,
+        'the fingerprint counts the shares that are live right now';
+    like $fn, qr/expires_at IS NULL OR expires_at > now\(\)/,
+        '...which is what makes a passing expiry change it';
+    like $fn, qr/\$r->\{n\}, \$r->\{hi\}, \$r->\{mt\}, \$r->\{live\}/,
+        'four components, not three';
+    # The no-grant and no-email paths must use the SAME shape, or a
+    # degraded fingerprint would collide with a real one.
+    my @zero = $fn =~ /'(0(?::0)+)'/g;
+    is_deeply [ grep { $_ ne '0:0:0:0' } @zero ], [],
+        'every placeholder fingerprint has four components too';
+}
+
+# ---------------------------------------- the index matches the predicate
+# drive's own shares_shared_with_idx is on the bare column, which cannot
+# serve a lookup on lower() of it -- and search's predicate is
+# case-insensitive because people and photo managers are. Measured before
+# this: Seq Scan, "Rows Removed by Filter: 7". Free at seven rows; this
+# sits on the render path of every authenticated search and degrades with
+# the number of shares in the whole system, not per user.
+{
+    my $f = '../drive/migrations/015-shares-lower-email-index.sql';
+    ok -e $f, 'the drive-side functional index has a migration';
+    my $sql = do { open my $fh, '<', $f or die $!; local $/; <$fh> };
+    like $sql, qr/ON drive\.shares \(lower\(shared_with_email\)\)/,
+        'it indexes lower(shared_with_email), which is what is queried';
+    like $sql, qr/WHERE shared_with_email IS NOT NULL/,
+        '...with 011\'s partial predicate, since a NULL address is a '
+      . 'public link and never an identity lookup';
 }
 
 done_testing;
