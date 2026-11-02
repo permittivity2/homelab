@@ -1,3 +1,36 @@
+homelab-search (0.3.7) unstable; urgency=medium
+
+  * A renamed or deleted mail folder no longer lingers in the index
+    forever. search.mailboxes.name IS the on-disk folder name, UNIQUE
+    (account_id, name), and mailbox_id() is get-or-create -- so renaming
+    '.Old' to '.New' never renamed anything here: it created a SECOND row
+    and re-indexed every message under fresh ids, while '.Old' and all its
+    messages stayed searchable, pointing at a folder that was no longer
+    there. Nothing in this package had ever removed a mailbox row; the
+    drive side has had a reconcile from the start and mail had none.
+  * New Index::prune_mailboxes, called from _discover_mail at the one
+    point where the folder list is trustworthy: after the account
+    directory has been read SUCCESSFULLY (a failed read does `next` well
+    above it) and with @boxes complete and always containing at least
+    INBOX.
+  * ONE DELETE, because every child cascades -- messages and
+    message_files hang off (account_id, mailbox_id) ON DELETE CASCADE, and
+    bodies, addresses, headers and attachments cascade from messages.
+    Staging it by hand would be more code and more ways to leave half of
+    it behind.
+  * Two guards, because the cost of being wrong is somebody's mail
+    vanishing from search: an empty or missing folder list deletes nothing
+    and does not even open a transaction (every account has at least
+    INBOX, so an empty list means the CALLER failed, not that the account
+    has no folders), and the delete is scoped to a single account_id so
+    even a wrong list cannot reach past the account being reconciled.
+  * Verified against production read-only before shipping: across every
+    account and every folder, the number of mailboxes this would have
+    pruned is ZERO, and no account directory was unreadable. It deletes
+    nothing today and exists for the first rename.
+
+ -- Claude <noreply@anthropic.com>  Sun, 01 Nov 2026 21:41:30 -0600
+
 homelab-search (0.3.6) unstable; urgency=medium
 
   * An unreadable message directory no longer wipes a mailbox out of the

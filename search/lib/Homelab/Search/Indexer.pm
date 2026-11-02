@@ -199,6 +199,21 @@ sub _discover_mail ($self) {
                 next if defined $seen && $seen >= $newest;
                 $enq += $self->_enqueue(kind => 'mailbox', account_id => $acct, mailbox_id => $mid);
             }
+
+            # RECONCILE, and only here. @boxes is the complete folder list
+            # for this account and we can only have reached this line if the
+            # account directory opened successfully -- the `unless (opendir
+            # $ah)` above does `next`, so a failed read never arrives with a
+            # short list. It also always holds at least 'INBOX'.
+            #
+            # That makes this the one place the list is trustworthy enough to
+            # delete from. Renaming a folder otherwise leaves the old one in
+            # the index forever, searchable, pointing somewhere that no
+            # longer exists -- nothing in this package ever removed a mailbox
+            # row before now.
+            my $pruned = $self->index->prune_mailboxes($acct, \@boxes);
+            $self->log->info("$email: pruned $pruned mailbox(es) no longer on disk")
+                if $pruned;
         }
     }
     return $enq;

@@ -420,6 +420,56 @@ sub touch_file ($self, $message_id, $file) {
 # explicit placeholder list has no type ambiguity at all. message_files,
 # message_addresses, message_headers, message_bodies and attachments all
 # cascade from search.messages, so this one delete is sufficient.
+# Remove index rows for mailboxes that no longer exist on disk.
+#
+# WHY THIS IS NEEDED. search.mailboxes.name IS the on-disk folder name,
+# UNIQUE (account_id, name), and mailbox_id() is get-or-create. So renaming
+# '.Old' to '.New' does not rename anything here -- it creates a SECOND row
+# and re-indexes every message under fresh ids, while '.Old' and all its
+# messages stay in the index forever, searchable, pointing at a folder that
+# no longer exists. Deleting a folder leaves the same residue. Nothing in
+# this package ever removed a mailbox row; the drive side has had a
+# reconcile from the start and mail had none.
+#
+# ONE DELETE, because every child cascades: search.messages and
+# search.message_files hang off (account_id, mailbox_id) ON DELETE CASCADE,
+# and message_bodies / message_addresses / message_headers / attachments all
+# cascade from messages. Doing it in stages by hand would be more code and
+# more ways to leave half of it behind.
+#
+# THE CALLER'S OBLIGATION, and it is the whole safety of this function:
+# $names must be the COMPLETE list of folders seen on disk for this account,
+# from a directory read that SUCCEEDED. Hand it a partial list and it
+# deletes real mail from the index -- which is exactly the bug this release
+# fixes one level down in _do_mailbox. Two guards here because the cost of
+# being wrong is somebody's mail vanishing from search:
+#
+#   * an empty or non-array $names deletes nothing and returns -- a caller
+#     with no list is a caller that failed, not an account with no folders
+#     (every account has at least INBOX);
+#   * the delete is scoped to one account_id, so even a wrong list cannot
+#     reach past the account being reconciled.
+sub prune_mailboxes ($self, $account_id, $names) {
+    return 0 unless defined $account_id && ref $names eq 'ARRAY' && @$names;
+
+    return $self->_tx(sub ($db) {
+        my $ph   = join ',', map { '?' } @$names;
+        my $gone = $db->query(
+            "SELECT mailbox_id, name FROM search.mailboxes
+              WHERE account_id = ? AND name NOT IN ($ph)",
+            $account_id, @$names)->hashes;
+        return 0 unless @$gone;
+
+        for my $m (@$gone) {
+            $db->query('DELETE FROM search.mailboxes WHERE mailbox_id = ? AND account_id = ?',
+                       $m->{mailbox_id}, $account_id);
+            $self->log->info("pruned mailbox '$m->{name}' (account $account_id): "
+                           . "no longer on disk") if $self->log;
+        }
+        return scalar @$gone;
+    }) // 0;
+}
+
 sub delete_messages ($self, $ids) {
     return 0 unless ref $ids eq 'ARRAY' && @$ids;
     my $n = 0;

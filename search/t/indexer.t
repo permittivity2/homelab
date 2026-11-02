@@ -51,6 +51,14 @@ package FakeIndex;
 sub new { return bless { known => {}, indexed => [], touched => [],
                          deleted => [], mtime => undef, next_id => 100 }, shift }
 sub known_files      { return $_[0]{known} }
+sub upsert_account   { return 1 }
+sub mailbox_mtime    { return undef }
+sub mailbox_id       { my ($s, $a, $n) = @_; $s->{boxes}{$n} //= 500 + scalar keys %{ $s->{boxes} // {} }; return $s->{boxes}{$n} }
+sub prune_mailboxes  {
+    my ($s, $acct, $names) = @_;
+    push @{ $s->{prune_calls} }, [ $acct, [ sort @$names ] ];
+    return 0;
+}
 sub delete_messages  { my ($s, $ids) = @_; push @{ $s->{deleted} }, @$ids; return scalar @$ids }
 sub set_mailbox_mtime{ my ($s, $mid, $t) = @_; $s->{mtime} = $t; return 1 }
 sub touch_file       { my ($s, $id, $file) = @_; push @{ $s->{touched} }, [ $id, $file->{file_name} ]; return 1 }
@@ -237,6 +245,96 @@ SKIP: {
     my $n = eval { $ix->_do_mailbox({ mailbox_id => 8 }) };
     is $@, '', 'a mailbox with no new/ directory does not fail';
     is $n, 1, '...and its read mail is still indexed';
+}
+
+# ===========================================================================
+# THE RENAMED FOLDER: an old mailbox must not linger in the index forever
+# ===========================================================================
+# search.mailboxes.name IS the on-disk folder name, UNIQUE (account_id,
+# name), and mailbox_id() is get-or-create -- so renaming '.Old' to '.New'
+# creates a SECOND row and re-indexes everything under fresh ids, while
+# '.Old' and its messages stay searchable, pointing at a folder that is not
+# there. Nothing in this package ever removed a mailbox row.
+#
+# The reconcile that fixes it runs in _discover_mail, and its safety rests
+# entirely on being handed the COMPLETE folder list from a directory read
+# that succeeded. These tests are about that contract, because getting it
+# wrong deletes real mail from the index.
+{
+    my $base = "$root/example.org/carol";
+    make_path("$base/$_") for qw(cur new tmp);
+    make_path("$base/.Keep/$_") for qw(cur new tmp);
+
+    my $idx = FakeIndex->new;
+    my $ix  = Homelab::Search::Indexer->new(
+        index => $idx, log => FakeLog->new, mail_root => $root);
+    # Enqueueing needs a database; the reconcile is what is under test here.
+    no warnings 'redefine', 'once';
+    local *Homelab::Search::Indexer::_enqueue = sub { 0 };
+    $ix->_discover_mail;
+
+    my @calls = @{ $idx->{prune_calls} || [] };
+    ok scalar @calls, 'discovery reconciles mailboxes against what is on disk';
+
+    # Every account in the scratch root is discovered in one pass, so find
+    # carol's call by its contents. The list must be exactly the folders
+    # actually present, INBOX included -- an account whose list came back
+    # short is an account whose mail would be deleted from the index.
+    my ($carol) = grep { my %h = map { $_ => 1 } @{ $_->[1] };
+                         $h{'INBOX'} && $h{'.Keep'} && @{ $_->[1] } == 2 } @calls;
+    ok $carol,
+        'the folder list is exactly INBOX plus the one named folder on disk '
+      . '-- no more, which would delete nothing, and no fewer, which would '
+      . 'delete real mail';
+}
+
+# The contract, asserted against the real implementation rather than a
+# stand-in: an empty or missing list must delete NOTHING. Every account has
+# at least INBOX, so an empty list means the caller failed to read the
+# directory -- never that the account has no folders.
+{
+    require Homelab::Search::Index;
+    my $called = 0;
+    no warnings 'redefine', 'once';
+    local *Homelab::Search::Index::_tx = sub { $called++; return 0 };
+    my $ix = bless { log => FakeLog->new }, 'Homelab::Search::Index';
+
+    is $ix->prune_mailboxes(1, []),     0, 'an empty folder list prunes nothing';
+    is $ix->prune_mailboxes(1, undef),  0, 'a missing folder list prunes nothing';
+    is $ix->prune_mailboxes(undef, ['INBOX']), 0, 'no account prunes nothing';
+    is $called, 0,
+        'and none of those even opened a transaction -- a caller with no '
+      . 'list is a caller that failed, not an account with no folders';
+}
+
+# A failed account-directory read must never reach the reconcile at all.
+# _discover_mail does `next` on that opendir, which is what makes the list
+# trustworthy everywhere below it; if that ever changes, this fails.
+SKIP: {
+    skip 'cannot test unreadable directories as root', 1 if $> == 0;
+
+    my $base = "$root/example.org/dave";
+    make_path("$base/$_") for qw(cur new tmp);
+    make_path("$base/.Secret/$_") for qw(cur new tmp);
+
+    my $idx = FakeIndex->new;
+    my $ix  = Homelab::Search::Indexer->new(
+        index => $idx, log => FakeLog->new, mail_root => $root);
+    no warnings 'redefine', 'once';
+    local *Homelab::Search::Indexer::_enqueue = sub { 0 };
+
+    chmod 0000, $base or die $!;
+    eval { $ix->_discover_mail; 1 };
+    chmod 0755, $base or die $!;
+
+    my @dave = grep { ($_->[0] // 0) } @{ $idx->{prune_calls} || [] };
+    # Every account in the scratch root is discovered in one pass, so the
+    # assertion is specifically that dave's folder list never became a
+    # prune call: with the directory unreadable there is no list to pass.
+    my $saw_secret = grep { grep { $_ eq '.Secret' } @{ $_->[1] } } @dave;
+    is $saw_secret, 0,
+        'an unreadable account directory produces no prune call -- a read '
+      . 'that failed must not be allowed to delete anything';
 }
 
 done_testing;
