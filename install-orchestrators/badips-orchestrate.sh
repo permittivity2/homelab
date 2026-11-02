@@ -26,6 +26,14 @@
 #   ./badips-orchestrate.sh --verify [NN ...]
 #       read-only: version, role, service, firewall table per node; the edge's
 #       ban/feed counts; the shared list's active count.
+#   ./badips-orchestrate.sh --deploy-web
+#       the real-visitor fixes (homelab-common 0.1.35, api 0.1.65, sso 0.1.18,
+#       roundcube 0.1.27, webproxy 0.1.14) from the fleet repo, ONE node at a
+#       time: api 12-14, sso 18-20, roundcube 42-44, the live edge, then every
+#       other node. Only installed packages are upgraded, then each node's
+#       homelab web apps (the hypnotoad units) are restarted so they load the
+#       new request log -- never databases, pgbouncer, patroni or etcd -- and
+#       checked before the next node. Stops at the first problem.
 #   ./badips-orchestrate.sh --print-config NN
 #       print the files node NN would get (password masked); changes nothing.
 #
@@ -374,6 +382,55 @@ do_static_realip(){
     fi
 }
 
+
+# ============================================================================
+# --deploy-web
+# ============================================================================
+WEB_PKGS="homelab-common homelab-api homelab-sso homelab-roundcube homelab-webproxy"
+deploy_node(){ # NN -> prints a status line; returns non-zero on a problem
+    rsh "$1" "
+        export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
+        sudo -E apt-get update -qq >/tmp/badips-deploy-web.log 2>&1 || { echo 'apt-get update failed'; exit 1; }
+        sudo -E apt-get install -y -qq --only-upgrade $WEB_PKGS >>/tmp/badips-deploy-web.log 2>&1 || { echo 'upgrade failed (see /tmp/badips-deploy-web.log)'; exit 1; }
+        r=''
+        for u in \$(systemctl list-units 'homelab-*' --type=service --state=running --no-legend | awk '{print \$1}'); do
+            systemctl cat \"\$u\" 2>/dev/null | grep -q '^ExecStart=/usr/bin/hypnotoad' || continue
+            sudo systemctl restart \"\$u\" && r=\"\$r \${u%.service}\"
+        done
+        sleep 6
+        bad=''
+        for u in \$r; do systemctl is-active --quiet \"\$u\" || bad=\"\$bad \$u\"; done
+        f=\$(systemctl list-units 'homelab-*' --state=failed --no-legend | awk '{print \$1}' | paste -sd' ')
+        v=\$(dpkg-query -W -f='\${Package}=\${Version} ' $WEB_PKGS 2>/dev/null | sed 's/homelab-//g')
+        echo \"\$v| restarted:\${r:- none}\${bad:+ | NOT ACTIVE:\$bad}\${f:+ | FAILED UNITS: \$f}\"
+        [ -z \"\$bad\" ] && [ -z \"\$f\" ]
+    " 2>/dev/null
+}
+
+do_deploy_web(){
+    local order=() seen=" " n live
+    for n in 12 13 14 18 19 20 42 43 44; do order+=("$n"); seen="$seen$n "; done
+    for n in $EDGES; do up "$n" && { order+=("$n"); seen="$seen$n "; live="$n"; }; done
+    for n in $(all_nodes); do case "$seen" in *" $n "*) ;; *) order+=("$n") ;; esac; done
+    say "deploying the real-visitor fixes, one node at a time (${#order[@]} nodes)"
+    local out
+    for n in "${order[@]}"; do
+        if ! up "$n"; then
+            case " $EDGES " in *" $n "*) warn "prod-homelab$n: parked edge -- upgraded when rotated in (edge-rotate.sh)" ;;
+                               *) warn "prod-homelab$n: unreachable -- skipped" ;; esac
+            continue
+        fi
+        if out="$(deploy_node "$n")"; then
+            ok "prod-homelab$n: $out"
+        else
+            bad "prod-homelab$n: ${out:-no answer}"
+            echo "  stopping here: fix prod-homelab$n first, then re-run (finished nodes are skipped quickly)"
+            return
+        fi
+    done
+    [ -n "${live:-}" ] && echo "  ${Y}check the edge from offsite:${O} ssh offsite and run edge-verify.sh's public checks"
+}
+
 # ============================================================================
 cmd="${1:-}"; shift || true
 DEB=""
@@ -391,6 +448,7 @@ case "$cmd" in
     --role)           [ ${#args[@]} -eq 2 ] || die "usage: --role NN block|watch|report|off"; do_role "${args[0]}" "${args[1]}" ;;
     --verify)         do_verify "${args[@]}" ;;
     --static-realip)  do_static_realip ;;
+    --deploy-web)     do_deploy_web ;;
     --print-config)   [ ${#args[@]} -eq 1 ] || die "usage: --print-config NN"
                       load_site; BADIPS_DB_PASSWORD='********'
                       r="$(role_for "$(nn "${args[0]}")")"
@@ -400,7 +458,7 @@ case "$cmd" in
                       [ "$r" = off ] && echo "### (no 96-fleet-db.conf: role off does not use the database)" \
                                      || { echo "### $CONFDIR/96-fleet-db.conf"; conf_db; }
                       exit 0 ;;
-    *) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) awk 'NR>2 && /^# ====/{exit} NR>2{sub(/^# ?/, ""); print}' "$0"; exit 2 ;;
 esac
 echo
 [ "$FAILS" -eq 0 ] && printf '%sdone, no failures%s\n' "$G" "$O" || printf '%s%d failure(s)%s\n' "$R" "$FAILS" "$O"
