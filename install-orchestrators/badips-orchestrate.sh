@@ -400,7 +400,10 @@ do_proving_ground(){
     else
         bad "a second database file was NOT refused: $st"
     fi
-    rsh "$n" "sudo /usr/local/sbin/bad_ips --test-config 2>&1" | grep -q "come from more than one file: .*96-fleet-db\.conf .*database\.conf" \
+    # captured first: --test-config exits 1 for a refused config (that is the
+    # point), and under pipefail a pipe from it would always count as failed
+    local tco; tco="$(rsh "$n" "sudo /usr/local/sbin/bad_ips --test-config 2>&1")"
+    printf '%s\n' "$tco" | grep -q "come from more than one file: .*96-fleet-db\\.conf .*database\\.conf" \
         && ok "...and --test-config names both files" || bad "--test-config did not name both files"
     rsh "$n" "sudo rm -f $CONFDIR/database.conf && sudo dpkg-reconfigure -f noninteractive bad-ips >/dev/null 2>&1"
 
