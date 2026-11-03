@@ -16,6 +16,16 @@
   .container { max-width: 40rem; }
   /* A long address breaks rather than pushing the page sideways on a phone. */
   .cand { overflow-wrap: anywhere; }
+  /* The block list: one address per line, the count pushed to the right of
+     the heading, and the filter taking whatever width the sort button
+     leaves. */
+  .bl-count { margin-left: auto; font-size: var(--app-sm); }
+  .toolbar .form-input { flex: 1 1 12rem; width: auto; min-width: 0; }
+  .blocklist { list-style: none; margin: 0; padding: 0; }
+  .blocklist li { padding: var(--space-2) 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  .blocklist li:last-child { border-bottom: 0; }
+  /* Just added on this visit. */
+  .blocklist li.is-new { color: var(--success); }
 </style>
 </head>
 <body class="app">

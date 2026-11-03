@@ -88,6 +88,27 @@ $t->app->pg->db->query(
 
 $t->get_ok("/l/$token")->status_is(200, 'a real pending link renders the management page')
     ->content_like(qr/checked/, 'the candidate checkbox is pre-checked by default')
-    ->content_like(qr{theme/v1/theme\.css}, 'the real page is on the shared theme');
+    ->content_like(qr{theme/v1/theme\.css}, 'the real page is on the shared theme')
+    ->content_like(qr{>Add to Block List</button>}, 'the button says Add to Block List');
+
+# --- Regression (post-cutover item 48): one link, two accounts -------------
+# One message to two accounts gets ONE link. Signed out, nobody may see or
+# block the other account's address. Refused before any on-behalf call, so
+# this leaves nothing behind in recipient_access.
+my $token2 = join '', map { sprintf('%02x', int(rand(256))) } 1 .. 32;
+$t->app->pg->db->query(
+    q{INSERT INTO block_link.pending_links (token, candidates, expires_at)
+      VALUES (?, ?, NOW() + INTERVAL '90 days')},
+    $token2, encode_json([
+        { account_email => $email,                  address => "mine\@$domain" },
+        { account_email => "someone-else\@$domain", address => "bcc-copy\@$domain" },
+    ]),
+);
+$t->get_ok("/l/$token2")->status_is(200)
+    ->content_unlike(qr{bcc-copy\@}, 'a two-account link does not show the other account\'s address')
+    ->content_unlike(qr{mine\@},     '... nor any address, until you sign in');
+$t->post_ok("/l/$token2" => json => { block => ["bcc-copy\@$domain"] })
+    ->status_is(403, '... and blocking from it is refused');
+$t->app->pg->db->query('DELETE FROM block_link.pending_links WHERE token IN (?, ?)', $token, $token2);
 
 done_testing;

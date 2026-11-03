@@ -71,6 +71,16 @@ recipients across domains with different modes, the body gets included if
 transaction, not one per recipient, so it can't structurally split by
 recipient. Documented, not silently inconsistent.
 
+**One link per message, even across accounts**: for the same reason, a
+message that reaches several mailmasker accounts in one transaction (To,
+Cc or Bcc) gets ONE `pending_links` row listing every enabled recipient,
+and the same link lands in every copy. The link page is what keeps the
+accounts apart: since homelab-block-link 0.1.4 it shows and blocks only
+the signed-in account's addresses on such a link, and nothing at all
+when nobody is signed in. See
+[block-link's README](../block-link/README.md), "Who sees which
+addresses, and signing in".
+
 ## Why PGP/S-MIME-signed mail always falls back to header-only
 
 Appending plaintext to a cryptographically signed body either breaks the

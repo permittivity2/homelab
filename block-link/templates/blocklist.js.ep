@@ -1,0 +1,205 @@
+// The link page's script: the block list's four-way sort and its regex
+// filter, and the Add to Block List form. Included inline by manage.html.ep.
+//
+// Plain JavaScript with no template tags, on purpose: t/js.t runs this same
+// file under gjs to test the sort and filter rules without a browser. Keep it
+// that way -- and keep every line from starting with a percent sign, which
+// the template engine would read as Perl.
+var BlockList = (function () {
+  'use strict';
+
+  // One button cycles through these, in this order. The page arrives in the
+  // first one: alphabetical, ignoring case -- the server sorts it the same way.
+  var SORTS = [
+    { key: 'addr',   dir:  1, label: 'A → Z' },
+    { key: 'addr',   dir: -1, label: 'Z → A' },
+    { key: 'domain', dir:  1, label: 'Domain A → Z' },
+    { key: 'domain', dir: -1, label: 'Domain Z → A' }
+  ];
+
+  // The filter starts at this many characters: below it the list is shown
+  // whole, and on a list of a thousand-plus addresses every keystroke would
+  // otherwise redraw it for nothing.
+  var MIN_FILTER = 3;
+
+  // What an address sorts by. "By domain" is the part after the @, then the
+  // part before it, so one domain's addresses sit together in order.
+  function sortKey(addr, key) {
+    var a = String(addr).toLowerCase();
+    if (key !== 'domain') return a;
+    var at = a.lastIndexOf('@');
+    return at < 0 ? '\u0000' + a : a.slice(at + 1) + '\u0000' + a.slice(0, at);
+  }
+
+  function compare(a, b, sort) {
+    var x = sortKey(a, sort.key), y = sortKey(b, sort.key);
+    // Same address apart from case: fall back to the exact text, so the
+    // order never depends on where an address happened to start.
+    var c = x < y ? -1 : x > y ? 1 : (a < b ? -1 : a > b ? 1 : 0);
+    return c * sort.dir;
+  }
+
+  function sorted(list, sortIndex) {
+    var s = SORTS[sortIndex] || SORTS[0];
+    return list.slice().sort(function (a, b) { return compare(a, b, s); });
+  }
+
+  // A Perl regular expression, run as a JavaScript one. The two agree on
+  // everything a filter needs (classes, anchors, alternation, quantifiers,
+  // lookarounds); what Perl spells differently is translated here:
+  //   \A -> ^ and \z or \Z -> $   (outside a [...] class)
+  //   a leading (?i) is dropped   (the filter ignores case anyway)
+  // Anything JavaScript cannot express (possessive quantifiers, atomic
+  // groups, recursion) throws, and the page says the pattern isn't usable.
+  function perlRegex(src) {
+    var s = String(src), out = '', inClass = false;
+    if (s.indexOf('(?i)') === 0) s = s.slice(4);
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charAt(i);
+      if (ch === '\\' && i + 1 < s.length) {
+        var nx = s.charAt(i + 1);
+        if (!inClass && nx === 'A') out += '^';
+        else if (!inClass && (nx === 'z' || nx === 'Z')) out += '$';
+        else out += ch + nx;
+        i++;
+        continue;
+      }
+      if (ch === '[' && !inClass) inClass = true;
+      else if (ch === ']' && inClass) inClass = false;
+      out += ch;
+    }
+    return new RegExp(out, 'i');
+  }
+
+  // {re: RegExp or null, error: true when the text is long enough but is not
+  // a usable pattern yet}. A half-typed pattern is normal mid-keystroke, so
+  // an error never hides the list: it shows the whole list and says why.
+  function compileFilter(text) {
+    var t = String(text == null ? '' : text).trim();
+    if (t.length < MIN_FILTER) return { re: null, error: false };
+    try { return { re: perlRegex(t), error: false }; }
+    catch (e) { return { re: null, error: true }; }
+  }
+
+  function filtered(list, text) {
+    var f = compileFilter(text);
+    return f.re ? list.filter(function (a) { return f.re.test(a); }) : list.slice();
+  }
+
+  function plural(n) { return n === 1 ? '1 address' : n.toLocaleString('en-US') + ' addresses'; }
+
+  // Everything that touches the page. Nothing above this line does, which is
+  // what lets t/js.t run the rules with no document at all.
+  function wire(doc) {
+    var form     = doc.getElementById('blockform');
+    var addSec   = doc.getElementById('add-section');
+    var msg      = doc.getElementById('msg');
+    var listEl   = doc.getElementById('bl-list');
+    var sortBtn  = doc.getElementById('bl-sort');
+    var filterEl = doc.getElementById('bl-filter');
+    var hintEl   = doc.getElementById('bl-filter-hint');
+    var countEl  = doc.getElementById('bl-count');
+    var noneEl   = doc.getElementById('bl-none');
+    var nomatch  = doc.getElementById('bl-nomatch');
+    var hint     = hintEl ? hintEl.textContent : '';
+    var sortIndex = 0;
+    var fresh = {};
+
+    var all = listEl
+      ? Array.prototype.map.call(listEl.querySelectorAll('li'), function (li) { return li.getAttribute('data-addr'); })
+      : [];
+
+    function say(kind, text) {
+      if (!msg) return;
+      msg.className = 'banner banner--' + kind;
+      msg.textContent = text;
+    }
+
+    function render() {
+      if (!listEl) return;
+      var f = compileFilter(filterEl ? filterEl.value : '');
+      if (filterEl) {
+        filterEl.classList.toggle('is-invalid', f.error);
+        filterEl.setAttribute('aria-invalid', f.error ? 'true' : 'false');
+      }
+      if (hintEl) hintEl.textContent = f.error ? "That isn't a usable pattern yet, so the whole list is shown." : hint;
+
+      var shown = sorted(f.re ? all.filter(function (a) { return f.re.test(a); }) : all, sortIndex);
+      var frag = doc.createDocumentFragment();
+      shown.forEach(function (a) {
+        var li = doc.createElement('li');
+        li.setAttribute('data-addr', a);
+        li.textContent = a;
+        if (fresh[a.toLowerCase()]) li.className = 'is-new';
+        frag.appendChild(li);
+      });
+      listEl.textContent = '';
+      listEl.appendChild(frag);
+
+      if (countEl) countEl.textContent = shown.length === all.length ? plural(all.length) : shown.length + ' of ' + plural(all.length);
+      if (noneEl) noneEl.classList.toggle('hide', all.length > 0);
+      if (nomatch) nomatch.classList.toggle('hide', !(all.length > 0 && shown.length === 0));
+    }
+
+    if (sortBtn) {
+      sortBtn.addEventListener('click', function () {
+        sortIndex = (sortIndex + 1) % SORTS.length;
+        sortBtn.textContent = 'Sort: ' + SORTS[sortIndex].label;
+        render();
+      });
+    }
+    if (filterEl) filterEl.addEventListener('input', render);
+
+    function addToList(addrs) {
+      addrs.forEach(function (a) {
+        var k = String(a).toLowerCase();
+        fresh[k] = true;
+        if (!all.some(function (x) { return x.toLowerCase() === k; })) all.push(a);
+      });
+      render();
+    }
+
+    if (form) {
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        var btn = form.querySelector('button[type=submit]');
+        var checked = Array.prototype.map.call(form.querySelectorAll('input[name=block]:checked'), function (i) { return i.value; });
+        if (!checked.length) { say('error', 'Tick at least one address to add.'); return; }
+        say('info', 'Adding...');
+        btn.disabled = true;
+        var finished = false;
+        try {
+          var r = await fetch('/l/' + encodeURIComponent(form.dataset.token), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ block: checked })
+          });
+          var j = await r.json().catch(function () { return {}; });
+          var added = Array.isArray(j.blocked) ? j.blocked : [];
+          if (r.ok) {
+            // Done: the section goes, and what it added joins the list.
+            if (addSec) addSec.classList.add('hide');
+            finished = true;
+            addToList(added.length ? added : checked);
+            say('ok', 'Added to your block list: ' + (added.length ? added : checked).join(', ') + '.');
+          } else {
+            if (added.length) addToList(added);
+            say('error', j.error || 'Something went wrong.');
+          }
+        } catch (err) {
+          say('error', 'Could not reach the server. Please try again.');
+        } finally {
+          if (!finished) btn.disabled = false;
+        }
+      });
+    }
+
+    render();
+  }
+
+  return {
+    SORTS: SORTS, MIN_FILTER: MIN_FILTER,
+    sortKey: sortKey, compare: compare, sorted: sorted,
+    perlRegex: perlRegex, compileFilter: compileFilter, filtered: filtered,
+    wire: wire
+  };
+})();

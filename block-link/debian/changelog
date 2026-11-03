@@ -1,3 +1,35 @@
+homelab-block-link (0.1.4) unstable; urgency=medium
+
+  * Fix: a link that covers more than one account no longer shows anyone
+    the other accounts' addresses or lets them block those. One message
+    to two mailmasker users gets ONE link (the milter cannot vary it per
+    recipient), and the page used to list every address on it, all
+    checked: each recipient saw the other's address, even a Bcc'd one,
+    and one Save blocked the other person's address on their account.
+    Who sees and may block what is now one rule (Visibility.pm) used by
+    both the page and the POST, which refuses anything the page would
+    not offer.
+  * An account's main address is never offered for blocking (it would
+    stop all of that account's mail); domain-admin's self-service
+    endpoint already refused it, the link's on-behalf path never did.
+  * Optional sign-in through homelab-sso (sso: + session: in the config;
+    see install-orchestrators/block-link-sso-provision.sh). Signed in as
+    the link's account, the page shows that account's whole block list,
+    read with the visitor's own token from the api myaccount uses:
+    alphabetical ignoring case, one button cycling A to Z, Z to A, by
+    domain A to Z and by domain Z to A, and a live filter that takes a
+    Perl-style regular expression from the third character.
+  * The button says "Add to Block List". Once it succeeds, the add
+    section goes away and the addresses join the list. On a later visit
+    only addresses not blocked yet are offered.
+  * Manage Account buttons above and below the list, to myaccount's
+    Mail section (block_link.manage_account_url).
+  * Without an sso: block the app starts as before and the page is
+    link-only (no Sign in, no list); the cross-account fix still
+    applies. An old config keeps working unchanged.
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 14:23:08 -0600
+
 homelab-block-link (0.1.3) unstable; urgency=medium
 
   * The public pages at blockemail.<domain> (the "manage blocked addresses"

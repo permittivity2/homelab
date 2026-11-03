@@ -1,9 +1,15 @@
 package Homelab::BlockLink::App::Controller::BlockLink;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::UserAgent;
+use Mojo::URL;
 use Mojo::JSON qw(decode_json);
+use Mojo::Util qw(secure_compare);
 use Homelab::Common::Registry qw(lookup system_agent_token);
 use Homelab::Common::AuditClient qw(enqueue);
+use Homelab::Common::SSOClient qw(exchange_code);
+use Homelab::BlockLink::Visibility qw(view refused_addresses);
+
+my $API_UA = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10);
 
 sub _home_domain ($email) {
     my ($domain) = $email =~ /\@(.+)$/;
@@ -100,9 +106,10 @@ sub domain_set ($c) {
 # link-prescanners fetch every link in incoming mail before a human opens
 # it, and this link lives INSIDE a real delivered email.
 #
-# Rendered from templates/manage.html.ep on the shared mailmasker layout
-# (homelab-webtheme). The renderer escapes every value, which replaces the
-# hand-rolled xml_escape() calls the old qq{} page needed.
+# What the page shows depends on who is looking -- see Visibility.pm for the
+# rule and why it exists. Signed in as the link's account, it also shows that
+# account's whole block list, read with the visitor's OWN token from the same
+# api call myaccount uses; nothing here can read a list any other way.
 sub show ($c) {
     my $token = $c->stash('token');
     my $row = $c->app->pg->db->query(
@@ -116,18 +123,63 @@ sub show ($c) {
     # decoded explicitly before use (real bug hit on first live GET,
     # not caught by t/basic.t since that test asserts on rendered HTML
     # content, not on this code path directly).
-    return $c->render(template => 'manage', candidates => decode_json($row->{candidates}), token => $token);
+    my $view = view(decode_json($row->{candidates}), $c->session_email);
+
+    my ($blocked, $list_error) = ([], 0);
+    if ($view->{mode} eq 'owner') {
+        $blocked = _my_block_list($c);
+        $list_error = 1 unless $blocked;
+        $blocked //= [];
+    }
+    # Already blocked is already done: on a later visit only what is left
+    # is offered, and once nothing is left the add section is not drawn.
+    my %already = map { lc($_) => 1 } @$blocked;
+    my @add = grep { !$already{ lc $_->{address} } } @{ $view->{offer} };
+
+    return $c->render(
+        template   => 'manage',
+        token      => $token,
+        view       => $view,
+        add        => \@add,
+        blocked    => $blocked,
+        list_error => $list_error,
+        signed_in  => $c->session_email,
+        can_sign_in => ($c->app->sso ? 1 : 0),
+        manage_url => $c->app->manage_account_url,
+    );
+}
+
+# The signed-in account's blocked addresses, sorted the way the page first
+# shows them (alphabetical, ignoring case), or undef if the api could not be
+# asked. 'OK' rows are allow-list entries, not blocks -- homelab-domain-
+# admin's own vocabulary: OK allows, every other action blocks.
+sub _my_block_list ($c) {
+    my $jwt = $c->session_jwt or return undef;
+    my $tx = $API_UA->get($c->app->api_base . '/api/v1/domains/recipient-access/mine'
+        => { Authorization => "Bearer $jwt" });
+    return undef unless ($tx->res->code // 0) == 200;
+    my $rows = eval { $tx->res->json };
+    return undef unless ref $rows eq 'ARRAY';
+    my %seen;
+    return [
+        sort { lc($a) cmp lc($b) || $a cmp $b }
+        grep { !$seen{ lc $_ }++ }
+        map  { $_->{recipient} }
+        grep { ref $_ eq 'HASH' && length($_->{recipient} // '') && uc($_->{action} // '') ne 'OK' }
+        @$rows
+    ];
 }
 
 # POST /l/:token {block: [address, ...]} -- public, unauthenticated.
 # The token itself IS the authentication for this action -- an
 # unguessable 32-byte value, validated server-side against
 # pending_links, same trust model as every other capability-token
-# design in this ecosystem. Calls homelab-domain-admin's own
-# system_agent-gated on-behalf endpoint for each address the visitor
-# left checked -- this service never writes domainadmin.recipient_
-# access directly (see README.md's architecture note: this is a new
-# delivery path into an existing blocking mechanism, not a new one).
+# design in this ecosystem -- but only for what view() offers this
+# visitor, the same rule the page was drawn with. Calls homelab-domain-
+# admin's own system_agent-gated on-behalf endpoint for each address --
+# this service never writes domainadmin.recipient_access directly (see
+# README.md's architecture note: this is a new delivery path into an
+# existing blocking mechanism, not a new one).
 sub submit ($c) {
     my $token = $c->stash('token');
     my $row = $c->app->pg->db->query(
@@ -136,7 +188,20 @@ sub submit ($c) {
     return $c->render(json => { error => 'this link is no longer valid' }, status => 410) unless $row;
 
     my $body = $c->req->json // {};
-    my %checked = map { $_ => 1 } @{ $body->{block} // [] };
+    my $list = ref $body->{block} eq 'ARRAY' ? $body->{block} : [];
+    my %asked;
+    my @asked = grep { !$asked{ lc $_ }++ } grep { defined($_) && !ref($_) && length($_) } @$list;
+    return $c->render(json => { error => 'Tick at least one address to add.' }, status => 400) unless @asked;
+
+    my $view = view(decode_json($row->{candidates}), $c->session_email);
+    if (my @refused = @{ refused_addresses($view, \@asked) }) {
+        my %main = map { lc($_->{address}) => 1 } @{ $view->{main} };
+        my $error = (grep { $main{ lc $_ } } @refused)
+            ? "Your account's main address can't be blocked: that would stop all of your mail."
+            : 'These addresses can\'t be blocked from this link: ' . join(', ', @refused)
+              . ($view->{mode} eq 'several' && !$c->session_email ? '. Sign in to block the ones that are yours.' : '.');
+        return $c->render(json => { error => $error }, status => 403);
+    }
 
     my $domain_admin = lookup('homelab-domain-admin', api_base => $c->app->api_base);
     return $c->render(json => { error => 'domain-admin service is not currently available' }, status => 502)
@@ -145,11 +210,10 @@ sub submit ($c) {
     my $agent_token = eval { system_agent_token() };
     return $c->render(json => { error => 'service credential unavailable' }, status => 502) unless $agent_token;
 
+    my %offer = map { lc($_->{address}) => $_ } @{ $view->{offer} };
     my $ua = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10);
-    my @failed;
-    my $candidates = decode_json($row->{candidates});
-    for my $cand (@$candidates) {
-        next unless $checked{ $cand->{address} };
+    my (@done, @failed);
+    for my $cand (map { $offer{ lc $_ } } @asked) {
         my $tx = $ua->post(
             "http://$domain_admin->{host}:$domain_admin->{port}/internal/v1/domains/recipient-access/on-behalf",
             { Authorization => "Bearer $agent_token" },
@@ -158,10 +222,68 @@ sub submit ($c) {
                 action => 'REJECT', reason => 'blocked via inbox link',
             },
         );
-        push @failed, $cand->{address} if $tx->error;
+        if ($tx->error) { push @failed, $cand->{address} } else { push @done, $cand->{address} }
     }
-    return $c->render(json => { error => "could not block: @failed" }, status => 502) if @failed;
-    return $c->render(json => { ok => \1, blocked => [keys %checked] });
+    return $c->render(json => { error => "could not block: @failed", blocked => \@done }, status => 502) if @failed;
+    return $c->render(json => { ok => \1, blocked => \@done });
+}
+
+# Where a sign-in may return to: a link page on this site, or nowhere.
+# Anything else -- another site, another path -- is an open redirect waiting
+# to be used.
+sub _safe_next ($next) {
+    return (defined $next && $next =~ m{\A/l/[A-Za-z0-9_-]{16,128}\z}) ? $next : '';
+}
+
+# GET /login?next=/l/<token> -- start a sign-in through homelab-sso, then
+# come back to the link that was open. Someone already signed in to webmail
+# or myaccount passes straight through: homelab-sso skips its form when its
+# own session is live.
+sub login ($c) {
+    my $sso = $c->app->sso or return $c->redirect_to('/');
+    my $next = _safe_next($c->param('next'));
+    my $state = Homelab::BlockLink::App::_random_hex(16);
+    $c->session(oauth_state => $state, next => $next);
+    return $c->redirect_to(Mojo::URL->new($sso->{base_url} . '/oauth/authorize')->query(
+        response_type => 'code',
+        client_id     => $sso->{client_id},
+        redirect_uri  => $sso->{redirect_uri},
+        state         => $state,
+        scope         => 'openid',
+    ));
+}
+
+sub oauth_callback ($c) {
+    my $sso = $c->app->sso or return $c->redirect_to('/');
+    my $code     = $c->param('code');
+    my $state    = $c->param('state') // '';
+    my $expected = $c->session('oauth_state') // '';
+    my $next     = _safe_next($c->session('next'));
+    delete @{ $c->session }{qw(oauth_state next)};
+
+    return _notice($c, 400, 'Sign-in failed',
+        'Sign-in expired or was not valid. Open the link from your email and try again.')
+        unless $code && length $expected && secure_compare($state, $expected);
+
+    my $r = exchange_code($code,
+        sso_base      => $sso->{internal_base_url},
+        client_id     => $sso->{client_id},
+        client_secret => $sso->{client_secret},
+        redirect_uri  => $sso->{redirect_uri},
+    );
+    return _notice($c, 502, 'Sign-in failed', 'Sign-in could not be completed just now. Please try again.')
+        unless $r->{success} && $r->{access_token};
+
+    $c->session(token => $r->{access_token}, refresh_token => $r->{refresh_token});
+    return $c->redirect_to($next || '/');
+}
+
+# POST /logout -- forget this app's session and hand off to homelab-sso's
+# single sign-out, which ends the session in every app, as everywhere else.
+sub logout ($c) {
+    $c->session(expires => 1);
+    my $sso = $c->app->sso or return $c->redirect_to('/');
+    return $c->redirect_to($sso->{base_url} . '/logout');
 }
 
 # The "invalid" and "expired" pages, on the same layout as the form.

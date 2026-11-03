@@ -42,6 +42,24 @@ block_link:
   # The public URL a management link points at -- must match whatever
   # homelab-webproxy's sites.yml actually fronts this service as.
   public_base_url: https://blockemail.test.mailmasker.org
+  # Optional: where the page's two Manage Account buttons lead. The default
+  # is myaccount's Mail section, which lists, filters, blocks and unblocks
+  # the same addresses.
+  # manage_account_url: https://myaccount.test.mailmasker.org/#mailself
+
+# Optional: sign-in through homelab-sso, so a signed-in visitor sees their
+# own whole block list on the link page (see README.md, "Who sees which
+# addresses"). Without these two blocks the page is link-only. Written by
+# install-orchestrators/block-link-sso-provision.sh, with the client
+# registered on the SSO nodes first; the client_secret matches theirs.
+# sso:
+#   base_url: https://login.test.mailmasker.org        # the BROWSER goes here: the public SSO name
+#   internal_base_url: http://sso.example.internal:2502 # this app's own server-to-server code exchange
+#   client_id: block-link
+#   client_secret: YOUR_SSO_CLIENT_SECRET_HERE
+#   redirect_uri: https://blockemail.test.mailmasker.org/oauth/callback
+# session:
+#   secret: "THE SAME LONG RANDOM VALUE ON EVERY POOL NODE"
 
 # Optional: the shared mailmasker look (homelab-webtheme). Both keys may be
 # left out; the defaults are shown.

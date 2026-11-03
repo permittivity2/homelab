@@ -1,47 +1,106 @@
 % layout 'default';
 % title 'Manage blocked addresses';
 %# The page a link in a delivered email opens. Opening it never changes
-%# anything (see README.md, "Why GET never mutates"); only Save does.
-%#   $candidates  [{address, account_email}, ...] -- the addresses the message
-%#                was sent to
-%#   $token       the link's own token: the only credential Save carries
+%# anything (see README.md, "Why GET never mutates"); only Add to Block List
+%# does.
+%#   $view        Visibility::view() -- mode owner | link | several, and the
+%#                addresses this visitor may block (offer) or not (main)
+%#   $add         $view->{offer} minus what is already on the block list
+%#   $blocked     the signed-in account's block list, sorted (owner only)
+%#   $list_error  the list could not be read just now
+%#   $signed_in   the address signed in here, or ''
+%#   $can_sign_in sign-in is configured
+%#   $manage_url  myaccount's Mail section
+%#   $token       the link's own token
+% my $mode   = $view->{mode};
+% my $login  = '/login?next=' . Mojo::Util::url_escape("/l/$token");
+% my $count  = scalar @$blocked;
+% (my $countf = $count) =~ s/(\d)(?=(?:\d{3})+\z)/$1,/g;
 <h1>Manage blocked addresses</h1>
-<p class="text-muted">This message was sent to the address(es) below. Uncheck any you do NOT want to block.</p>
+<div class="form-actions page-actions">
+  <a class="btn" href="<%= $manage_url %>">Manage Account</a>
+</div>
+
+% if (@$add) {
+<section id="add-section">
 <form id="blockform" class="panel" data-token="<%= $token %>">
   <div class="panel__body stack">
-  %# .check is inline-flex, so each one gets its own line, and its words sit
-  %# in ONE span: as separate flex items they split into a column on a phone.
-  % for my $cand (@$candidates) {
+    <p class="text-muted">This message was sent to the address<%= @$add == 1 ? '' : 'es' %> below. Uncheck any you do NOT want to block.</p>
+    %# .check is inline-flex, so each one gets its own line, and its words sit
+    %# in ONE span: as separate flex items they split into a column on a phone.
+    % for my $cand (@$add) {
     <div><label class="check"><input type="checkbox" name="block" value="<%= $cand->{address} %>" checked> <span class="cand">Block mail to <strong><%= $cand->{address} %></strong></span></label></div>
-  % }
-    <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
+    % }
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Add to Block List</button></div>
   </div>
 </form>
+</section>
+% } elsif ($mode eq 'owner' && @{ $view->{offer} } && !$list_error) {
+<p class="banner banner--ok"><span>Everything this message was sent to is already on your block list.</span></p>
+% }
+
+% for my $cand (@{ $view->{main} }) {
+%# One span: .banner is a flex box, and loose text beside a <strong> would
+%# become separate flex items and break apart on a phone.
+<p class="banner banner--info"><span>This message was sent to <strong class="cand"><%= $cand->{address} %></strong>, your account's main address. It can't be blocked: that would stop all of your mail.</span></p>
+% }
+
+% if ($mode eq 'several') {
+<div class="panel"><div class="panel__body stack">
+  % if (length $signed_in) {
+  <p>This message went to more than one account, and you're signed in as <strong class="cand"><%= $signed_in %></strong>, which isn't one of them.</p>
+  % } elsif ($can_sign_in) {
+  <p>This message went to more than one account, so its addresses aren't shown until you sign in. Signed in, you'll see the ones that are yours.</p>
+  <div class="form-actions"><a class="btn btn-primary" href="<%= $login %>">Sign in</a></div>
+  % } else {
+  <p>This message went to more than one account, so its addresses aren't shown here. Your own block list is in Manage Account.</p>
+  % }
+</div></div>
+% }
+
 <div id="msg" role="status" aria-live="polite"></div>
+
+<section id="blocklist-section" class="panel">
+  <div class="panel__head">
+    <h2 class="panel__title">Your block list</h2>
+    % if ($mode eq 'owner' && !$list_error) {
+    <span id="bl-count" class="text-muted bl-count"><%= $count == 1 ? '1 address' : "$countf addresses" %></span>
+    % }
+  </div>
+  <div class="panel__body">
+  % if ($mode eq 'owner' && $list_error) {
+    <p class="text-muted">Your block list couldn't be loaded just now. Reload the page to try again, or use Manage Account.</p>
+  % } elsif ($mode eq 'owner') {
+    <div class="toolbar">
+      <button type="button" id="bl-sort" class="btn btn-sm" title="Change the order">Sort: A &rarr; Z</button>
+      <label class="sr-only" for="bl-filter">Filter the list</label>
+      <input type="search" id="bl-filter" class="form-input" autocomplete="off" spellcheck="false"
+             placeholder="Filter, e.g. ^shop" aria-describedby="bl-filter-hint">
+    </div>
+    <p id="bl-filter-hint" class="form-hint">A Perl-style regular expression; it starts filtering at 3 characters and ignores case.</p>
+    <ul id="bl-list" class="blocklist">
+    % for my $addr (@$blocked) {
+      <li data-addr="<%= $addr %>"><%= $addr %></li>
+    % }
+    </ul>
+    <p id="bl-none" class="text-muted<%= @$blocked ? ' hide' : '' %>">You haven't blocked any addresses yet.</p>
+    <p id="bl-nomatch" class="text-muted hide">No blocked address matches that filter.</p>
+  % } elsif (length $signed_in) {
+    <p class="text-muted">This link is for another account, so your own block list isn't shown here.</p>
+  % } elsif ($can_sign_in) {
+    <p class="text-muted">Sign in to see every address you've blocked, sort it and filter it.</p>
+    <div class="form-actions"><a class="btn btn-primary" href="<%= $login %>">Sign in to see your block list</a></div>
+  % } else {
+    <p class="text-muted">Your whole block list is in Manage Account.</p>
+  % }
+  </div>
+</section>
+
+<div class="form-actions page-actions">
+  <a class="btn" href="<%= $manage_url %>">Manage Account</a>
+</div>
+
 <script>
-(function () {
-  var form = document.getElementById('blockform');
-  var msg  = document.getElementById('msg');
-  function say(kind, text) { msg.className = 'banner banner--' + kind; msg.textContent = text; }
-  form.addEventListener('submit', async function (e) {
-    e.preventDefault();
-    var btn = form.querySelector('button[type=submit]');
-    var checked = Array.from(form.querySelectorAll('input[name=block]:checked')).map(function (i) { return i.value; });
-    say('info', 'Saving...');
-    btn.disabled = true;
-    try {
-      var r = await fetch('/l/' + encodeURIComponent(form.dataset.token), {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({block: checked}),
-      });
-      var j = await r.json().catch(function () { return {}; });
-      if (r.ok) { say('ok', 'Saved.'); }
-      else      { say('error', j.error || 'Something went wrong.'); }
-    } catch (err) {
-      say('error', 'Could not reach the server. Please try again.');
-    } finally {
-      btn.disabled = false;
-    }
-  });
-})();
+%= include 'blocklist', format => 'js'
+BlockList.wire(document);
 </script>

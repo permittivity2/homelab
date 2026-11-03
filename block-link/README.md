@@ -44,6 +44,45 @@ only touched on `POST`. Same shape RFC 8058 mandates for one-click
 unsubscribe, and the exact same GET-renders/POST-mutates pattern already
 proven in `homelab-invite`'s `/invite/:token` + `/invite/:token/accept`.
 
+## Who sees which addresses, and signing in
+
+A message that reaches several mailmasker accounts in one delivery (To,
+Cc or Bcc) gets **one** link, and the same link is in every copy:
+`homelab-postfix-block-link` collects every enabled recipient in its
+`envrcpt` callback and writes one `pending_links` row at `eom`, and a
+milter can't give each recipient a different header or body. Until
+0.1.4 the page showed every address on the link to whoever opened it,
+with every box checked, so each recipient saw the others' addresses
+(even a Bcc'd one), and one person's Save blocked the other person's
+address on the other person's account.
+
+The rule is in `lib/Homelab/BlockLink/Visibility.pm`, and the page (GET)
+and Add to Block List (POST) both use it, so the page never offers
+something the server would refuse:
+
+| Visitor | What the link page shows | What it may block |
+|---|---|---|
+| signed in as one of the link's accounts | that account's addresses from the message, and its **whole block list** (four sorts, a regex filter) | that account's addresses |
+| not signed in (or signed in as someone else), link covers **one** account | the message's addresses, as before | those addresses (the token is the credential, as before) |
+| not signed in, link covers **several** accounts | none of them; a Sign in button | nothing |
+
+An account's **main address** is never offered: blocking it would stop
+all of that account's mail. `homelab-domain-admin`'s self-service
+endpoint refuses that too; the on-behalf path this service uses never
+checked it, so the check lives here.
+
+**Signing in** goes through `homelab-sso`, like drive, search and
+myaccount; this app keeps the resulting token in its own session cookie
+(`homelab-block-link`) and reads the block list with it from the same
+api call myaccount uses (`GET /api/v1/domains/recipient-access/mine`).
+Someone already signed in to webmail or myaccount passes straight
+through. It needs an SSO client registration and an `sso:` + `session:`
+block in the config, written by
+`install-orchestrators/block-link-sso-provision.sh`. Both are
+optional: without them the page is link-only, exactly as above, minus
+the Sign in buttons. The session secret must be the same on every pool
+node (requests are not sticky).
+
 ## Why long-lived tokens
 
 Unlike `homelab-invite`'s one-time-use tokens, a `pending_links.token`
