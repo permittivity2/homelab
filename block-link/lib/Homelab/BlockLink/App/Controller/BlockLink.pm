@@ -1,7 +1,6 @@
 package Homelab::BlockLink::App::Controller::BlockLink;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::UserAgent;
-use Mojo::Util qw(xml_escape);
 use Mojo::JSON qw(decode_json);
 use Homelab::Common::Registry qw(lookup system_agent_token);
 use Homelab::Common::AuditClient qw(enqueue);
@@ -96,73 +95,28 @@ sub domain_set ($c) {
     return $c->render(json => $row);
 }
 
-# GET /l/:token -- public, unauthenticated. Renders a minimal,
-# self-contained HTML page (no templates/ directory -- same "why
-# inline HTML" reasoning as homelab-invite's identical /invite/:token
-# page). Every dynamic value is xml_escape()'d. No DB mutation here --
-# see README.md's "Why GET never mutates" section: automated mail-
-# security link-prescanners fetch every link in incoming mail before a
-# human opens it, and this link lives INSIDE a real delivered email.
+# GET /l/:token -- public, unauthenticated. No DB mutation here -- see
+# README.md's "Why GET never mutates" section: automated mail-security
+# link-prescanners fetch every link in incoming mail before a human opens
+# it, and this link lives INSIDE a real delivered email.
+#
+# Rendered from templates/manage.html.ep on the shared mailmasker layout
+# (homelab-webtheme). The renderer escapes every value, which replaces the
+# hand-rolled xml_escape() calls the old qq{} page needed.
 sub show ($c) {
     my $token = $c->stash('token');
     my $row = $c->app->pg->db->query(
         q{SELECT *, (expires_at <= NOW()) AS is_expired FROM block_link.pending_links WHERE token = ?}, $token,
     )->hash;
-    unless ($row) {
-        return $c->render(text => _page('Invalid link', 'This management link is not valid.'), format => 'html', status => 404);
-    }
-    if ($row->{is_expired}) {
-        return $c->render(text => _page('Link expired', 'This management link has expired.'), format => 'html', status => 410);
-    }
+    return _notice($c, 404, 'Invalid link', 'This management link is not valid.') unless $row;
+    return _notice($c, 410, 'Link expired', 'This management link has expired.') if $row->{is_expired};
 
-    my $token_html = xml_escape($token);
-    my $rows_html = '';
     # candidates is a JSONB column -- Mojo::Pg/DBD::Pg hand it back as
     # the raw JSON text, not an inflated arrayref, so it must be
     # decoded explicitly before use (real bug hit on first live GET,
     # not caught by t/basic.t since that test asserts on rendered HTML
     # content, not on this code path directly).
-    my $candidates = decode_json($row->{candidates});
-    for my $cand (@$candidates) {
-        my $addr = xml_escape($cand->{address});
-        $rows_html .= qq{<label class="row"><input type="checkbox" name="block" value="$addr" checked> Block mail to <b>$addr</b></label>\n};
-    }
-    return $c->render(format => 'html', text => qq{<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Manage blocked addresses</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body{font-family:sans-serif;max-width:32em;margin:4em auto;padding:0 1em}
-.row{display:block;margin:.8em 0}button{padding:.6em 1.2em;margin-top:1em}
-.err{color:#b00}.ok{color:#080}</style></head>
-<body>
-<h1>Manage blocked addresses</h1>
-<p>This message was sent to the address(es) below. Uncheck any you do NOT want to block.</p>
-<form id="blockform">
-$rows_html
-<button type="submit">Save</button>
-</form>
-<p id="msg"></p>
-<script>
-document.getElementById('blockform').onsubmit = async function (e) {
-    e.preventDefault();
-    var checked = Array.from(document.querySelectorAll('input[name=block]:checked')).map(function (i) { return i.value; });
-    var msg = document.getElementById('msg');
-    msg.className = '';
-    msg.textContent = 'Saving...';
-    var r = await fetch('/l/$token_html', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({block: checked}),
-    });
-    var j = await r.json();
-    if (r.ok) {
-        msg.className = 'ok';
-        msg.textContent = 'Saved.';
-    } else {
-        msg.className = 'err';
-        msg.textContent = j.error || 'Something went wrong.';
-    }
-};
-</script>
-</body></html>});
+    return $c->render(template => 'manage', candidates => decode_json($row->{candidates}), token => $token);
 }
 
 # POST /l/:token {block: [address, ...]} -- public, unauthenticated.
@@ -210,12 +164,9 @@ sub submit ($c) {
     return $c->render(json => { ok => \1, blocked => [keys %checked] });
 }
 
-sub _page ($title, $body) {
-    my $t = xml_escape($title);
-    my $b = xml_escape($body);
-    return qq{<!DOCTYPE html><html><head><meta charset="utf-8"><title>$t</title></head>
-<body style="font-family:sans-serif;max-width:32em;margin:4em auto;padding:0 1em">
-<h1>$t</h1><p>$b</p></body></html>};
+# The "invalid" and "expired" pages, on the same layout as the form.
+sub _notice ($c, $status, $heading, $body) {
+    return $c->render(template => 'notice', status => $status, heading => $heading, body => $body);
 }
 
 1;

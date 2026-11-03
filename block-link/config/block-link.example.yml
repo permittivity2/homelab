@@ -43,6 +43,12 @@ block_link:
   # homelab-webproxy's sites.yml actually fronts this service as.
   public_base_url: https://blockemail.test.mailmasker.org
 
+# Optional: the shared mailmasker look (homelab-webtheme). Both keys may be
+# left out; the defaults are shown.
+# web_theme:
+#   base_url: https://static.mailmasker.org/theme/v1   # where theme.css lives
+#   home_url: https://mailmasker.org/                  # where the top bar's logo leads
+
 # What this instance announces itself as in homelab-api's service
 # registry -- host/port only. homelab-api's gateway forwards
 # /api/v1/block-link/* here.

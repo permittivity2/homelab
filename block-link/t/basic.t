@@ -74,7 +74,8 @@ is($effective2->{domain_default}, 1, 'domain_default field reports the real doma
 
 # --- Public link page (no DB mutation on GET) -----------------------------
 my $bogus_token = 'not-a-real-token-at-all';
-$t->get_ok("/l/$bogus_token")->status_is(404, 'a garbage token is a clean 404');
+$t->get_ok("/l/$bogus_token")->status_is(404, 'a garbage token is a clean 404')
+    ->content_like(qr{class="topbar"}, 'the invalid-link page has the shared top bar');
 
 # Insert a real pending_links row directly (this is what the milter would
 # do live) to test the public page against real data.
@@ -86,6 +87,7 @@ $t->app->pg->db->query(
 );
 
 $t->get_ok("/l/$token")->status_is(200, 'a real pending link renders the management page')
-    ->content_like(qr/checked/, 'the candidate checkbox is pre-checked by default');
+    ->content_like(qr/checked/, 'the candidate checkbox is pre-checked by default')
+    ->content_like(qr{theme/v1/theme\.css}, 'the real page is on the shared theme');
 
 done_testing;

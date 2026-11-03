@@ -1,0 +1,47 @@
+% layout 'default';
+% title 'Manage blocked addresses';
+%# The page a link in a delivered email opens. Opening it never changes
+%# anything (see README.md, "Why GET never mutates"); only Save does.
+%#   $candidates  [{address, account_email}, ...] -- the addresses the message
+%#                was sent to
+%#   $token       the link's own token: the only credential Save carries
+<h1>Manage blocked addresses</h1>
+<p class="text-muted">This message was sent to the address(es) below. Uncheck any you do NOT want to block.</p>
+<form id="blockform" class="panel" data-token="<%= $token %>">
+  <div class="panel__body stack">
+  %# .check is inline-flex, so each one gets its own line, and its words sit
+  %# in ONE span: as separate flex items they split into a column on a phone.
+  % for my $cand (@$candidates) {
+    <div><label class="check"><input type="checkbox" name="block" value="<%= $cand->{address} %>" checked> <span class="cand">Block mail to <strong><%= $cand->{address} %></strong></span></label></div>
+  % }
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Save</button></div>
+  </div>
+</form>
+<div id="msg" role="status" aria-live="polite"></div>
+<script>
+(function () {
+  var form = document.getElementById('blockform');
+  var msg  = document.getElementById('msg');
+  function say(kind, text) { msg.className = 'banner banner--' + kind; msg.textContent = text; }
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type=submit]');
+    var checked = Array.from(form.querySelectorAll('input[name=block]:checked')).map(function (i) { return i.value; });
+    say('info', 'Saving...');
+    btn.disabled = true;
+    try {
+      var r = await fetch('/l/' + encodeURIComponent(form.dataset.token), {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({block: checked}),
+      });
+      var j = await r.json().catch(function () { return {}; });
+      if (r.ok) { say('ok', 'Saved.'); }
+      else      { say('error', j.error || 'Something went wrong.'); }
+    } catch (err) {
+      say('error', 'Could not reach the server. Please try again.');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>

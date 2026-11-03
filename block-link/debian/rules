@@ -16,3 +16,5 @@ override_dh_install:
 		debian/homelab-block-link/usr/share/homelab-block-link/services/block-link.yml
 	find migrations -type f -exec install -D -m 644 {} \
 		debian/homelab-block-link/usr/share/homelab-block-link/{} \;
+	find templates -type f -exec install -D -m 644 {} \
+		debian/homelab-block-link/usr/share/homelab-block-link/{} \;

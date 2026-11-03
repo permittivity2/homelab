@@ -1,0 +1,6 @@
+% layout 'default';
+% title $heading;
+%# The "invalid link" (404) and "link expired" (410) pages, on the same
+%# layout as the form.
+<h1><%= $heading %></h1>
+<p class="text-muted"><%= $body %></p>

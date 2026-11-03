@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+%# Shared chrome from homelab-webtheme: theme.css, fonts and favicon come from
+%# static.mailmasker.org, so these pages restyle with the rest of mailmasker
+%# and need no rebuild for a colour change. Only the rules this app needs
+%# live below.
+%#
+%# These templates replace HTML that was built with qq{} inside the
+%# controller until 2026-11-03, which is why the pages had their own
+%# black-on-white look.
+%= include 'homelab/head'
+<title><%= title %></title>
+<style>
+  /* A short form: a readable column, not the full page width. */
+  .container { max-width: 40rem; }
+  /* A long address breaks rather than pushing the page sideways on a phone. */
+  .cand { overflow-wrap: anywhere; }
+</style>
+</head>
+<body class="app">
+%= include 'homelab/header'
+<main class="app__main">
+  <div class="container stack"><%= content %></div>
+</main>
+%= include 'homelab/footer'
+</body>
+</html>

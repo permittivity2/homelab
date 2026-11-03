@@ -13,8 +13,28 @@ has 'api_base';
 has 'block_link_config';
 
 sub startup ($self) {
+    # Templates ship in /usr/share/homelab-block-link/templates since
+    # 2026-11-03; before that the public pages were qq{} HTML built in the
+    # controller, which is why they were the last pages left off the shared
+    # mailmasker look.
+    my $home = $ENV{HOMELAB_BLOCK_LINK_HOME} // '/usr/share/homelab-block-link';
+    $self->renderer->paths([("$home/templates"), @{ $self->renderer->paths }]);
+
     my $config = load_config('HOMELAB_BLOCK_LINK_CONFIG', '/etc/homelab/block-link/config.yml');
     $self->config($config);
+
+    # Shared web chrome (homelab-webtheme): the top bar, the footer and
+    # theme.css from static.mailmasker.org, the same as drive, search and
+    # myaccount. Nobody is signed in here -- the link's token is the only
+    # credential -- so the top bar shows the logo and the app name with no
+    # account menu, which is how the shared header renders without a user.
+    my $theme = $config->{web_theme} // {};
+    $self->plugin('Homelab::WebTheme' => {
+        app_name   => 'Block email',
+        menu_links => [],
+        ($theme->{base_url} ? (theme_base => $theme->{base_url}) : ()),
+    });
+    my $home_url = $theme->{home_url} // 'https://mailmasker.org/';
 
     my $srv = $config->{server} // {};
     $self->config(hypnotoad => {
@@ -94,6 +114,10 @@ sub startup ($self) {
     # this ecosystem needs. ---------------------------------------------
     $r->get('/l/:token' => [token => qr/[^\/]+/])  ->to('block_link#show');
     $r->post('/l/:token' => [token => qr/[^\/]+/]) ->to('block_link#submit');
+
+    # The shared top bar's logo links to "/", and this site has no page of
+    # its own there: send it to the product's front page rather than a 404.
+    $r->get('/' => sub ($c) { $c->redirect_to($home_url) });
 
     return;
 }
