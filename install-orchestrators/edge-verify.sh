@@ -173,6 +173,21 @@ else
         "timeout 10 bash -c 'exec 3<>/dev/tcp/mail.mailmasker.org/587; head -1 <&3'" 2>/dev/null)
     printf '%s' "$sub" | grep -qi esmtp && ok "submission :587 answers from the internet" \
         || bad "submission :587 gave no banner -- sending is DOWN"
+
+    # SSH must NOT answer from the internet, on either public address. Found
+    # OPEN on 01 and 02 on 2026-11-02 -- `tcp dport { 22, 80, 443, 53 }` in a
+    # base firewall file nothing here checked -- so whenever either of them
+    # was the live edge, SSH faced the internet. A dropped (filtered) or
+    # refused connect both count as closed; only a completed connect is open.
+    for a in 23.116.91.66 23.116.91.68; do
+        r=$(timeout 20 ssh -o ConnectTimeout=6 offsite \
+            "timeout 6 bash -c 'echo > /dev/tcp/$a/22' 2>/dev/null && echo OPEN || echo closed" 2>/dev/null)
+        case "$r" in
+            closed) ok "SSH is closed to the internet on $a" ;;
+            OPEN)   bad "SSH is OPEN to the internet on $a" ;;
+            *)      warn "could not test SSH on $a from offsite" ;;
+        esac
+    done
 fi
 
 step "result for prod-homelab$NN"
