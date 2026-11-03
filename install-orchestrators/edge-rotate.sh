@@ -464,10 +464,16 @@ BADIPS=$(ssh -o ConnectTimeout=10 "$MGMT" '
     v=$(dpkg-query -W -f="\${Version}" bad-ips 2>/dev/null) || { echo "installed=no"; exit 0; }
     echo "installed=$v"
     echo "enabled=$(systemctl is-enabled bad_ips 2>/dev/null) active=$(systemctl is-active bad_ips 2>/dev/null)"
-    sudo /usr/local/sbin/bad_ips --test-config 2>/dev/null | sed -n "s/^role: */role=/p" | head -1
+    # ONE token: the role line is "role: block (watch mode: ...)  (from ...)",
+    # and bv() below splits on spaces -- so "watch" must be named outright.
+    tc=$(sudo /usr/local/sbin/bad_ips --test-config 2>/dev/null)
+    r=$(printf "%s\n" "$tc" | sed -n "s/^role: *\([a-z]*\).*/\1/p" | head -1)
+    printf "%s\n" "$tc" | grep -q "^role:.*watch mode" && r=watch
+    echo "role=$r"
     c(){ sudo nft -j list set inet badips "$1" 2>/dev/null | jq "[.nftables[] | select(.set) | .set.elem // [] | length] | add // 0"; }
     echo "bans=$(c badipv4) feed=$(c feedv4) never=$(c never_block)"
-    echo "shared=$(sudo /usr/local/sbin/bad_ips list --limit 1 2>/dev/null | sed -n "s/^\([0-9]*\) active ban.*/\1/p")"
+    # no --limit: with one, the count line is the rows SHOWN, not the total
+    echo "shared=$(sudo /usr/local/sbin/bad_ips list 2>/dev/null | sed -n "s/^\([0-9]*\) active ban.*/\1/p" | tail -1)"
 ' 2>/dev/null)
 bv(){ printf '%s\n' "$BADIPS" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }
 if [ "$(bv installed)" = no ] || [ -z "$BADIPS" ]; then
@@ -476,8 +482,8 @@ else
     ok "bad-ips $(bv installed): $(bv role), enabled=$(bv enabled), active=$(bv active)"
     [ "$(bv enabled)" = enabled ] && [ "$(bv active)" = active ] || bad "bad-ips is not running"
     case "$(bv role)" in
-        block*watch*) ok "watch mode: reports, blocks nothing (switch on with badips-orchestrate.sh --role $TARGET block)" ;;
-        block*)
+        watch) ok "watch mode: reports, blocks nothing (switch on with badips-orchestrate.sh --role $TARGET block)" ;;
+        block)
             [ "$(bv never)" -gt 0 ] 2>/dev/null && ok "never-block loaded ($(bv never) entries)" || bad "never-block set empty or missing"
             ok "blocking $(bv bans) addresses + $(bv feed) feed ranges (shared list: $(bv shared) active)" ;;
         *) bad "role is '$(bv role)' -- the edge must be block (or watch)" ;;

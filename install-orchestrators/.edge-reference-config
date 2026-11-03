@@ -23,7 +23,7 @@
 /etc/nftables.d/10-homelab-fleet-trust.nft c3f0cc62c1f8962f93645f5dd38557eade324a332a80059e4f77b1ef6bbae579
 /etc/nftables.d/10-homelab-metrics.nft 99791c5c67f066a36c07a747bc4d4117fa832fed306299b609aafdabb68c5cdb
 /etc/nftables.d/60-plex-egress.nft db9604fce29d973ddc985f6fe82357088fd9d7167b36d216401f8ea0c0cdcd48
-/etc/nginx/conf.d/00-catchall.conf eeb269531cb526389ff6758e78611971824a01bf64ea45719992a7809748ef14
+/etc/nginx/conf.d/00-catchall.conf ed10135d5355f7413c362fd5bfde264e5b67d621fa0e59664a19baa8a34c24a5
 /etc/nginx/conf.d/blockemail.mailmasker.org-upstream.conf c896e198df0bab1f4c3ff3d26ff6a191e1ecefa6f4a2c8c1333537f5c3f09edb
 /etc/nginx/conf.d/drive.mailmasker.org-upstream.conf 74a2667d10ad57101a4df8705e01b0add3c2f2aeb159e0dd0841e4731012ee7b
 /etc/nginx/conf.d/homelab-webproxy-websocket.conf 05bbfd1ffba7382b92fb736114b82d60f641aadc99e4ecdb274eea7d1b72aab6
@@ -65,4 +65,14 @@
 /etc/systemd/network/eth7.network b6828ad6299cfe210131e649a691ff7d4ee043645099c78bbc9daf7bcb39170d
 /etc/systemd/network/eth7.network.d/10-homelab-nohijack.conf d5b6abec27080abf633e151a279d0bb83d30bba39479e2d43f2c8b1add3d9f31
 /etc/systemd/system/systemd-networkd-wait-online.service.d/10-homelab-any.conf 0b444cfa1c265c1c91e7d984139fa09c8108453b583eae69ad790ff8899ceee5
-/usr/local/etc/badips.d/database.conf 61ed4a90073312dea0fd1eafb0099a782ec831516ee0b1ad3a79e9b7fb772a4d
+/usr/local/etc/badips.d/10-sshd.conf 354923c0ed0824145f45a66f7e183afdef1ed9a4b00f636adcfebbfb0ed46487
+/usr/local/etc/badips.d/20-postfix.conf 262be2d01509e335dbb3208feaffdbf0409c3476a9184de2e11668cdbf98a661
+/usr/local/etc/badips.d/30-dovecot.conf 1a4eea0980dad555ca39fed11675234fe0f3a749c03a23fdbb03556938d5eb42
+/usr/local/etc/badips.d/40-nginx.conf 9a6be54e5542ea6b32bfb506ec4e81313de36339a4b011072284ffa9c7911940
+/usr/local/etc/badips.d/50-apache.conf ce77d5bdefaf4cddcb17196870423ca6b3fc27353861acbe7fbcb02586493903
+/usr/local/etc/badips.d/60-rules.conf 90551bb11b28bbd588b20ce97e9415db3e836909ec3c657dc316de905cf8dc70
+/usr/local/etc/badips.d/70-bind.conf 039e916da5a6d9856120261ae0bf13c8c6e9acf1652f4fe90a3353de774a7d3a
+/usr/local/etc/badips.d/80-publicblocklists.conf 1d52d1f9f8841dc8e53de3c541d32831199666b703420c11a256539c25880ba1
+/usr/local/etc/badips.d/94-role.conf a7c70b166d034fed738ddc463d3932118764b97827f3c79263ee8f9df5bd6daf
+/usr/local/etc/badips.d/95-fleet.conf cd26605185bd0ed4b7fe88cc92d91fe0fd94893798753a60d8bdfdf7031e1ac0
+/usr/local/etc/badips.d/96-fleet-db.conf 7278d1741b84f7e3d17bdb263d965e76698daacfea938d3c816bace9b4a4da3f
