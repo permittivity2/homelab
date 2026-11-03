@@ -240,15 +240,23 @@ files=$(ls /usr/local/etc/badips.d 2>/dev/null | grep '\.conf$' | paste -sd,)
 main=$([ -e /usr/local/etc/badips.conf ] && echo present || echo absent)
 conn=-; warns=-; first=
 L=/var/log/bad_ips/bad_ips.log
+# The running daemon's own lines, oldest first, from EVERY file logrotate has
+# kept: the daily rotation moves its start-up lines (the connection among
+# them) out of bad_ips.log, which made three healthy reporters look
+# unconnected on 2026-11-03. Matched by PID AND start time, so a recycled PID
+# in an older file cannot count.
+mine(){ for f in $L*; do zcat -f "$f"; done 2>/dev/null | awk -F'|' -v p="$pid" -v s="$since" '$2 == p && $1 >= s' | LC_ALL=C sort -s -t'|' -k1,1; }
 if [ "$a" = active ]; then
     pid=$(systemctl show -p MainPID --value bad_ips)
+    since=$(date -d "$(systemctl show -p ExecMainStartTimestamp --value bad_ips)" '+%Y/%m/%d %H:%M:%S' 2>/dev/null)
     if [ "$db" != none ]; then
-        for i in $(seq 1 30); do grep -q "^[^|]*|$pid|INFO|.*shared ban list: connected to " $L 2>/dev/null && break; sleep 1; done
+        for i in $(seq 1 30); do mine | grep -q '|INFO|.*shared ban list: connected to ' && break; sleep 1; done
     fi
-    conn=$(grep "^[^|]*|$pid|INFO|.*shared ban list: connected to " $L 2>/dev/null | tail -1 | sed 's/.*connected to //')
+    M=$(mine)
+    conn=$(printf '%s\n' "$M" | grep '|INFO|.*shared ban list: connected to ' | tail -1 | sed 's/.*connected to //')
     [ -n "$conn" ] || conn=NO
-    warns=$(grep -cE "^[^|]*\|$pid\|(WARN|ERROR|FATAL)\|" $L 2>/dev/null)
-    first=$(grep -E "^[^|]*\|$pid\|(WARN|ERROR|FATAL)\|" $L 2>/dev/null | head -1 | cut -d'|' -f6- | cut -c1-200)
+    warns=$(printf '%s\n' "$M" | grep -cE '^[^|]*\|[^|]*\|(WARN|ERROR|FATAL)\|')
+    first=$(printf '%s\n' "$M" | grep -E '^[^|]*\|[^|]*\|(WARN|ERROR|FATAL)\|' | head -1 | cut -d'|' -f6- | cut -c1-200)
 fi
 echo "version=$v role=${r:-?} config=$([ "$tcrc" = 0 ] && echo ok || echo REFUSED) db=${db:-?} reach=${reach:--} daemon_db=$conn warns=$warns enabled=${e:-?} active=${a:-?} table=$t mainconf=$main files=${files:-none} first_warn=$first"
 EOS
@@ -570,7 +578,8 @@ do_verify(){
                       c(){ sudo nft -j list set inet badips "$1" 2>/dev/null | jq "[.nftables[] | select(.set) | .set.elem // [] | length] | add // 0"; }
                       echo "    blocking: $(c badipv4) addresses, $(c feedv4) + $(c feedv6) feed ranges; never-block $(c never_block) + $(c never_block_v6)"
                       sudo nft list chain inet badips preroute_block 2>/dev/null | grep -E "counter packets [1-9]" | sed "s/^\s*/    drops: /"'
-            rsh "$n" 'sudo grep "watch mode: would block" /var/log/bad_ips/bad_ips.log 2>/dev/null | tail -1 | cut -d"|" -f1,6- | sed "s/^/    /"' ;;
+            # what a WATCHING edge would block (on a blocking edge that line is stale)
+            [ "$want" = watch ] && rsh "$n" 'sudo grep "watch mode: would block" /var/log/bad_ips/bad_ips.log 2>/dev/null | tail -1 | cut -d"|" -f1,6- | sed "s/^/    /"' ;;
         esac
     done
     local leader; leader="$(find_leader)" && \
