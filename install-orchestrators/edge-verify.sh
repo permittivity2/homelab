@@ -118,6 +118,7 @@ else
     # for it. A probe list shorter than the site list can only ever confirm
     # the sites someone remembered.
     probe_http https://search.mailmasker.org/           "200 301 302"
+    probe_http https://developer.mailmasker.org/        "200"
     # Mail ingress: haproxy binds *:25/587/143/993 on this node.
     #
     # :25 CANNOT be probed from offsite -- its provider blocks outbound port 25
