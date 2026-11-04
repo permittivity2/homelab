@@ -9,6 +9,11 @@ DEVELOPER_BASE_URL points it somewhere else.
 What it expects comes from ../../developer/reference in this same repo, so
 a reference change that was committed but never released shows up here as
 a site that is behind.
+
+It needs nothing from the test fleet, so it runs on its own without the
+suite's shared setup (which signs in to the test fleet first):
+
+    python3 -m pytest tests/e2e/test_developer_site.py --noconftest
 """
 
 import json
