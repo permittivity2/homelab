@@ -157,8 +157,8 @@ if [ "$DRY" = 1 ]; then
     cat <<PLANNED
   1. $HOST: apt-get install homelab-developer ($PUB), which enables the
      site in nginx and reloads it (only if nginx -t passes)
-  2. $DNS_NODE: pdnsutil add-record $ZONE developer A 3600 $PUBLIC_IP
-     (only if absent), then increase-serial
+  2. $DNS_NODE: pdnsutil rrset add $ZONE $NAME A 3600 $PUBLIC_IP
+     (only if absent), then zone increase-serial
   3. $ISSUER:$CERT_CONF -- add lineage $NAME, issue it (DNS-01), publish
   4. $EDGE:$CERTSYNC_CONF -- add the certsync target, run certsync
   5. $EDGE:$SITES -- add:
@@ -196,11 +196,17 @@ done
 
 # ------------------------------------------------------------------- 2. DNS
 step "2. DNS: $NAME -> $PUBLIC_IP"
-if on "$DNS_NODE" "sudo pdnsutil list-zone $ZONE 2>/dev/null | grep -qE '^$NAME[[:space:]].*[[:space:]]A[[:space:]]'"; then
+# pdnsutil 5 (on the fleet) names these `zone list`, `rrset add` and `zone
+# increase-serial`; the older add-record and increase-serial are gone.
+if on "$DNS_NODE" "sudo pdnsutil zone list $ZONE 2>/dev/null | grep -qE '^$NAME[[:space:]].*[[:space:]]A[[:space:]]'"; then
     ok "the A record already exists"
 else
-    on "$DNS_NODE" "sudo pdnsutil add-record $ZONE developer A 3600 $PUBLIC_IP && sudo pdnsutil increase-serial $ZONE" >/dev/null 2>&1 \
-        && ok "added the A record and raised the zone's serial" || die "could not add the A record"
+    if out=$(on "$DNS_NODE" "sudo pdnsutil rrset add $ZONE $NAME A 3600 $PUBLIC_IP && sudo pdnsutil zone increase-serial $ZONE" 2>&1); then
+        ok "added the A record and raised the zone's serial"
+    else
+        printf '%s\n' "$out" | tail -5 | sed 's/^/      /'
+        die "could not add the A record"
+    fi
 fi
 for i in 1 2 3 4 5 6; do
     [ "$(resolves)" = "$PUBLIC_IP" ] && break
