@@ -8,7 +8,7 @@
 /etc/haproxy/errors/504.http 0ac0c626a1ac4d322f40710ace0faa6a234f7225c8f9704de47de79cdd537eca
 /etc/haproxy/haproxy.cfg 0f93980f208d83260488518a257e40e154c63d4c3a2ed5b1601a85cfcf81e291
 /etc/homelab/agent/config.yml e99d9df0b43c830fcd353fb2bfcdf848a21c88b225c6426e46c10adc3d124f64
-/etc/homelab/certsync/certsync.yml 38da2d393e0b353cec8d788be48f97d15acd7d2ef91b7b807dba6d06b2dd578b
+/etc/homelab/certsync/certsync.yml ddf116f2e941ed9b685540f26c87640b739259999a567c6015838aa6aa582665
 /etc/homelab/dnsdist/backends.yml 2f28e1affca18299fed36ca6b413bfa777e653fc1405a9f3a12b52fef9af0c67
 /etc/homelab/haproxy/backends.yml c98df195a96848275faa30de2005ea3740ceb6a4bf056f992ffd8a50e41b12fb
 /etc/homelab/node-exporter/config 1250a5c0e7175af4b09fd9ddb29ab58f837b422588c12ad0ce3dfb8bcbfa7895
@@ -16,13 +16,14 @@
 /etc/homelab/services/dnsdist.yml d1657830c908a447379b8dfedaf6bdcc4b16d2af7fe02855e9aa93c54bca2285
 /etc/homelab/services/haproxy.yml a49bff0329aa13172238c1d953335e86e9dec90c1ef492e97d7ca37ef72a8724
 /etc/homelab/services/node-exporter.yml 860d5d3399c2053484bc8c6eb6566d3d939eb871df8ef2bd83a3b2a56ca081bf
-/etc/homelab/services/webproxy.yml 68f0723a69a56bdeb5c69d8da6c88ff231eafcacc760ba3bb1e92197e702d49e
-/etc/homelab/webproxy/sites.yml 371a82d9ec411a6e50b7649e463517e6861153317697fb08122725850e9b51e8
+/etc/homelab/services/webproxy.yml defeb6d3eae201f9ec548b0c9d4a222cb7c2c0f389bcaa73280124c26d16a8b2
+/etc/homelab/webproxy/sites.yml 57fe764d154cb6fe0f297301eb7fb4cbbefcf675fb8dae19db4b054d4771857d
 /etc/homelab/webproxy/sites.yml.pre-ws-20261025-130009.bak c8f98cb01f49ad25b98908bc971507d649cdf3de16158f4cd1f833f85b599e30
 /etc/nftables.conf 1826f83f8de944f88bdd2d4607029ea1ff77ee3f7efaac65979117932783b3c6
 /etc/nftables.d/10-homelab-fleet-trust.nft c3f0cc62c1f8962f93645f5dd38557eade324a332a80059e4f77b1ef6bbae579
 /etc/nftables.d/10-homelab-metrics.nft 99791c5c67f066a36c07a747bc4d4117fa832fed306299b609aafdabb68c5cdb
 /etc/nftables.d/60-plex-egress.nft db9604fce29d973ddc985f6fe82357088fd9d7167b36d216401f8ea0c0cdcd48
+/etc/nftables.d/99-badips.nft a79fefbb0f4acd059ce4a4ac88ccccc1f7177f678fda38a2bbacbd04ccfe072e
 /etc/nginx/conf.d/00-catchall.conf ed10135d5355f7413c362fd5bfde264e5b67d621fa0e59664a19baa8a34c24a5
 /etc/nginx/conf.d/blockemail.mailmasker.org-upstream.conf c896e198df0bab1f4c3ff3d26ff6a191e1ecefa6f4a2c8c1333537f5c3f09edb
 /etc/nginx/conf.d/drive.mailmasker.org-upstream.conf 74a2667d10ad57101a4df8705e01b0add3c2f2aeb159e0dd0841e4731012ee7b
@@ -35,6 +36,7 @@
 /etc/nginx/sites-available/api.mailmasker.org 864f327e100030a69e475d65a34bb2db8c8c7539bd975ef8c1d144267e282429
 /etc/nginx/sites-available/blockemail.mailmasker.org 38ef98705d7ecf3bfdd898f36501c94eb3e6f74812192048e9d0f58cfde4cd02
 /etc/nginx/sites-available/default 805f873ce7610e4610a2a46d9c4ab084b64fac8031f19e9ef123723ae6fafa73
+/etc/nginx/sites-available/developer.mailmasker.org 1b50eebada1abf54ddd089f3db0a7a00abd71318708bf30bdef7034c6a82623b
 /etc/nginx/sites-available/drive.mailmasker.org f268b04fc9bebac253d0c409615acf3da005627cf18bfb2d50ee93b56333e0ea
 /etc/nginx/sites-available/invite.mailmasker.org ea394c6cd3c020dc8efc5416c8678260b3bcc0f00ed70c40c3fdd0ffcb891ef3
 /etc/nginx/sites-available/login.mailmasker.org a495911816e91080a810f92913197bc423af4fe29224370d1eb7d8bafcbb5fe7
@@ -73,6 +75,6 @@
 /usr/local/etc/badips.d/60-rules.conf 90551bb11b28bbd588b20ce97e9415db3e836909ec3c657dc316de905cf8dc70
 /usr/local/etc/badips.d/70-bind.conf 039e916da5a6d9856120261ae0bf13c8c6e9acf1652f4fe90a3353de774a7d3a
 /usr/local/etc/badips.d/80-publicblocklists.conf 1d52d1f9f8841dc8e53de3c541d32831199666b703420c11a256539c25880ba1
-/usr/local/etc/badips.d/94-role.conf a7c70b166d034fed738ddc463d3932118764b97827f3c79263ee8f9df5bd6daf
+/usr/local/etc/badips.d/94-role.conf b60df3a3d7a93dea1fa49825b4c845e199e7f727b2fc8f83f7b321bbea6948c5
 /usr/local/etc/badips.d/95-fleet.conf cd26605185bd0ed4b7fe88cc92d91fe0fd94893798753a60d8bdfdf7031e1ac0
 /usr/local/etc/badips.d/96-fleet-db.conf 7278d1741b84f7e3d17bdb263d965e76698daacfea938d3c816bace9b4a4da3f
