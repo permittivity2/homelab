@@ -22,6 +22,7 @@
     <button type="button" data-section="devices"><span class="ico">📱</span><span class="label">Mail setup</span></button>
     <button type="button" data-section="invites"><span class="ico">✉️</span><span class="label">Invites</span></button>
     <button type="button" data-section="activity"><span class="ico">📜</span><span class="label">Activity</span></button>
+    <a class="sidenav-link" href="https://developer.mailmasker.org/"><span class="ico">🔌</span><span class="label">API</span></a>
 % if ($is_admin) {
     <button type="button" data-section="admin"><span class="ico">🛠️</span><span class="label">Administration</span></button>
 % }

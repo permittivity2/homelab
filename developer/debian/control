@@ -1,0 +1,25 @@
+Source: homelab-developer
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.36), libmojolicious-perl, libyaml-libyaml-perl
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-developer
+Architecture: all
+Depends: ${misc:Depends}, nginx
+Description: developer.mailmasker.org, the MailMasker API reference
+ Every ability of the MailMasker API (homelab-api and the services behind
+ it): what it does, who may use it, its parameters, an example answer, and
+ ready-to-run examples in cURL, Perl and homelab-cli. Each page is also
+ Markdown, indexed by llms.txt, and a Claude Code skill (skill/SKILL.md)
+ looks calls up there as it works.
+ .
+ The site is built when the package is, from reference/*.yml, and checked
+ against the code it documents: every route reachable through the api must
+ have an entry saying who may really use it, or the build fails. The host
+ serving it runs only nginx.
+ .
+ An API call homelab-cli makes is documented here first; homelab-cli's own
+ build fails on a call this reference does not have.

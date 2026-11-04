@@ -1,0 +1,160 @@
+# Your own addresses, and blocking mail to them. See README.md for the fields.
+area: Your addresses and blocking
+order: 40
+intro: >
+  The addresses you can send from and receive at, and the ones you've
+  blocked. Blocking an address rejects all mail sent to it, from anyone;
+  it is how you retire an address you gave to a shop or a newsletter.
+
+abilities:
+  - id: my-addresses
+    title: List your addresses
+    method: GET
+    path: /api/v1/domains/mail-aliases/mine
+    who: signed-in
+    summary: Every address you can send from, and the ones you can only receive at.
+    description: >
+      Your own login address first, then every extra address and whole
+      domain routed to you. Under `send` are the ones you may also send
+      from; under `receive_only` are ones whose sending is switched off, so
+      mail reaches you but a send from them is refused.
+    response: |
+      {
+        "send": {
+          "addresses": ["{me}", "shop@{domain}"],
+          "domains": ["@{domain}"]
+        },
+        "receive_only": {
+          "addresses": [],
+          "domains": []
+        }
+      }
+    cli: homelab-cli mail allowed-senders
+
+  - id: blocked-list
+    title: List your blocked addresses
+    method: GET
+    path: /api/v1/domains/recipient-access/mine
+    who: signed-in
+    summary: The addresses you've blocked or allowed, alphabetically.
+    description: >
+      Every block-or-allow entry you made yourself, whether from myaccount,
+      homelab-cli or a link in an email. An entry whose `action` is `OK` is
+      an allow; any other action is a block.
+    params:
+      - name: q
+        in: query
+        required: false
+        about: Only entries whose address contains this text, ignoring case.
+        example: shop
+    response: |
+      [
+        {
+          "recipient": "shop@{domain}",
+          "action": "REJECT",
+          "reason": "blocked via inbox link",
+          "created_by": "{me}",
+          "user_email": "{me}",
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "updated_at": "2026-11-03 21:42:10.123456-06"
+        }
+      ]
+    cli: homelab-cli mail blocked --search shop
+
+  - id: block-address
+    title: Block an address
+    method: POST
+    path: /api/v1/domains/recipient-access/mine
+    who: signed-in
+    status: 201
+    summary: Reject all future mail sent to one of your own addresses.
+    description: >
+      From now on, mail to this address is refused while it is being
+      delivered, so the sender gets a rejection and you never see it.
+      Blocking an address that is already blocked updates its reason.
+    params:
+      - name: recipient
+        in: body
+        required: true
+        about: The address to block. It must be one of yours.
+        example: shop@{domain}
+      - name: action
+        in: body
+        required: true
+        about: REJECT to block. (OK would make it an allow entry instead.)
+        example: REJECT
+      - name: reason
+        in: body
+        required: false
+        about: Shown to whoever sends mail to it, in the rejection.
+        example: This address is no longer in use
+    response: |
+      {
+        "recipient": "shop@{domain}",
+        "action": "REJECT",
+        "reason": "This address is no longer in use",
+        "created_by": "{me}",
+        "user_email": "{me}",
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "updated_at": "2026-11-03 21:42:10.123456-06"
+      }
+    notes:
+      - Your main (login) address can't be blocked, because that would cut off all of your mail; the answer is 400.
+      - An address you don't own is refused with 403.
+    cli: homelab-cli mail block shop@{domain} --reason "This address is no longer in use"
+
+  - id: unblock-address
+    title: Unblock an address
+    method: DELETE
+    path: /api/v1/domains/recipient-access/mine/:recipient
+    who: signed-in
+    summary: Take one address off your block list, so its mail is delivered again.
+    description: >
+      Removes your own entry for this address. Only entries you made can be
+      removed this way; one a site admin made stays.
+    params:
+      - name: recipient
+        in: path
+        required: true
+        about: The address, exactly as your list shows it.
+        example: shop@{domain}
+    response: |
+      { "ok": true }
+    notes:
+      - An address that isn't on your list answers 404.
+    cli: homelab-cli mail unblock shop@{domain}
+
+  - id: block-link-setting
+    title: See your inbox-link setting
+    method: GET
+    path: /api/v1/block-link/account
+    who: signed-in
+    summary: Whether mail to you gets a "block this address" link, and how.
+    description: >
+      Incoming mail can carry a link that blocks the address it was sent
+      to in one click. `enabled` is your own choice if you have made one,
+      otherwise your domain's default (`domain_default`). `mode` is where
+      the link goes: `header` (a List-Unsubscribe header), `body` (a line
+      at the end of the message) or `both`.
+    response: |
+      { "enabled": true, "mode": "both", "domain_default": false }
+    cli: homelab-cli mail block-link show
+
+  - id: block-link-set
+    title: Turn inbox links on or off
+    method: PUT
+    path: /api/v1/block-link/account
+    who: signed-in
+    summary: Choose whether your incoming mail carries a "block this address" link.
+    description: >
+      Your own choice overrides your domain's default. Send `null` to drop
+      your choice and follow the domain default again.
+    params:
+      - name: enabled
+        in: body
+        required: true
+        about: true for links, false for none, null to follow the domain default.
+        example: true
+    response: |
+      { "enabled": true, "mode": "both", "domain_default": false }
+    cli: homelab-cli mail block-link enable

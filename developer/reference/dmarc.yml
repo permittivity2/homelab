@@ -1,0 +1,236 @@
+# What other mail systems report about mail in our domains' names. See README.md for the fields.
+area: DMARC reports
+order: 135
+intro: >
+  Mail systems that receive mail in our domains' names send back daily
+  reports on it: how much passed DMARC, how much failed, and from which
+  addresses it came. They are fetched from the reports mailbox once an
+  hour; these calls only read what has been stored.
+
+abilities:
+  - id: dmarc-status
+    title: Check the report fetching
+    method: GET
+    path: /api/v1/dmarc/status
+    who: site-admin
+    summary: When reports were last fetched, how that went, and how many are stored.
+    description: >
+      `ingest` is the hourly fetch's last run: when, on which host, and its
+      note (what it found, or ERROR and why). `store` covers every report
+      kept so far, with the earliest and latest dates they cover. Look here
+      first, since a summary with nothing in it can also mean the fetching
+      has stopped.
+    response: |
+      {
+        "ingest": {
+          "last_run": "2026-11-03 21:00:04.512339-06",
+          "last_host": "admin-node-1",
+          "last_note": "seen=3 reports+=3 records+=7 skipped=0 failed=0"
+        },
+        "store": {
+          "reports": 412,
+          "last_ingest": "2026-11-03 21:00:03.998120-06",
+          "earliest": "2026-11-01 18:00:00-06",
+          "latest": "2026-11-03 17:59:59-06"
+        }
+      }
+    cli: none
+
+  - id: dmarc-summary
+    title: Summarize DMARC results by domain
+    method: GET
+    path: /api/v1/dmarc/summary
+    who: site-admin
+    summary: For each domain, how many messages passed DMARC and how many failed.
+    description: >
+      One row per domain, the most failing mail first. Every count is of
+      messages: `aligned` passed DMARC, `failing` did not, and `acted_on`
+      were quarantined or rejected by the receiver. `policy_p` is the policy
+      receivers found published, `reporters` how many receivers sent
+      reports, and `sources` how many sending addresses they saw.
+    params:
+      - name: days
+        in: query
+        required: false
+        about: How many days back to look, by when each report's period began. 30 if you leave it out, 3650 at most.
+    response: |
+      {
+        "days": 30,
+        "domains": [
+          {
+            "domain": "{domain}",
+            "policy_p": "quarantine",
+            "reports": 58,
+            "reporters": 4,
+            "sources": 6,
+            "messages": 1290,
+            "aligned": 1281,
+            "failing": 9,
+            "acted_on": 9,
+            "window_start": "2026-10-04 19:00:00-05",
+            "window_end": "2026-11-03 17:59:59-06"
+          }
+        ]
+      }
+    cli: none
+
+  - id: dmarc-sources
+    title: List who sends mail as our domains
+    method: GET
+    path: /api/v1/dmarc/sources
+    who: site-admin
+    summary: Each address the reports saw sending in a domain's name, and how much of its mail passed.
+    description: >
+      One row per sending address and domain, the most failing mail first,
+      500 rows at most. An address that isn't one of ours, sending mail that
+      fails, is someone else using the domain's name.
+    params:
+      - name: days
+        in: query
+        required: false
+        about: How many days back to look. 30 if you leave it out.
+      - name: domain
+        in: query
+        required: false
+        about: Only this domain.
+      - name: failing
+        in: query
+        required: false
+        about: 1 for only the addresses with some failing mail.
+    response: |
+      {
+        "days": 30,
+        "domain": null,
+        "sources": [
+          {
+            "source_ip": "203.0.113.77",
+            "domain": "{domain}",
+            "messages": 9,
+            "aligned": 0,
+            "failing": 9,
+            "reporters": 1,
+            "last_seen": "2026-11-02 17:59:59-06"
+          },
+          {
+            "source_ip": "192.0.2.25",
+            "domain": "{domain}",
+            "messages": 1281,
+            "aligned": 1281,
+            "failing": 0,
+            "reporters": 4,
+            "last_seen": "2026-11-03 17:59:59-06"
+          }
+        ]
+      }
+    cli: none
+
+  - id: dmarc-reports
+    title: List DMARC reports
+    method: GET
+    path: /api/v1/dmarc/reports
+    who: site-admin
+    summary: The reports received, newest first, with who sent each and the period it covers.
+    description: >
+      One row per report. `org_name` is the receiver that sent it,
+      `date_begin` to `date_end` the period it covers, and the `policy_`
+      fields the policy it found published. `messages` is how many messages
+      it covers, and `records` how many lines it has.
+    params:
+      - name: days
+        in: query
+        required: false
+        about: How many days back to look. 30 if you leave it out.
+      - name: domain
+        in: query
+        required: false
+        about: Only reports about this domain.
+      - name: limit
+        in: query
+        required: false
+        about: At most this many reports. 100 if you leave it out, 1000 at most.
+    response: |
+      {
+        "days": 30,
+        "reports": [
+          {
+            "id": 412,
+            "org_name": "example.net",
+            "report_id": "18342296310421557",
+            "policy_domain": "{domain}",
+            "policy_p": "quarantine",
+            "policy_pct": 100,
+            "policy_adkim": "r",
+            "policy_aspf": "r",
+            "date_begin": "2026-11-02 18:00:00-06",
+            "date_end": "2026-11-03 17:59:59-06",
+            "ingested_at": "2026-11-03 21:00:03.998120-06",
+            "messages": 214,
+            "records": 2
+          }
+        ]
+      }
+    cli: none
+
+  - id: dmarc-report
+    title: Read a DMARC report
+    method: GET
+    path: /api/v1/dmarc/reports/:id
+    who: site-admin
+    summary: One report in full, with a line for each sending address it covers.
+    description: >
+      Each of `records` is a number of messages from one address, and what
+      the receiver made of them. `dkim_result` and `spf_result` say whether
+      each lined up with the domain, which is what DMARC goes by. The checks
+      themselves, with the DKIM key's `selector`, are in `auth_results`; a
+      signature can pass there and still not line up.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The report's `id`, from List DMARC reports.
+        example: 412
+    response: |
+      {
+        "id": 412,
+        "org_name": "example.net",
+        "org_email": "dmarc-noreply@example.net",
+        "report_id": "18342296310421557",
+        "date_begin": "2026-11-02 18:00:00-06",
+        "date_end": "2026-11-03 17:59:59-06",
+        "policy_domain": "{domain}",
+        "policy_p": "quarantine",
+        "policy_sp": null,
+        "policy_pct": 100,
+        "policy_adkim": "r",
+        "policy_aspf": "r",
+        "ingested_at": "2026-11-03 21:00:03.998120-06",
+        "records": [
+          {
+            "source_ip": "192.0.2.25",
+            "message_count": 212,
+            "disposition": "none",
+            "dkim_result": "pass",
+            "spf_result": "pass",
+            "header_from": "{domain}",
+            "auth_results": {
+              "dkim": [ { "domain": "{domain}", "result": "pass", "selector": "20261020a" } ],
+              "spf": [ { "domain": "{domain}", "result": "pass" } ]
+            }
+          },
+          {
+            "source_ip": "203.0.113.77",
+            "message_count": 2,
+            "disposition": "quarantine",
+            "dkim_result": "fail",
+            "spf_result": "fail",
+            "header_from": "{domain}",
+            "auth_results": {
+              "dkim": [],
+              "spf": [ { "domain": "example.net", "result": "fail" } ]
+            }
+          }
+        ]
+      }
+    notes:
+      - An id with no report answers 404.
+    cli: none

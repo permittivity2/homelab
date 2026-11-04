@@ -52,7 +52,7 @@ is($app->build_controller->homelab_app_name, 'My Account', 'app_name reaches the
 
 # The dropdown must not offer "Manage your account" from inside My Account.
 my $links = $app->build_controller->homelab_menu_links;
-is(scalar(@$links), 2, 'two cross-app links');
+is(scalar(@$links), 3, 'three cross-app links (Email, Drive, Search)');
 unlike(join(' ', map { "$_->{label} $_->{href}" } @$links), qr/myaccount|Manage your account/,
     'no menu entry pointing at the page you are already on');
 

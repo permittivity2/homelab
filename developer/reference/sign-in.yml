@@ -1,0 +1,195 @@
+# Signing in, keeping your token fresh, and signing out. See README.md for the fields.
+area: Sign-in and tokens
+order: 10
+intro: >
+  Sign in with your address and password to get a token, and send it as
+  `Authorization: Bearer <token>` with every other call. When it runs out,
+  trade the refresh token that came with it for a new pair, without your
+  password. Signing out ends that session for good.
+
+abilities:
+  - id: create-account
+    title: Create an account
+    method: POST
+    path: /api/v1/auth/register
+    who: anyone
+    status: 201
+    summary: Make a new account with an invite, an address and a password.
+    description: >
+      Accounts are by invitation only: `invite_token` must be an unused
+      invite, and creating the account uses it up. The account can sign in
+      straight away, but this call doesn't sign it in: sign in next to get
+      a token.
+    params:
+      - name: email
+        in: body
+        required: true
+        about: The new account's address, which is also what it signs in with.
+        example: newuser@{domain}
+      - name: password
+        in: body
+        required: true
+        about: The new account's password.
+        example: $PASSWORD
+      - name: invite_token
+        in: body
+        required: true
+        about: The token from an invite link.
+        example: $INVITE_TOKEN
+      - name: recovery_email
+        in: body
+        required: false
+        about: An address outside this mail system, where a password-reset link can be sent.
+        example: personal@example.com
+    response: |
+      { "id": 42, "email": "newuser@{domain}" }
+    notes:
+      - An address that already has an account answers 409, and the invite is not used up.
+      - Leaving out invite_token answers 400. An invite that is unknown, used or expired answers 403, and so does an address outside the invite's own domain (mailmasker.org).
+      - After ten failed sign-ins or invite attempts from one network address within 15 minutes, it answers 429; wait 15 minutes.
+    cli: homelab-cli register newuser@{domain} --invite-token "$INVITE_TOKEN"
+
+  - id: sign-in
+    title: Sign in
+    method: POST
+    path: /api/v1/auth/login
+    who: anyone
+    summary: Trade your address and password for a token and a refresh token.
+    description: >
+      Starts a new session. Send `token` with every other call until it runs
+      out, `expires_in` seconds from now. Keep `refresh_token` as secret as
+      your password: it gets you a new token without one.
+    params:
+      - name: email
+        in: body
+        required: true
+        about: Your address.
+        example: "{me}"
+      - name: password
+        in: body
+        required: true
+        about: Your password.
+        example: $PASSWORD
+    response: |
+      {
+        "success": true,
+        "token": "<token>",
+        "refresh_token": "<refresh token>",
+        "expires_in": 86400,
+        "email": "{me}"
+      }
+    notes:
+      - A wrong address or password answers 401, and so does an account a site admin has switched off.
+      - After ten failed attempts from one network address within 15 minutes, it answers 429; wait 15 minutes.
+    cli: homelab-cli login {me}
+
+  - id: check-token
+    title: Check your token
+    method: GET
+    path: /api/v1/auth/introspect
+    who: signed-in
+    summary: Who a token belongs to, when it runs out, and the account's roles.
+    description: >
+      Answers only while the token still works: it hasn't run out, and its
+      session hasn't been ended. `exp` is when it runs out, in seconds since
+      1970 (UTC). `jti` is the id of its session, as your session list shows
+      it.
+    params:
+      - name: capability
+        in: query
+        required: false
+        about: A permission name, such as audit.view. The answer then also says, as `has_capability`, whether the account holds it. Site admins hold every permission.
+    response: |
+      {
+        "email": "{me}",
+        "exp": 1793850130,
+        "roles": ["user"],
+        "jti": "7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f"
+      }
+    notes:
+      - A missing, run-out or signed-out token answers 401.
+    cli: homelab-cli whoami
+
+  - id: refresh-token
+    title: Refresh your token
+    method: POST
+    path: /api/v1/auth/refresh
+    who: anyone
+    summary: Trade your refresh token for a new token and a new refresh token.
+    description: >
+      Keeps a session going without your password. A refresh token works
+      once: keep the new one in place of the old, and expect the token you
+      had to stop working now. If the answer never reached you, sending the
+      old refresh token again within a few minutes hands back the same new
+      pair, marked `"recovered": true`.
+    params:
+      - name: refresh_token
+        in: body
+        required: true
+        about: The refresh token from signing in, or from your last refresh.
+        example: $REFRESH_TOKEN
+    response: |
+      {
+        "success": true,
+        "token": "<token>",
+        "refresh_token": "<refresh token>",
+        "expires_in": 86400
+      }
+    notes:
+      - An unknown, run-out or signed-out refresh token answers 401, and so does one whose account a site admin has switched off; sign in again.
+      - Changing or resetting your password ends every other session's refresh token as well as its token.
+      - A refresh token lasts 30 days unless the server is set otherwise, so a session that refreshes at least that often never needs your password again.
+      - homelab-cli refreshes for you whenever its token runs out, so it has no command for this.
+    cli: none
+
+  - id: sign-out
+    title: Sign out
+    method: POST
+    path: /api/v1/auth/logout
+    who: anyone
+    summary: End the session a refresh token belongs to.
+    description: >
+      The refresh token stops working, and so does that session's token, at
+      once rather than when it would have run out. Your other sessions, on
+      other devices or in other apps, stay signed in; "Sign out your other
+      sessions" ends those.
+    params:
+      - name: refresh_token
+        in: body
+        required: true
+        about: The refresh token of the session to end.
+        example: $REFRESH_TOKEN
+    response: |
+      { "success": true }
+    notes:
+      - The answer is the same for a refresh token that was already signed out, or never existed.
+    cli: homelab-cli logout
+
+  - id: change-password
+    title: Change your password
+    method: POST
+    path: /api/v1/auth/password
+    who: signed-in
+    summary: Set a new password, given your current one.
+    description: >
+      Works whether or not you have a recovery address. The tokens of your
+      other sessions stop working at once, while the session making this
+      call stays signed in. Mail apps that sign in with your password, such
+      as a phone's, need the new one too.
+    params:
+      - name: current_password
+        in: body
+        required: true
+        about: Your password now.
+        example: $PASSWORD
+      - name: new_password
+        in: body
+        required: true
+        about: The new password, at least 8 characters.
+        example: $NEW_PASSWORD
+    response: |
+      { "ok": true }
+    notes:
+      - A wrong current password answers 403, and a new one shorter than 8 characters answers 400.
+      - If someone else may be signed in as you, sign out your other sessions first, then change your password.
+    cli: none

@@ -1,0 +1,112 @@
+# Slow work done in the background. See README.md for the fields.
+area: Background jobs
+order: 90
+intro: >
+  Work too slow to finish while you wait, such as building one zip file
+  out of many files. Drive starts these for you (see "Zip files and
+  folders"); here you can follow your jobs and download what they made.
+  Finished jobs are cleared away after a while, a day unless the site has
+  set another time.
+
+abilities:
+  - id: job-list
+    title: List your jobs
+    method: GET
+    path: /api/v1/jobs
+    who: signed-in
+    summary: Your 50 most recent background jobs, newest first.
+    description: >
+      A job's `state` is pending (waiting its turn), running, completed or
+      failed. While it runs, `progress_current` of `progress_total` says how
+      far it has got; a failed job says why in `error_message`. A finished
+      job's file is `output_name`, `output_size_bytes` long.
+    params:
+      - name: all
+        in: query
+        required: false
+        about: 1 for everyone's jobs, not only yours. Site admins only; anyone else gets 403.
+      - name: type
+        in: query
+        required: false
+        about: Only jobs of this kind, such as zip.
+      - name: state
+        in: query
+        required: false
+        about: Only jobs in this state, such as failed.
+    response: |
+      [
+        {
+          "id": 42,
+          "type": "zip",
+          "state": "completed",
+          "user_email": "{me}",
+          "output_name": "photos.zip",
+          "output_size_bytes": 5242880,
+          "progress_current": 2,
+          "progress_total": 2,
+          "error_message": null,
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "started_at": "2026-11-03 21:42:19.004211-06",
+          "completed_at": "2026-11-03 21:42:31.870442-06"
+        }
+      ]
+    notes:
+      - "`started_at` moves on each time a running job makes progress, so it can be later than when the job really began."
+    cli: homelab-cli jobs list
+
+  - id: job-show
+    title: Check on a job
+    method: GET
+    path: /api/v1/jobs/:id
+    who: signed-in
+    summary: One job's state and progress, and its file's name and size once it is done.
+    description: >
+      The same fields as List your jobs, for one job. You can look up your
+      own jobs; a site admin can look up anyone's.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The job's `id`.
+        example: 42
+    response: |
+      {
+        "id": 42,
+        "type": "zip",
+        "state": "running",
+        "user_email": "{me}",
+        "output_name": "photos.zip",
+        "output_size_bytes": null,
+        "progress_current": 1,
+        "progress_total": 2,
+        "error_message": null,
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "started_at": "2026-11-03 21:42:15.502114-06",
+        "completed_at": null
+      }
+    notes:
+      - A job that isn't yours, or has been cleared away, answers 404.
+    cli: homelab-cli jobs show 42
+
+  - id: job-download
+    title: Download a job's file
+    method: GET
+    path: /api/v1/jobs/:id/download
+    who: signed-in
+    summary: The file a finished job made, such as its zip.
+    description: >
+      Sends the file itself, named as the job's `output_name`. It is there
+      once the job is completed, until the job is cleared away. A site
+      admin can download anyone's.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The job's `id`.
+        example: 42
+    response: |
+      (the job's output file)
+    notes:
+      - A job that hasn't finished yet answers 409.
+      - A job that isn't yours, or has been cleared away, answers 404.
+    cli: homelab-cli jobs download 42

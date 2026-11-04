@@ -1,0 +1,603 @@
+# Site admins' controls for the domains this system serves. See README.md
+# for the fields.
+area: Domains and DNS
+order: 120
+intro: >
+  For site admins: the domains this system serves and whether each takes
+  mail, their DNS records, the extra addresses (mail aliases) routed to
+  each account, every account's block and allow entries, and each
+  domain's default for inbox block links.
+
+abilities:
+  - id: domains-list
+    title: List domains
+    method: GET
+    path: /api/v1/domains
+    who: site-admin
+    summary: Every domain on the system, alphabetically, and whether it takes mail.
+    description: >
+      Mail to a domain is accepted only while both `mail_enabled` and
+      `active` are on. `dns_managed` means its DNS zone is kept here.
+    response: |
+      [
+        {
+          "id": 1,
+          "domain_name": "example.com",
+          "mail_enabled": 1,
+          "dns_managed": 1,
+          "active": 1,
+          "created_by": "{me}",
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "updated_at": "2026-11-03 21:42:10.123456-06"
+        },
+        {
+          "id": 2,
+          "domain_name": "example.org",
+          "mail_enabled": 0,
+          "dns_managed": 1,
+          "active": 1,
+          "created_by": "{me}",
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "updated_at": "2026-11-03 21:42:10.123456-06"
+        }
+      ]
+    notes:
+      - Yes-or-no fields come back as 1 or 0.
+    cli: homelab-cli dns domains list
+
+  - id: domain-add
+    title: Add a domain
+    method: POST
+    path: /api/v1/domains
+    who: site-admin
+    status: 201
+    summary: Start serving a domain, for mail, DNS or both.
+    description: >
+      Unless you say otherwise, mail for the domain is accepted from now on
+      and it gets a DNS zone here. A zone that already exists is kept as
+      it is.
+    params:
+      - name: domain_name
+        in: body
+        required: true
+        about: The domain, in lowercase.
+        example: example.com
+      - name: mail_enabled
+        in: body
+        required: false
+        about: Accept mail for it. true if left out; false for DNS only.
+      - name: dns_managed
+        in: body
+        required: false
+        about: Keep its DNS zone here, creating the zone if needed. true if left out; false for mail only.
+      - name: nameservers
+        in: body
+        required: false
+        about: The name servers for a new zone, as a list. If left out, the zone's name server is `ns-test.` followed by the domain.
+    response: |
+      {
+        "id": 3,
+        "domain_name": "example.com",
+        "mail_enabled": 1,
+        "dns_managed": 1,
+        "active": 1,
+        "created_by": "{me}",
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "updated_at": "2026-11-03 21:42:10.123456-06"
+      }
+    notes:
+      - A domain that is already listed answers 409.
+      - If the DNS zone can't be created, the answer is 502 and the domain isn't added.
+    cli: homelab-cli dns domains add example.com
+
+  - id: domain-show
+    title: See a domain's settings
+    method: GET
+    path: /api/v1/domains/:domain
+    who: site-admin
+    summary: One domain, with the same fields as the list of domains.
+    description: >
+      Whether the domain takes mail (`mail_enabled` and `active` both on),
+      whether its DNS zone is kept here, and who added it when.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain name.
+        example: example.com
+    response: |
+      {
+        "id": 1,
+        "domain_name": "example.com",
+        "mail_enabled": 1,
+        "dns_managed": 1,
+        "active": 1,
+        "created_by": "{me}",
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "updated_at": "2026-11-03 21:42:10.123456-06"
+      }
+    notes:
+      - A domain that isn't listed answers 404.
+    cli: homelab-cli dns domains show example.com
+
+  - id: domain-change
+    title: Change a domain's settings
+    method: PATCH
+    path: /api/v1/domains/:domain
+    who: site-admin
+    summary: Turn a domain's mail, its DNS management, or the whole domain on or off.
+    description: >
+      Send only what you want to change; the rest stays as it is. The
+      answer is the domain's settings afterwards.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain name.
+        example: example.com
+      - name: mail_enabled
+        in: body
+        required: false
+        about: Accept mail for the domain.
+        example: true
+      - name: dns_managed
+        in: body
+        required: false
+        about: Whether its DNS zone is kept here. Only the setting changes; no zone is created or removed.
+      - name: active
+        in: body
+        required: false
+        about: false turns the whole domain off, as Disable a domain does; true turns it back on.
+    response: |
+      {
+        "id": 1,
+        "domain_name": "example.com",
+        "mail_enabled": 1,
+        "dns_managed": 1,
+        "active": 1,
+        "created_by": "{me}",
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "updated_at": "2026-11-03 21:50:02.654321-06"
+      }
+    notes:
+      - A domain that isn't listed answers 404.
+    cli: homelab-cli dns domains enable example.com
+
+  - id: domain-disable
+    title: Disable a domain
+    method: DELETE
+    path: /api/v1/domains/:domain
+    who: site-admin
+    summary: Stop accepting mail for a domain, without deleting anything.
+    description: >
+      Turns the domain off (`active` becomes 0), so mail to it is refused
+      from now on. Nothing is deleted: its DNS zone is still served and its
+      extra addresses stay. Change a domain's settings with `active` true
+      turns it back on.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain name.
+        example: example.com
+    response: |
+      { "ok": true }
+    notes:
+      - A domain that isn't listed answers 404.
+      - homelab-cli's `dns domains disable` turns `mail_enabled` off instead, through Change a domain's settings. Mail to the domain is refused either way.
+    cli: none
+
+  - id: dns-records-list
+    title: List a domain's DNS records
+    method: GET
+    path: /api/v1/domains/:domain/dns/records
+    who: site-admin
+    summary: Every record in a domain's DNS zone.
+    description: >
+      One item per name and type, with all of its values in `content`.
+      Names are full names ending in a dot, and TXT values keep their
+      quotes.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain name.
+        example: example.com
+    response: |
+      [
+        { "name": "example.com.", "type": "MX", "ttl": 3600, "content": ["10 mail.example.com."] },
+        { "name": "example.com.", "type": "TXT", "ttl": 3600, "content": ["\"v=spf1 mx ~all\""] },
+        { "name": "www.example.com.", "type": "A", "ttl": 3600, "content": ["203.0.113.10"] }
+      ]
+    notes:
+      - A domain that isn't listed, or has no DNS zone here, answers 404.
+    cli: homelab-cli dns records list example.com
+
+  - id: dns-record-set
+    title: Create or replace a DNS record
+    method: POST
+    path: /api/v1/domains/:domain/dns/records
+    who: site-admin
+    status: 201
+    summary: Set every value of one name and type in a domain's DNS zone.
+    description: >
+      What you send replaces what that name and type held before, so to
+      add a second value (a backup MX, say) send both. TXT values are put
+      in quotes for you, and the host name at the end of an MX, NS, CNAME,
+      PTR or SRV value gets its final dot. `restart_pending` is true when
+      the name and type had no record before.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain whose zone it goes in.
+        example: example.com
+      - name: name
+        in: body
+        required: true
+        about: The record's full name, such as `www.example.com`, or the domain itself for its own records. A final dot is optional.
+        example: www.example.com
+      - name: type
+        in: body
+        required: true
+        about: The record type in capitals, such as A, AAAA, CNAME, MX or TXT.
+        example: A
+      - name: content
+        in: body
+        required: true
+        about: One value, or a list of them.
+        example: ["203.0.113.10"]
+      - name: ttl
+        in: body
+        required: false
+        about: How long, in seconds, others may keep it. 3600 if left out.
+        example: 3600
+    response: |
+      { "ok": true, "restart_pending": true }
+    notes:
+      - A domain that isn't listed answers 404.
+      - A record the DNS server refuses (a name outside the domain, say) answers 502, with its reason.
+    cli: homelab-cli dns records add example.com --name www.example.com --type A --value 203.0.113.10
+
+  - id: dns-record-delete
+    title: Delete a DNS record
+    method: DELETE
+    path: /api/v1/domains/:domain/dns/records
+    who: site-admin
+    summary: Remove every value of one name and type from a domain's DNS zone.
+    description: >
+      Deletes the whole record set for that name and type. They go in the
+      body, as when creating a record.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain whose zone it is in.
+        example: example.com
+      - name: name
+        in: body
+        required: true
+        about: The record's full name. A final dot is optional.
+        example: www.example.com
+      - name: type
+        in: body
+        required: true
+        about: The record type in capitals.
+        example: A
+    response: |
+      { "ok": true, "restart_pending": true }
+    notes:
+      - A domain that isn't listed answers 404.
+    cli: homelab-cli dns records delete example.com --name www.example.com --type A
+
+  - id: aliases-list
+    title: List extra addresses
+    method: GET
+    path: /api/v1/domains/mail-aliases
+    who: site-admin
+    summary: Every extra address and whole domain routed to an account, and whether it may send from them.
+    description: >
+      `source_pattern` is an exact address, or `@` and a domain for all of
+      that domain's mail; domain catch-alls are listed here too.
+      `destination` is the account it goes to, `active` whether its mail
+      is delivered, and `send_enabled` whether that account may also send
+      from it.
+    params:
+      - name: destination
+        in: query
+        required: false
+        about: Only what is routed to this account.
+    response: |
+      [
+        {
+          "id": 4,
+          "source_pattern": "@example.org",
+          "destination": "{me}",
+          "active": 1,
+          "send_enabled": 0,
+          "created_by": "{me}",
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "updated_at": "2026-11-03 21:42:10.123456-06"
+        },
+        {
+          "id": 5,
+          "source_pattern": "sales@example.com",
+          "destination": "{me}",
+          "active": 1,
+          "send_enabled": 1,
+          "created_by": "{me}",
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "updated_at": "2026-11-03 21:42:10.123456-06"
+        }
+      ]
+    cli: homelab-cli dns mail-aliases list
+
+  - id: alias-add
+    title: Give an account an extra address
+    method: POST
+    path: /api/v1/domains/mail-aliases
+    who: site-admin
+    status: 201
+    summary: Route an address, or a whole domain, to an account, which may also send from it.
+    description: >
+      Mail to the address goes to the account, which may also send from it
+      unless `send_enabled` is false. For a whole domain, that is every
+      address there without a mailbox or entry of its own. Giving an
+      address that is already routed moves it to the new account.
+    params:
+      - name: source_pattern
+        in: body
+        required: true
+        about: An exact address, or `@` and a domain for the whole domain.
+        example: sales@example.com
+      - name: destination
+        in: body
+        required: true
+        about: The account it goes to. It isn't checked, so make sure it is a real one.
+        example: "{me}"
+      - name: send_enabled
+        in: body
+        required: false
+        about: Whether the account may send from it. true if left out.
+    response: |
+      {
+        "id": 5,
+        "source_pattern": "sales@example.com",
+        "destination": "{me}",
+        "active": 1,
+        "send_enabled": 1,
+        "created_by": "{me}",
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "updated_at": "2026-11-03 21:42:10.123456-06"
+      }
+    notes:
+      - A domain that isn't listed yet is added, with a DNS zone but with mail off. The account can send from it, but mail sent to it arrives only once mail is turned on (Change a domain's settings).
+      - If that DNS zone can't be created, the answer is 502 and nothing is added.
+    cli: homelab-cli dns mail-aliases add sales@example.com {me}
+
+  - id: alias-sending
+    title: Turn sending on or off for an extra address
+    method: PATCH
+    path: /api/v1/domains/mail-aliases/:source_pattern
+    who: site-admin
+    summary: Let an account send from an extra address, or stop it, while its mail keeps arriving.
+    description: >
+      Only sending changes: mail to the address reaches the account either
+      way, so this can suspend sending without breaking delivery.
+    params:
+      - name: source_pattern
+        in: path
+        required: true
+        about: The exact address, or `@` and a domain, as the list shows it. The `@` may be sent as it is or as `%40`.
+        example: sales@example.com
+      - name: send_enabled
+        in: body
+        required: true
+        about: true to allow sending from it, false to stop it.
+        example: false
+    response: |
+      {
+        "id": 5,
+        "source_pattern": "sales@example.com",
+        "destination": "{me}",
+        "active": 1,
+        "send_enabled": 0,
+        "created_by": "{me}",
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "updated_at": "2026-11-03 21:50:02.654321-06"
+      }
+    notes:
+      - An address that isn't on the list answers 404.
+    cli: homelab-cli dns mail-aliases disable-send sales@example.com
+
+  - id: alias-remove
+    title: Remove an extra address
+    method: DELETE
+    path: /api/v1/domains/mail-aliases/:source_pattern
+    who: site-admin
+    summary: Stop routing an address or domain to an account, and stop the account sending from it.
+    description: >
+      Removes the entry completely: its mail no longer reaches the account,
+      and a send from it is refused. To stop only sending, turn sending
+      off instead. The domain itself stays.
+    params:
+      - name: source_pattern
+        in: path
+        required: true
+        about: The exact address, or `@` and a domain, as the list shows it. The `@` may be sent as it is or as `%40`.
+        example: sales@example.com
+    response: |
+      { "ok": true }
+    notes:
+      - An address that isn't on the list answers 404.
+    cli: homelab-cli dns mail-aliases remove sales@example.com
+
+  - id: all-blocks-list
+    title: List every block and allow entry
+    method: GET
+    path: /api/v1/domains/recipient-access
+    who: site-admin
+    summary: The blocked and allowed addresses of every account and site admin, alphabetically.
+    description: >
+      Entries a site admin made have a null `user_email`; the rest belong
+      to the account in `user_email`, which made them for one of its own
+      addresses. An `action` of `OK` is an allow; any other action is a
+      block.
+    params:
+      - name: user
+        in: query
+        required: false
+        about: Only the entries this account made for itself.
+    response: |
+      [
+        {
+          "id": 7,
+          "recipient": "news@example.org",
+          "action": "REJECT",
+          "reason": "Spam",
+          "created_by": "{me}",
+          "user_email": null,
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "updated_at": "2026-11-03 21:42:10.123456-06"
+        },
+        {
+          "id": 8,
+          "recipient": "shop@example.com",
+          "action": "REJECT",
+          "reason": "blocked via inbox link",
+          "created_by": "pat@example.com",
+          "user_email": "pat@example.com",
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "updated_at": "2026-11-03 21:42:10.123456-06"
+        }
+      ]
+    cli: homelab-cli dns recipient-access list
+
+  - id: block-any-address
+    title: Block or allow any address
+    method: POST
+    path: /api/v1/domains/recipient-access
+    who: site-admin
+    status: 201
+    summary: Reject all mail to an address, or let it through ahead of every other check.
+    description: >
+      Takes effect at once, for mail from every sender. Unlike blocking
+      your own addresses, nothing here checks whose address it is.
+    params:
+      - name: recipient
+        in: body
+        required: true
+        about: The address. Any address, not only one of yours.
+        example: shop@example.com
+      - name: action
+        in: body
+        required: true
+        about: REJECT to block, or OK to allow ahead of every other check. Other Postfix actions, such as DISCARD, are passed on as written.
+        example: REJECT
+      - name: reason
+        in: body
+        required: false
+        about: Why. A blocked sender sees it in the rejection.
+        example: Sells addresses
+    response: |
+      {
+        "id": 9,
+        "recipient": "shop@example.com",
+        "action": "REJECT",
+        "reason": "Sells addresses",
+        "created_by": "{me}",
+        "user_email": null,
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "updated_at": "2026-11-03 21:42:10.123456-06"
+      }
+    notes:
+      - An address already on the list is updated in place, and stays with the account or admin who first made it.
+      - Nothing stops this blocking an account's own login address, which cuts off all of its mail.
+    cli: homelab-cli dns recipient-access block shop@example.com --reason "Sells addresses"
+
+  - id: unblock-any-address
+    title: Remove a block or allow entry
+    method: DELETE
+    path: /api/v1/domains/recipient-access/:recipient
+    who: site-admin
+    summary: Take any address off the block-and-allow list, whoever put it there.
+    description: >
+      Removes the entry for this address, whether a site admin or the
+      account itself made it, so its mail is handled as usual again.
+    params:
+      - name: recipient
+        in: path
+        required: true
+        about: The address, exactly as the list shows it.
+        example: shop@example.com
+    response: |
+      { "ok": true }
+    notes:
+      - An address that isn't on the list answers 404.
+    cli: homelab-cli dns recipient-access remove shop@example.com
+
+  - id: domain-block-link-show
+    title: See a domain's inbox-link default
+    method: GET
+    path: /api/v1/block-link/domains/:domain
+    who: site-admin
+    summary: Whether accounts on a domain get a "block this address" link by default, and where it goes.
+    description: >
+      The setting covers accounts whose login address is at this domain.
+      `enabled` is the default each of them follows until it makes its own
+      choice. `mode` is where the link goes, for all of them: `header` (a
+      List-Unsubscribe header), `body` (a line at the end of the message)
+      or `both`.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain name.
+        example: example.com
+    response: |
+      {
+        "domain_name": "example.com",
+        "enabled": 1,
+        "mode": "both",
+        "updated_by_email": "{me}",
+        "updated_at": "2026-11-03 21:42:10.123456-06"
+      }
+    notes:
+      - A domain that has never been set answers `enabled` false and `mode` header, with no `updated_at`.
+    cli: homelab-cli admin block-link domain show example.com
+
+  - id: domain-block-link-set
+    title: Set a domain's inbox-link default
+    method: PUT
+    path: /api/v1/block-link/domains/:domain
+    who: site-admin
+    summary: Choose whether accounts on a domain get a "block this address" link, and where it goes.
+    description: >
+      Accounts whose login address is at this domain follow `enabled`
+      unless they have made their own choice; `mode` applies to all of
+      them.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain name.
+        example: example.com
+      - name: enabled
+        in: body
+        required: true
+        about: true to add the link by default, false for none.
+        example: true
+      - name: mode
+        in: body
+        required: true
+        about: Where the link goes, `header`, `body` or `both`.
+        example: both
+    response: |
+      {
+        "domain_name": "example.com",
+        "enabled": 1,
+        "mode": "both",
+        "updated_by_email": "{me}",
+        "updated_at": "2026-11-03 21:42:10.123456-06"
+      }
+    cli: homelab-cli admin block-link domain set example.com --enabled --mode both

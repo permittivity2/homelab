@@ -1,0 +1,111 @@
+# Routes only fleet services call, with their own fleet credential. Never
+# shown to anyone; each entry needs only id, title, method, path, who and
+# summary. See README.md.
+area: Fleet services
+order: 900
+
+abilities:
+  - id: check-username
+    title: Check whether a username is free
+    method: POST
+    path: /api/v1/auth/username-availability
+    who: fleet
+    summary: The invite page asks whether a username is free, and gets free alternatives when it isn't.
+
+  - id: request-password-reset
+    title: Start a password reset
+    method: POST
+    path: /api/v1/auth/password-reset/request
+    who: fleet
+    summary: The sign-in page gets a one-hour reset token for an account that has a recovery address.
+
+  - id: confirm-password-reset
+    title: Finish a password reset
+    method: POST
+    path: /api/v1/auth/password-reset/confirm
+    who: fleet
+    summary: The sign-in page sets the new password from a reset link, and the account's current tokens stop working.
+
+  - id: issue-app-token
+    title: Issue a token for an app
+    method: POST
+    path: /api/v1/auth/issue
+    who: fleet
+    summary: The sign-in service gives one app its own token pair for a person who is already signed in.
+
+  - id: register-service
+    title: Register a service's address
+    method: POST
+    path: /api/v1/registry/register
+    who: fleet
+    summary: A service records where it can be reached, so homelab-api can forward calls to it.
+
+  - id: redeem-enrolment-code
+    title: Redeem an enrolment code
+    method: POST
+    path: /api/v1/agent/enroll/redeem
+    who: fleet
+    summary: A new node trades its one-time enrolment code for its agent's first token pair.
+
+  - id: agent-heartbeat
+    title: Report a node's services
+    method: POST
+    path: /api/v1/agent/heartbeat
+    who: fleet
+    summary: A node's agent reports its address, and whether each service it runs should be up and is.
+
+  - id: feature-backends
+    title: List a service's instances
+    method: GET
+    path: /api/v1/agent/feature-backends/:feature
+    who: fleet
+    summary: Every node meant to run a service, with address, port and health, for load balancers and allow-lists.
+
+  - id: publish-certificate
+    title: Publish a certificate
+    method: POST
+    path: /api/v1/certstore/publish
+    who: fleet
+    summary: The certificate issuer stores a new certificate and key, already encrypted.
+
+  - id: fetch-certificate
+    title: Fetch a certificate
+    method: GET
+    path: /api/v1/certstore/:lineage
+    who: fleet
+    summary: A server collects the current certificate and key for one certificate, still encrypted.
+
+  - id: block-on-behalf
+    title: Block an address for someone
+    method: POST
+    path: /api/v1/domains/recipient-access/on-behalf
+    who: fleet
+    summary: An inbox block link blocks an address for the person it belongs to, who isn't signed in.
+
+  - id: check-domain-mail
+    title: Check whether a domain takes mail here
+    method: GET
+    path: /api/v1/domains/mail-managed/:domain
+    who: fleet
+    summary: Whether this fleet accepts and delivers mail for a domain itself.
+
+  - id: set-acme-challenge
+    title: Write a certificate challenge record
+    method: POST
+    path: /api/v1/domains/:domain/acme-challenge
+    who: fleet
+    summary: The certificate issuer writes an _acme-challenge TXT record to prove it controls a domain.
+
+  - id: clear-acme-challenge
+    title: Remove a certificate challenge record
+    method: DELETE
+    path: /api/v1/domains/:domain/acme-challenge
+    who: fleet
+    summary: The certificate issuer removes its _acme-challenge TXT record from a domain.
+
+  - id: consume-invite
+    title: Use up an invite
+    method: POST
+    path: /api/v1/invites/consume
+    who: fleet
+    summary: Creating an account marks its invite accepted, so the invite can't be used again.

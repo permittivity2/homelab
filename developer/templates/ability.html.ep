@@ -1,0 +1,33 @@
+%# One ability: what it does and who may use it, its parameters and the
+%# things worth knowing, with its examples and answer in the code panel.
+    <article class="ref-main">
+      <div class="ref-crumb"><%= $entry->{area} %></div>
+      <h1><%= $entry->{title} %></h1>
+      <div class="ref-endpoint"><span class="m m-<%= $entry->{method} %>"><%= $entry->{method} %></span><span><%= $entry->{path} %></span></div>
+      <p class="ref-who">Who can use this: <strong><%= $who_text->($entry->{who}) %></strong><a href="/<%= $entry->{id} %>.md">As Markdown</a></p>
+      <p><%== $fmt->($entry->{description}) %></p>
+% if (@{ $entry->{params} }) {
+      <h2>Parameters</h2>
+      <table class="ref-params">
+        <thead><tr><th>Name</th><th>Where</th><th>What it is</th></tr></thead>
+        <tbody>
+%   for my $p (@{ $entry->{params} }) {
+          <tr>
+            <td class="name"><%= $p->{name} %><% if ($p->{required}) { %> <span class="req">required</span><% } %></td>
+            <td><%= $p->{in} %></td>
+            <td><%== $fmt->($p->{about}) %><% if (defined $p->{example}) { %><span class="ex">e.g. <%= $example_text->($p->{example}) %></span><% } %></td>
+          </tr>
+%   }
+        </tbody>
+      </table>
+% }
+% if (@{ $entry->{notes} }) {
+      <h2>Good to know</h2>
+      <ul class="ref-notes">
+%   for my $n (@{ $entry->{notes} }) {
+        <li><%== $fmt->($n) %></li>
+%   }
+      </ul>
+% }
+    </article>
+%= include 'code', ex => $entry

@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+# Switch the site off. The configuration file under sites-available stays
+# until a purge, as Debian keeps every changed /etc file.
+case "$1" in
+    remove|purge)
+        rm -f /etc/nginx/sites-enabled/developer.mailmasker.org
+        if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1 \
+                && systemctl is-active --quiet nginx; then
+            systemctl reload nginx || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

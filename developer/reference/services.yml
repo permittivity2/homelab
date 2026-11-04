@@ -1,0 +1,67 @@
+# The service registry: where each fleet service can be reached. See README.md for the fields.
+area: Services
+order: 95
+intro: >
+  Each fleet service (Drive, mail, domains, the activity log and the rest)
+  records the address it can be reached at, and homelab-api forwards your
+  calls there. The addresses are inside the fleet's own network; from
+  outside, reach every service through this API.
+
+abilities:
+  - id: list-services
+    title: List the services
+    method: GET
+    path: /api/v1/registry
+    who: signed-in
+    summary: Every registered service, with its address, port and what it does.
+    description: >
+      Sorted by name. A service registered at more than one address appears
+      once for each, the one heard from most recently first.
+      `health_check_url` is the path at that address that says whether the
+      service is up.
+    response: |
+      [
+        {
+          "feature_name": "homelab-audit",
+          "host": "192.0.2.10",
+          "port": 2513,
+          "health_check_url": "/health",
+          "description": "Audit trail: drains api.audit_queue, serves /api/v1/audit/*"
+        },
+        {
+          "feature_name": "homelab-drive",
+          "host": "192.0.2.11",
+          "port": 2501,
+          "health_check_url": "/health",
+          "description": "File storage web app + JSON API, serves /api/v1/drive/*"
+        }
+      ]
+    cli: homelab-cli registry list
+
+  - id: find-service
+    title: Find a service
+    method: GET
+    path: /api/v1/registry/:feature
+    who: signed-in
+    summary: The address homelab-api sends one service's calls to.
+    description: >
+      When a service is registered at more than one address, this is the
+      one heard from most recently, which is the one homelab-api forwards
+      your calls to.
+    params:
+      - name: feature
+        in: path
+        required: true
+        about: The service's name, as the list shows it.
+        example: homelab-drive
+    response: |
+      {
+        "feature_name": "homelab-drive",
+        "host": "192.0.2.11",
+        "port": 2501,
+        "health_check_url": "/health",
+        "description": "File storage web app + JSON API, serves /api/v1/drive/*"
+      }
+    notes:
+      - A name no service has registered answers 404.
+    cli: homelab-cli registry lookup homelab-drive

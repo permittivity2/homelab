@@ -1,0 +1,123 @@
+# Your own account: what's on file, your recovery address, your activity. See README.md for the fields.
+area: Your account
+order: 30
+intro: >
+  What the system holds about your account, the recovery address a
+  password-reset link is sent to, and the record of what your account has
+  done.
+
+abilities:
+  - id: account-summary
+    title: See your account
+    method: GET
+    path: /api/v1/account/summary
+    who: signed-in
+    summary: Your address, when the account was made, your recovery address and your roles.
+    description: >
+      `recovery_email` is where a "forgot password" link is sent, or null
+      if you have none. `roles` are what the account may do; an ordinary
+      account has just `user`.
+    response: |
+      {
+        "email": "{me}",
+        "created_at": "2026-09-27 14:03:51.402117-05",
+        "recovery_email": "personal@example.com",
+        "active": true,
+        "roles": ["user"]
+      }
+    cli: none
+
+  - id: set-recovery-email
+    title: Set your recovery address
+    method: POST
+    path: /api/v1/account/recovery-email
+    who: signed-in
+    summary: Choose where a password-reset link is sent, or remove it.
+    description: >
+      If you forget your password, the sign-in page sends a reset link to
+      this address, so pick one outside this mail system. Without one, a
+      reset by email isn't possible, though you can still change your
+      password while signed in. Nothing is sent to check the address, so
+      make sure it is right.
+    params:
+      - name: recovery_email
+        in: body
+        required: false
+        about: The address to use. An empty string or null removes it, and so does leaving it out.
+        example: personal@example.com
+    response: |
+      { "ok": true, "recovery_email": "personal@example.com" }
+    notes:
+      - Something that doesn't look like an address answers 400.
+    cli: none
+
+  - id: activity-log
+    title: See your activity log
+    method: GET
+    path: /api/v1/audit/log
+    who: signed-in
+    summary: What your account has done and when, the newest first.
+    description: >
+      Sign-ins and changes made through the fleet's services: ending a
+      session, blocking an address, deleting a file, sending mail through
+      this API and so on. Looking at things isn't recorded. Each entry says
+      what was done (`action`), to what (`resource_type`, `resource_id`),
+      by which service, and from which network address and program. At most
+      500 entries come back.
+    params:
+      - name: user
+        in: query
+        required: false
+        about: Only entries this account did. Anyone but yourself needs the audit.view permission.
+      - name: affecting
+        in: query
+        required: false
+        about: Only entries that touched this account, including what a site admin did to it. Anyone but yourself needs the audit.view permission.
+      - name: since
+        in: query
+        required: false
+        about: Only entries at or after this time, such as 2026-11-01 or 2026-11-01 16:00:00-06.
+        example: "2026-11-01"
+      - name: until
+        in: query
+        required: false
+        about: Only entries at or before this time, written the same way.
+      - name: action
+        in: query
+        required: false
+        about: Only entries with this action, such as auth.login or file.delete.
+    response: |
+      [
+        {
+          "id": 18342,
+          "occurred_at": "2026-11-03 21:42:10.123456-06",
+          "actor_email": "{me}",
+          "affected_user": "{me}",
+          "jti": "7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f",
+          "action": "recipient_access.block",
+          "resource_type": "recipient_access",
+          "resource_id": "shop@{domain}",
+          "source_service": "homelab-domain-admin",
+          "ip_address": "203.0.113.7",
+          "user_agent": "homelab-cli/0.1.0 (Linux 6.8.0-49-generic)",
+          "detail": { "tier": "self_service", "action": "REJECT", "reason": "Sells my address" }
+        },
+        {
+          "id": 18297,
+          "occurred_at": "2026-11-03 21:40:02.654321-06",
+          "actor_email": "{me}",
+          "affected_user": "{me}",
+          "jti": "7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f",
+          "action": "auth.login",
+          "resource_type": "user",
+          "resource_id": "42",
+          "source_service": "homelab-api",
+          "ip_address": "203.0.113.7",
+          "user_agent": "homelab-cli/0.1.0 (Linux 6.8.0-49-generic)",
+          "detail": null
+        }
+      ]
+    notes:
+      - Asking for someone else's entries without the audit.view permission answers 403.
+      - With audit.view and neither user nor affecting, you see everyone's entries.
+    cli: homelab-cli audit list --since 2026-11-01

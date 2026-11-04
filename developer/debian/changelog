@@ -1,0 +1,16 @@
+homelab-developer (0.1.0) unstable; urgency=medium
+
+  * First release: developer.mailmasker.org, the MailMasker API reference
+    (post-cutover item 49). Every ability a person or a script can use,
+    118 of them by area, each with who may use it, its parameters, an
+    example answer, and cURL, Perl and homelab-cli examples; every page
+    also as Markdown, plus llms.txt, reference.md and reference.json.
+  * A Claude Code skill, served at /skill/SKILL.md, that looks calls up on
+    the site as it works.
+  * Built from reference/*.yml and checked against the code at build time:
+    every route reachable through homelab-api has exactly one entry, and
+    each entry's "who may use it" matches the route's own access check.
+  * The rule from here on: an API call homelab-cli makes is documented in
+    this package first. homelab-cli's build fails on any call missing here.
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 22:08:10 -0600

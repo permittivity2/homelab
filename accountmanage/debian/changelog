@@ -1,3 +1,12 @@
+homelab-accountmanage (0.1.42) unstable; urgency=medium
+
+  * The menu's API item opens developer.mailmasker.org, the MailMasker API
+    reference (post-cutover item 49).
+  * t/chrome.t: the account menu has had three cross-app links (Email,
+    Drive, Search) since 0.1.41; the test still counted two.
+
+ -- Claude <noreply@anthropic.com>  Tue, 03 Nov 2026 22:10:01 -0600
+
 homelab-accountmanage (0.1.41) unstable; urgency=medium
 
   * Add Search to the account menu.

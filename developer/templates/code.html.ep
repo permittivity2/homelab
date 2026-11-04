@@ -1,0 +1,29 @@
+%# The code panel: an ability's examples in three languages, and its example
+%# answer. $ex is the ability.
+% my $ex = stash 'ex';
+    <aside class="ref-code" aria-label="Example">
+      <div class="ref-block">
+        <div class="ref-bar" role="tablist" aria-label="Example language">
+          <button type="button" class="tab" data-lang="curl" role="tab">cURL</button>
+          <button type="button" class="tab" data-lang="perl" role="tab">Perl</button>
+          <button type="button" class="tab" data-lang="cli" role="tab">homelab-cli</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-ghost btn-sm copy">Copy</button>
+        </div>
+        <pre data-lang="curl"><%= $ex->{examples}{curl} %></pre>
+        <pre data-lang="perl" hidden><%= $ex->{examples}{perl} %></pre>
+% if (defined $ex->{examples}{cli}) {
+        <pre data-lang="cli" hidden><%= $ex->{examples}{cli} %></pre>
+% } else {
+        <pre data-lang="cli" class="none" hidden>There's no homelab-cli command for this yet.</pre>
+% }
+      </div>
+      <div class="ref-block">
+        <div class="ref-bar">
+          <span class="label">Response</span>&nbsp;<span class="ref-status"><%= $ex->{status} %> <%= $status_text->{ $ex->{status} } // '' %></span>
+          <span class="spacer"></span>
+          <button type="button" class="btn btn-ghost btn-sm copy">Copy</button>
+        </div>
+        <pre><%= Mojo::Util::trim($ex->{response} // '') %></pre>
+      </div>
+    </aside>

@@ -1,0 +1,927 @@
+# Drive: your files and folders, sharing, Trash and big uploads. See README.md for the fields.
+area: Drive
+order: 60
+intro: >
+  The files and folders you keep in Drive. Upload, list, download and
+  organise them, share one by link, and bring back what you deleted from
+  Trash. A big file goes up in pieces, so a dropped connection costs only
+  the piece in flight. Unlike the Drive web page, a delete through the API
+  is immediate and permanent unless you ask for Trash.
+
+abilities:
+  # --- Files and folders ---------------------------------------------------
+  - id: drive-list-files
+    title: List your files
+    method: GET
+    path: /api/v1/drive/files
+    who: signed-in
+    summary: The files in one folder, or at the top level, newest first.
+    description: >
+      Only the files directly in that folder; its subfolders come from List
+      your folders. Without `folder_id` you get the files at the top level,
+      not every file you have. Files in Trash are left out.
+    params:
+      - name: folder_id
+        in: query
+        required: false
+        about: The folder to list. Leave it out for the top level.
+    response: |
+      [
+        {
+          "id": 42,
+          "filename": "notes.txt",
+          "size_bytes": 1532,
+          "mime_type": "text/plain",
+          "uploaded_at": "2026-11-03 21:42:10.123456-06",
+          "folder_id": null
+        },
+        {
+          "id": 41,
+          "filename": "receipt.pdf",
+          "size_bytes": 84210,
+          "mime_type": "application/pdf",
+          "uploaded_at": "2026-11-02 09:15:44.551203-06",
+          "folder_id": null
+        }
+      ]
+    notes:
+      - A folder that isn't yours, or doesn't exist, answers 404.
+    cli: homelab-cli drive list
+
+  - id: drive-upload-file
+    title: Upload a file
+    method: POST
+    path: /api/v1/drive/files
+    who: signed-in
+    status: 201
+    summary: Send a whole file in one request, as a form upload.
+    description: >
+      The body is a multipart form, the kind a browser sends, with the file
+      in a field named `file`; the name it has there becomes its name in
+      Drive. Drive works out the real type from the contents, whatever the
+      upload claims. Fine for everyday files; for a big one, or over a shaky
+      connection, use Start a big upload instead. homelab-cli switches to
+      that for files over 8 MiB.
+    params:
+      - name: file
+        in: body
+        required: true
+        about: The file itself, as a multipart form field (with cURL, `-F file=@notes.txt`).
+      - name: folder_id
+        in: body
+        required: false
+        about: A form field naming the folder to put it in. Leave it out for the top level.
+      - name: client_mtime
+        in: body
+        required: false
+        about: >
+          A form field with the file's own date, in seconds since 1970, so a
+          search by date finds it (or client_mtime_ms, in milliseconds). A
+          date before 1990, or more than a day ahead, is ignored.
+    response: |
+      {
+        "id": 42,
+        "filename": "notes.txt",
+        "size_bytes": 1532,
+        "mime_type": "text/plain",
+        "uploaded_at": "2026-11-03 21:42:10.123456-06",
+        "content_created_at": "2026-10-30 08:12:03-06",
+        "folder_id": null
+      }
+    notes:
+      - With no file field the answer is 400, and a folder that isn't yours answers 404.
+      - An upload that would take you past your storage limit is refused with 413.
+    cli: homelab-cli drive upload ./notes.txt
+    curl: |
+      curl -s -X POST 'https://api.mailmasker.org/api/v1/drive/files' \
+        -H "Authorization: Bearer $TOKEN" \
+        -F file=@notes.txt
+    perl: |
+      use Mojo::Base -strict;
+      use Mojo::UserAgent;
+
+      my $ua  = Mojo::UserAgent->new;
+      my $res = $ua->post('https://api.mailmasker.org/api/v1/drive/files',
+          { Authorization => "Bearer $ENV{TOKEN}" },
+          form => { file => { file => 'notes.txt' } })->result;
+      die $res->code, ' ', ($res->json('/error') // $res->message), "\n" unless $res->is_success;
+      print $res->body, "\n";
+
+  - id: drive-download-file
+    title: Download a file
+    method: GET
+    path: /api/v1/drive/files/:id
+    who: signed-in
+    summary: The file's contents, exactly as uploaded.
+    description: >
+      Answers with the file's bytes, sent as the file's own type. The api
+      passes on the type but not the file's name, so save it under the name
+      your file list shows.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The file's id, from List your files.
+        example: 42
+    response: |
+      (the file's contents)
+    notes:
+      - A file that isn't yours answers 404, the same as one that doesn't exist, and so does a file in Trash until it is restored.
+    cli: homelab-cli drive download 42 --output notes.txt
+
+  - id: drive-delete-file
+    title: Delete a file
+    method: DELETE
+    path: /api/v1/drive/files/:id
+    who: signed-in
+    summary: Delete one file at once and for good, or move it to Trash.
+    description: >
+      Unlike the Drive web page, this deletes the file immediately and for
+      good. Add `soft=1` to move it to Trash instead, where it can be
+      restored; `trashed` in the answer says which happened.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The file's id.
+        example: 42
+      - name: soft
+        in: query
+        required: false
+        about: 1 to move the file to Trash instead of deleting it for good.
+    response: |
+      { "ok": true, "trashed": false }
+    notes:
+      - Any link you shared for the file stops working.
+      - A file that isn't yours, doesn't exist or is already in Trash answers 404.
+    cli: homelab-cli drive delete 42
+
+  - id: drive-list-folders
+    title: List your folders
+    method: GET
+    path: /api/v1/drive/folders
+    who: signed-in
+    summary: The folders inside one folder, or at the top level, by name.
+    description: >
+      One level only: the folders directly inside the one you name, not
+      their subfolders. Folders in Trash are left out. The parameter here is
+      `parent_id`, not `folder_id`.
+    params:
+      - name: parent_id
+        in: query
+        required: false
+        about: The folder whose subfolders you want. Leave it out for the top level.
+    response: |
+      [
+        { "id": 7, "name": "Photos", "parent_folder_id": null },
+        { "id": 9, "name": "Receipts", "parent_folder_id": null }
+      ]
+    notes:
+      - A folder that isn't yours, or doesn't exist, answers 404.
+    cli: homelab-cli drive list
+
+  - id: drive-create-folder
+    title: Create a folder
+    method: POST
+    path: /api/v1/drive/folders
+    who: signed-in
+    status: 201
+    summary: Make a new folder, at the top level or inside another.
+    description: >
+      Folders nest as deep as you like, but two folders in the same place
+      can't have the same name.
+    params:
+      - name: name
+        in: body
+        required: true
+        about: The new folder's name.
+        example: Receipts
+      - name: parent_folder_id
+        in: body
+        required: false
+        about: The folder to make it in. Leave it out, or send null, for the top level.
+        example: 7
+    response: |
+      { "id": 9, "name": "Receipts", "parent_folder_id": 7 }
+    notes:
+      - A missing name answers 400.
+      - A folder of that name already in the same place answers 409, and so does a parent folder that isn't yours.
+    cli: homelab-cli drive mkdir Receipts --parent 7
+
+  - id: drive-delete-folder
+    title: Delete a folder
+    method: DELETE
+    path: /api/v1/drive/folders/:id
+    who: signed-in
+    summary: Delete a folder and everything inside it, for good or to Trash.
+    description: >
+      Every file and folder inside it goes too, however deep. Unlike the
+      Drive web page, this is immediate and for good; add `soft=1` to move
+      the whole folder to Trash instead, where it can be restored in one go.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The folder's id.
+        example: 7
+      - name: soft
+        in: query
+        required: false
+        about: 1 to move the folder to Trash instead of deleting it for good.
+    response: |
+      { "ok": true, "trashed": false }
+    notes:
+      - A folder that isn't yours, doesn't exist or is already in Trash answers 404.
+    cli: homelab-cli drive rmdir 7
+
+  - id: drive-usage
+    title: See your storage use
+    method: GET
+    path: /api/v1/drive/usage
+    who: signed-in
+    summary: How much space your files take, and your limit, in bytes.
+    description: >
+      `used_bytes` counts your files outside Trash. `limit_bytes` is your
+      limit, 1 TiB unless a site admin has set another for you. An upload
+      that would take you past it is refused.
+    response: |
+      { "used_bytes": 2147483648, "limit_bytes": 1099511627776 }
+    cli: none
+
+  # --- Big uploads, in pieces ----------------------------------------------
+  - id: drive-upload-start
+    title: Start a big upload
+    method: POST
+    path: /api/v1/drive/uploads
+    who: signed-in
+    status: 201
+    summary: Open an upload session, to send a big file in pieces you can resume.
+    description: >
+      Open a session here, then send the file in order, one piece at a time,
+      with Send a piece of a big upload. If the connection drops, Check a big
+      upload tells you where to carry on. `chunk_size` is a suggested piece
+      size; any size works. The file appears in Drive when its last byte
+      arrives. homelab-cli uploads this way for files over 8 MiB.
+    params:
+      - name: filename
+        in: body
+        required: true
+        about: The file's name in Drive. Only the last part of a path is kept.
+        example: backup.iso
+      - name: total_size
+        in: body
+        required: true
+        about: The file's exact size, in bytes.
+        example: 4294967296
+      - name: folder_id
+        in: body
+        required: false
+        about: The folder to put it in. Leave it out for the top level.
+    response: |
+      {
+        "upload_id": "0b6f3c1e-8d2a-4f7b-9e5c-3a1d2b4c6e8f",
+        "offset": 0,
+        "chunk_size": 8388608
+      }
+    notes:
+      - An empty file (total_size 0) is finished at once, and the answer has done set to true and its file_id.
+      - A file over 50 GiB, or one that won't fit in your storage limit, is refused with 413.
+      - You can have up to 100 uploads open at once; one more answers 429. An upload left untouched for 24 hours is thrown away.
+    cli: homelab-cli drive upload ./backup.iso
+
+  - id: drive-upload-status
+    title: Check a big upload
+    method: GET
+    path: /api/v1/drive/uploads/:id
+    who: signed-in
+    summary: How much of an upload has arrived, so you know where to carry on.
+    description: >
+      `offset` is how many bytes Drive has safely stored, so the next piece
+      starts there. `state` is `open` while bytes are still to come,
+      `completed` once the file is in Drive (the answer then has its
+      `file_id`), or `aborted` if Drive could not store it, in which case
+      start again. Checking also keeps an open upload from being thrown away
+      as abandoned. homelab-cli does this when you run the same upload again
+      after an interruption.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The upload_id from Start a big upload.
+        example: 0b6f3c1e-8d2a-4f7b-9e5c-3a1d2b4c6e8f
+    response: |
+      {
+        "upload_id": "0b6f3c1e-8d2a-4f7b-9e5c-3a1d2b4c6e8f",
+        "state": "open",
+        "offset": 16777216,
+        "total_size": 4294967296,
+        "filename": "backup.iso",
+        "chunk_size": 8388608
+      }
+    notes:
+      - An upload that isn't yours, or no longer exists, answers 404.
+    cli: homelab-cli drive upload ./backup.iso
+
+  - id: drive-upload-piece
+    title: Send a piece of a big upload
+    method: PATCH
+    path: /api/v1/drive/uploads/:id
+    who: signed-in
+    summary: Add the next piece of the file to an open upload.
+    description: >
+      The body is the raw bytes of the piece, not JSON, and an
+      `Upload-Offset` header says where in the file the piece starts, which
+      must be exactly how much Drive already has. The answer's `offset` is
+      where the next piece starts. When the last byte lands, `done` is true
+      and `file_id` is the new file.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The upload_id from Start a big upload.
+        example: 0b6f3c1e-8d2a-4f7b-9e5c-3a1d2b4c6e8f
+      - name: chunk
+        in: body
+        required: true
+        about: >
+          The next piece of the file, as the whole raw request body (send it
+          as application/octet-stream), with an Upload-Offset header giving
+          the byte it starts at.
+    response: |
+      { "offset": 25165824, "done": false }
+    notes:
+      - A missing or malformed Upload-Offset header answers 400.
+      - A piece that doesn't start where Drive's copy ends answers 409 with the true offset, so carry on from there. That is how a resend after a dropped connection sorts itself out.
+      - A piece that would run past the size you declared answers 409 too, and so does one sent to a finished upload, whose answer includes its file_id.
+    cli: homelab-cli drive upload ./backup.iso
+    curl: |
+      curl -s -X PATCH 'https://api.mailmasker.org/api/v1/drive/uploads/0b6f3c1e-8d2a-4f7b-9e5c-3a1d2b4c6e8f' \
+        -H "Authorization: Bearer $TOKEN" \
+        -H 'Upload-Offset: 0' \
+        -H 'Content-Type: application/octet-stream' \
+        --data-binary @piece-1.bin
+    perl: |
+      use Mojo::Base -strict;
+      use Mojo::File qw(path);
+      use Mojo::UserAgent;
+
+      my $ua  = Mojo::UserAgent->new;
+      my $res = $ua->patch('https://api.mailmasker.org/api/v1/drive/uploads/0b6f3c1e-8d2a-4f7b-9e5c-3a1d2b4c6e8f',
+          { Authorization => "Bearer $ENV{TOKEN}", 'Upload-Offset' => 0,
+            'Content-Type' => 'application/octet-stream' },
+          path('piece-1.bin')->slurp)->result;
+      die $res->code, ' ', ($res->json('/error') // $res->message), "\n" unless $res->is_success;
+      print $res->body, "\n";
+
+  - id: drive-upload-cancel
+    title: Cancel a big upload
+    method: DELETE
+    path: /api/v1/drive/uploads/:id
+    who: signed-in
+    summary: Give up on an unfinished upload and throw away what was sent.
+    description: >
+      Drops the bytes sent so far and closes the session. An upload you just
+      abandon is cleared away after 24 hours anyway; this does it now.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The upload_id from Start a big upload.
+        example: 0b6f3c1e-8d2a-4f7b-9e5c-3a1d2b4c6e8f
+    response: |
+      { "ok": true }
+    notes:
+      - A finished upload can't be cancelled (409), because it is a file now; delete the file instead.
+      - An upload that isn't yours, or no longer exists, answers 404.
+    cli: none
+
+  # --- Combining and zipping -------------------------------------------------
+  - id: drive-combine
+    title: Combine files into one
+    method: POST
+    path: /api/v1/drive/append-jobs
+    who: signed-in
+    status: 202
+    summary: Join several files end to end into a new file, in the order you give.
+    description: >
+      For putting a file back together from its pieces, such as
+      `backup.iso.001`, `backup.iso.002` and so on. The work happens in the
+      background, so the answer is a job `id` to follow with See how a
+      combine is going. The pieces are kept, and the new file lands next to
+      the first piece unless you say otherwise.
+    params:
+      - name: file_ids
+        in: body
+        required: true
+        about: At least two of your file ids, in the order their bytes should go.
+        example: [41, 42, 43]
+      - name: output_name
+        in: body
+        required: false
+        about: >
+          The new file's name. Left out, it is the first piece's name without
+          its piece number, so backup.iso.001 gives backup.iso.
+        example: backup.iso
+      - name: folder_id
+        in: body
+        required: false
+        about: The folder to put the new file in. Left out, it goes in the first piece's folder.
+    response: |
+      { "id": 12, "output_name": "backup.iso" }
+    notes:
+      - Every piece must be one of your files and not in Trash. If any isn't, nothing starts and the answer is 400.
+      - The new file counts against your storage limit on top of the pieces; if it won't fit, the answer is 413.
+    cli: homelab-cli drive append 41 42 43 --output backup.iso
+
+  - id: drive-combine-status
+    title: See how a combine is going
+    method: GET
+    path: /api/v1/drive/append-jobs/:id
+    who: signed-in
+    summary: Whether a combine has finished, and how far along it is.
+    description: >
+      `state` goes from `pending` to `processing` and `finalizing`, then
+      ends as `completed` or `failed`. While it runs, `received_bytes` of
+      `total_bytes` have been written (`total_bytes` is null until it
+      starts). Once it completes, `file_id` is the new file; if it fails,
+      `error` says why.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The job id from Combine files into one.
+        example: 12
+    response: |
+      {
+        "id": 12,
+        "state": "processing",
+        "output_name": "backup.iso",
+        "received_bytes": 1073741824,
+        "total_bytes": 4294967296,
+        "file_id": null,
+        "error": null
+      }
+    notes:
+      - A job that isn't yours, or doesn't exist, answers 404.
+    cli: none
+
+  - id: drive-zip
+    title: Zip files and folders
+    method: POST
+    path: /api/v1/drive/zip-jobs
+    who: signed-in
+    status: 201
+    summary: Build one zip of the files and folders you pick, saved into your Archives folder.
+    description: >
+      The zip is built in the background and saved as a new file in a
+      folder called Archives at your top level, made the first time it is
+      needed. A folder goes in whole, subfolders and all. The answer is a job
+      `id` to follow with See if a zip is ready, and the name and place the
+      finished file will have.
+    params:
+      - name: file_ids
+        in: body
+        required: false
+        about: Ids of files to put in the zip. Give this, folder_ids, or both.
+        example: [41, 42]
+      - name: folder_ids
+        in: body
+        required: false
+        about: Ids of folders to put in the zip, with everything inside them.
+        example: [7]
+    response: |
+      {
+        "id": 318,
+        "output_name": "drive-export-you-example-com-1793763730.zip",
+        "dest_path": "Archives/drive-export-you-example-com-1793763730.zip"
+      }
+    notes:
+      - Ids that aren't yours, and anything in Trash, are quietly left out. With no ids, or nothing left to zip, the answer is 400.
+      - Two files with the same name both go in, one of them with a number added, such as notes (01).txt.
+      - If the service that builds zips is down, the answer is 502 or 504; try again later.
+    cli: none
+
+  - id: drive-zip-status
+    title: See if a zip is ready
+    method: GET
+    path: /api/v1/drive/zip-jobs/:id
+    who: signed-in
+    summary: Whether a zip has been built and saved, and where it is.
+    description: >
+      `state` is `queued`, then `building` (with `progress_current` of
+      `progress_total` files done), then `delivering` while it is saved into
+      Archives. It ends as `completed`, with the new file's `file_id`, or
+      `failed`, with the reason in `error`.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The job id from Zip files and folders.
+        example: 318
+    response: |
+      {
+        "id": 318,
+        "state": "completed",
+        "output_name": "drive-export-you-example-com-1793763730.zip",
+        "dest_path": "Archives/drive-export-you-example-com-1793763730.zip",
+        "file_id": 57
+      }
+    notes:
+      - A job that isn't yours, or doesn't exist, answers 404.
+    cli: none
+
+  # --- Deleting many, and Trash ----------------------------------------------
+  - id: drive-delete-many
+    title: Delete several files and folders at once
+    method: POST
+    path: /api/v1/drive/bulk/delete
+    who: signed-in
+    summary: Delete a selection of files and folders in one go, for good.
+    description: >
+      Through the API this is immediate and permanent; there is no Trash
+      option here, so to keep things recoverable delete them one at a time
+      with `soft=1`. Folders go first, with everything inside them, so a
+      listed file that was in one of them comes back under `not_found`.
+      Every id is reported, and one problem doesn't stop the rest.
+    params:
+      - name: file_ids
+        in: body
+        required: false
+        about: Ids of files to delete.
+        example: [41, 42]
+      - name: folder_ids
+        in: body
+        required: false
+        about: Ids of folders to delete, with everything inside them.
+        example: [7]
+    response: |
+      {
+        "files": { "deleted": [41, 42], "not_found": [] },
+        "folders": { "deleted": [7], "not_found": [] },
+        "counts": { "deleted": 3, "not_found": 0 }
+      }
+    notes:
+      - An id that isn't yours counts as not found, the same as one that doesn't exist.
+    cli: none
+
+  - id: drive-trash
+    title: List what's in Trash
+    method: GET
+    path: /api/v1/drive/trash
+    who: signed-in
+    summary: Every file and folder you've deleted and can still get back.
+    description: >
+      Newest first. Things you delete wait in Trash until you restore them,
+      delete them for good, or empty Trash; after a while (30 days unless
+      the server says otherwise) Drive empties them itself.
+    response: |
+      {
+        "files": [
+          { "id": 42, "filename": "old-notes.txt", "size_bytes": 1532, "mime_type": "text/plain", "deleted_at_display": "2026-11-03 21:42:10 CST" }
+        ],
+        "folders": [
+          { "id": 7, "name": "Old photos", "deleted_at_display": "2026-11-02 09:15:00 CST" }
+        ]
+      }
+    cli: homelab-cli drive trash
+
+  - id: drive-restore-file
+    title: Restore a file from Trash
+    method: POST
+    path: /api/v1/drive/files/:id/restore
+    who: signed-in
+    summary: Bring a file back out of Trash, to the folder it was in.
+    description: >
+      The file goes back where it was. If its folder is in Trash too, that
+      folder and any above it come back as well, so the file has somewhere
+      to land; their other contents stay in Trash. Links you shared for it
+      work again.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The file's id.
+        example: 42
+    response: |
+      { "ok": true }
+    notes:
+      - A file that isn't in your Trash answers 404.
+    cli: homelab-cli drive restore 42
+
+  - id: drive-restore-folder
+    title: Restore a folder from Trash
+    method: POST
+    path: /api/v1/drive/folders/:id/restore
+    who: signed-in
+    summary: Bring a folder back out of Trash, with everything inside it.
+    description: >
+      The folder goes back where it was, with all its files and subfolders.
+      Any folders above it that are in Trash come back too.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The folder's id.
+        example: 7
+    response: |
+      { "ok": true }
+    notes:
+      - A folder that isn't in your Trash answers 404.
+    cli: homelab-cli drive restore 7 --folder
+
+  - id: drive-purge-file
+    title: Delete a file in Trash forever
+    method: POST
+    path: /api/v1/drive/files/:id/purge
+    who: signed-in
+    summary: Permanently delete one file that is in Trash.
+    description: >
+      Only for a file already in Trash, and it can't be undone. To delete a
+      file that isn't in Trash, use Delete a file.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The file's id.
+        example: 42
+    response: |
+      { "ok": true }
+    notes:
+      - A file that isn't in your Trash answers 404.
+    cli: none
+
+  - id: drive-purge-folder
+    title: Delete a folder in Trash forever
+    method: POST
+    path: /api/v1/drive/folders/:id/purge
+    who: signed-in
+    summary: Permanently delete one folder that is in Trash, with everything inside it.
+    description: >
+      Only for a folder already in Trash. All its files and subfolders go
+      with it, and it can't be undone.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The folder's id.
+        example: 7
+    response: |
+      { "ok": true }
+    notes:
+      - A folder that isn't in your Trash answers 404.
+    cli: none
+
+  - id: drive-empty-trash
+    title: Empty your Trash
+    method: POST
+    path: /api/v1/drive/trash/empty
+    who: signed-in
+    summary: Permanently delete everything in your Trash.
+    description: >
+      Every file and folder in your Trash is deleted for good, and the
+      answer says how many of each. Trash also empties itself as it goes,
+      deleting anything that has been there for 30 days.
+    response: |
+      { "ok": true, "purged": { "files": 3, "folders": 1 } }
+    cli: none
+
+  # --- Search privacy ---------------------------------------------------------
+  - id: drive-file-private
+    title: Keep a file out of search
+    method: POST
+    path: /api/v1/drive/files/:id/private
+    who: signed-in
+    summary: Stop a file turning up in search results, or let it show again.
+    description: >
+      Private means only that the file stops coming back from a search. It
+      isn't hidden or deleted; it stays in its folder and still downloads.
+      Search catches up on its next indexing pass, not at once, as `notice`
+      says.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The file's id.
+        example: 42
+      - name: private
+        in: query
+        required: false
+        about: 0 (or false, no, off) to let search find it again. Leave it out, or send 1, to make it private.
+    response: |
+      {
+        "id": 42,
+        "name": "notes.txt",
+        "kind": "file",
+        "private": true,
+        "notice": "Marked private. It stops appearing in search on the next index pass; it is not hidden, deleted or unindexed."
+      }
+    notes:
+      - A file inside a private folder stays out of search even when the file itself isn't marked.
+      - A file that isn't yours, or is in Trash, answers 404.
+    cli: homelab-cli drive private 42
+
+  - id: drive-folder-private
+    title: Keep a folder out of search
+    method: POST
+    path: /api/v1/drive/folders/:id/private
+    who: signed-in
+    summary: Stop everything in a folder turning up in search results, or let it show again.
+    description: >
+      Covers everything inside the folder, however deep. As with a file,
+      nothing is hidden or deleted; it all just stops coming back from a
+      search, from the next indexing pass on.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The folder's id.
+        example: 7
+      - name: private
+        in: query
+        required: false
+        about: 0 (or false, no, off) to let search find it again. Leave it out, or send 1, to make it private.
+    response: |
+      {
+        "id": 7,
+        "name": "Taxes",
+        "kind": "folder",
+        "private": true,
+        "notice": "Marked private. It stops appearing in search on the next index pass; it is not hidden, deleted or unindexed."
+      }
+    notes:
+      - Turning it off lifts only this folder's own setting. Anything still under another private folder, or marked private itself, stays out of search.
+      - A folder that isn't yours, or is in Trash, answers 404.
+    cli: homelab-cli drive private 7 --folder
+
+  # --- Sharing ---------------------------------------------------------------
+  - id: drive-share-file
+    title: Share a file
+    method: POST
+    path: /api/v1/drive/files/:id/share
+    who: signed-in
+    status: 201
+    summary: Make a link to one of your files, for one person or for anyone.
+    description: >
+      Every share is a link. Leave out `shared_with` for a public link that
+      anyone who has it can open, to pass on yourself. Name a person and the
+      link opens only for them, signed in as that address (and for you); it
+      also shows in their list of shares, and they are emailed the link.
+      `notice` says plainly what happened, including when no email went
+      out.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The file's id.
+        example: 42
+      - name: shared_with
+        in: query
+        required: false
+        about: The address of the person to share with. Leave it out for a public link.
+        example: friend@example.com
+      - name: expires_days
+        in: query
+        required: false
+        about: The link stops working after this many days (1 to 9999). Leave it out for a link that lasts until you revoke it.
+    response: |
+      {
+        "ok": true,
+        "id": 15,
+        "token": "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e",
+        "url": "https://drive.example.com/s/5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e",
+        "target": "file",
+        "label": "notes.txt",
+        "shared_with": "friend@example.com",
+        "public": false,
+        "emailed": true,
+        "notice": "Shared with friend@example.com and emailed them the link."
+      }
+    notes:
+      - Sharing with an address that has no account still makes the share, but sends no email (emailed is false), and the link opens only once someone signs in as that address. For anyone without an account, make a public link.
+      - You can't share with yourself (400). A file that isn't yours, or is in Trash, answers 404.
+      - While the file is in Trash its link stops working, and deleting it for good ends the share.
+    cli: none
+
+  - id: drive-share-folder
+    title: Share a folder
+    method: POST
+    path: /api/v1/drive/folders/:id/share
+    who: signed-in
+    status: 201
+    summary: Make a link to one of your folders, for one person or for anyone.
+    description: >
+      The link opens the whole folder, subfolders included, to browse and
+      download, but nothing outside it. As with a file, a public link opens
+      for anyone who has it, and naming a person in `shared_with` makes it
+      open only for them, signed in, lists it for them and emails them the
+      link.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The folder's id.
+        example: 7
+      - name: shared_with
+        in: query
+        required: false
+        about: The address of the person to share with. Leave it out for a public link.
+      - name: expires_days
+        in: query
+        required: false
+        about: The link stops working after this many days (1 to 9999). Leave it out for a link that lasts until you revoke it.
+        example: 7
+    response: |
+      {
+        "ok": true,
+        "id": 16,
+        "token": "0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e",
+        "url": "https://drive.example.com/s/0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e",
+        "target": "folder",
+        "label": "Photos",
+        "shared_with": null,
+        "public": true,
+        "notice": "Public link created. Anyone with the link can open it."
+      }
+    notes:
+      - What you add to the folder later is shared too, and anything inside it you move to Trash drops out of the share.
+      - You can't share with yourself (400). A folder that isn't yours, or is in Trash, answers 404.
+    cli: none
+
+  - id: drive-shares
+    title: List your shares
+    method: GET
+    path: /api/v1/drive/shares
+    who: signed-in
+    summary: What you have shared, and what others have shared with you, newest first.
+    description: >
+      Two lists in one answer. `shared_by_me` is every share you made and
+      haven't revoked, with who it is for (null means anyone with the link)
+      and how often it has been opened. `shared_with_me` is what others have
+      shared with your address and still works. Shares of things in Trash
+      are left out of both.
+    response: |
+      {
+        "shared_by_me": [
+          {
+            "id": 16,
+            "token": "0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e",
+            "shared_with_email": null,
+            "created_at": "2026-11-03 21:42:10.123456-06",
+            "expires_at": "2026-11-10 21:42:10.123456-06",
+            "access_count": 4,
+            "accessed_at": "2026-11-03 22:05:31.402215-06",
+            "label": "Photos",
+            "target": "folder",
+            "url": "https://drive.example.com/s/0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e0ddba11e"
+          },
+          {
+            "id": 15,
+            "token": "5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e",
+            "shared_with_email": "friend@example.com",
+            "created_at": "2026-11-03 21:40:02.918377-06",
+            "expires_at": null,
+            "access_count": 0,
+            "accessed_at": null,
+            "label": "notes.txt",
+            "target": "file",
+            "url": "https://drive.example.com/s/5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e5ca1ab1e"
+          }
+        ],
+        "shared_with_me": [
+          {
+            "id": 11,
+            "token": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+            "owner_email": "friend@example.com",
+            "created_at": "2026-11-01 14:03:55.120934-06",
+            "expires_at": null,
+            "label": "Recipes",
+            "target": "folder",
+            "url": "https://drive.example.com/s/c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
+          }
+        ]
+      }
+    notes:
+      - Your own list still shows shares whose time has run out; check expires_at.
+    cli: none
+
+  - id: drive-revoke-share
+    title: Revoke a share
+    method: POST
+    path: /api/v1/drive/shares/:id/revoke
+    who: signed-in
+    summary: Turn off a share's link, for everyone who has it.
+    description: >
+      The link stops working at once, and the share drops off your list and
+      the other person's. It can't be turned back on; share again for a new
+      link.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The share's id, from List your shares.
+        example: 15
+    response: |
+      { "ok": true, "id": 15 }
+    notes:
+      - A share that isn't yours, or is already revoked, answers 404.
+    cli: none

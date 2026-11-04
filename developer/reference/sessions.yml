@@ -1,0 +1,100 @@
+# Where you are signed in, and ending those sessions. See README.md for the fields.
+area: Sessions
+order: 20
+intro: >
+  A session is one place you are signed in: a device, a script, or an app
+  you opened through the sign-in page (webmail, Drive and myaccount each
+  keep their own). Ending a session signs it out at once.
+
+abilities:
+  - id: list-sessions
+    title: List your sessions
+    method: GET
+    path: /api/v1/auth/sessions
+    who: signed-in
+    summary: Every place you are signed in, the newest first.
+    description: >
+      Each session shows the program it came from (`user_agent`), the
+      network address it signed in from, and when it began
+      (`first_seen_at`), which stays put however often it refreshes.
+      `expires_at` is when its current token runs out, `current` marks the
+      session making this call, and `jti` is the id to end it by.
+    params:
+      - name: user
+        in: query
+        required: false
+        about: Another account's address, to list its sessions instead. Site admins only; anyone else gets 403.
+    response: |
+      [
+        {
+          "jti": "7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f",
+          "user_agent": "Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0",
+          "ip_address": "203.0.113.7",
+          "first_seen_at": "2026-11-03 21:40:02.654321-06",
+          "expires_at": "2026-11-04 21:40:02.654321-06",
+          "current": true
+        },
+        {
+          "jti": "c41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41a",
+          "user_agent": "homelab-cli/0.1.0 (Linux 6.8.0-49-generic)",
+          "ip_address": "198.51.100.23",
+          "first_seen_at": "2026-11-01 09:15:42.246810-06",
+          "expires_at": "2026-11-04 08:05:31.135792-06",
+          "current": false
+        }
+      ]
+    notes:
+      - A session whose token has run out isn't listed, though it can still refresh and come back. Signing out your other sessions ends those too.
+    cli: homelab-cli sessions list
+
+  - id: end-session
+    title: End a session
+    method: DELETE
+    path: /api/v1/auth/sessions/:jti
+    who: signed-in
+    summary: Sign one of your sessions out at once, wherever it is.
+    description: >
+      Its token stops working straight away, and so does its refresh token,
+      so it can't quietly sign itself back in. Ending the session you are
+      using signs you out here too.
+    params:
+      - name: jti
+        in: path
+        required: true
+        about: The session's id, in full, as your session list shows it.
+        example: c41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41ac41a
+      - name: user
+        in: query
+        required: false
+        about: Another account's address, to end one of its sessions. Site admins only; anyone else gets 403.
+    response: |
+      { "ok": true }
+    notes:
+      - A session that isn't yours, or was already ended, answers 404.
+      - homelab-cli also takes just the start of the id, as long as only one session matches it.
+    cli: homelab-cli sessions revoke c41a9e07b2d8
+
+  - id: sign-out-other-sessions
+    title: Sign out your other sessions
+    method: DELETE
+    path: /api/v1/auth/sessions
+    who: signed-in
+    summary: End every session but this one, or every one including it.
+    description: >
+      Ends your sessions all at once, along with their refresh tokens,
+      including any whose token has run out but could still refresh. With
+      `except_current=true` the session making this call stays signed in;
+      with `false` it ends too, which signs you out everywhere. `revoked` is
+      how many sessions ended.
+    params:
+      - name: except_current
+        in: query
+        required: true
+        about: true to keep the session making this call, false to end it too. There is no default.
+        example: "true"
+    response: |
+      { "ok": true, "revoked": 2 }
+    notes:
+      - Leaving out except_current, or sending anything but true or false, answers 400.
+      - It only ever ends your own sessions.
+    cli: homelab-cli sessions revoke --all-others

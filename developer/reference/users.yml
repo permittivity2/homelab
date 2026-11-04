@@ -1,0 +1,468 @@
+# Site admins' controls for accounts, roles and permissions. See README.md
+# for the fields.
+area: Users and roles
+order: 110
+intro: >
+  For site admins: the accounts on the system, suspending and restoring
+  them, how much mail and drive space each may use, and what each may do.
+  An account may do what its roles allow; a role carries a set of
+  permissions, and a site admin may do everything.
+
+abilities:
+  - id: admin-list-users
+    title: List accounts
+    method: GET
+    path: /api/v1/admin/users
+    who: site-admin
+    summary: Every account with its roles and whether it can sign in, or a quick search by address.
+    description: >
+      Without a search, every account comes back, oldest first. `active` is
+      1 for an account that can sign in and 0 for a suspended one. The list
+      includes the system's own non-person accounts too: one for each
+      node's agent and one the api uses itself, all with the `system_agent`
+      role.
+    params:
+      - name: q
+        in: query
+        required: false
+        about: Only accounts whose address starts with this text, ignoring case. At least 3 characters.
+      - name: limit
+        in: query
+        required: false
+        about: With q, the most accounts to return, from 1 to 100. The default is 20.
+    response: |
+      [
+        {
+          "id": 1,
+          "email": "{me}",
+          "active": 1,
+          "created_at": "2026-10-12 14:03:51.402117-05",
+          "roles": ["user", "site_admin"]
+        },
+        {
+          "id": 7,
+          "email": "alice@example.com",
+          "active": 1,
+          "created_at": "2026-10-20 09:15:02.551873-05",
+          "roles": ["user", "auditor"]
+        },
+        {
+          "id": 9,
+          "email": "bob@example.com",
+          "active": 0,
+          "created_at": "2026-10-28 18:40:37.004512-05",
+          "roles": ["user"]
+        }
+      ]
+    notes:
+      - A search comes back in address order. One shorter than 3 characters answers an empty list.
+    cli: homelab-cli admin users list
+
+  - id: admin-create-service-account
+    title: Create an account without an invite
+    method: POST
+    path: /api/v1/admin/users/service-account
+    who: site-admin
+    status: 201
+    summary: Make an account directly, for a system mailbox or an operator or test login.
+    description: >
+      For an account the invite process won't make: a system mailbox (the
+      one invites are sent from, say), or an operator or test account on
+      one of this system's own mail domains. It gets the ordinary `user`
+      role and signs in to mail like any other account. Without a
+      `password`, a random one is made. Either way the answer shows it,
+      this once only.
+    params:
+      - name: email
+        in: body
+        required: true
+        about: The new account's address.
+        example: invites@example.com
+      - name: password
+        in: body
+        required: false
+        about: A password to use instead of a random one. At least 8 characters.
+    response: |
+      { "id": 12, "email": "invites@example.com", "password": "<generated password>" }
+    notes:
+      - Keep the password when you get it; it is never shown again.
+      - An address that already has an account answers 409, and a password shorter than 8 characters 400.
+      - The new account is recorded in the audit log.
+    cli: homelab-cli admin users create-service-account --email invites@example.com
+
+  - id: admin-suspend-user
+    title: Suspend or restore an account
+    method: POST
+    path: /api/v1/admin/users/:id/active
+    who: site-admin
+    summary: Stop an account signing in anywhere, or let it sign in again.
+    description: >
+      Suspending stops every way the account signs in, all at once: the
+      web, single sign-on, reading mail and sending it. It also ends the
+      account's current sign-in sessions and their refresh tokens, so it
+      can't go on using one it already has. Restoring lets it sign in
+      again. Nothing is deleted either way.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The account's number, from the account list.
+        example: 7
+      - name: active
+        in: body
+        required: true
+        about: false to suspend the account, true to restore it.
+        example: false
+    response: |
+      { "ok": true, "id": 7, "email": "alice@example.com", "active": false }
+    notes:
+      - Leaving out `active` counts as false, so it suspends.
+      - You can't suspend your own account; the answer is 400.
+      - An unknown account answers 404.
+    cli: none
+
+  - id: admin-mail-usage
+    title: See an account's mail usage
+    method: GET
+    path: /api/v1/admin/mail-usage
+    who: site-admin
+    summary: How much mail one account keeps, and the limit that applies to it.
+    description: >
+      The bytes and messages in the account's mailbox, and its limit: its
+      own if one is set, otherwise the 1 TB default (1099511627776 bytes).
+      The mail server sends fresh figures each time the mailbox changes, so
+      an account whose mailbox hasn't changed since that began shows null
+      for both until it next does.
+    params:
+      - name: user_email
+        in: query
+        required: true
+        about: The account's address, exactly as the account has it.
+        example: alice@example.com
+    response: |
+      {
+        "user_email": "alice@example.com",
+        "used_bytes": 734003200,
+        "messages": 4182,
+        "limit_bytes": 5368709120
+      }
+    notes:
+      - An address with no account still answers, with null figures and the default limit.
+      - An address without an @ answers 400.
+    cli: none
+
+  - id: admin-set-mail-quota
+    title: Set an account's mail quota
+    method: POST
+    path: /api/v1/admin/users/:id/mail-quota
+    who: site-admin
+    summary: Change how much mail one account may keep, or put it back to the default.
+    description: >
+      Sets the account's own limit, in bytes, which the mail server then
+      enforces. Leave out `limit_bytes` (or send null) to remove the
+      account's own limit, so the 1 TB default applies again.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The account's number, from the account list.
+        example: 7
+      - name: limit_bytes
+        in: body
+        required: false
+        about: The new limit in bytes, as a whole number. Leave it out, or send null, for the default.
+        example: 5368709120
+    response: |
+      { "ok": true, "email": "alice@example.com", "mail_quota_bytes": 5368709120 }
+    notes:
+      - Putting it back to the default answers a null `mail_quota_bytes` and a `note` saying "reset to default".
+      - A limit lower than what the account already keeps deletes nothing, so check its usage first.
+      - A limit that isn't a whole number answers 400, and an unknown account 404.
+    cli: none
+
+  - id: admin-drive-usage
+    title: See an account's drive usage
+    method: GET
+    path: /api/v1/drive/admin/usage
+    who: site-admin
+    summary: How much one account keeps in drive, and the limit that applies to it.
+    description: >
+      The bytes the account keeps in drive, not counting its trash, and its
+      limit: its own if one is set, otherwise the 1 TB default
+      (1099511627776 bytes).
+    params:
+      - name: user_email
+        in: query
+        required: true
+        about: The account's address, exactly as the account has it.
+        example: alice@example.com
+    response: |
+      { "user_email": "alice@example.com", "used_bytes": 2147483648, "limit_bytes": 53687091200 }
+    notes:
+      - An address with no account answers 0 bytes used and the default limit.
+    cli: none
+
+  - id: admin-set-drive-quota
+    title: Set an account's drive quota
+    method: PUT
+    path: /api/v1/drive/admin/quota
+    who: site-admin
+    summary: Change how much one account may keep in drive, or put it back to the default.
+    description: >
+      Sets the account's own limit, in bytes. An upload, or joining files
+      together, that would take the account over it is refused; files in
+      the trash don't count. Leave out `limit_bytes` (or send null) to
+      remove the account's own limit, so the 1 TB default applies again.
+    params:
+      - name: user_email
+        in: body
+        required: true
+        about: The account's address, exactly as the account has it.
+        example: alice@example.com
+      - name: limit_bytes
+        in: body
+        required: false
+        about: The new limit in bytes, as a whole number. Leave it out, or send null, for the default.
+        example: 53687091200
+    response: |
+      { "ok": true, "user_email": "alice@example.com", "limit_bytes": 53687091200 }
+    notes:
+      - Putting it back to the default answers a null `limit_bytes` and a `note` saying "reset to default".
+      - A limit lower than what the account already keeps deletes nothing; it only stops further uploads.
+      - It doesn't check that the address has an account.
+      - A limit that isn't a whole number answers 400.
+    cli: none
+
+  - id: admin-list-roles
+    title: List roles
+    method: GET
+    path: /api/v1/admin/roles
+    who: site-admin
+    summary: Every role, whether it can be deleted, and the permissions it carries.
+    description: >
+      In the order they were made. `protected` is 1 for the three built-in
+      roles that can't be deleted, and 0 for the rest: `user`, `site_admin`,
+      and `system_agent`, the role the fleet's own services sign in with.
+      `site_admin` carries no permissions because it needs none: a site
+      admin may always do everything.
+    response: |
+      [
+        {
+          "id": 1,
+          "name": "user",
+          "description": "Default role -- standard API access",
+          "protected": 1,
+          "created_at": "2026-10-12 13:58:20.118347-05",
+          "permissions": []
+        },
+        {
+          "id": 2,
+          "name": "site_admin",
+          "description": "Administrative capabilities (informational only; admin routes are hardcoded, not gated by a table, so a bad edit can't lock every admin out)",
+          "protected": 1,
+          "created_at": "2026-10-12 13:58:20.118347-05",
+          "permissions": []
+        },
+        {
+          "id": 4,
+          "name": "auditor",
+          "description": "Reads the audit log",
+          "protected": 0,
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "permissions": ["audit.view"]
+        }
+      ]
+    cli: homelab-cli admin roles list
+
+  - id: admin-grant-role
+    title: Give an account a role
+    method: POST
+    path: /api/v1/admin/users/:id/roles
+    who: site-admin
+    summary: Add a role to an account, and with it everything the role allows.
+    description: >
+      The account gets every permission the role carries. Giving
+      `site_admin` makes it a full site admin. Giving a role the account
+      already has changes nothing. Each grant is recorded in the audit log.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The account's number, from the account list.
+        example: 7
+      - name: role
+        in: body
+        required: true
+        about: The role's name, as the role list shows it.
+        example: auditor
+    response: |
+      { "ok": true }
+    notes:
+      - An unknown account answers 404, and an unknown role 400.
+    cli: homelab-cli admin users grant-role 7 auditor
+
+  - id: admin-revoke-role
+    title: Take a role from an account
+    method: DELETE
+    path: /api/v1/admin/users/:id/roles/:role
+    who: site-admin
+    summary: Remove one role from an account.
+    description: >
+      The account loses what the role allowed, unless another of its roles
+      allows the same. Each removal is recorded in the audit log.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The account's number, from the account list.
+        example: 7
+      - name: role
+        in: path
+        required: true
+        about: The role's name.
+        example: auditor
+    response: |
+      { "ok": true }
+    notes:
+      - It answers ok even when the account didn't have the role.
+      - Nothing stops you taking `site_admin` from your own account, so take care.
+    cli: homelab-cli admin users revoke-role 7 auditor
+
+  - id: admin-create-role
+    title: Create a role
+    method: POST
+    path: /api/v1/admin/roles
+    who: site-admin
+    status: 201
+    summary: Add a new role, with no permissions yet.
+    description: >
+      A new role carries nothing until you give it permissions; then give
+      the role to accounts. New roles are never protected, so they can be
+      deleted later.
+    params:
+      - name: name
+        in: body
+        required: true
+        about: The role's name.
+        example: auditor
+      - name: description
+        in: body
+        required: false
+        about: What the role is for, in a few words.
+        example: Reads the audit log
+    response: |
+      {
+        "id": 4,
+        "name": "auditor",
+        "description": "Reads the audit log",
+        "protected": 0,
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "permissions": []
+      }
+    notes:
+      - A name already in use answers 409.
+    cli: homelab-cli admin roles add auditor --description "Reads the audit log"
+
+  - id: admin-delete-role
+    title: Delete a role
+    method: DELETE
+    path: /api/v1/admin/roles/:name
+    who: site-admin
+    summary: Remove a role, taking it from every account that has it.
+    description: >
+      The role goes completely: every account that had it loses it at once,
+      along with the permissions it carried.
+    params:
+      - name: name
+        in: path
+        required: true
+        about: The role's name.
+        example: auditor
+    response: |
+      { "ok": true }
+    notes:
+      - The built-in `user`, `site_admin` and `system_agent` roles are protected; deleting one answers 400.
+      - An unknown role answers 404.
+    cli: homelab-cli admin roles remove auditor
+
+  - id: admin-list-permissions
+    title: List permissions
+    method: GET
+    path: /api/v1/admin/permissions
+    who: site-admin
+    summary: Every permission a role can be given, alphabetically.
+    description: >
+      Permissions come with the software, since each one only means
+      something where the code checks for it, so there is no way to add one
+      here. Give them to roles; a site admin holds them all already.
+    response: |
+      [
+        {
+          "id": 1,
+          "name": "audit.view",
+          "description": "View the system audit log (own entries always allowed; this grants viewing other users' entries too)"
+        },
+        {
+          "id": 3,
+          "name": "domains.catchall",
+          "description": "Manage domain catch-all routing + domain send-as (the myaccount \"Domain catch-all routing\" area)"
+        },
+        {
+          "id": 2,
+          "name": "metrics.view",
+          "description": "View the fleet metrics dashboard (Prometheus-backed) in myaccount"
+        }
+      ]
+    cli: homelab-cli admin permissions list
+
+  - id: admin-grant-permission
+    title: Give a role a permission
+    method: POST
+    path: /api/v1/admin/roles/:role/permissions/:permission
+    who: site-admin
+    summary: Let every account with a role do one more thing.
+    description: >
+      Every account with the role gets the permission. Giving a role a
+      permission it already has changes nothing.
+    params:
+      - name: role
+        in: path
+        required: true
+        about: The role's name.
+        example: auditor
+      - name: permission
+        in: path
+        required: true
+        about: The permission's name, from the permission list.
+        example: audit.view
+    response: |
+      { "ok": true }
+    notes:
+      - An unknown role or permission answers 404.
+    cli: homelab-cli admin roles grant-permission auditor audit.view
+
+  - id: admin-revoke-permission
+    title: Take a permission from a role
+    method: DELETE
+    path: /api/v1/admin/roles/:role/permissions/:permission
+    who: site-admin
+    summary: Stop a role carrying one permission.
+    description: >
+      Every account with the role loses the permission, unless another of
+      its roles carries it too.
+    params:
+      - name: role
+        in: path
+        required: true
+        about: The role's name.
+        example: auditor
+      - name: permission
+        in: path
+        required: true
+        about: The permission's name.
+        example: audit.view
+    response: |
+      { "ok": true }
+    notes:
+      - It answers ok even when the role didn't have the permission, or either name is unknown.
+    cli: homelab-cli admin roles revoke-permission auditor audit.view

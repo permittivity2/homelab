@@ -36,7 +36,9 @@
     /* The nav buttons carry no class of their own (JS toggles .active on
        them), so the theme's .sidenav__item look is applied by element here
        instead of rewriting the markup + the toggle. */
-    .sidenav button {
+    /* The API item is a link to developer.mailmasker.org, not a section:
+       the same look. */
+    .sidenav button, .sidenav a.sidenav-link {
       display: flex; align-items: center; gap: var(--space-3);
       width: 100%; text-align: left;
       background: none; border: none; cursor: pointer;
@@ -45,7 +47,8 @@
       color: var(--text-secondary); font: inherit; font-size: var(--app-base);
       transition: background var(--transition-fast), color var(--transition-fast);
     }
-    .sidenav button:hover { background: var(--surface-hover); color: var(--text-primary); }
+    .sidenav a.sidenav-link { text-decoration: none; box-sizing: border-box; }
+    .sidenav button:hover, .sidenav a.sidenav-link:hover { background: var(--surface-hover); color: var(--text-primary); }
     .sidenav button.active { background: var(--surface); color: var(--silver-bright); font-weight: var(--weight-medium); box-shadow: inset 2px 0 0 var(--silver-medium); }
     .sidenav .ico { width: 1.2rem; text-align: center; }
     .section { display: none; }

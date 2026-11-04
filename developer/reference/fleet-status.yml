@@ -1,0 +1,345 @@
+# Site admins' views of the machines behind the service. See README.md for
+# the fields.
+area: Fleet and status
+order: 140
+intro: >
+  For site admins: the machines behind the service. How the database
+  cluster, the mailbox servers and the other redundant groups are doing,
+  every node's agent and the services it reports, a map of what connects
+  to what, enrolling a new node, and the fleet's TLS certificates.
+
+abilities:
+  - id: admin-ha-status
+    title: See high-availability status
+    method: GET
+    path: /api/v1/admin/ha/status
+    who: site-admin
+    summary: The database cluster, its connection poolers, the mailbox servers and the internet edges, node by node.
+    description: >
+      Four groups, always in this order, each listing its nodes with a
+      `role`, a `state` and whether it is `healthy`, plus a `note` on how
+      the group works. For the database, `leader` is the node taking
+      writes, and each node's role, state and replication lag come live
+      from the cluster itself; `unreachable` means that node didn't answer.
+      For the mailbox servers, `leader` is the active server's address.
+    response: |
+      {
+        "components": [
+          {
+            "name": "PostgreSQL (Patroni)",
+            "kind": "patroni",
+            "vip": "192.0.2.30",
+            "leader": "prod-homelab06",
+            "members": [
+              { "name": "prod-homelab06", "address": "192.0.2.6", "role": "leader", "state": "running",
+                "lag": null, "timeline": 4, "healthy": true, "last_heartbeat": "2026-11-03 21:42:10.123456-06" },
+              { "name": "prod-homelab07", "address": "192.0.2.7", "role": "replica", "state": "streaming",
+                "lag": 0, "timeline": 4, "healthy": true, "last_heartbeat": "2026-11-03 21:41:52.410028-06" }
+            ],
+            "note": "Patroni + etcd + keepalived VIP 192.0.2.30 (follows the leader; apps reach it via pgbouncer). Role/state/lag are Patroni's own cluster view via each node's :8008/cluster REST; \"unreachable\" means that node's Patroni REST did not answer."
+          },
+          {
+            "name": "Connection poolers (pgbouncer)",
+            "kind": "pgbouncer",
+            "members": [
+              { "name": "prod-homelab09", "address": "192.0.2.9", "role": "pooler", "state": "up",
+                "healthy": true, "last_heartbeat": "2026-11-03 21:41:58.907311-06" }
+            ],
+            "note": "Every pooler fronts the database VIP, so any one keeps serving across a leader failover. Liveness is the fleet agent heartbeat (:6432 manifest)."
+          },
+          {
+            "name": "Mailbox servers (dovecot)",
+            "kind": "dovecot",
+            "leader": "192.0.2.62",
+            "members": [
+              { "name": "prod-homelabvm62", "address": "192.0.2.62", "role": "active", "state": "up",
+                "healthy": true, "last_heartbeat": "2026-11-03 21:42:01.335871-06" }
+            ],
+            "note": "Active/passive: the active host serves ALL mail paths (IMAP/IMAPS, LMTP delivery, SASL submission auth) and they fail over together via homelab-haproxy, which marks the other two `backup`. Same source as the Dovecot tab, so the two cannot disagree."
+          },
+          {
+            "name": "Internet-facing edges",
+            "kind": "edges",
+            "members": [
+              { "name": "prod-homelab01", "address": "192.0.2.1", "role": "powered on", "state": "serving",
+                "healthy": true, "last_heartbeat": "2026-11-03 21:42:04.661290-06" },
+              { "name": "prod-homelab02", "address": "192.0.2.2", "role": "off", "state": "powered off",
+                "healthy": false, "last_heartbeat": "2026-10-30 08:12:44.310925-05" }
+            ],
+            "note": "NOT automatic failover, by design: exactly ONE edge is powered on at a time and is swapped by hand (pct shutdown one, pct start another). Both public addresses arrive by DHCP from the AT&T reservations keyed to that node's eth7/eth6 MACs, so whichever node is up answers on them. keepalived was removed deliberately. Exactly one is up, which is correct."
+          }
+        ]
+      }
+    notes:
+      - For the poolers, mailbox servers and edges, `healthy` only means the node's agent checked in within the last 3 minutes, not that the service itself answered.
+      - The edges are not a failover group. Exactly one should be powered on at a time, and their `note` says whether that is so.
+      - Each call asks the database nodes directly, so one that is down can slow the answer by several seconds.
+    cli: none
+
+  - id: admin-dovecot-status
+    title: See the mailbox servers
+    method: GET
+    path: /api/v1/admin/dovecot/status
+    who: site-admin
+    summary: Which mailbox server is active, which are standing by, and whether each is up.
+    description: >
+      One mailbox server is active and does all the mail work: reading
+      mail, delivering it, and checking passwords for sending. The others
+      stand by, and if the active one goes down all of that moves to a
+      standby together. `paths` lists those mail services and their ports,
+      and `note` explains the arrangement.
+    response: |
+      {
+        "active_address": "192.0.2.62",
+        "hosts": [
+          {
+            "name": "prod-homelabvm62",
+            "address": "192.0.2.62",
+            "role": "active",
+            "healthy": true,
+            "last_heartbeat": "2026-11-03 21:42:10.123456-06"
+          },
+          {
+            "name": "prod-homelabvm63",
+            "address": "192.0.2.63",
+            "role": "standby",
+            "healthy": true,
+            "last_heartbeat": "2026-11-03 21:41:58.907311-06"
+          }
+        ],
+        "paths": [
+          { "name": "IMAP / IMAPS", "ports": "143, 993", "via": "HAProxy active/passive" },
+          { "name": "LMTP delivery", "ports": "24", "via": "HAProxy active/passive" },
+          { "name": "SASL submission auth", "ports": "12345", "via": "HAProxy active/passive" }
+        ],
+        "note": "Active/passive: exactly one host (the active one) serves ALL mail -- IMAP/IMAPS reads, LMTP delivery, and SASL submission auth -- so its local maildir index stays authoritative (shared storage, per-host indexes). All three paths fail over together to a standby if the active host goes down. Enforced by homelab-haproxy active_passive; keep the pool here in sync with its backends.yml."
+      }
+    notes:
+      - "`healthy` means the server's agent checked in within the last 3 minutes; it doesn't test the mail service itself."
+      - "`role` is the planned layout from the api's own settings, not a live reading: if the mail service fails over by itself, this still names the old server as active."
+      - "`last_heartbeat` is null for a server whose agent has never checked in."
+    cli: homelab-cli admin dovecot status
+
+  - id: admin-list-nodes
+    title: List nodes
+    method: GET
+    path: /api/v1/admin/agent/hosts
+    who: site-admin
+    summary: Every node whose agent has ever checked in, and when it last did.
+    description: >
+      In name order: each node's address, the port its agent listens on,
+      the agent's version, and when it last checked in. Agents check in
+      about once a minute, so a `last_heartbeat` more than a few minutes
+      old means that node has gone quiet.
+    response: |
+      [
+        {
+          "hostname": "prod-homelab12",
+          "address": "192.0.2.12",
+          "agent_port": 2520,
+          "agent_version": "0.1.9",
+          "last_heartbeat": "2026-11-03 21:42:10.123456-06"
+        },
+        {
+          "hostname": "prod-homelab13",
+          "address": "192.0.2.13",
+          "agent_port": 2520,
+          "agent_version": "0.1.9",
+          "last_heartbeat": "2026-11-03 21:41:47.880315-06"
+        }
+      ]
+    notes:
+      - A node that has been switched off stays on the list; only its `last_heartbeat` stops moving.
+      - A node missing from the list has never finished enrolling.
+    cli: homelab-cli admin fleet status
+
+  - id: admin-service-status
+    title: List services on every node
+    method: GET
+    path: /api/v1/admin/agent/status
+    who: site-admin
+    summary: Every service each node declares, and whether its agent found it running.
+    description: >
+      One row per service per node, by service name, as each node last
+      reported it. `expected` is 1 for a service the node's packages
+      declare, and `actual` is 1 when the agent found it running (its
+      system service active, or its port answering). For a proxy, `fronts`
+      lists where it passes traffic on to.
+    response: |
+      [
+        {
+          "hostname": "prod-homelab09",
+          "service_name": "pgbouncer",
+          "package_name": "homelab-pgbouncer",
+          "kind": "pgbouncer",
+          "expected": 1,
+          "actual": 1,
+          "description": "PgBouncer connection pooler in front of the shared homelab database",
+          "fronts": null,
+          "checked_at": "2026-11-03 21:41:58.907311-06"
+        },
+        {
+          "hostname": "prod-homelab03",
+          "service_name": "webproxy-myaccount.example.com",
+          "package_name": "homelab-webproxy",
+          "kind": "http-proxy-vhost",
+          "expected": 1,
+          "actual": 1,
+          "description": "HTTPS vhost for myaccount.example.com",
+          "fronts": ["192.0.2.20:2503", "192.0.2.21:2503"],
+          "checked_at": "2026-11-03 21:42:10.123456-06"
+        }
+      ]
+    notes:
+      - Yes-or-no fields come back as 1 or 0.
+      - A node that stops checking in keeps its last report, so its services can look fine long after it went quiet. Compare `checked_at` with the time, or see the fleet map, which marks such nodes stale.
+    cli: homelab-cli admin fleet status
+
+  - id: admin-service-problems
+    title: List services that aren't running
+    method: GET
+    path: /api/v1/admin/agent/status/mismatches
+    who: site-admin
+    summary: Only the services whose running state doesn't match what their node declares.
+    description: >
+      The rows of the service list where `expected` and `actual` differ.
+      Agents report only the services their node declares, so in practice
+      each row is a service that should be running and isn't. An empty list
+      means everything declared is running.
+    response: |
+      [
+        {
+          "hostname": "prod-homelab13",
+          "service_name": "drive",
+          "package_name": "homelab-drive",
+          "kind": "http_service",
+          "expected": 1,
+          "actual": 0,
+          "description": "File storage web app + JSON API, serves /api/v1/drive/*",
+          "fronts": null,
+          "checked_at": "2026-11-03 21:41:47.880315-06"
+        }
+      ]
+    notes:
+      - Yes-or-no fields come back as 1 or 0.
+      - A node that has gone quiet keeps its last report, so its services don't show up here; look for it in the node list or on the fleet map.
+    cli: homelab-cli admin fleet drift
+
+  - id: admin-fleet-topology
+    title: Map the fleet
+    method: GET
+    path: /api/v1/admin/agent/topology
+    who: site-admin
+    summary: Every machine, the services on it, and which service talks to which, as a graph.
+    description: >
+      For drawing a map. `nodes` holds one entry per service per machine,
+      named `host/service`; `edges` say which talks to which, with a `kind`
+      of proxy, http, mail or dns; `hosts` groups the same entries under the
+      machine they run on. The connections come from where the proxies say
+      they pass traffic, plus a fixed list of the calls the services make
+      to each other.
+    response: |
+      {
+        "heartbeat_stale_after_sec": 300,
+        "hosts": [
+          {
+            "hostname": "prod-homelab42",
+            "address": "192.0.2.42",
+            "agent_version": "0.1.9",
+            "last_heartbeat": "2026-11-03 21:42:10.123456-06",
+            "stale": false,
+            "monitored": true,
+            "services": [
+              { "id": "prod-homelab42/roundcube-nginx", "host": "prod-homelab42", "service": "roundcube-nginx",
+                "kind": "http_service", "package": "homelab-roundcube", "address": "192.0.2.42",
+                "expected": true, "actual": true, "healthy": true, "monitored": true,
+                "description": "Roundcube's internal-only nginx vhost, bridging homelab-webproxy to PHP-FPM" },
+              { "id": "prod-homelab42/roundcube-php-fpm", "host": "prod-homelab42", "service": "roundcube-php-fpm",
+                "kind": "http_service", "package": "homelab-roundcube", "address": "192.0.2.42",
+                "expected": true, "actual": true, "healthy": true, "monitored": true,
+                "description": "PHP-FPM pool serving Roundcube itself" }
+            ]
+          }
+        ],
+        "nodes": [
+          { "id": "prod-homelab42/roundcube-nginx", "host": "prod-homelab42", "service": "roundcube-nginx",
+            "kind": "http_service", "package": "homelab-roundcube", "address": "192.0.2.42",
+            "expected": true, "actual": true, "healthy": true, "monitored": true,
+            "description": "Roundcube's internal-only nginx vhost, bridging homelab-webproxy to PHP-FPM" },
+          { "id": "prod-homelab42/roundcube-php-fpm", "host": "prod-homelab42", "service": "roundcube-php-fpm",
+            "kind": "http_service", "package": "homelab-roundcube", "address": "192.0.2.42",
+            "expected": true, "actual": true, "healthy": true, "monitored": true,
+            "description": "PHP-FPM pool serving Roundcube itself" }
+        ],
+        "edges": [
+          { "from": "prod-homelab42/roundcube-nginx", "to": "prod-homelab42/roundcube-php-fpm", "kind": "http" }
+        ]
+      }
+    notes:
+      - A service is `healthy` when it is running and its machine checked in within the last `heartbeat_stale_after_sec` seconds; a machine past that is marked `stale`.
+      - A service found only as somewhere a proxy passes traffic, on a machine with no agent, has `monitored` false and `healthy` null.
+    cli: homelab-cli admin fleet topology
+
+  - id: admin-enroll-node
+    title: Enroll a new node
+    method: POST
+    path: /api/v1/admin/agent/enroll
+    who: site-admin
+    status: 201
+    summary: Get a one-time code that lets a new node's agent sign itself in.
+    description: >
+      Do this before installing homelab-agent on the new node. The code is
+      tied to the host name you give. The agent there trades it for its own
+      sign-in, then checks in by itself about once a minute. Enrolling a
+      host name again later (after its agent has been offline too long,
+      say) keeps the same identity.
+    params:
+      - name: hostname
+        in: body
+        required: true
+        about: The node's name, exactly as its agent is set up with it.
+        example: prod-homelab12
+      - name: ttl_minutes
+        in: body
+        required: false
+        about: How many minutes the code stays usable. The default is 10.
+    response: |
+      { "code": "<one-time token>", "hostname": "prod-homelab12", "expires_in_minutes": 10 }
+    notes:
+      - The code works once, and only until it expires.
+      - Hand it over by preseeding the homelab-agent/enrollment_code answer before installing the agent; homelab-cli prints the exact line to run.
+    cli: homelab-cli admin agent enroll prod-homelab12
+
+  - id: admin-list-certificates
+    title: List the fleet's certificates
+    method: GET
+    path: /api/v1/admin/certstore
+    who: site-admin
+    summary: Each TLS certificate the fleet hands out, soonest to expire first.
+    description: >
+      One entry per certificate name (`lineage`): the certificate the
+      servers using that name should have now, the names it covers, when it
+      expires and how many days are left. The issuing node publishes each
+      renewal here and the servers pick it up from here; `sha256_fullchain`
+      is what each of them compares with its own copy to tell whether it is
+      out of date. No key material is ever included.
+    response: |
+      [
+        {
+          "lineage": "mail.example.com",
+          "serial": "04F3A2B19C7D5E6F8091A2B3C4D5E6F70812",
+          "not_before": "2026-10-15 02:12:44-05",
+          "not_after": "2027-01-13 01:12:43-06",
+          "days_remaining": 70,
+          "domains": ["mail.example.com", "imap.example.com", "smtp.example.com"],
+          "sha256_fullchain": "6b1f6b1f6b1f6b1f6b1f6b1f6b1f6b1f6b1f6b1f6b1f6b1f6b1f6b1f6b1f6b1f",
+          "published_by": "agent+prod-homelab46@example.com",
+          "published_at": "2026-10-15 03:12:51.208734-05",
+          "promoted_at": "2026-10-15 03:12:51.208734-05"
+        }
+      ]
+    notes:
+      - Only the current certificate for each name is listed, not older ones.
+      - "`published_by` is the issuing node's agent, and `promoted_at` is when this certificate became the current one."
+      - "`days_remaining` counts whole days, and goes below 0 once a certificate is more than a day past its expiry."
+    cli: none

@@ -1,0 +1,155 @@
+# Catch-all routing: all mail for a domain to one mailbox. See README.md for
+# the fields.
+area: Catch-all routing
+order: 125
+intro: >
+  Send a domain's mail to one mailbox. Mail to an address with its own
+  mailbox or extra-address entry still goes there; everything else at the
+  domain goes to the catch-all.
+
+abilities:
+  - id: catch-alls-list
+    title: List every domain's catch-all
+    method: GET
+    path: /api/v1/domains/catch-alls
+    who: permission:domains.catchall
+    summary: Every domain on the system, alphabetically, with where its catch-all sends mail.
+    description: >
+      `destination` is the catch-all's mailbox, or null when the domain has
+      none. The domain takes mail while both `mail_enabled` and `active` are
+      on. `send_enabled` is whether the catch-all's mailbox may also send
+      from any address at the domain, and `has_dkim` whether the domain
+      signs the mail it sends.
+    response: |
+      [
+        {
+          "domain": "example.com",
+          "mail_enabled": 1,
+          "active": 1,
+          "destination": null,
+          "catchall_active": null,
+          "send_enabled": null,
+          "has_dkim": 1
+        },
+        {
+          "domain": "example.org",
+          "mail_enabled": 1,
+          "active": 1,
+          "destination": "{me}",
+          "catchall_active": 1,
+          "send_enabled": 0,
+          "has_dkim": 0
+        }
+      ]
+    notes:
+      - Yes-or-no fields come back as 1 or 0, and the catch-all's own fields as null when there is none.
+    cli: none
+
+  - id: catch-all-show
+    title: See a domain's catch-all
+    method: GET
+    path: /api/v1/domains/:domain/catch-all
+    who: permission:domains.catchall
+    summary: Where one domain's catch-all sends mail, if anywhere.
+    description: >
+      `destination` is the catch-all's mailbox, or null for none. A domain
+      the system doesn't serve yet isn't an error: it answers `managed`
+      false, and setting a catch-all for it adds it.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain name.
+        example: example.org
+    response: |
+      {
+        "domain": "example.org",
+        "managed": true,
+        "mail_enabled": 1,
+        "active": 1,
+        "destination": "{me}",
+        "catchall_active": 1
+      }
+    cli: none
+
+  - id: catch-all-set
+    title: Set a domain's catch-all
+    method: PUT
+    path: /api/v1/domains/:domain/catch-all
+    who: permission:domains.catchall
+    summary: Send all mail for a domain to one mailbox.
+    description: >
+      Sets or replaces the domain's catch-all, and turns mail on for the
+      domain, even one that was disabled. A domain the system doesn't serve
+      yet is added, but gets no DNS zone here, so its mail must already be
+      pointed at this system.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain whose mail to catch.
+        example: example.org
+      - name: destination
+        in: body
+        required: true
+        about: The mailbox it goes to. It must not be at the same domain.
+        example: "{me}"
+      - name: send_enabled
+        in: body
+        required: false
+        about: Whether that mailbox may also send from any address at the domain. Left out, it stays as it was (off for a new catch-all).
+    response: |
+      {
+        "ok": true,
+        "domain": "example.org",
+        "destination": "{me}",
+        "mail_enabled": true,
+        "send_enabled": false
+      }
+    notes:
+      - The destination isn't checked here, so check it first with Check that a mailbox exists, as myaccount does.
+      - A destination at the same domain answers 400, and one that is itself an extra address answers 409, since either would loop.
+    cli: none
+
+  - id: catch-all-clear
+    title: Remove a domain's catch-all
+    method: DELETE
+    path: /api/v1/domains/:domain/catch-all
+    who: permission:domains.catchall
+    summary: Stop sending a domain's leftover mail to one mailbox.
+    description: >
+      Mail to addresses at the domain without a mailbox or entry of their
+      own is refused again. The domain keeps taking mail for the rest.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain name.
+        example: example.org
+    response: |
+      { "ok": true, "domain": "example.org" }
+    notes:
+      - A domain with no catch-all answers 404.
+    cli: none
+
+  - id: mailbox-exists
+    title: Check that a mailbox exists
+    method: GET
+    path: /api/v1/mail/recipient-exists
+    who: permission:domains.catchall
+    summary: Whether an address is an active account's mailbox.
+    description: >
+      Matches the whole address exactly, ignoring case, and never lists or
+      suggests others. Use it before setting a catch-all, which doesn't
+      check its destination.
+    params:
+      - name: email
+        in: query
+        required: true
+        about: The full address to check.
+        example: "{me}"
+    response: |
+      { "exists": true }
+    notes:
+      - A suspended account, or text without an @, answers false.
+    cli: none

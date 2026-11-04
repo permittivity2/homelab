@@ -1,0 +1,191 @@
+# Inviting people to get an account. See README.md for the fields.
+area: Invites
+order: 80
+intro: >
+  Invite someone to make an account here. An invite is a link that works
+  for one sign-up, emailed to them. How many you may have waiting, and
+  send in a day, is limited.
+
+abilities:
+  - id: invite-send
+    title: Invite someone
+    method: POST
+    path: /api/v1/invites
+    who: signed-in
+    status: 201
+    summary: Email someone a link they can use to make an account.
+    description: >
+      Makes a one-time sign-up link and emails it to them, with your note
+      if you add one. The answer holds the link itself as `url`, so you can
+      also pass it on another way. It stops working at `expires_at`.
+    params:
+      - name: recipient_email
+        in: body
+        required: true
+        about: Their email address, where the link is sent.
+        example: friend@example.com
+      - name: message
+        in: body
+        required: false
+        about: A note from you, put in the email and shown on the sign-up page.
+        example: Come and join me here.
+      - name: channel
+        in: body
+        required: false
+        about: cli (the default) or web, and the email is sent for you. roundcube_plugin sends no email, leaving the link for you to deliver.
+    response: |
+      {
+        "id": 12,
+        "token": "f00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeed",
+        "sender_email": "{me}",
+        "recipient_email": "friend@example.com",
+        "channel": "cli",
+        "message": "Come and join me here.",
+        "status": "pending",
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "expires_at": "2026-11-17 21:42:10.123456-06",
+        "accepted_at": null,
+        "accepted_user_email": null,
+        "revoked_at": null,
+        "revoked_by_email": null,
+        "url": "https://invite.example.com/invite/f00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeed"
+      }
+    notes:
+      - Past your limit of waiting invites, or of invites sent in the last day, the answer is 429 (see See your invite limits).
+      - A second invite to someone who already has a pending one from you answers 409. An address that doesn't look like one answers 400.
+      - If the email can't be sent, the invite is still made. The answer adds a `warning`, and the link in `url` still works.
+      - Someone whose address is on one of this system's own mail domains can't use an invite; the sign-up page turns them away.
+    cli: homelab-cli invite send --to friend@example.com --message "Come and join me here."
+
+  - id: invite-list
+    title: List your invites
+    method: GET
+    path: /api/v1/invites
+    who: signed-in
+    summary: Every invite you have sent, newest first, and what became of each.
+    description: >
+      `status` is pending, accepted (the link was used), revoked (it was
+      withdrawn) or expired. For an accepted invite, `accepted_user_email`
+      is the account it made.
+    params:
+      - name: all
+        in: query
+        required: false
+        about: true or 1 for everyone's invites, not only yours. Site admins only; anyone else gets 403.
+    response: |
+      [
+        {
+          "id": 12,
+          "token": "f00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeed",
+          "sender_email": "{me}",
+          "recipient_email": "friend@example.com",
+          "channel": "cli",
+          "message": "Come and join me here.",
+          "status": "pending",
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "expires_at": "2026-11-17 21:42:10.123456-06",
+          "accepted_at": null,
+          "accepted_user_email": null,
+          "revoked_at": null,
+          "revoked_by_email": null
+        }
+      ]
+    notes:
+      - An invite past its `expires_at` says expired, and no longer counts toward your limit of waiting invites.
+    cli: homelab-cli invite list
+
+  - id: invite-revoke
+    title: Withdraw an invite
+    method: DELETE
+    path: /api/v1/invites/:id
+    who: signed-in
+    summary: Cancel a pending invite, so its link stops working.
+    description: >
+      The invite stays on your list, as revoked, and no longer counts
+      toward your limit of waiting invites. Only a pending invite can be
+      withdrawn.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The invite's `id`, from List your invites.
+        example: 12
+      - name: user
+        in: query
+        required: false
+        about: The sender's address, to withdraw an invite someone else sent. Site admins only; anyone else gets 403.
+    response: |
+      { "ok": true }
+    notes:
+      - An invite that isn't yours, or isn't pending any more, answers 404.
+    cli: homelab-cli invite revoke 12
+
+  - id: invite-quota-mine
+    title: See your invite limits
+    method: GET
+    path: /api/v1/invites/quota
+    who: signed-in
+    summary: How many invites you may have waiting at once, and send in a day.
+    description: >
+      `max_pending` is how many unused invites you may have out at once,
+      and `max_per_day` how many you may send in any 24 hours. They are the
+      site's defaults unless a site admin has set your own.
+    response: |
+      { "max_pending": 10, "max_per_day": 5 }
+    cli: homelab-cli invite quota show
+
+  - id: invite-quota-show
+    title: See someone's invite limits
+    method: GET
+    path: /api/v1/invites/quota/:sender_email
+    who: site-admin
+    summary: The invite limits that apply to one sender.
+    description: >
+      Their own limits if a site admin has set them, otherwise the site's
+      defaults. The answer looks the same either way.
+    params:
+      - name: sender_email
+        in: path
+        required: true
+        about: The sender's address.
+        example: alex@{domain}
+    response: |
+      { "max_pending": 20, "max_per_day": 10 }
+    cli: homelab-cli invite quota show --user alex@{domain}
+
+  - id: invite-quota-set
+    title: Set someone's invite limits
+    method: PUT
+    path: /api/v1/invites/quota/:sender_email
+    who: site-admin
+    summary: Give one sender their own invite limits in place of the site's defaults.
+    description: >
+      Replaces any limits the sender already had. There is no call to
+      remove them and go back to following the defaults.
+    params:
+      - name: sender_email
+        in: path
+        required: true
+        about: The sender's address.
+        example: alex@{domain}
+      - name: max_pending
+        in: body
+        required: true
+        about: How many unused invites they may have out at once.
+        example: 20
+      - name: max_per_day
+        in: body
+        required: true
+        about: How many they may send in any 24 hours.
+        example: 10
+    response: |
+      {
+        "sender_email": "alex@{domain}",
+        "max_pending": 20,
+        "max_per_day": 10,
+        "updated_at": "2026-11-03 21:42:10.123456-06",
+        "updated_by_email": "{me}"
+      }
+    notes:
+      - Leaving out either number answers 400.
+    cli: homelab-cli invite quota set --user alex@{domain} --max-pending 20 --max-per-day 10

@@ -1,0 +1,134 @@
+# Your mailbox: read it and send from it. See README.md for the fields.
+area: Mail
+order: 50
+intro: >
+  Read the mail in your mailbox and send mail as yourself, without an
+  email program. Each call opens your own mailbox with your own sign-in,
+  so it sees exactly what your email app sees.
+
+abilities:
+  - id: mail-list
+    title: List your recent messages
+    method: GET
+    path: /api/v1/mail/messages
+    who: signed-in
+    summary: The sender, subject and date of the newest messages in one folder.
+    description: >
+      The most recent messages in a folder, the oldest of them first. Each
+      `uid` is the message's lasting number in that folder; use it to read
+      the message. Listing doesn't mark anything as read.
+    params:
+      - name: mailbox
+        in: query
+        required: false
+        about: The folder to list. INBOX if you leave it out.
+      - name: limit
+        in: query
+        required: false
+        about: How many of the newest messages to return. 20 if you leave it out.
+        example: 10
+    response: |
+      [
+        {
+          "uid": "41",
+          "from": "Alex <alex@example.com>",
+          "subject": "Lunch on Friday?",
+          "date": "Tue, 3 Nov 2026 12:05:44 -0600"
+        },
+        {
+          "uid": "42",
+          "from": "billing@example.com",
+          "subject": "Your November invoice",
+          "date": "Tue, 3 Nov 2026 21:42:10 -0600"
+        }
+      ]
+    notes:
+      - A folder that doesn't exist answers 502, the same as when your mailbox can't be reached.
+    cli: homelab-cli mail list --limit 10
+
+  - id: mail-read
+    title: Read a message
+    method: GET
+    path: /api/v1/mail/messages/:uid
+    who: signed-in
+    summary: One message's sender, subject, date and plain-text body.
+    description: >
+      The body is the message's plain-text part. A message sent only as
+      HTML comes back with an empty body, and attachments are left out.
+      Reading a message marks it as read, as opening it in an email
+      program does.
+    params:
+      - name: uid
+        in: path
+        required: true
+        about: The message's number, from List your recent messages.
+        example: 42
+      - name: mailbox
+        in: query
+        required: false
+        about: The folder the message is in. INBOX if you leave it out.
+    response: |
+      {
+        "from": "billing@example.com",
+        "subject": "Your November invoice",
+        "date": "Tue, 3 Nov 2026 21:42:10 -0600",
+        "body": "Thanks for your order. Your invoice is attached."
+      }
+    notes:
+      - A number that isn't in that folder answers 404.
+    cli: homelab-cli mail read 42
+
+  - id: mail-send
+    title: Send a message
+    method: POST
+    path: /api/v1/mail/send
+    who: signed-in
+    summary: Send a plain-text email from your own address, or another one you may send from.
+    description: >
+      The message goes out from your login address unless you name another
+      in `from`, which must be one of the addresses you may send from (see
+      List your addresses). It goes to one recipient, as plain text.
+    params:
+      - name: to
+        in: body
+        required: true
+        about: The one address to send it to.
+        example: alex@example.com
+      - name: subject
+        in: body
+        required: true
+        about: The subject line.
+        example: Lunch on Friday?
+      - name: body
+        in: body
+        required: true
+        about: The message, as plain text.
+        example: Are you free at noon?
+      - name: from
+        in: body
+        required: false
+        about: Send from this address instead of your login address. It may carry a name, as in `Shop <shop@example.com>`.
+    response: |
+      { "ok": true }
+    notes:
+      - Leaving out to, subject or body answers 400.
+      - A from address you may not send from is refused with 403.
+      - If the mail server won't take the message, the answer is 502.
+      - Each message sent is recorded in your activity log, with its sender, recipient and subject.
+    cli: homelab-cli mail send --to alex@example.com --subject "Lunch on Friday?" --body "Are you free at noon?"
+
+  - id: mail-usage
+    title: See your mail storage use
+    method: GET
+    path: /api/v1/mail/usage
+    who: signed-in
+    summary: How much space your mail takes, and your mailbox's limit, in bytes.
+    description: >
+      `used_bytes` is how much your mail takes up and `limit_bytes` is the
+      most your mailbox may hold, the same numbers myaccount's dashboard
+      shows.
+    response: |
+      { "used_bytes": 734003200, "limit_bytes": 10737418240 }
+    notes:
+      - Both are 0 when no size limit is set for your mailbox.
+    cli: none

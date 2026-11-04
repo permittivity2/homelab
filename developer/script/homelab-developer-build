@@ -1,0 +1,25 @@
+#!/usr/bin/perl
+use Mojo::Base -strict, -signatures;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+use Getopt::Long qw(GetOptions);
+use Mojo::File qw(path);
+use Homelab::Developer::Site qw(build_site);
+
+# Builds developer.mailmasker.org into a directory, as plain files
+# (post-cutover item 49). debian/rules runs it when the package is built;
+# run it by hand to look at the result:
+#
+#   script/homelab-developer-build --out /tmp/developer-site
+#
+# The pages link to each other as /name, served from name.html by nginx's
+# try_files (see nginx/developer.mailmasker.org.conf).
+
+my %o = (root => path($FindBin::Bin)->dirname->to_string);
+GetOptions(\%o, 'out=s', 'version=s', 'root=s', 'webtheme=s', 'help')
+    or die "usage: $0 --out DIR [--version V] [--root DIR] [--webtheme DIR]\n";
+die "usage: $0 --out DIR [--version V] [--root DIR] [--webtheme DIR]\n" if $o{help} || !$o{out};
+delete $o{help};
+
+my $r = build_site(%o);
+say "built $r->{pages} pages ($r->{abilities} abilities) into $r->{out}";

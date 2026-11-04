@@ -1,0 +1,27 @@
+#!/bin/sh
+set -e
+
+# Switch the site on and reload nginx -- but only with a configuration nginx
+# accepts. The same nginx serves the fleet's apt repository and the other
+# sites on this host, so it must never be reloaded into a broken state.
+case "$1" in
+    configure)
+        link=/etc/nginx/sites-enabled/developer.mailmasker.org
+        [ -e "$link" ] || ln -s ../sites-available/developer.mailmasker.org "$link"
+        if nginx -t >/dev/null 2>&1; then
+            if systemctl is-active --quiet nginx; then
+                systemctl reload nginx
+            fi
+        else
+            rm -f "$link"
+            echo "homelab-developer: nginx rejects its configuration with developer.mailmasker.org in it," >&2
+            echo "so the site is left switched off and nginx was not reloaded:" >&2
+            nginx -t >&2 || true
+            exit 1
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -3,10 +3,13 @@
 %:
 	dh $@ --buildsystem=pybuild
 
+# One test runs at build time, the one that holds the "developer first"
+# rule (post-cutover item 49): every API call homelab-cli makes must already
+# be in homelab-developer's reference (../developer/reference), and every
+# command that reference shows must parse. It needs no network and no fleet.
+# The rest of the suite runs in CI and by hand: python3 -m pytest tests/
 override_dh_auto_test:
-	# No package-build-time tests (pytest isn't a runtime dep, and the
-	# suite doesn't need any live infrastructure — run it directly via
-	# `python3 -m pytest tests/` during development instead).
+	PYTHONPATH=. python3 -m pytest -q -p no:cacheprovider tests/test_reference.py
 
 # Man page generated fresh from the real, live build_parser() (the same
 # function argcomplete.autocomplete() already uses for tab completion,

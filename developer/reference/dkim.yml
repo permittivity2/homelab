@@ -1,0 +1,197 @@
+# The keys that sign each domain's outgoing mail. See README.md for the fields.
+area: DKIM signing keys
+order: 130
+intro: >
+  Each domain's outgoing mail is signed with a DKIM key, so receivers can
+  tell it really came from us. Changing a key takes three steps: make a
+  new one, wait for its DNS record to spread, then switch to it. The old
+  key stays published for a while (7 days unless the site has set
+  another time), then is removed on its own.
+
+abilities:
+  - id: dkim-list
+    title: List a domain's signing keys
+    method: GET
+    path: /api/v1/domains/:domain/dkim/selectors
+    who: site-admin
+    summary: Every DKIM key a domain has had, by selector, newest first, with its state.
+    description: >
+      A key's `state` is pending (published in DNS, not signing yet),
+      active (signing the domain's mail; there is at most one), retiring
+      (replaced, but kept in DNS until `retire_after` so mail it already
+      signed still checks out) or retired (gone from DNS).
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain.
+        example: "{domain}"
+    response: |
+      [
+        {
+          "id": 9,
+          "selector": "20261103a",
+          "state": "pending",
+          "key_bits": 2048,
+          "created_at": "2026-11-03 21:42:10.123456-06",
+          "activated_at": null,
+          "retiring_at": null,
+          "retire_after": null,
+          "retired_at": null
+        },
+        {
+          "id": 7,
+          "selector": "20261020a",
+          "state": "active",
+          "key_bits": 2048,
+          "created_at": "2026-10-20 10:02:44.318200-05",
+          "activated_at": "2026-10-20 14:30:05.771032-05",
+          "retiring_at": null,
+          "retire_after": null,
+          "retired_at": null
+        }
+      ]
+    notes:
+      - A domain that isn't on the system answers 404.
+    cli: homelab-cli dns dkim list {domain}
+
+  - id: dkim-rotate
+    title: Make a new signing key
+    method: POST
+    path: /api/v1/domains/:domain/dkim/rotate
+    who: site-admin
+    status: 201
+    summary: Create a new DKIM key for a domain and publish it in DNS, ready to switch to.
+    description: >
+      Makes a new 2048-bit key, its selector named for today's date, such
+      as `20261103a` (`20261103b` for a second one that day), and publishes
+      its public half in DNS, where receivers look it up. It starts out
+      pending and signs nothing until you switch to it.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain.
+        example: "{domain}"
+    response: |
+      {
+        "id": 9,
+        "domain_id": 3,
+        "selector": "20261103a",
+        "state": "pending",
+        "public_key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...IDAQAB",
+        "key_bits": 2048,
+        "created_by": "{me}",
+        "activated_by": null,
+        "retired_by": null,
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "activated_at": null,
+        "retiring_at": null,
+        "retire_after": null,
+        "retired_at": null,
+        "next_action_at": null
+      }
+    notes:
+      - If the key can't be made or its DNS record can't be published, the answer is 502 and nothing is left behind.
+      - The private half of a key is never shown.
+    cli: homelab-cli dns dkim rotate {domain}
+
+  - id: dkim-activate
+    title: Switch to a new signing key
+    method: POST
+    path: /api/v1/domains/:domain/dkim/:selector/activate
+    who: site-admin
+    summary: Start signing a domain's mail with a pending key, and start retiring the old one.
+    description: >
+      The pending key becomes active and signs the domain's outgoing mail
+      from now on. The key it replaces turns retiring: it stays in DNS until
+      its `retire_after`, so mail it already signed still checks out, and is
+      then removed on its own.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain.
+        example: "{domain}"
+      - name: selector
+        in: path
+        required: true
+        about: The pending key's selector, from List a domain's signing keys.
+        example: 20261103a
+    response: |
+      {
+        "id": 9,
+        "domain_id": 3,
+        "selector": "20261103a",
+        "state": "active",
+        "public_key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...IDAQAB",
+        "key_bits": 2048,
+        "created_by": "{me}",
+        "activated_by": "{me}",
+        "retired_by": null,
+        "created_at": "2026-11-03 21:42:10.123456-06",
+        "activated_at": "2026-11-04 09:15:27.640118-06",
+        "retiring_at": null,
+        "retire_after": null,
+        "retired_at": null,
+        "next_action_at": null
+      }
+    notes:
+      - Switch only once the new key's DNS record has had time to spread; until then, receivers can't check mail signed with it.
+      - Only a pending key can be switched to; any other answers 409.
+    cli: homelab-cli dns dkim activate {domain} 20261103a
+
+  - id: dkim-retire
+    title: Retire a signing key now
+    method: POST
+    path: /api/v1/domains/:domain/dkim/:selector/retire
+    who: site-admin
+    summary: Take an active or retiring key out of use and out of DNS straight away.
+    description: >
+      For a key you think has leaked. It skips the rest of the usual wait:
+      the DNS record and the key go at once, so mail it signed that is still
+      on its way fails its signature check. Normally keys retire on their
+      own, after a newer one is switched to.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain.
+        example: "{domain}"
+      - name: selector
+        in: path
+        required: true
+        about: The key's selector.
+        example: 20261020a
+    response: |
+      { "ok": true }
+    notes:
+      - Retiring the active key leaves the domain's mail unsigned until you switch to another.
+      - A pending key can't be retired (cancel it instead), and neither can a retired one; both answer 409.
+    cli: homelab-cli dns dkim retire {domain} 20261020a
+
+  - id: dkim-cancel
+    title: Cancel a new signing key
+    method: DELETE
+    path: /api/v1/domains/:domain/dkim/:selector
+    who: site-admin
+    summary: Throw away a pending key that was never switched to.
+    description: >
+      Removes the key's DNS record and the key itself, and drops it from
+      the list altogether, where a retired key would stay listed.
+    params:
+      - name: domain
+        in: path
+        required: true
+        about: The domain.
+        example: "{domain}"
+      - name: selector
+        in: path
+        required: true
+        about: The pending key's selector.
+        example: 20261103a
+    response: |
+      { "ok": true }
+    notes:
+      - Only a pending key can be cancelled; any other answers 409, and retire is the way to take it out of use.
+    cli: none

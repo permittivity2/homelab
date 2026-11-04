@@ -1,0 +1,140 @@
+# One search over your mail and your files. See README.md for the fields.
+area: Search
+order: 70
+intro: >
+  Search your email and your files together. It looks through a copy of
+  both that is kept up to date in the background, so something that has
+  only just arrived can take a little while to show up.
+
+abilities:
+  - id: search
+    title: Search your mail and files
+    method: GET
+    path: /api/v1/search
+    who: signed-in
+    summary: Find email and files by words, people, dates or type, in one search.
+    description: >
+      Mail matches on its subject and text, files on their name and text;
+      with `q` the best matches come first, otherwise the newest. Results
+      come in two lists, `mail` and `drive`, each up to `limit` long. Files
+      someone has shared with you are included, with their address in
+      `shared_by`. `filters` shows how your request was read, and
+      `indexed` is false until something of yours has been indexed.
+    params:
+      - name: q
+        in: query
+        required: false
+        about: Words to find. Put a phrase in double quotes, use OR between words for either one, and a minus before a word to leave it out.
+        example: invoice
+      - name: person
+        in: query
+        required: false
+        about: A name or address. Finds mail from or to them, and photos they are tagged in.
+      - name: from
+        in: query
+        required: false
+        about: Only items dated on or after this day, as YYYY-MM-DD.
+      - name: to
+        in: query
+        required: false
+        about: Only items dated on or before this day, as YYYY-MM-DD.
+      - name: source
+        in: query
+        required: false
+        about: both (the default), mail or drive.
+      - name: mailbox
+        in: query
+        required: false
+        about: Only mail in this folder, spelled as the results' `mailbox` shows it, such as INBOX.
+      - name: has_attachments
+        in: query
+        required: false
+        about: 1 for only mail that has attachments.
+      - name: mime
+        in: query
+        required: false
+        about: Only files of this type, such as image or application/pdf.
+      - name: type_in
+        in: query
+        required: false
+        about: Only these types, repeated for more than one. A group (cat:pictures), a whole kind (image/*) or one type (image/png). For mail it matches the attachments.
+      - name: type_ex
+        in: query
+        required: false
+        about: Leave these types out, written the same way as type_in.
+      - name: tag
+        in: query
+        required: false
+        about: Only photos with this tag, or a tag filed under it.
+      - name: shared
+        in: query
+        required: false
+        about: What to do with files others have shared with you. include (the default), exclude, or only.
+      - name: in_trash
+        in: query
+        required: false
+        about: 1 to search your deleted files instead.
+      - name: min_size
+        in: query
+        required: false
+        about: Only files of at least this many bytes.
+      - name: max_size
+        in: query
+        required: false
+        about: Only files of at most this many bytes.
+      - name: limit
+        in: query
+        required: false
+        about: The most results from mail, and from files. 50 if you leave it out, 200 at most.
+      - name: offset
+        in: query
+        required: false
+        about: Skip this many results first, to get the next page.
+    response: |
+      {
+        "account": "{me}",
+        "indexed": true,
+        "filters": {
+          "q": "invoice", "person": "", "from": "", "to": "", "mailbox": "",
+          "mime": "", "tag": "", "shared": "include", "source": "both",
+          "type_in": [], "type_ex": [], "in_trash": 0, "has_attachments": 0,
+          "limit": 50, "offset": 0
+        },
+        "mail": [
+          {
+            "message_id": 4182,
+            "subject": "Your November invoice",
+            "sent_at": "2026-11-03 21:42:10-06",
+            "received_at": "2026-11-03 21:42:12-06",
+            "size_bytes": 48211,
+            "has_attachments": 1,
+            "is_seen": 1,
+            "mailbox": "INBOX",
+            "rank": 0.4,
+            "from_addr": "billing@example.com",
+            "from_name": "Example Billing",
+            "snippet": "Thanks for your order. Your invoice for November is attached."
+          }
+        ],
+        "drive": [
+          {
+            "drive_item_id": 913,
+            "drive_file_id": 2207,
+            "file_uuid": "6f1c2a9e-3b4d-4c5e-9f70-1a2b3c4d5e6f",
+            "file_name": "invoice-october.pdf",
+            "folder_path": "Bills",
+            "size_bytes": 88340,
+            "uploaded_at": "2026-11-02 08:15:30.402113-06",
+            "content_created_at": null,
+            "deleted_at": null,
+            "mime_type": "application/pdf",
+            "rank": 0.2,
+            "snippet": "Invoice for October. Amount due"
+          }
+        ]
+      }
+    notes:
+      - With no words and no filter, nothing is searched and both lists come back empty. Choosing only a `source` doesn't count as a filter.
+      - A mail result's `message_id` is the search's own number for it, not the `uid` that Read a message takes.
+      - Files you have kept out of search (marked private in drive, alone or by their folder) never come back.
+    cli: homelab-cli search invoice

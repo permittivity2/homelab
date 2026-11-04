@@ -1,0 +1,28 @@
+#!/usr/bin/make -f
+# homelab-developer is a static site, built here from reference/*.yml,
+# pages/*.md and skill/SKILL.md (see README.md). Nothing in it runs on the
+# server but nginx.
+SITE := build/site
+DEST := debian/homelab-developer
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	perl -Ilib script/homelab-developer-build --out $(SITE) --version "$(shell dpkg-parsechangelog -S Version)"
+
+# The reference against the code it documents (every route reachable through
+# the api has an entry, saying who may really use it) and the built site, so
+# no release is made with either wrong.
+override_dh_auto_test:
+	prove -I lib t/
+
+override_dh_auto_install:
+	install -d $(DEST)/usr/share/homelab-developer
+	cp -a $(SITE) $(DEST)/usr/share/homelab-developer/site
+	rm -f $(DEST)/usr/share/homelab-developer/site/.homelab-developer-site
+	install -D -m 644 nginx/developer.mailmasker.org.conf \
+		$(DEST)/etc/nginx/sites-available/developer.mailmasker.org
+
+override_dh_auto_clean:
+	rm -rf build

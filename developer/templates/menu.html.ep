@@ -1,0 +1,36 @@
+%# The menu on every page: Getting started, every area and its abilities,
+%# then the files for tools. $current is the page's id ('start' for Getting
+%# started). On a phone it becomes the "Jump to" list.
+% my $cur = stash('current') // '';
+% my @tools = (['/claude-code', 'Claude Code skill', 'claude-code'], ['/llms.txt', 'llms.txt'], ['/reference.md', 'Everything as Markdown'], ['/reference.json', 'Everything as JSON']);
+    <nav class="ref-nav" aria-label="API reference">
+      <input type="search" id="ref-filter" class="form-input ref-filter" placeholder="Filter" aria-label="Filter the abilities" autocomplete="off">
+      <a href="/" data-search="getting started sign in token"<%== $cur eq 'start' ? ' class="current" aria-current="page"' : '' %>>Getting started</a>
+% for my $area (@$areas) {
+      <h3><%= $area->{area} %></h3>
+%   for my $ab (@{ $area->{abilities} }) {
+      <a href="/<%= $ab->{id} %>" data-search="<%= lc "$ab->{title} $ab->{method} $ab->{path} $area->{area}" %>"<%== $ab->{id} eq $cur ? ' class="current" aria-current="page"' : '' %>><span class="m m-<%= $ab->{method} %>"><%= $ab->{method} %></span><span><%= $ab->{title} %></span></a>
+%   }
+% }
+      <h3>For tools</h3>
+% for my $t (@tools) {
+      <a href="<%= $t->[0] %>" data-search="<%= lc "$t->[1] tools ai claude markdown json" %>"<%== ($t->[2] // '-') eq $cur ? ' class="current" aria-current="page"' : '' %>><span><%= $t->[1] %></span></a>
+% }
+      <p class="ref-version">Reference <%= $v->{version} %>, built <%= $v->{built} %>.</p>
+    </nav>
+
+    <select id="ref-jump" class="form-input ref-jump" aria-label="Jump to">
+      <option value="/"<%== $cur eq 'start' ? ' selected' : '' %>>Getting started</option>
+% for my $area (@$areas) {
+      <optgroup label="<%= $area->{area} %>">
+%   for my $ab (@{ $area->{abilities} }) {
+        <option value="/<%= $ab->{id} %>"<%== $ab->{id} eq $cur ? ' selected' : '' %>><%= $ab->{method} %> · <%= $ab->{title} %></option>
+%   }
+      </optgroup>
+% }
+      <optgroup label="For tools">
+% for my $t (@tools) {
+        <option value="<%= $t->[0] %>"<%== ($t->[2] // '-') eq $cur ? ' selected' : '' %>><%= $t->[1] %></option>
+% }
+      </optgroup>
+    </select>
