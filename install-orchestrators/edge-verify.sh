@@ -62,12 +62,23 @@ ssh -o ConnectTimeout=6 "$MGMT" 'sudo haproxy -c -f /etc/haproxy/haproxy.cfg' >/
 step "the agent can authenticate"
 # A node parked for weeks can come back with a refresh token past its 30-day
 # life, which no amount of restarting fixes -- agent-reenroll.sh is the repair.
-ST=$(ssh -o ConnectTimeout=8 "$MGMT" '
+# Parked for just over a day it boots with an expired ACCESS token (24h), which
+# the agent replaces itself in its first heartbeat, 2s after it starts -- so a
+# "no" in the first moments after a boot is asked again before it counts.
+agent_state(){ ssh -o ConnectTimeout=8 "$MGMT" '
     T=$(sudo grep "^token:" /etc/homelab/agent/credential.yml 2>/dev/null | sed "s/^token:[[:space:]]*//")
     [ -z "$T" ] && { echo "no-credential"; exit 0; }
     curl -s --max-time 8 -H "Authorization: Bearer $T" \
         http://10.50.2.132:3000/api/v1/auth/introspect \
-      | grep -oE "system_agent|\"error\":\"[^\"]*\"" | head -1' 2>/dev/null)
+      | grep -oE "system_agent|\"error\":\"[^\"]*\"" | head -1' 2>/dev/null; }
+ST=$(agent_state)
+if [ "$ST" != "system_agent" ] && [ "$ST" != "no-credential" ]; then
+    for i in $(seq 1 9); do
+        sleep 10
+        ST=$(agent_state)
+        [ "$ST" = "system_agent" ] && break
+    done
+fi
 [ "$ST" = "system_agent" ] && ok "introspects as system_agent" \
     || bad "agent state is '${ST:-unreachable}' -- run agent-reenroll.sh $NN"
 

@@ -180,14 +180,30 @@ fi
 # ------------------------------------------------------- outstanding work
 if [ "$UPDATES" = 1 ]; then
     step "the agent must authenticate before anything else can be fetched"
-    AG=$(ssh -o ConnectTimeout=8 "$MGMT" '
+    agent_state(){ ssh -o ConnectTimeout=8 "$MGMT" '
         T=$(sudo grep "^token:" /etc/homelab/agent/credential.yml 2>/dev/null | sed "s/^token:[[:space:]]*//")
         [ -z "$T" ] && { echo "no-credential"; exit 0; }
         curl -s --max-time 8 -H "Authorization: Bearer $T" \
             http://10.50.2.132:3000/api/v1/auth/introspect \
-          | grep -oE "system_agent|\"error\":\"[^\"]*\"" | head -1' 2>/dev/null)
+          | grep -oE "system_agent|\"error\":\"[^\"]*\"" | head -1' 2>/dev/null; }
+    AG=$(agent_state)
+    # A node parked for more than a day ALWAYS boots holding an expired access
+    # token -- it lasts 24h -- and the agent swaps it for a new one by itself in
+    # its first heartbeat, 2s after it starts, with the refresh token (30 days).
+    # Asking in the second before that answers "invalid or expired token": on
+    # 2026-11-04 that re-enrolled 02, parked for two days, which would have
+    # recovered on its own. So give the agent's own refresh two cycles first;
+    # only a refresh token that is itself dead needs re-enrolling.
+    if [ "$AG" != "system_agent" ] && [ "$AG" != "no-credential" ]; then
+        echo "  ${D}not yet (${AG:-unreachable}) -- giving the agent up to 90s to refresh its own token${O}"
+        for i in $(seq 1 9); do
+            sleep 10
+            AG=$(agent_state)
+            [ "$AG" = "system_agent" ] && break
+        done
+    fi
     if [ "$AG" = "system_agent" ]; then
-        ok "agent already authenticates"
+        ok "agent authenticates"
     else
         warn "agent state is '${AG:-unreachable}' -- re-enrolling (expected on a node parked past the 30-day refresh-token life)"
         "$HERE/agent-reenroll.sh" "$TARGET" --force 2>&1 | sed 's/^/    /'
