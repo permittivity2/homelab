@@ -259,7 +259,7 @@ sub _renderer ($root, $webtheme) {
     my $app = Mojolicious->new;
     $app->log->level('fatal');
     $app->renderer->paths([ $root->child('templates')->to_string ]);
-    my %theme = (app_name => 'MailMasker API', nav_links => [ { href => '/claude-code', label => 'Claude Code skill' } ]);
+    my %theme = (app_name => 'MailMasker API', nav_links => [ { href => '/claude-code', label => 'Claude Code' } ]);
     if (-d $wt->child('templates', 'homelab')) {
         unshift @INC, $wt->child('lib')->to_string if -d $wt->child('lib');
         local $ENV{HOMELAB_WEBTHEME_HOME} = $wt->to_string;

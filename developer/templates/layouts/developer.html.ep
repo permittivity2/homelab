@@ -43,6 +43,7 @@
     .ref-main h1 { font-size: var(--app-xl); font-weight: var(--weight-light); letter-spacing: var(--tracking-tight); margin: var(--space-2) 0 var(--space-4); }
     .ref-main h2 { font-size: var(--app-md); font-weight: var(--weight-medium); margin: var(--space-8) 0 var(--space-3); }
     .ref-main p, .ref-main li { line-height: 1.6; }
+    .ref-main p { margin: 0 0 var(--space-3); }
     .ref-main a { color: var(--silver-bright); text-decoration: underline; text-underline-offset: 0.15em; }
     .ref-main code { font-size: 0.85em; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.05rem 0.3rem; overflow-wrap: anywhere; }
     .ref-endpoint { display: flex; gap: var(--space-3); align-items: center; padding: var(--space-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: var(--app-sm); overflow-wrap: anywhere; }
