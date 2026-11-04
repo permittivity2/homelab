@@ -168,6 +168,9 @@ sub startup ($self) {
     # this ecosystem needs. ---------------------------------------------
     $r->get('/l/:token' => [token => qr/[^\/]+/])  ->to('block_link#show');
     $r->post('/l/:token' => [token => qr/[^\/]+/]) ->to('block_link#submit');
+    # Signed in only, and only from the page itself (a CSRF token): the one
+    # route here whose credential is the session cookie, not the link.
+    $r->post('/l/:token/unblock' => [token => qr/[^\/]+/])->to('block_link#unblock');
 
     # Sign-in, for the signed-in view of a link (see Visibility.pm). Without
     # an sso: block these lead back to the front page.

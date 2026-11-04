@@ -1,5 +1,6 @@
-// The link page's script: the block list's four-way sort and its regex
-// filter, and the Add to Block List form. Included inline by manage.html.ep.
+// The link page's script: the block list's four-way sort, its regex filter
+// and each row's unblock button, and the Add to Block List form. Included
+// inline by manage.html.ep.
 //
 // Plain JavaScript with no template tags, on purpose: t/js.t runs this same
 // file under gjs to test the sort and filter rules without a browser. Keep it
@@ -86,13 +87,39 @@ var BlockList = (function () {
     return f.re ? list.filter(function (a) { return f.re.test(a); }) : list.slice();
   }
 
+  // Whether a list holds an address, and the list without it -- both ignoring
+  // case, like the sort and the filter.
+  function contains(list, addr) {
+    var k = String(addr).toLowerCase();
+    return list.some(function (x) { return String(x).toLowerCase() === k; });
+  }
+  function without(list, addr) {
+    var k = String(addr).toLowerCase();
+    return list.filter(function (x) { return String(x).toLowerCase() !== k; });
+  }
+
+  // What unblocking asks, where the browser's own confirm box has to ask it:
+  // when the shared theme's script (which opens the page's own dialog) did
+  // not load.
+  function confirmText(addr) {
+    return 'Unblock ' + addr + '?\n\nMail sent to it will be delivered to you again.';
+  }
+
   function plural(n) { return n === 1 ? '1 address' : n.toLocaleString('en-US') + ' addresses'; }
+
+  // The unblock button's mark: an x, as Android's blocked-numbers list uses.
+  // A constant, so it is the one thing here set as HTML.
+  var X_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">'
+    + '<path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
   // Everything that touches the page. Nothing above this line does, which is
   // what lets t/js.t run the rules with no document at all.
   function wire(doc) {
+    var win      = doc.defaultView || {};
     var form     = doc.getElementById('blockform');
     var addSec   = doc.getElementById('add-section');
+    var addDone  = doc.getElementById('add-done');
+    var addEs    = doc.getElementById('add-es');
     var msg      = doc.getElementById('msg');
     var listEl   = doc.getElementById('bl-list');
     var sortBtn  = doc.getElementById('bl-sort');
@@ -101,9 +128,15 @@ var BlockList = (function () {
     var countEl  = doc.getElementById('bl-count');
     var noneEl   = doc.getElementById('bl-none');
     var nomatch  = doc.getElementById('bl-nomatch');
+    var askEl    = doc.getElementById('bl-confirm');
+    var askAddr  = doc.getElementById('bl-confirm-addr');
+    var askYes   = doc.getElementById('bl-confirm-yes');
     var hint     = hintEl ? hintEl.textContent : '';
+    var canUnblock = !!(listEl && listEl.dataset.csrf);
     var sortIndex = 0;
     var fresh = {};
+    var busy = {};
+    var asking = null;
 
     var all = listEl
       ? Array.prototype.map.call(listEl.querySelectorAll('li'), function (li) { return li.getAttribute('data-addr'); })
@@ -113,6 +146,37 @@ var BlockList = (function () {
       if (!msg) return;
       msg.className = 'banner banner--' + kind;
       msg.textContent = text;
+    }
+
+    // The result of an unblock, which happens down in the list where the
+    // status line at the top may be out of sight: a toast from the shared
+    // theme's script (errors stay until dismissed), else the status line.
+    function notify(kind, text) {
+      if (win.HomelabShell) win.HomelabShell.toast(text, kind, 6000);
+      else say(kind || 'info', text);
+    }
+
+    function row(a) {
+      var k = a.toLowerCase();
+      var li = doc.createElement('li');
+      li.setAttribute('data-addr', a);
+      if (fresh[k]) li.classList.add('is-new');
+      if (busy[k]) li.classList.add('is-busy');
+      var span = doc.createElement('span');
+      span.className = 'bl-addr';
+      span.textContent = a;
+      li.appendChild(span);
+      if (canUnblock) {
+        var b = doc.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn-ghost btn-icon bl-unblock';
+        b.title = 'Unblock';
+        b.setAttribute('aria-label', 'Unblock ' + a);
+        b.innerHTML = X_ICON;
+        b.disabled = !!busy[k];
+        li.appendChild(b);
+      }
+      return li;
     }
 
     function render() {
@@ -126,13 +190,7 @@ var BlockList = (function () {
 
       var shown = sorted(f.re ? all.filter(function (a) { return f.re.test(a); }) : all, sortIndex);
       var frag = doc.createDocumentFragment();
-      shown.forEach(function (a) {
-        var li = doc.createElement('li');
-        li.setAttribute('data-addr', a);
-        li.textContent = a;
-        if (fresh[a.toLowerCase()]) li.className = 'is-new';
-        frag.appendChild(li);
-      });
+      shown.forEach(function (a) { frag.appendChild(row(a)); });
       listEl.textContent = '';
       listEl.appendChild(frag);
 
@@ -150,20 +208,123 @@ var BlockList = (function () {
     }
     if (filterEl) filterEl.addEventListener('input', render);
 
+    // The add section's rows follow the list: an address on it has its row
+    // hidden and its box left out of the form. Returns how many rows are left.
+    function syncRows() {
+      var left = 0;
+      if (!form) return left;
+      Array.prototype.forEach.call(form.querySelectorAll('.cand-row'), function (r) {
+        var blocked = contains(all, r.getAttribute('data-addr'));
+        var box = r.querySelector('input[name=block]');
+        r.classList.toggle('hide', blocked);
+        if (box) box.disabled = blocked;
+        if (!blocked) left++;
+      });
+      if (addEs) addEs.textContent = left === 1 ? '' : 'es';
+      return left;
+    }
+
     function addToList(addrs) {
       addrs.forEach(function (a) {
-        var k = String(a).toLowerCase();
-        fresh[k] = true;
-        if (!all.some(function (x) { return x.toLowerCase() === k; })) all.push(a);
+        fresh[String(a).toLowerCase()] = true;
+        if (!contains(all, a)) all.push(a);
       });
+      syncRows();
       render();
+    }
+
+    // Just unblocked. If it is one of this message's own addresses, the add
+    // section comes back with it ticked, so blocking it again is one tap.
+    function removeFromList(addr) {
+      all = without(all, addr);
+      delete fresh[addr.toLowerCase()];
+      syncRows();
+      var again = form && Array.prototype.filter.call(form.querySelectorAll('.cand-row'), function (r) {
+        return r.getAttribute('data-addr').toLowerCase() === addr.toLowerCase();
+      })[0];
+      if (again) {
+        var box = again.querySelector('input[name=block]');
+        if (box) box.checked = true;
+        if (addSec) addSec.classList.remove('hide');
+        if (addDone) addDone.classList.add('hide');
+        var btn = form.querySelector('button[type=submit]');
+        if (btn) btn.disabled = false;
+      }
+      render();
+    }
+
+    async function unblock(addr) {
+      var k = addr.toLowerCase();
+      var shownAt = Array.prototype.map.call(listEl.querySelectorAll('li'), function (li) {
+        return li.getAttribute('data-addr').toLowerCase();
+      }).indexOf(k);
+      busy[k] = true;
+      render();
+      try {
+        var r = await fetch('/l/' + encodeURIComponent(listEl.dataset.token) + '/unblock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': listEl.dataset.csrf },
+          body: JSON.stringify({ address: addr })
+        });
+        var j = await r.json().catch(function () { return {}; });
+        if (r.ok) {
+          delete busy[k];
+          removeFromList(addr);
+          notify('ok', 'Unblocked ' + addr + '. Mail sent to it will be delivered to you again.');
+        } else if (j.gone) {
+          delete busy[k];
+          removeFromList(addr);
+          notify('', j.error);
+        } else {
+          notify('error', j.error || 'Something went wrong. Please try again.');
+        }
+      } catch (err) {
+        notify('error', 'Could not reach the server. Please try again.');
+      } finally {
+        delete busy[k];
+        render();
+        // Redrawing the list dropped the focus with the button it was on: put
+        // it on the row that took this one's place, else the new last row.
+        // Never on the filter box, which would pop a phone's keyboard up.
+        var btns = listEl.querySelectorAll('.bl-unblock:not([disabled])');
+        var lost = !doc.activeElement || doc.activeElement === doc.body;
+        if (lost && btns.length) btns[Math.min(Math.max(shownAt, 0), btns.length - 1)].focus();
+      }
+    }
+
+    // A row's button asks first. The shared theme's modal is the question;
+    // without the theme's script, the browser's own confirm box asks instead.
+    function ask(addr) {
+      if (win.HomelabShell && askEl && askAddr && askYes) {
+        asking = addr;
+        askAddr.textContent = addr;
+        win.HomelabShell.openModal('bl-confirm');
+      } else if (win.confirm && win.confirm(confirmText(addr))) {
+        unblock(addr);
+      }
+    }
+
+    if (canUnblock) {
+      listEl.addEventListener('click', function (e) {
+        var b = e.target && e.target.closest ? e.target.closest('.bl-unblock') : null;
+        if (!b || b.disabled) return;
+        ask(b.closest('li').getAttribute('data-addr'));
+      });
+    }
+    if (askYes) {
+      askYes.addEventListener('click', function () {
+        var addr = asking;
+        asking = null;
+        if (win.HomelabShell) win.HomelabShell.closeModal('bl-confirm');
+        if (addr) unblock(addr);
+      });
     }
 
     if (form) {
       form.addEventListener('submit', async function (e) {
         e.preventDefault();
         var btn = form.querySelector('button[type=submit]');
-        var checked = Array.prototype.map.call(form.querySelectorAll('input[name=block]:checked'), function (i) { return i.value; });
+        var checked = Array.prototype.map.call(form.querySelectorAll('input[name=block]:checked:not(:disabled)'), function (i) { return i.value; });
         if (!checked.length) { say('error', 'Tick at least one address to add.'); return; }
         say('info', 'Adding...');
         btn.disabled = true;
@@ -200,6 +361,7 @@ var BlockList = (function () {
     SORTS: SORTS, MIN_FILTER: MIN_FILTER,
     sortKey: sortKey, compare: compare, sorted: sorted,
     perlRegex: perlRegex, compileFilter: compileFilter, filtered: filtered,
+    contains: contains, without: without, confirmText: confirmText,
     wire: wire
   };
 })();

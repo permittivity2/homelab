@@ -2,7 +2,7 @@
 % title 'Manage blocked addresses';
 %# The page a link in a delivered email opens. Opening it never changes
 %# anything (see README.md, "Why GET never mutates"); only Add to Block List
-%# does.
+%# and, signed in, a row's unblock button do.
 %#   $view        Visibility::view() -- mode owner | link | several, and the
 %#                addresses this visitor may block (offer) or not (main)
 %#   $add         $view->{offer} minus what is already on the block list
@@ -21,22 +21,28 @@
   <a class="btn" href="<%= $manage_url %>">Manage Account</a>
 </div>
 
-% if (@$add) {
-<section id="add-section">
+%# Every address this visitor may block has a row, and the ones already blocked
+%# are hidden: unblocking one of them further down brings its row back, so it
+%# can be blocked again from here, as a fresh visit would offer it.
+% my %todo = map { lc($_->{address}) => 1 } @$add;
+% if (@{ $view->{offer} }) {
+<section id="add-section"<%== @$add ? '' : ' class="hide"' %>>
 <form id="blockform" class="panel" data-token="<%= $token %>">
   <div class="panel__body stack">
-    <p class="text-muted">This message was sent to the address<%= @$add == 1 ? '' : 'es' %> below. Uncheck any you do NOT want to block.</p>
+    <p class="text-muted">This message was sent to the address<span id="add-es"><%= @$add == 1 ? '' : 'es' %></span> below. Uncheck any you do NOT want to block.</p>
     %# .check is inline-flex, so each one gets its own line, and its words sit
     %# in ONE span: as separate flex items they split into a column on a phone.
-    % for my $cand (@$add) {
-    <div><label class="check"><input type="checkbox" name="block" value="<%= $cand->{address} %>" checked> <span class="cand">Block mail to <strong><%= $cand->{address} %></strong></span></label></div>
+    % for my $cand (@{ $view->{offer} }) {
+    %   my $open = $todo{ lc $cand->{address} };
+    <div class="cand-row<%= $open ? '' : ' hide' %>" data-addr="<%= $cand->{address} %>"><label class="check"><input type="checkbox" name="block" value="<%= $cand->{address} %>"<%== $open ? ' checked' : ' disabled' %>> <span class="cand">Block mail to <strong><%= $cand->{address} %></strong></span></label></div>
     % }
     <div class="form-actions"><button type="submit" class="btn btn-primary">Add to Block List</button></div>
   </div>
 </form>
 </section>
-% } elsif ($mode eq 'owner' && @{ $view->{offer} } && !$list_error) {
-<p class="banner banner--ok"><span>Everything this message was sent to is already on your block list.</span></p>
+% }
+% if ($mode eq 'owner' && @{ $view->{offer} } && !@$add && !$list_error) {
+<p id="add-done" class="banner banner--ok"><span>Everything this message was sent to is already on your block list.</span></p>
 % }
 
 % for my $cand (@{ $view->{main} }) {
@@ -78,12 +84,14 @@
              placeholder="Filter, e.g. ^shop" aria-describedby="bl-filter-hint">
     </div>
     <p id="bl-filter-hint" class="form-hint">A Perl-style regular expression; it starts filtering at 3 characters and ignores case.</p>
-    <ul id="bl-list" class="blocklist">
+    %# The script gives each row its unblock button; data-csrf is what an
+    %# unblock sends back to show it came from this page.
+    <ul id="bl-list" class="blocklist" data-token="<%= $token %>" data-csrf="<%= csrf_token %>">
     % for my $addr (@$blocked) {
-      <li data-addr="<%= $addr %>"><%= $addr %></li>
+      <li data-addr="<%= $addr %>"><span class="bl-addr"><%= $addr %></span></li>
     % }
     </ul>
-    <p id="bl-none" class="text-muted<%= @$blocked ? ' hide' : '' %>">You haven't blocked any addresses yet.</p>
+    <p id="bl-none" class="text-muted<%= @$blocked ? ' hide' : '' %>">Your block list is empty.</p>
     <p id="bl-nomatch" class="text-muted hide">No blocked address matches that filter.</p>
   % } elsif (length $signed_in) {
     <p class="text-muted">This link is for another account, so your own block list isn't shown here.</p>
@@ -99,6 +107,23 @@
 <div class="form-actions page-actions">
   <a class="btn" href="<%= $manage_url %>">Manage Account</a>
 </div>
+
+% if ($mode eq 'owner' && !$list_error) {
+%# The question a row's unblock button asks first, in the shared theme's modal
+%# (homelab-webtheme's shell.js opens it, traps focus in it and closes it on
+%# Escape or a click outside). Cancel comes first, so it is what has focus.
+<div class="modal" id="bl-confirm" role="dialog" aria-modal="true" aria-labelledby="bl-confirm-title">
+  <div class="modal__head"><h2 id="bl-confirm-title" class="panel__title">Unblock this address?</h2></div>
+  <div class="modal__body stack">
+    <p><strong id="bl-confirm-addr" class="cand"></strong></p>
+    <p class="text-muted">Mail sent to it will be delivered to you again.</p>
+  </div>
+  <div class="modal__foot">
+    <button type="button" class="btn" data-modal-close>Cancel</button>
+    <button type="button" class="btn btn-primary" id="bl-confirm-yes">Unblock</button>
+  </div>
+</div>
+% }
 
 <script>
 %= include 'blocklist', format => 'js'

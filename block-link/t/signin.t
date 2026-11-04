@@ -134,6 +134,25 @@ $app->routes->get('/t/who' => sub ($c) { $c->render(text => 'who=' . $c->session
 $t->get_ok('/t/set-token')->content_is('set');
 $t->get_ok('/t/who')->content_is('who=', 'a dead token (api unreachable here) is simply signed out');
 
+# --- unblocking from the list: only from this site's own page, signed in ---
+# The session cookie is the credential for an unblock, so a request must carry
+# the CSRF token the page was drawn with. Both checks come before the link is
+# looked up, which is why they can be tested here with no database.
+$app->routes->get('/t/csrf' => sub ($c) { $c->render(text => $c->csrf_token) });
+my $csrf = $t->get_ok('/t/csrf')->tx->res->body;
+like $csrf, qr/\A[0-9a-f]{40}\z/, 'the page\'s CSRF token';
+$t->post_ok("/l/$token/unblock" => json => { address => 'a@b.example' })->status_is(403)
+  ->json_like('/error', qr/out of date/, 'unblock without the page\'s token: refused (a cross-site request has none)');
+$t->post_ok("/l/$token/unblock" => { 'X-CSRF-Token' => 'f' x 40 } => json => { address => 'a@b.example' })->status_is(403)
+  ->json_like('/error', qr/out of date/, '... and with the wrong one');
+my $other = Test::Mojo->new($app);
+my $theirs = $other->get_ok('/t/csrf')->tx->res->body;
+$t->post_ok("/l/$token/unblock" => { 'X-CSRF-Token' => $theirs } => json => { address => 'a@b.example' })->status_is(403,
+  '... and with another browser\'s');
+$t->post_ok("/l/$token/unblock" => { 'X-CSRF-Token' => $csrf } => json => { address => 'a@b.example' })->status_is(401)
+  ->json_like('/error', qr/sign-in has ended/, 'the right token, but the session\'s sign-in is dead: refused, and it says why');
+$t->get_ok("/l/$token/unblock")->status_is(404, 'unblock is POST only');
+
 # --- /logout ---
 $t->post_ok('/logout')->status_is(302)->header_is(Location => 'https://login.example.test/logout',
     'sign-out hands off to homelab-sso\'s single sign-out');

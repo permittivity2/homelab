@@ -49,4 +49,14 @@ is(BlockList.filtered(L, 'shop['), L, '... and the whole list stays visible');
 is(BlockList.compileFilter('a++b').error, true, 'a possessive quantifier (Perl-only) is reported, not silently mangled');
 is(BlockList.compileFilter('ab').error, false, 'a short text is not an error, just not a filter yet');
 
+// --- unblocking: the list without an address, ignoring case ---
+is(BlockList.contains(L, 'ZED@A.ORG'), true, 'contains ignores case');
+is(BlockList.contains(L, 'zed@a.or'), false, '... and matches whole addresses only');
+is(BlockList.without(L, 'zed@A.org'), ['b@x.org', 'A@y.org', 'c@a.org', 'a@x.org'], 'without drops it, whatever its case');
+is(BlockList.without(['B@x.org', 'b@x.org', 'c@x.org'], 'b@X.org'), ['c@x.org'], '... every spelling of it');
+is(BlockList.without(L, 'nobody@x.org'), L, '... and leaves the list alone when it is not there');
+is(L, ['b@x.org', 'Zed@a.org', 'A@y.org', 'c@a.org', 'a@x.org'], 'without never changes the list it was given');
+ok(/^Unblock a@b\.org\?\n\nMail sent to it will be delivered to you again\.$/.test(BlockList.confirmText('a@b.org')),
+   'the fallback confirm box asks the same question as the dialog');
+
 print('1..' + n);

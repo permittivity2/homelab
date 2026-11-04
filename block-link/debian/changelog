@@ -1,3 +1,24 @@
+homelab-block-link (0.1.5) unstable; urgency=medium
+
+  * Unblock from the list: signed in, each row of the block list has an x.
+    It asks first, in the shared theme's modal ("Unblock this address?",
+    Cancel / Unblock), and the result shows as a toast. The browser's own
+    confirm box asks if the theme's script did not load.
+  * New POST /l/:token/unblock {address}. It calls the api endpoint that
+    myaccount's Unblock button calls, with the visitor's own token, and
+    domain-admin can only delete that account's own rows. It needs a CSRF
+    token from the page (X-CSRF-Token, checked before anything else), a
+    sign-in as one of the link's accounts, and the address on that
+    account's block list as just read, so an allow entry is never removed
+    here. An address already gone answers 404 with "gone".
+  * Unblocking one of this message's own addresses brings its row in the
+    add section back, ticked. Every address the visitor may block now has
+    a row there; already-blocked ones are hidden and left out of the form.
+  * An empty list says "Your block list is empty." (it may have just been
+    emptied, not never filled).
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 19:05:00 -0600
+
 homelab-block-link (0.1.4) unstable; urgency=medium
 
   * Fix: a link that covers more than one account no longer shows anyone

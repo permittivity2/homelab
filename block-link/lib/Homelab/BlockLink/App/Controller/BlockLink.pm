@@ -3,7 +3,7 @@ use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::UserAgent;
 use Mojo::URL;
 use Mojo::JSON qw(decode_json);
-use Mojo::Util qw(secure_compare);
+use Mojo::Util qw(secure_compare url_escape);
 use Homelab::Common::Registry qw(lookup system_agent_token);
 use Homelab::Common::AuditClient qw(enqueue);
 use Homelab::Common::SSOClient qw(exchange_code);
@@ -226,6 +226,52 @@ sub submit ($c) {
     }
     return $c->render(json => { error => "could not block: @failed", blocked => \@done }, status => 502) if @failed;
     return $c->render(json => { ok => \1, blocked => \@done });
+}
+
+# POST /l/:token/unblock {address} -- signed in only. Takes one address off the
+# signed-in account's own block list, with the visitor's OWN token and the
+# same api call myaccount's Unblock button makes, which can only ever remove
+# that account's own entries. Allowed only where the page draws the list --
+# signed in as one of this link's accounts -- and only for an address that is
+# on that list: an allow entry, or anything else, is not this page's to remove.
+sub unblock ($c) {
+    # Here the session cookie is the credential, so the request has to show it
+    # came from this site's own page: the CSRF token drawn into it. Checked
+    # before anything else is looked up.
+    my $csrf = $c->req->headers->header('X-CSRF-Token') // '';
+    return $c->render(json => { error => 'This page is out of date. Reload it and try again.' }, status => 403)
+        unless length $csrf && secure_compare($csrf, $c->csrf_token);
+    my $me = $c->session_email;
+    return $c->render(json => { error => 'Your sign-in has ended. Reload the page and sign in again.' }, status => 401)
+        unless $me;
+
+    my $row = $c->app->pg->db->query(
+        q{SELECT * FROM block_link.pending_links WHERE token = ? AND expires_at > NOW()}, $c->stash('token'),
+    )->hash;
+    return $c->render(json => { error => 'this link is no longer valid' }, status => 410) unless $row;
+    return $c->render(json => { error => 'This link is for another account.' }, status => 403)
+        unless view(decode_json($row->{candidates}), $me)->{mode} eq 'owner';
+
+    my $address = ($c->req->json // {})->{address};
+    return $c->render(json => { error => 'No address given.' }, status => 400)
+        unless defined $address && !ref $address && length $address;
+
+    my $list = _my_block_list($c);
+    return $c->render(json => { error => "Your block list couldn't be read just now. Please try again." }, status => 502)
+        unless $list;
+    # The list's own spelling: the api removes an exact match only.
+    my ($exact) = grep { lc($_) eq lc($address) } @$list;
+    my $tx = defined $exact
+        ? $API_UA->delete($c->app->api_base . '/api/v1/domains/recipient-access/mine/' . url_escape($exact)
+            => { Authorization => 'Bearer ' . $c->session_jwt })
+        : undef;
+    my $code = $tx ? ($tx->res->code // 0) : 404;
+    return $c->render(json => { ok => \1, unblocked => $exact }) if $code == 200;
+    # Gone already (unblocked in myaccount meanwhile, say): what was asked for
+    # is true, so the page takes it off the list and says so.
+    return $c->render(json => { error => "$address isn't on your block list any more.", gone => \1 }, status => 404)
+        if $code == 404;
+    return $c->render(json => { error => "Couldn't unblock $address just now. Please try again." }, status => 502);
 }
 
 # Where a sign-in may return to: a link page on this site, or nowhere.

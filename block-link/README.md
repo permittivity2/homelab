@@ -83,6 +83,34 @@ optional: without them the page is link-only, exactly as above, minus
 the Sign in buttons. The session secret must be the same on every pool
 node (requests are not sticky).
 
+## Unblocking from the list
+
+Signed in, each row of the block list has an **×**. It asks first, in the
+shared theme's modal ("Unblock this address?", Cancel / Unblock; the
+browser's own confirm box if the theme's script didn't load), then
+`POST /l/:token/unblock {address}`. That calls the same api endpoint as
+myaccount's Unblock button, with the visitor's own token:
+`DELETE /api/v1/domains/recipient-access/mine/:recipient`. domain-admin
+scopes that delete to the caller's own rows in its WHERE clause.
+
+This is the one route whose credential is the session cookie rather than
+the link, so it takes more care than Add to Block List:
+- **A CSRF token.** The list carries Mojolicious's `csrf_token` in
+  `data-csrf`, and the request must send it back as `X-CSRF-Token`. It is
+  checked first, before anything is looked up. The cookie is also
+  `SameSite=Lax` (the Mojolicious default), and the JSON body forces a
+  preflight cross-site.
+- **The same rule as the page.** You must be signed in as one of the
+  link's accounts (`owner` in `Visibility.pm`), and the address must be on
+  that account's block list as just read. So an allow entry (`OK`) is never
+  removed here. The list's own spelling is what gets deleted.
+- **Already gone** (unblocked in myaccount meanwhile, say) answers 404 with
+  `gone`. The page takes the row off and says so.
+
+If the unblocked address is one of this message's own, its row in the add
+section comes back, ticked. Every offered address has a row there; the
+ones already blocked are hidden and left out of the form.
+
 ## Why long-lived tokens
 
 Unlike `homelab-invite`'s one-time-use tokens, a `pending_links.token`

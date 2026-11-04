@@ -139,6 +139,7 @@ $t->get_ok('/t/link')
   ->content_unlike(qr{>Save<},                           'not Save')
   ->content_like(qr{id="msg"},                           'the status line')
   ->content_unlike(qr{id="bl-list"},                     'no block list without signing in')
+  ->content_unlike(qr{data-csrf=|id="bl-confirm"},       '... so nothing to unblock with either')
   ->content_like(qr{href="/login\?next=%2Fl%2F$token"},  'a sign-in button that comes back to this link')
   ->content_like(qr{Sign in to see your block list},     '... saying what it is for');
 my $link_html = $t->tx->res->body;
@@ -153,10 +154,19 @@ $t->get_ok('/t/link-nosso')
 
 # --- signed in as the link's account: the whole list ---
 $t->get_ok('/t/owner')
-  ->content_like(qr{id="add-section"},                         'the add section')
-  ->content_like(qr{name="block" value="shop1\@alice\.example"}, '... with what is not blocked yet')
-  ->content_like(qr{id="bl-list"},                             'the block list')
-  ->content_like(qr{<li data-addr="a-first\@x\.example">a-first\@x\.example</li>}, '... one entry per address')
+  ->content_like(qr{<section id="add-section">},               'the add section, shown')
+  ->content_like(qr{<div class="cand-row" data-addr="shop1\@alice\.example"><label class="check"><input type="checkbox" name="block" value="shop1\@alice\.example" checked>},
+                 '... with what is not blocked yet, ticked')
+  ->content_like(qr{<div class="cand-row hide" data-addr="&quot;&gt;&lt;script[^"]*"><label class="check"><input type="checkbox" name="block" value="[^"]*" disabled>},
+                 '... and what is, hidden and left out of the form (unblocking it brings it back)')
+  ->content_like(qr{the address<span id="add-es"></span> below},  '... counting only what it shows: one address')
+  ->content_like(qr{id="bl-list" class="blocklist" data-token="$token" data-csrf="[0-9a-f]{40}"},
+                 'the block list, with what an unblock sends back')
+  ->content_like(qr{<li data-addr="a-first\@x\.example"><span class="bl-addr">a-first\@x\.example</span></li>}, '... one entry per address')
+  ->content_like(qr{<div class="modal" id="bl-confirm" role="dialog" aria-modal="true"}, 'the unblock question, in the theme\'s modal')
+  ->content_like(qr{Unblock this address\?},                   '... asking first')
+  ->content_like(qr{data-modal-close>Cancel</button>\s*<button type="button" class="btn btn-primary" id="bl-confirm-yes">Unblock</button>},
+                 '... Cancel first (it gets the focus), then Unblock')
   ->content_like(qr{id="bl-sort"[^>]*>Sort: A &rarr; Z<},      'the sort button, starting at A to Z')
   ->content_like(qr{id="bl-filter"},                           'the filter box')
   ->content_like(qr{3 characters},                             '... which says when it starts')
@@ -167,14 +177,17 @@ $t->get_ok('/t/owner')
 like($t->tx->res->body, qr{a-first.*B-second}s, 'the list keeps the order it was given (the controller sorts it)');
 
 $t->get_ok('/t/owner-done')
-  ->content_unlike(qr{id="blockform"}, 'everything already blocked: no add section')
-  ->content_like(qr{already on your block list}, '... and it says so');
+  ->content_like(qr{<section id="add-section" class="hide">}, 'everything already blocked: the add section is hidden')
+  ->content_like(qr{class="cand-row hide"[^>]*><label class="check"><input type="checkbox" name="block" value="shop1\@alice\.example" disabled>},
+                 '... its row too, ready to come back if that address is unblocked')
+  ->content_like(qr{id="add-done" class="banner banner--ok"><span>Everything this message was sent to is already on your block list}, '... and it says so');
 $t->get_ok('/t/owner-empty')
-  ->content_like(qr{id="bl-none" class="text-muted">You haven't blocked any addresses yet}, 'an empty list says so');
+  ->content_like(qr{id="bl-none" class="text-muted">Your block list is empty\.}, 'an empty list says so');
 $t->get_ok('/t/owner-error')
   ->content_like(qr{couldn't be loaded just now}, 'a list that cannot be read says so')
   ->content_unlike(qr{id="bl-list"},             '... and draws no list')
-  ->content_like(qr{id="blockform"},             '... but the add section still works');
+  ->content_unlike(qr{id="bl-confirm"},          '... nor anything to unblock with')
+  ->content_like(qr{<section id="add-section">.*value="shop1\@alice\.example" checked}s, '... but the add section still works');
 
 # --- the regression: a link that covers two accounts ---
 $t->get_ok('/t/several')
@@ -192,7 +205,8 @@ $t->get_ok('/t/several-other')
 $t->get_ok('/t/link-other')
   ->content_like(qr{value="shop1\@alice\.example"}, 'one-account link, signed in as someone else: the link still blocks')
   ->content_like(qr{This link is for another account}, '... but the list is not theirs to see here')
-  ->content_unlike(qr{id="bl-list"},                 '... and no list is drawn');
+  ->content_unlike(qr{id="bl-list"},                 '... and no list is drawn')
+  ->content_unlike(qr{data-csrf=|id="bl-confirm"},   '... nor anything to unblock with');
 
 # --- an account's main address ---
 $t->get_ok('/t/main')
