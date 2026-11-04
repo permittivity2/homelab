@@ -155,8 +155,12 @@ else
         && ok "SMTP :25 answers on the service plane ($(printf '%s' "$banner" | head -c 44)...)" \
         || bad "SMTP :25 gave no ESMTP banner on the service plane -- inbound mail is DOWN"
 
+    # Address-shaped tokens only: haproxy's own start/stop lines name smtp_in
+    # too, and on a node that has just booted they are all there is -- which
+    # once printed "ok ... (Proxy,[WARNING])" for a node no sender had reached.
     EXT=$(ssh -o ConnectTimeout=8 "$MGMT" 'sudo journalctl -u haproxy --since "-30min" --no-pager 2>/dev/null \
         | grep smtp_in | sed "s/.*haproxy\[[0-9]*\]: //" | awk "{print \$1}" | cut -d: -f1 \
+        | grep -E "^[0-9]{1,3}(\.[0-9]{1,3}){3}$" \
         | grep -vE "^(10\.|127\.|172\.1[6-9]\.|172\.2[0-9]\.|172\.3[01]\.|192\.168\.)" | sort -u | head -3' 2>/dev/null)
     [ -n "$EXT" ] && ok "real internet senders have reached :25 through this node ($(printf '%s' "$EXT" | paste -sd, -))" \
         || echo "      ${D}(no internet sender on :25 in the last 30min -- normal on a quiet node, not a failure)${O}"
