@@ -1,0 +1,15 @@
+% layout 'default';
+% title 'Shared with someone else — Drive';
+%# A share made for one person, opened while signed in as someone else
+%# (see _share_visitor_ok). It names neither the file nor the person it is
+%# for: the visitor learns only that this link is not theirs.
+<div class="layout" style="justify-content:center;">
+  <main style="max-width:34em;">
+    <h1 style="font-size:var(--app-xl);font-weight:var(--weight-light);margin:0 0 var(--space-4);">Shared with someone else</h1>
+    <p>This link was shared with one person, and you're signed in as
+       <strong><%= $signed_in_as %></strong>, which isn't them.</p>
+    <p class="muted">If it was meant for you under another address, sign out
+       and sign in with that one. Otherwise, ask the person who shared it for
+       a link of your own.</p>
+  </main>
+</div>

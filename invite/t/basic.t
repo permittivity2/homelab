@@ -107,8 +107,12 @@ my $consumable = $t->post_ok('/internal/v1/invites' => $sender_auth => json => {
 $t->post_ok('/internal/v1/invites/consume' => $sender_auth => json => { token => $consumable->{token}, email => $second_recipient })
     ->status_is(403, 'a normal user JWT (even the invite\'s own sender) cannot call consume -- system_agent only');
 
-$t->post_ok('/internal/v1/invites/consume' => $agent_auth => json => { token => $consumable->{token}, email => 'wrong@test.mailmasker.org' })
-    ->status_is(403, 'consume rejects an email that does not match the invite\'s own recipient_email');
+# Regression (security fix 2026-11-03): an invite claims one username on the
+# fleet's own mail domain, never an address anywhere else -- and a refused
+# claim leaves the invite usable.
+$t->post_ok('/internal/v1/invites/consume' => $agent_auth => json => { token => $consumable->{token}, email => 'someone@not-our-domain.example' })
+    ->status_is(409, 'consume refuses an address outside the fleet\'s own mail domain')
+    ->json_like('/error', qr/an invite creates an address at /);
 
 $t->post_ok('/internal/v1/invites/consume' => $agent_auth => json => { token => $consumable->{token}, email => $second_recipient })
     ->status_is(200, 'consume succeeds the first time')

@@ -61,7 +61,7 @@ is($app->build_controller->homelab_app_name, 'Drive', 'app_name reaches the part
 is($app->account_manage_url, 'https://myaccount.mailmasker.org',
     'account_manage_url defaults to the production host');
 my $links = $app->build_controller->homelab_menu_links;
-is(scalar(@$links), 2, 'drive publishes two cross-app links');
+is(scalar(@$links), 3, 'drive publishes three cross-app links (account, Email, Search)');
 is($links->[0]{href}, 'https://myaccount.mailmasker.org', 'first link is the configured account URL');
 unlike(join(' ', map { $_->{label} } @$links), qr/Drive/, 'drive does not link to itself');
 

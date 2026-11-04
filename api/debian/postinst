@@ -103,6 +103,21 @@ case "$1" in
                 || echo "  WARNING: could not grant audit.queue access -- if homelab-audit isn't installed/migrated yet, install it and re-run this grant by hand (see homelab-audit/README.md); audited actions (login, role grant/revoke, session revoke) will fail closed until this grant exists."
         fi
 
+        # Registration requires an invite (security fix 2026-11-03). The
+        # fleet's configs were written with require_invite: false, which left
+        # /api/v1/auth/register open to anyone on the internet, for any
+        # address, and meant an invite was never marked used, so its link
+        # kept working. Flip it once; the marker leaves a later, deliberate
+        # 'false' (a closed test host) alone.
+        INVITE_MARKER=/var/lib/homelab/api-require-invite.done
+        if [ ! -e "$INVITE_MARKER" ]; then
+            if grep -qE '^[[:space:]]+require_invite:[[:space:]]*false[[:space:]]*(#.*)?$' "$CONFIG_FILE"; then
+                sed -i -E 's/^([[:space:]]+require_invite:)[[:space:]]*false[[:space:]]*(#.*)?$/\1 true/' "$CONFIG_FILE"
+                echo "  registration now requires an invite (auth.require_invite: true in $CONFIG_FILE)"
+            fi
+            touch "$INVITE_MARKER"
+        fi
+
         echo "  applying migrations..."
         HOMELAB_API_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
             HOMELAB_API_CONFIG="$CONFIG_FILE" \

@@ -273,8 +273,15 @@ sub startup ($self) {
     # homelab-worker directly (not through this gateway) when building a
     # zip job's manifest and forwarding the user's JWT -- this route is
     # for homelab-cli's own `jobs list/show/download` commands.
-    $r->any('/api/v1/jobs' => sub ($c) { $self->_gateway($c, 'homelab-worker', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
-    $r->any('/api/v1/jobs/*capture' => sub ($c) { $self->_gateway($c, 'homelab-worker', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+    #
+    # READ-ONLY, on purpose (security fix 2026-11-03): a zip job fetches
+    # whatever URLs its manifest names, from inside the fleet, and hands
+    # back what it got. Forwarding POST here let any account start one
+    # naming internal addresses and download the answers. Jobs are started
+    # only by the service that owns them (homelab-drive, straight to the
+    # worker); a caller here can only follow and collect its own.
+    $r->get('/api/v1/jobs' => sub ($c) { $self->_gateway($c, 'homelab-worker', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+    $r->get('/api/v1/jobs/*capture' => sub ($c) { $self->_gateway($c, 'homelab-worker', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
 
     # homelab-audit's own route is /internal/v1/audit/log -- same
     # two-registration requirement as jobs/domains above (a *capture
@@ -497,7 +504,9 @@ sub _register ($self, $c) {
         return $c->render(json => { error => 'email already registered' }, status => 409);
     }
 
-    my $require_invite = $self->config->{auth}{require_invite} // 0;
+    # Invite-only unless a config says otherwise (security fix 2026-11-03:
+    # a config with no answer must not leave registration open).
+    my $require_invite = $self->config->{auth}{require_invite} // 1;
     if ($require_invite) {
         return $c->render(json => { error => 'invite_token is required' }, status => 400)
             unless $invite_token;
@@ -737,8 +746,7 @@ sub _password_reset_confirm ($self, $c) {
 
     $self->pg->db->query('UPDATE api.users SET password_hash = ? WHERE id = ?',
         hash_password($password), $row->{user_id});
-    $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE user_id = ? AND revoked = FALSE',
-        $row->{user_id});
+    $self->_end_sessions($row->{user_id});
     return $c->render(json => { ok => \1 });
 }
 
@@ -1101,6 +1109,27 @@ sub _require_bearer ($self, $c) {
 # new one, and revokes the user's OTHER sessions (keeping the caller's
 # own) so a stolen old token can't outlive the change. Works with no
 # recovery_email on file, unlike the SSO reset-by-email flow.
+# Ends a user's sessions for real: every session AND the refresh token it
+# could come back with. Ending only the sessions (as a password change, a
+# reset and a suspension did until 2026-11-03) left each refresh token
+# working, so every other client simply refreshed back in, and a suspended
+# account stayed signed in. keep_jti spares the caller's own session.
+sub _end_sessions ($self, $user_id, %o) {
+    my $keep = $o{keep_jti} // '';
+    my $db = $self->pg->db;
+    my $tx = $db->begin;
+    $db->query(
+        q{UPDATE api.refresh_tokens SET revoked = TRUE
+           WHERE user_id = ? AND revoked = FALSE
+             AND id NOT IN (SELECT refresh_token_id FROM api.sessions
+                             WHERE jti = ? AND refresh_token_id IS NOT NULL)},
+        $user_id, $keep);
+    $db->query('UPDATE api.sessions SET revoked = TRUE WHERE user_id = ? AND jti <> ? AND revoked = FALSE',
+        $user_id, $keep);
+    $tx->commit;
+    return;
+}
+
 sub _change_password ($self, $c) {
     my $payload = $self->_require_bearer($c) or return;
     my $body = $c->req->json // {};
@@ -1116,9 +1145,7 @@ sub _change_password ($self, $c) {
         unless verify_password($cur, $user->{password_hash});
 
     $self->pg->db->query('UPDATE api.users SET password_hash = ? WHERE id = ?', hash_password($new), $user->{id});
-    $self->pg->db->query(
-        'UPDATE api.sessions SET revoked = TRUE WHERE user_id = ? AND jti <> ? AND revoked = FALSE',
-        $user->{id}, $payload->{jti} // '');
+    $self->_end_sessions($user->{id}, keep_jti => $payload->{jti} // '');
     return $c->render(json => { ok => \1 });
 }
 
@@ -1158,7 +1185,7 @@ sub _refresh ($self, $c) {
     # still fatal, and so is a token nobody ever issued.
     my $row = $self->pg->db->query(
         q{SELECT rt.id, rt.user_id, rt.revoked, rt.successor_id,
-                 (rt.expires_at <= NOW()) AS expired, u.email
+                 (rt.expires_at <= NOW()) AS expired, u.email, u.active
           FROM api.refresh_tokens rt
           JOIN api.users u ON u.id = rt.user_id
           WHERE rt.token = ?},
@@ -1166,9 +1193,24 @@ sub _refresh ($self, $c) {
     )->hash;
     return $c->render(json => { error => 'invalid or expired refresh_token' }, status => 401)
         unless $row && !$row->{expired};
+    # A suspended account never refreshes back in.
+    return $c->render(json => { error => 'invalid or expired refresh_token' }, status => 401)
+        unless $row->{active};
 
     # Already rotated: either hand back what it rotated into, or refuse.
     return $self->_refresh_replay($c, $row) if $row->{revoked};
+
+    # Nor does a session that was ended (sign-out, a password change, a
+    # suspension): its refresh token is revoked with it now, and this catches
+    # one ended some other way. A token with no session row at all is older
+    # than sessions and keeps working.
+    my $sess = $self->pg->db->query(
+        q{SELECT count(*) AS n, count(*) FILTER (WHERE NOT revoked) AS live
+            FROM api.sessions WHERE refresh_token_id = ?},
+        $row->{id},
+    )->hash;
+    return $c->render(json => { error => 'invalid or expired refresh_token' }, status => 401)
+        if $sess->{n} && !$sess->{live};
 
     # Carry the OLD session's device/IP metadata forward rather than
     # recapturing it here -- see migrations/007-session-metadata.sql.
@@ -2220,8 +2262,7 @@ sub _admin_set_active ($self, $c) {
         'UPDATE api.users SET active = ? WHERE id = ? RETURNING id, email, active',
         ($active ? 'true' : 'false'), $id)->hash;
     return $c->render(json => { error => 'user not found' }, status => 404) unless $row;
-    $self->pg->db->query('UPDATE api.sessions SET revoked = TRUE WHERE user_id = ? AND revoked = FALSE', $id)
-        unless $active;
+    $self->_end_sessions($id) unless $active;
     return $c->render(json => { ok => \1, id => $row->{id}, email => $row->{email}, active => ($row->{active} ? \1 : \0) });
 }
 

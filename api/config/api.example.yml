@@ -46,16 +46,17 @@ jwt:
   refresh_grace_seconds: 300
 
 auth:
-  # false (default): /api/v1/auth/register works exactly as it always
-  # has, invite_token ignored if sent. true: an operator has installed
-  # homelab-invite and wants self-registration gated behind it --
-  # invite_token becomes mandatory and is verified via a
-  # server-to-server call into homelab-invite before any account is
-  # created. Flip this only after homelab-invite is installed and
-  # registered (homelab-cli admin fleet status should show it), or
-  # every registration attempt will fail closed with "invite service is
-  # not currently available".
-  require_invite: false
+  # true (default): /api/v1/auth/register needs an invite_token, which is
+  # checked AND used up through homelab-invite before any account is made;
+  # homelab-invite's own sign-up page sends it. Needs homelab-invite
+  # installed and registered, or every registration fails closed with
+  # "invite service is not currently available".
+  #
+  # false: anyone who can reach the api may create an account, for any
+  # address, and an invite is never marked used. Only for a closed test
+  # host. Production ran this way until 2026-11-03 (security fix; the
+  # package's postinst flipped existing configs to true once).
+  require_invite: true
 
 server:
   listen: "http://0.0.0.0:3000"

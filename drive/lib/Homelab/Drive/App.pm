@@ -1151,7 +1151,15 @@ sub oauth_callback ($c) {
     }
 
     $c->session(token => $result->{access_token}, refresh_token => $result->{refresh_token});
-    return $c->redirect_to('/');
+    return $c->redirect_to(_after_login($c));
+}
+
+# Where a sign-in returns to: the share link that sent the visitor to sign in
+# (see _share_visitor_ok), else the front page. Only a share path, so it can
+# never become an open redirect.
+sub _after_login ($c) {
+    my $next = delete $c->session->{after_login} // '';
+    return $next =~ m{\A/s/[0-9a-f]{64}(?:/f/\d+)?\z} ? $next : '/';
 }
 
 # Deliberately does NOT revoke the token itself (homelab-api's
@@ -2033,6 +2041,29 @@ sub _share_url ($c, $token) {
 #     not a cosmetic bug
 # Returns undef for all of them, so a dead share is indistinguishable from a
 # wrong token to whoever is holding it.
+# A share made for one person opens only for that person, or the owner,
+# signed in -- what the email it sends promises ("You will need to sign in
+# with your own account to open it"). Until 2026-11-03 nothing checked, so
+# the link opened for anyone who had it (security fix). A public link (no
+# person named) still opens for anyone holding it. True to go on; otherwise
+# this has already answered: off to sign in (coming back to the link), or a
+# page saying the link is someone else's. $page says whether this request is
+# the link's page or one of its downloads and thumbnails.
+sub _share_visitor_ok ($c, $sh, $page = 0) {
+    my $for = $sh->{shared_with_email};
+    return 1 unless defined $for && length $for;
+    my $me = _current_email($c) // '';
+    return 1 if length $me && (lc $me eq lc $for || lc $me eq lc($sh->{owner_email} // ''));
+    if (!length $me) {
+        $c->session(after_login => $page ? $c->req->url->path->to_string : "/s/$sh->{token}");
+        $c->redirect_to('/login');
+        return 0;
+    }
+    $page ? $c->render(template => 'share_not_yours', status => 403, signed_in_as => $me)
+          : $c->render(text => 'not available', status => 403);
+    return 0;
+}
+
 sub _live_share ($c, $token) {
     return undef unless defined $token && $token =~ /\A[0-9a-f]{64}\z/;
     my $sh = $c->app->pg->db->query(
@@ -2179,16 +2210,16 @@ sub create_share ($c) {
     if (length $with) {
         if (!$recipient_exists) {
             $out{emailed} = \0;
-            $out{notice}  = "Share created, but there is no account for $with, so nothing was emailed. "
-                          . 'Copy the link and send it yourself.';
+            $out{notice}  = "Share created for $with, but nothing was emailed. Copy the link and send it yourself: "
+                          . "only $with can open it, signed in to Drive. For someone without an account here, make a public link instead.";
         }
         else {
             my $sent = _send_share_email($c, $email, $with, $row->{label}, $target, $url);
             $out{emailed} = $sent ? \1 : \0;
             $out{notice}  = $sent
-                ? "Shared with $with and emailed them the link."
+                ? "Shared with $with and emailed them the link. Only they can open it, signed in to Drive."
                 : "Share created and $with has access, but the notification email could not be sent. "
-                . 'Copy the link and send it yourself.';
+                . "Copy the link and send it yourself: only $with can open it, signed in to Drive.";
         }
     }
     else {
@@ -2311,6 +2342,7 @@ sub revoke_share ($c) {
 sub public_share ($c) {
     my $sh = _live_share($c, $c->stash('token'));
     return $c->render(template => 'share_gone', status => 404) unless $sh;
+    _share_visitor_ok($c, $sh, 1) or return;
     _note_share_access($c, $sh->{id});
 
     if ($sh->{file_id}) {
@@ -2396,6 +2428,7 @@ sub _folder_in_share ($c, $sh, $fid) {
 sub public_download ($c) {
     my $sh = _live_share($c, $c->stash('token'));
     return $c->render(text => 'not available', status => 404) unless $sh && $sh->{file_id};
+    _share_visitor_ok($c, $sh) or return;
     my $path = $c->app->storage_path . '/' . $sh->{file_uuid};
     return $c->render(text => 'not available', status => 404) unless -f $path;
     _note_share_access($c, $sh->{id});
@@ -2407,6 +2440,7 @@ sub public_download ($c) {
 sub public_thumbnail ($c) {
     my $sh = _live_share($c, $c->stash('token'));
     return $c->render(text => '', status => 404) unless $sh && $sh->{file_id};
+    _share_visitor_ok($c, $sh) or return;
     return _serve_share_derivative($c, $sh->{file_uuid});
 }
 
@@ -2433,6 +2467,7 @@ sub public_folder_file ($c) {
     my $sh = _live_share($c, $c->stash('token'));
     my $f  = _file_in_shared_folder($c, $sh, $c->param('fid'));
     return $c->render(text => 'not available', status => 404) unless $f;
+    _share_visitor_ok($c, $sh) or return;
     my $path = $c->app->storage_path . '/' . $f->{uuid};
     return $c->render(text => 'not available', status => 404) unless -f $path;
     _note_share_access($c, $sh->{id});
@@ -2445,6 +2480,7 @@ sub public_folder_thumb ($c) {
     my $sh = _live_share($c, $c->stash('token'));
     my $f  = _file_in_shared_folder($c, $sh, $c->param('fid'));
     return $c->render(text => '', status => 404) unless $f;
+    _share_visitor_ok($c, $sh) or return;
     return _serve_share_derivative($c, $f->{uuid});
 }
 

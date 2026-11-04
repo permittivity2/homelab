@@ -108,19 +108,19 @@ $t->get_ok('/api/v1/domains')->status_is(401, 'no Authorization header -> 401, n
 # TWO routes needed here too, same *capture-can't-match-the-bare-path
 # reason as domains -- the bare list route below and the by-id route
 # after it exercise both.
-$t->post_ok('/api/v1/jobs' => $auth => json => { type => 'zip', input => { output_name => 'gw-test.zip', entries => [] } })
-  ->status_is(201, 'gateway resolved homelab-worker via the registry and forwarded successfully')
-  ->json_is('/type', 'zip');
-my $job_id = $t->tx->res->json('/id');
-ok($job_id, 'homelab-worker returned a real job id through the gateway');
+# Regression (security fix 2026-11-03): starting a job is NOT forwarded. A zip
+# job fetches the URLs it names from inside the fleet, so this let any
+# account read internal addresses. Only homelab-drive starts jobs, straight
+# to the worker; through here a caller can only list and follow its own.
+$t->post_ok('/api/v1/jobs' => $auth => json => { type => 'zip', input => { output_name => 'gw-test.zip',
+    entries => [ { fetch_url => 'http://127.0.0.1:9/', zip_path => 'x' } ] } })
+  ->status_is(404, 'starting a job through the gateway is refused, not forwarded');
 
 $t->get_ok('/api/v1/jobs' => $auth)
-  ->status_is(200)
-  ->json_has('/0', 'the job shows up in a subsequent gateway list call');
+  ->status_is(200, 'listing jobs still goes through the gateway');
 
-$t->get_ok("/api/v1/jobs/$job_id" => $auth)
-  ->status_is(200, 'the *capture route matches a sub-path, unlike the bare list route above')
-  ->json_is('/id', $job_id);
+$t->get_ok('/api/v1/jobs/999999999' => $auth)
+  ->status_is(404, 'the *capture route still reaches the worker (which has no such job)');
 
 $t->get_ok('/api/v1/jobs')->status_is(401, 'no Authorization header -> 401, not a forwarded 200');
 

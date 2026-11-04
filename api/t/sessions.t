@@ -339,4 +339,37 @@ subtest 'every rotation leaves a successor that exists' => sub {
     is $orphans, 0, 'no rotated token points at a missing successor';
 };
 
+# Regression (security fix 2026-11-03): a password change, a reset and a
+# suspension revoked only the SESSIONS, so every other client refreshed
+# straight back in with its refresh token, and a suspended account stayed in.
+subtest 'ending sessions ends their refresh tokens' => sub {
+    my ($e, $p) = ("sess-end-$suffix\@test.mailmasker.org", 'SessEndTest1Aa!!');
+    track_account($t->app, $e);
+    $t->post_ok('/api/v1/auth/register', json => { email => $e, password => $p })->status_is(201);
+    $t->post_ok('/api/v1/auth/login', json => { email => $e, password => $p })->status_is(200);
+    my ($a_jwt, $a_rt) = map { $t->tx->res->json("/$_") } qw(token refresh_token);
+    $t->post_ok('/api/v1/auth/login', json => { email => $e, password => $p })->status_is(200);
+    my $b_rt = $t->tx->res->json('/refresh_token');
+
+    $t->post_ok('/api/v1/auth/password' => { Authorization => "Bearer $a_jwt" }
+        => json => { current_password => $p, new_password => "${p}2" })->status_is(200);
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $b_rt })
+      ->status_is(401, 'after a password change, another session cannot refresh back in');
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $a_rt })
+      ->status_is(200, '... while the session that changed it carries on');
+
+    $t->post_ok('/api/v1/auth/login', json => { email => $e, password => "${p}2" })->status_is(200);
+    my $c_rt = $t->tx->res->json('/refresh_token');
+    $t->post_ok('/api/v1/auth/login', json => { email => $admin_email, password => $admin_pw })->status_is(200);
+    my $admin_jwt = $t->tx->res->json('/token');
+    my $id = $t->app->pg->db->query('SELECT id FROM api.users WHERE email = ?', $e)->hash->{id};
+    $t->post_ok("/api/v1/admin/users/$id/active" => { Authorization => "Bearer $admin_jwt" } => json => { active => \0 })
+      ->status_is(200);
+    $t->post_ok('/api/v1/auth/refresh', json => { refresh_token => $c_rt })
+      ->status_is(401, 'a suspended account cannot refresh back in');
+    is($t->app->pg->db->query(q{SELECT count(*) AS n FROM api.refresh_tokens rt JOIN api.users u ON u.id = rt.user_id
+                                 WHERE u.email = ? AND rt.revoked = FALSE}, $e)->hash->{n},
+       0, '... and holds no live refresh token at all');
+};
+
 done_testing;

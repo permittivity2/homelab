@@ -1,3 +1,13 @@
+homelab-invite (0.1.16) unstable; urgency=high
+
+  * Security: an invite claims one username on the fleet's own mail domain
+    and nothing else. /internal/v1/invites/consume now refuses (409) an
+    address on any other domain, before the invite is used, so whoever
+    holds an invite can't have the api create an account for any address
+    at all.
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 20:33:45 -0600
+
 homelab-invite (0.1.15) unstable; urgency=medium
 
   * Release v0.1.15

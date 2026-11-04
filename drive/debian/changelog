@@ -1,3 +1,17 @@
+homelab-drive (0.1.67) unstable; urgency=high
+
+  * Security: a share made for one person opens only for that person, or
+    the owner, signed in. Until now the link opened for anyone who had it,
+    though the email it sends says "You will need to sign in with your own
+    account to open it". Signed out, the link sends you to sign in and
+    brings you back; signed in as someone else, it says the link is
+    someone else's. A public link (no person named) is unchanged.
+  * What the sharer is told after sharing with a person now says only that
+    person can open it, signed in.
+  * t/share-access.t (runs in CI) pins every share handler's check.
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 20:33:45 -0600
+
 homelab-drive (0.1.66) unstable; urgency=medium
 
   * Index drive.shares the way it is actually queried. 011 indexed

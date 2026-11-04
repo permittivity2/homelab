@@ -245,6 +245,16 @@ sub consume ($c) {
     my $existing = $c->app->pg->db->query('SELECT * FROM invite.invites WHERE token = ?', $token)->hash;
     return $c->render(json => { error => 'invite not found' }, status => 404) unless $existing;
 
+    # An invite claims one username on the fleet's own mail domain, and
+    # nothing else (security fix 2026-11-03): without this, whoever held an
+    # invite could have the api create an account for any address at all.
+    # 409, not 403: homelab-api retries a 403 (a rotated agent token), and
+    # this answer is final. Checked before the flip, so the invite survives.
+    my $domain = _account_domain($c);
+    my ($wanted) = lc($email) =~ /\@([^@\s]+)\z/;
+    return $c->render(json => { error => "an invite creates an address at $domain" }, status => 409)
+        unless defined $wanted && $wanted eq lc $domain;
+
     my $row = $c->app->pg->db->query(
         q{UPDATE invite.invites SET status = 'accepted', accepted_at = NOW(), accepted_user_email = ?
           WHERE token = ? AND status = 'pending' AND expires_at > NOW() RETURNING *},

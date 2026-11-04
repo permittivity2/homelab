@@ -1,3 +1,29 @@
+homelab-api (0.1.66) unstable; urgency=high
+
+  * Security: registration requires an invite. The fleet's configs had
+    auth.require_invite: false, so /api/v1/auth/register was open to anyone
+    on the internet, for any address, and an invite was never marked used.
+    The example config now says true, an unset value means true, and this
+    postinst flips an existing 'false' to true once (a marker,
+    /var/lib/homelab/api-require-invite.done, leaves a later deliberate
+    'false' alone, for a closed test host).
+  * Security: jobs are read-only through the gateway. POST /api/v1/jobs
+    let any account start a zip job, which fetches whatever URLs it names
+    from inside the fleet and hands back the answers. Only homelab-drive
+    starts jobs, straight to the worker; GET list/show/download still go
+    through.
+  * Security: ending sessions ends their refresh tokens. A password change,
+    a password reset and suspending an account revoked only the sessions,
+    so every other client refreshed straight back in, and a suspended
+    account stayed signed in. All three now end both (_end_sessions), and
+    /api/v1/auth/refresh refuses a suspended account or a token whose
+    sessions were all ended. Migration 021 ends the tokens the old
+    behaviour left live.
+  * t/security.t pins all three in the source, so CI catches a regression;
+    t/sessions.t and t/gateway.t test them against a real deployment.
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 20:33:45 -0600
+
 homelab-api (0.1.65) unstable; urgency=medium
 
   * Release v0.1.65
