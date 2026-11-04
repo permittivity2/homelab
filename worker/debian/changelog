@@ -1,3 +1,23 @@
+homelab-worker (0.1.14) unstable; urgency=medium
+
+  * A finished job's output can be downloaded from any worker node (post-
+    cutover item 51). The output is on the disk of the node that ran the
+    job, and a download reaching another node failed with "output file is
+    missing", so Drive's "download as zip" failed whenever it did. Each job
+    now records its owner (output_node, migration 003), and a download for
+    another node's file is relayed from that node, with the caller's own
+    credential, once.
+  * Only the owning node removes an expired job's file and row. The sweep
+    on another node used to delete the row and leave the file on disk for
+    good; a row whose owner has been gone a week is removed anyway.
+  * A zip job fetches only https addresses with a public name: never an IP
+    address, a fleet-internal name or the machine itself (item 53, defence
+    in depth now that the api forwards no job creation). Checked when the
+    job is created and again when it runs. jobs.zip_allowed_url_prefixes
+    narrows it further.
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 21:10:47 -0600
+
 homelab-worker (0.1.13) unstable; urgency=medium
 
   * Release v0.1.13

@@ -1,3 +1,15 @@
+homelab-invite (0.1.17) unstable; urgency=medium
+
+  * An invite past its expiry is marked expired (post-cutover item 53),
+    before anything counts or lists pending invites and every 10 minutes.
+    It used to stay pending until someone opened its link: it held the
+    sender's pending limit, and the one-pending-invite-per-person rule kept
+    the sender from inviting that person again.
+  * GET /internal/v1/invites?all= takes any value but empty, 0 or false, as
+    the job list does; only the word "true" worked before.
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 21:10:47 -0600
+
 homelab-invite (0.1.16) unstable; urgency=high
 
   * Security: an invite claims one username on the fleet's own mail domain

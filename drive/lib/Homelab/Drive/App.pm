@@ -906,7 +906,7 @@ use Mojo::URL;
 use Mojo::UserAgent;
 use Homelab::Common::AuthClient qw(introspect revoke_all);
 use Homelab::Common::SSOClient qw(exchange_code);
-use Homelab::Common::Registry qw(lookup);
+use Homelab::Common::Registry qw(lookup system_agent_token);
 use Homelab::Common::AuditClient qw(enqueue);
 
 # Separate from any UA Homelab::Common::* modules keep internally --
@@ -2235,7 +2235,13 @@ sub _trim_addr ($v) { $v //= ''; $v =~ s/\A\s+|\s+\z//g; return $v; }
 # reading another schema's.
 sub _share_recipient_exists ($c, $addr) {
     return 0 unless $addr =~ /\A[^@\s]+\@[^@\s]+\.[^@\s]+\z/;
-    my (undef, $jwt) = _current_auth($c);
+    # Asked with Drive's OWN service credential (post-cutover item 52). The
+    # api answers this for fleet services and catch-all admins only, so
+    # asking with the sharer's token said "no account" for everyone else, and
+    # a share email never reached anyone. The sharer's token is the fallback
+    # on a host with no agent credential (a dev box).
+    my $jwt = eval { system_agent_token() };
+    (undef, $jwt) = _current_auth($c) unless $jwt;
     return 0 unless $jwt;
     my $tx = eval {
         $WORKER_STATUS_UA->get($c->app->api_base . '/api/v1/mail/recipient-exists?email=' . Mojo::Util::url_escape($addr)
@@ -2504,8 +2510,10 @@ sub download ($c) {
     return $c->render(text => 'not logged in', status => 401) unless $email;
 
     my $id = $c->param('id');
+    # Not a file in Trash (post-cutover item 53): Trash offers no download,
+    # and a trashed file is restored first, like everywhere else in Drive.
     my $file = $c->app->pg->db->query(
-        'SELECT filename, uuid, mime_type FROM drive.files WHERE id = ? AND user_email = ?',
+        'SELECT filename, uuid, mime_type FROM drive.files WHERE id = ? AND user_email = ? AND deleted_at IS NULL',
         $id, $email,
     )->hash;
     return $c->render(text => 'not found', status => 404) unless $file;

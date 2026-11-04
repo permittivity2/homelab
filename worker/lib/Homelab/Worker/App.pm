@@ -17,6 +17,9 @@ has 'storage_path';
 has 'jobs_config';
 has 'max_concurrent_jobs';
 has 'job_types' => sub { {} };
+# This node's service address (host:port, as registered), recorded on each
+# job it completes as output_node: the output file is on THIS node's disk.
+has 'self_node' => '';
 
 sub startup ($self) {
     my $config = load_config('HOMELAB_WORKER_CONFIG', '/etc/homelab/worker/config.yml');
@@ -49,6 +52,10 @@ sub startup ($self) {
         retention_hours     => $jobs_cfg->{retention_hours}     // 24,
         job_timeout_minutes => $jobs_cfg->{job_timeout_minutes} // 30,
         max_attempts        => $jobs_cfg->{max_attempts}        // 3,
+        # Optional: URL prefixes a zip job may fetch from, on top of the
+        # built-in https-public-names-only rule (JobType::Zip::url_refusal).
+        zip_allowed_url_prefixes => (ref $jobs_cfg->{zip_allowed_url_prefixes} eq 'ARRAY'
+                                     ? $jobs_cfg->{zip_allowed_url_prefixes} : []),
     });
     $self->max_concurrent_jobs(_resolve_concurrency($jobs_cfg->{max_concurrent_jobs} // 'auto'));
 
@@ -68,6 +75,10 @@ sub startup ($self) {
     });
 
     my $me = $config->{registry} // {};
+    $self->self_node("$me->{host}:$me->{port}") if $me->{host} && $me->{port};
+    # Relaying another node's output (see Jobs::download) streams files of
+    # many GB: no response size cap, and a generous idle allowance.
+    $self->ua->max_response_size(0)->inactivity_timeout(600)->connect_timeout(10);
     if ($me->{host} && $me->{port}) {
         register_recurring(
             api_base => $self->api_base, feature_name => 'homelab-worker',
@@ -191,14 +202,34 @@ sub _reclaim_stale_jobs ($self) {
 # expires_at. expires_at is set by _claim_and_run_job's completion
 # callback and by the reclaim-exhausted case above -- never by this
 # method, which only ever reads it.
+# What this node does with one expired job (item 51). A completed job's
+# output is on ONE node's disk, so only that node removes it, and the row
+# with it: another node removing the row first would strand the file there
+# for good. Returns 'file-and-row', 'row' or 'keep':
+#   - the file is here                      -> remove it and the row
+#   - the job is ours but the file is gone  -> the row
+#   - nothing was ever written (not completed) -> the row, from any node
+#   - another node's, or nobody knows whose -> keep it for that node; after
+#     a week overdue its owner must be gone, so the row goes anyway
+sub expiry_action ($row, $me, $file_here) {
+    return 'file-and-row' if $file_here;
+    return 'row' if length($me) && defined $row->{output_node} && $row->{output_node} eq $me;
+    return 'row' if ($row->{state} // '') ne 'completed';
+    return 'row' if $row->{week_overdue};
+    return 'keep';
+}
+
 sub _expire_old_jobs ($self) {
     my $db   = $self->pg->db;
     my $rows = $db->query(
-        q{SELECT id, output_uuid FROM worker.jobs WHERE expires_at IS NOT NULL AND expires_at <= NOW()},
+        q{SELECT id, state, output_uuid, output_node, (expires_at <= NOW() - INTERVAL '7 days') AS week_overdue
+          FROM worker.jobs WHERE expires_at IS NOT NULL AND expires_at <= NOW()},
     )->hashes;
     for my $row (@$rows) {
         my $path = File::Spec->catfile($self->storage_path, $row->{output_uuid});
-        unlink $path if -e $path;
+        my $act = expiry_action($row, $self->self_node, -e $path);
+        next if $act eq 'keep';
+        unlink $path if $act eq 'file-and-row';
         $db->query('DELETE FROM worker.jobs WHERE id = ?', $row->{id});
     }
 
@@ -308,7 +339,7 @@ sub _claim_and_run_job ($self) {
                 my ($cur, $tot) = @_;
                 if (open(my $pf, '>', $progress_file)) { print $pf "$cur $tot\n"; close($pf); }
             };
-            my $built_path = eval { $handler->($input, $tmpdir->dirname, $progress_cb) };
+            my $built_path = eval { $handler->($input, $tmpdir->dirname, $progress_cb, $cfg->{zip_allowed_url_prefixes}) };
             return { ok => 0, error => "$@" } if $@;
             return { ok => 0, error => "job type produced no output file" }
                 unless defined $built_path && -f $built_path;
@@ -338,9 +369,9 @@ sub _claim_and_run_job ($self) {
             }
             $db2->query(
                 q{UPDATE worker.jobs SET state = 'completed', output_size_bytes = ?,
-                  progress_current = progress_total, completed_at = NOW(),
+                  progress_current = progress_total, completed_at = NOW(), output_node = ?,
                   expires_at = NOW() + make_interval(hours => ?) WHERE id = ? AND attempt_count = ?},
-                $result->{size}, $retention_hrs, $job_id, $attempt,
+                $result->{size}, (length $self->self_node ? $self->self_node : undef), $retention_hrs, $job_id, $attempt,
             );
         },
     );

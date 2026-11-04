@@ -58,6 +58,14 @@ sub create ($c) {
     return $c->render(json => { error => 'input must be an object' }, status => 400) unless ref $input eq 'HASH';
     return $c->render(json => { error => "unknown job type '$type'" }, status => 400)
         unless $c->app->job_types->{$type};
+    if ($type eq 'zip') {
+        my $entries = ref $input->{entries} eq 'ARRAY' ? $input->{entries} : [];
+        for my $i (0 .. $#$entries) {
+            my $why = Homelab::Worker::JobType::Zip::url_refusal($entries->[$i]{fetch_url},
+                $c->app->jobs_config->{zip_allowed_url_prefixes});
+            return $c->render(json => { error => 'entry ' . ($i + 1) . " was refused: $why" }, status => 400) if $why;
+        }
+    }
 
     my $row = $c->app->pg->db->query(
         q{INSERT INTO worker.jobs (user_email, type, input, output_name)
@@ -111,7 +119,7 @@ sub list ($c) {
 sub _find_visible_job ($c, $email, $roles) {
     my $row = $c->app->pg->db->query(
         q{SELECT id, type, state, user_email, output_name, output_uuid, output_size_bytes,
-                 progress_current, progress_total, error_message, created_at, started_at, completed_at
+                 progress_current, progress_total, error_message, created_at, started_at, completed_at, output_node
           FROM worker.jobs WHERE id = ?},
         $c->stash('id'),
     )->hash;
@@ -138,7 +146,20 @@ sub download ($c) {
 
     my $path = File::Spec->catfile($c->app->storage_path, $row->{output_uuid});
     unless (-f $path) {
-        $c->app->log->error("worker: job $row->{id} is 'completed' but its output file is missing: $path");
+        # Written on another node (item 51): relay it from the one that has
+        # it, with the caller's own credential, which that node checks again.
+        # The hop header stops a relayed request from being relayed on.
+        my $owner = $row->{output_node} // '';
+        if (length $owner && $owner ne $c->app->self_node && !$c->req->headers->header('X-Homelab-Worker-Relay')) {
+            return $c->proxy->get_p("http://$owner/internal/v1/jobs/$row->{id}/download" => {
+                Authorization => $c->req->headers->authorization, 'X-Homelab-Worker-Relay' => 1,
+            })->catch(sub ($err) {
+                $c->app->log->error("worker: job $row->{id}: could not relay its output from $owner: $err");
+                $c->render(json => { error => 'output artifact unavailable' }, status => 502) unless $c->res->code;
+            });
+        }
+        $c->app->log->error("worker: job $row->{id} is 'completed' but its output file is missing: $path"
+            . (length $owner ? " (output_node $owner)" : ''));
         return $c->render(json => { error => 'output artifact missing' }, status => 500);
     }
 

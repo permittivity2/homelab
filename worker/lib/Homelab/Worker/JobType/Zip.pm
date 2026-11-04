@@ -14,11 +14,35 @@ use Mojo::UserAgent;
 # Runs inside Homelab::Worker::App's forked subprocess child -- returns
 # the finished archive's local path (inside $workdir) on success, or
 # dies with a message that becomes the job's error_message on failure.
+# May a zip job fetch this URL? Only https, to a public name: never an IP
+# address, a fleet-internal name or the machine itself (post-cutover item 53,
+# defence in depth behind the api no longer forwarding job creation). With
+# allowed prefixes configured (jobs.zip_allowed_url_prefixes), it must also
+# start with one of them. Returns an error message, or '' when allowed.
+sub url_refusal {
+    my ($url, $prefixes) = @_;
+    my ($scheme, $host) = ($url // '') =~ m{\A([a-z][a-z0-9+.-]*)://(?:[^/@]*@)?(\[[^\]]*\]|[^/:?#]*)}i;
+    return 'not a URL' unless defined $host && length $host;
+    $host = lc $host;
+    return 'only https addresses are fetched' unless lc $scheme eq 'https';
+    return 'an IP address is not fetched' if $host =~ /\A\[|\A[\d.]+\z/;
+    return 'an internal name is not fetched'
+        if $host !~ /\./ || $host =~ /(?:\A|\.)(?:localhost|svc\.homelab|homelab|internal|local|lan|home\.arpa)\z/;
+    if ($prefixes && @$prefixes) {
+        return 'not an allowed address' unless grep { index($url, $_) == 0 } @$prefixes;
+    }
+    return '';
+}
+
 sub run {
-    my ($input, $workdir, $progress_cb) = @_;
+    my ($input, $workdir, $progress_cb, $prefixes) = @_;
 
     my $entries = $input->{entries};
     die "zip job: input.entries is required\n" unless ref $entries eq 'ARRAY' && @$entries;
+    for my $i (0 .. $#$entries) {
+        my $why = url_refusal($entries->[$i]{fetch_url}, $prefixes);
+        die "zip job: entry " . ($i + 1) . " was refused: $why\n" if $why;
+    }
 
     my $zip = Archive::Zip->new;
     my $ua  = Mojo::UserAgent->new(connect_timeout => 10, request_timeout => 300);

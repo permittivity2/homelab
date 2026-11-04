@@ -39,4 +39,15 @@ like($refresh, qr/FILTER \(WHERE NOT revoked\) AS live.*?if \$sess->\{n\} && !\$
 my $mig = path("$FindBin::Bin/../migrations/021-end-refresh-tokens-of-ended-sessions.sql")->slurp;
 like($mig, qr/UPDATE api\.refresh_tokens rt\s+SET revoked = TRUE\s+WHERE rt\.revoked = FALSE\s+AND EXISTS/, 'migration 021 ends the tokens that outlived their sessions');
 
+# Post-cutover item 52: fleet services may ask whether an address has an
+# account (homelab-drive does, before emailing a share).
+like(body('_recipient_exists'), qr/unless \(\$caller && \$self->_is_system_agent\(\$caller\)\) \{\s*\$self->_require_capability\(\$c, 'domains\.catchall'\) or return;/,
+     'recipient-exists: a fleet service, or site admin / domains.catchall as before');
+
+# Post-cutover item 53: system_agent can't be deleted, and a role with a dot
+# in its name can be taken off a user.
+my $m22 = path("$FindBin::Bin/../migrations/022-protect-system-agent-role.sql")->slurp;
+like($m22, qr/UPDATE api\.roles SET protected = TRUE WHERE name = 'system_agent'/, 'migration 022 protects system_agent');
+like($src, qr{\$r->delete\('/api/v1/admin/users/:id/roles/:role' => \[role => qr/\[\^\\/\]\+/\]}, 'the role-removal route takes a name with a dot');
+
 done_testing;

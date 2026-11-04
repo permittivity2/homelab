@@ -49,6 +49,17 @@ sub _quota_for ($c, $sender_email) {
 #
 # Either way the token/quota/dedup logic below is identical and lives in
 # exactly one place.
+# A pending invite past its expiry is marked expired (post-cutover item 53).
+# Until now it stayed 'pending' until someone opened its link: it still
+# counted toward the sender's pending limit, and the one-pending-invite-per-
+# recipient rule kept the sender from inviting that person again. Run before
+# anything that counts or lists pending invites, and on a timer (App.pm).
+sub expire_stale ($db) {
+    return $db->query(
+        q{UPDATE invite.invites SET status = 'expired' WHERE status = 'pending' AND expires_at <= NOW()},
+    )->rows;
+}
+
 sub create ($c) {
     my $email = $c->authenticated_email_any or return;
     my $body = $c->req->json // {};
@@ -61,6 +72,7 @@ sub create ($c) {
         unless $CHANNELS{$channel};
 
     my $quota = _quota_for($c, $email);
+    expire_stale($c->app->pg->db);
     my $pending_count = $c->app->pg->db->query(
         q{SELECT COUNT(*) AS n FROM invite.invites WHERE sender_email = ? AND status = 'pending'}, $email,
     )->hash->{n};
@@ -134,12 +146,16 @@ sub create ($c) {
     return $c->render(json => { %$row, url => $url }, status => 201);
 }
 
-# GET /internal/v1/invites[?all=true]
+# GET /internal/v1/invites[?all=1]
+# ?all= takes any value but empty, 0 or false, the same as homelab-worker's
+# job list (until 2026-11-03 only the exact word "true" worked here, and
+# ?all=1 quietly listed just your own).
 sub list ($c) {
     my $email = $c->authenticated_email_any or return;
-    my $all = $c->param('all');
-    if ($all && $all eq 'true') {
-        return $c->render(json => { error => 'site_admin role required for ?all=true' }, status => 403)
+    expire_stale($c->app->pg->db);
+    my $all = $c->param('all') // '';
+    if (length $all && $all ne '0' && lc $all ne 'false') {
+        return $c->render(json => { error => 'site_admin role required for ?all=1' }, status => 403)
             unless $c->is_site_admin;
         return $c->render(json => $c->app->pg->db->query(
             'SELECT * FROM invite.invites ORDER BY created_at DESC',
@@ -182,6 +198,7 @@ sub delete_entry ($c) {
 
 sub quota_show_mine ($c) {
     my $email = $c->authenticated_email_any or return;
+    expire_stale($c->app->pg->db);
     return $c->render(json => _quota_for($c, $email));
 }
 

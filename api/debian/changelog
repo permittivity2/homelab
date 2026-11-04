@@ -1,3 +1,16 @@
+homelab-api (0.1.67) unstable; urgency=medium
+
+  * GET /api/v1/mail/recipient-exists answers fleet services as well as
+    site admins and holders of domains.catchall (post-cutover item 52):
+    homelab-drive asks before emailing a share, and asking as the sharer
+    answered "no account" for everyone else, so no share email went out.
+  * The system_agent role can't be deleted (migration 022, item 53): every
+    fleet agent signs in with it.
+  * DELETE /api/v1/admin/users/:id/roles/:role takes a role name with a dot
+    in it, like the other role routes.
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 21:10:47 -0600
+
 homelab-api (0.1.66) unstable; urgency=high
 
   * Security: registration requires an invite. The fleet's configs had

@@ -1,3 +1,14 @@
+homelab-drive (0.1.68) unstable; urgency=medium
+
+  * Share emails reach people again (post-cutover item 52): the check for
+    whether the person has an account now uses Drive's own service
+    credential. Asked with the sharer's token, it answered "no account" for
+    anyone but a catch-all admin, so nothing was ever emailed.
+  * A file in Trash isn't served for download any more (item 53); restore
+    it first, as everywhere else in Drive.
+
+ -- Gardner <gardner@homelab>  Tue, 03 Nov 2026 21:10:47 -0600
+
 homelab-drive (0.1.67) unstable; urgency=high
 
   * Security: a share made for one person opens only for that person, or

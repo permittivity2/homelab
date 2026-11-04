@@ -62,6 +62,14 @@ sub startup ($self) {
         return 1;
     });
 
+    # Expired invites stop counting as pending (Invites::expire_stale), on a
+    # timer as well as before each count, so lists read elsewhere are right.
+    require Homelab::Invite::App::Controller::Invites;   # controllers load lazily; the timer can't wait
+    Mojo::IOLoop->recurring(600 => sub {
+        eval { Homelab::Invite::App::Controller::Invites::expire_stale($self->pg->db); 1 }
+            or $self->log->warn("invite: expiring stale invites failed: $@");
+    });
+
     my $me = $config->{registry} // {};
     if ($me->{host} && $me->{port}) {
         register_recurring(

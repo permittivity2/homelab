@@ -116,7 +116,9 @@ sub startup ($self) {
     $r->get('/api/v1/admin/dovecot/status'       => sub ($c) { $self->_admin_dovecot_status($c) });
     $r->get('/api/v1/admin/ha/status'            => sub ($c) { $self->_admin_ha_status($c) });
     $r->post('/api/v1/admin/users/:id/roles'     => sub ($c) { $self->_admin_grant_role($c) });
-    $r->delete('/api/v1/admin/users/:id/roles/:role' => sub ($c) { $self->_admin_revoke_role($c) });
+    # [role => ...] as on the other role routes: Mojolicious's default
+    # placeholder stops at a dot, so a role named with one couldn't be removed.
+    $r->delete('/api/v1/admin/users/:id/roles/:role' => [role => qr/[^\/]+/] => sub ($c) { $self->_admin_revoke_role($c) });
     # Mints a real api.users row for a system-owned mailbox identity
     # (e.g. invites@<domain>, used by homelab-invite to send mail with
     # no logged-in human behind it) -- reuses hash_password() so this
@@ -2234,7 +2236,13 @@ sub _require_capability ($self, $c, $name) {
 # domains.catchall) -- e.g. accountmanage validating a catch-all
 # destination. Deliberately NOT the site_admin-only /admin/users search.
 sub _recipient_exists ($self, $c) {
-    $self->_require_capability($c, 'domains.catchall') or return;
+    # Fleet services may ask too: homelab-drive does before emailing a share
+    # (post-cutover item 52). Everyone else needs site_admin or the
+    # domains.catchall permission, as before.
+    my $caller = $self->_authenticated_user($c);
+    unless ($caller && $self->_is_system_agent($caller)) {
+        $self->_require_capability($c, 'domains.catchall') or return;
+    }
     my $email = $c->param('email') // '';
     return $c->render(json => { exists => \0 }) unless $email =~ /\@/;
     my $row = $self->pg->db->query(

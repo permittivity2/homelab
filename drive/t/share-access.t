@@ -38,4 +38,15 @@ like($src, qr/sub _share_visitor_ok .*?shared_with_email.*?owner_email.*?redirec
     }
 }
 
+# Post-cutover item 52: the account check before a share email was asked with
+# the sharer's own token, which the api refuses for anyone but catch-all
+# admins, so the email never went out. Drive asks with its own credential.
+like($src, qr/sub _share_recipient_exists .*?my \$jwt = eval \{ system_agent_token\(\) \};.*?_current_auth\(\$c\) unless \$jwt;/s,
+     'the share account check asks with Drive\'s own credential first');
+like($src, qr/use Homelab::Common::Registry qw\(lookup system_agent_token\);/, '... which is imported');
+
+# Post-cutover item 53: a file in Trash isn't served for download.
+like($src, qr/sub download \(\$c\) \{.*?FROM drive\.files WHERE id = \? AND user_email = \? AND deleted_at IS NULL/s,
+     'download skips a file in Trash');
+
 done_testing;
