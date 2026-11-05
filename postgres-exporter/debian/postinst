@@ -17,31 +17,44 @@ case "$1" in
             exit 0
         fi
 
-        PASS="$(openssl rand -hex 16)"
-        sudo -u postgres psql -q -c "DO \$\$ BEGIN \
-            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='homelab_exporter') THEN \
-                CREATE ROLE homelab_exporter LOGIN PASSWORD '$PASS'; \
-            ELSE ALTER ROLE homelab_exporter LOGIN PASSWORD '$PASS'; END IF; END \$\$;"
-        sudo -u postgres psql -q -c "GRANT pg_monitor TO homelab_exporter;"
-
-        DBPORT="$(sudo -u postgres psql -tAc 'SHOW port;' 2>/dev/null | tr -d '[:space:]')"
-        [ -n "$DBPORT" ] || DBPORT=5432
+        # The exporter runs as the OS user 'prometheus' and connects over the
+        # local unix socket, which pg_hba maps with `peer`. The role is named
+        # after that OS user, so there is NO password anywhere. Roles live in
+        # the shared catalog: on a Patroni cluster the role is created once,
+        # on the LEADER, and reaches the replicas by replication. A replica is
+        # read-only, so there it can only check that the role has arrived.
+        IN_RECOVERY="$(sudo -u postgres psql -tAc 'SELECT pg_is_in_recovery()' 2>/dev/null | tr -d '[:space:]')"
+        if [ "$IN_RECOVERY" = "t" ]; then
+            if [ -z "$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='prometheus'" | tr -d '[:space:]')" ]; then
+                echo "  ERROR: this is a replica and the 'prometheus' role has not replicated yet."
+                echo "         Install on the leader first, then: dpkg-reconfigure homelab-postgres-exporter"
+                exit 0
+            fi
+        else
+            sudo -u postgres psql -q -c "DO \$\$ BEGIN \
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='prometheus') THEN \
+                    CREATE ROLE prometheus LOGIN; END IF; END \$\$;"
+            sudo -u postgres psql -q -c "GRANT pg_monitor TO prometheus;"
+        fi
 
         # Custom-query access: the exporter connects to the shared 'homelab'
         # DB so queries.yaml can read a few app tables (read-only). Grants
         # are guarded -- a table that doesn't exist yet (its package not
         # migrated) is simply skipped; the role stays pg_monitor otherwise.
+        # Grants are catalog writes too, so only the leader applies them.
         QUERIES_FILE=""
         if sudo -u postgres psql -d homelab -tAc 'SELECT 1' >/dev/null 2>&1; then
-            sudo -u postgres psql -d homelab -q -c "GRANT CONNECT ON DATABASE homelab TO homelab_exporter;" || true
-            for spec in "worker:jobs" "api:host_service_status"; do
-                sch="${spec%:*}"; tbl="${spec#*:}"
-                if [ -n "$(sudo -u postgres psql -d homelab -tAc "SELECT to_regclass('$sch.$tbl')" 2>/dev/null | tr -d '[:space:]')" ]; then
-                    sudo -u postgres psql -d homelab -q \
-                        -c "GRANT USAGE ON SCHEMA $sch TO homelab_exporter;" \
-                        -c "GRANT SELECT ON $sch.$tbl TO homelab_exporter;" || true
-                fi
-            done
+            if [ "$IN_RECOVERY" != "t" ]; then
+                sudo -u postgres psql -d homelab -q -c "GRANT CONNECT ON DATABASE homelab TO prometheus;" || true
+                for spec in "worker:jobs" "api:host_service_status"; do
+                    sch="${spec%:*}"; tbl="${spec#*:}"
+                    if [ -n "$(sudo -u postgres psql -d homelab -tAc "SELECT to_regclass('$sch.$tbl')" 2>/dev/null | tr -d '[:space:]')" ]; then
+                        sudo -u postgres psql -d homelab -q \
+                            -c "GRANT USAGE ON SCHEMA $sch TO prometheus;" \
+                            -c "GRANT SELECT ON $sch.$tbl TO prometheus;" || true
+                    fi
+                done
+            fi
             QUERIES_FILE="$SHARE_DIR/queries.yaml"
             EXPORTER_DB=homelab
         else
@@ -49,14 +62,14 @@ case "$1" in
             EXPORTER_DB=postgres
         fi
 
-        # DSN carries the role password -> keep the file root:prometheus 0640
-        # (the exporter runs as the 'prometheus' user).
+        # The DSN holds no secret (peer auth). The unix-socket directory is
+        # Debian's default.
         if [ -n "$QUERIES_FILE" ]; then
-            printf "DATA_SOURCE_NAME='postgresql://homelab_exporter:%s@localhost:%s/%s?sslmode=disable'\nARGS=\"--extend.query-path=%s\"\n" \
-                "$PASS" "$DBPORT" "$EXPORTER_DB" "$QUERIES_FILE" > "$DEFAULT_FILE"
+            printf "DATA_SOURCE_NAME='postgresql://prometheus@/%s?host=/var/run/postgresql&sslmode=disable'\nARGS=\"--extend.query-path=%s\"\n" \
+                "$EXPORTER_DB" "$QUERIES_FILE" > "$DEFAULT_FILE"
         else
-            printf "DATA_SOURCE_NAME='postgresql://homelab_exporter:%s@localhost:%s/%s?sslmode=disable'\nARGS=\"\"\n" \
-                "$PASS" "$DBPORT" "$EXPORTER_DB" > "$DEFAULT_FILE"
+            printf "DATA_SOURCE_NAME='postgresql://prometheus@/%s?host=/var/run/postgresql&sslmode=disable'\nARGS=\"\"\n" \
+                "$EXPORTER_DB" > "$DEFAULT_FILE"
         fi
         chown root:prometheus "$DEFAULT_FILE" 2>/dev/null || true
         chmod 640 "$DEFAULT_FILE"

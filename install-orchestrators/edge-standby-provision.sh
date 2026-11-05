@@ -50,8 +50,8 @@ say "[1/5] install edge stack on $TGT"
 # it back on a new standby would quietly re-introduce the auto-failover that was
 # removed on purpose.
 ssh "$TGT" 'sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    homelab-webproxy homelab-haproxy homelab-dnsdist homelab-certsync 2>&1 | tail -8
-  echo "installed:"; dpkg-query -W homelab-webproxy homelab-haproxy homelab-dnsdist homelab-certsync'
+    homelab-webproxy homelab-haproxy homelab-dnsdist homelab-certsync homelab-nginx-exporter 2>&1 | tail -8
+  echo "installed:"; dpkg-query -W homelab-webproxy homelab-haproxy homelab-dnsdist homelab-certsync homelab-nginx-exporter'
 
 say "[2/5] pull configs + certs from $SRC (as root, preserving perms/symlinks)"
 ssh "$SRC" "sudo tar -C / -cf - $CLONE_PATHS" > "$STAGE/edge.tar"

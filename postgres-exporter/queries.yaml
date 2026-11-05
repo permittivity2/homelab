@@ -3,7 +3,7 @@
 # directly -- turning DB-resident state into Prometheus series with no new
 # endpoint, firewall opening, or per-app instrumentation.
 #
-# homelab_exporter is granted only SELECT on exactly these tables (see the
+# prometheus is granted only SELECT on exactly these tables (see the
 # package postinst); it remains a read-only pg_monitor role otherwise.
 
 # Worker job queue depth by state (homelab-worker). The single

@@ -8,6 +8,11 @@ case "$1" in
         chgrp homelab /etc/homelab/services 2>/dev/null || true
         chmod 775 /etc/homelab/services 2>/dev/null || true
         cp "$SHARE_DIR/services/postfix-exporter.yml" "/etc/homelab/services/postfix-exporter.yml"
+        # Read /var/log/mail.log, not the (near-empty) journal.
+        install -d /etc/systemd/system/prometheus-postfix-exporter.service.d
+        install -m 644 "$SHARE_DIR/systemd/10-homelab-logfile.conf" \
+            /etc/systemd/system/prometheus-postfix-exporter.service.d/10-homelab-logfile.conf
+        systemctl daemon-reload >/dev/null 2>&1 || true
         systemctl enable prometheus-postfix-exporter >/dev/null 2>&1 || true
         systemctl restart prometheus-postfix-exporter \
             || echo "  WARNING: prometheus-postfix-exporter restart failed -- check its journal."

@@ -3,7 +3,7 @@ set -e
 case "$1" in
     purge)
         rm -f /etc/homelab/services/postgres-exporter.yml
-        # Leave the homelab_exporter Postgres role in place (shared with the
+        # Leave the prometheus Postgres role in place (shared with the
         # pgbouncer exporter); dropping DB roles on purge is deliberately
         # out of scope. The exporter's DATA_SOURCE_NAME file belongs to the
         # upstream package and is removed with it.

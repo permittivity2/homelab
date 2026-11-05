@@ -1,3 +1,9 @@
+homelab-postgres-exporter (0.3.0) unstable; urgency=medium
+
+  * Release v0.3.0
+
+ -- Gardner <gardner@homelab>  Thu, 05 Nov 2026 10:55:58 -0600
+
 homelab-postgres-exporter (0.2.0) unstable; urgency=medium
 
   * Release v0.2.0

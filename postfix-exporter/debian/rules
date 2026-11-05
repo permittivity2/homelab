@@ -6,3 +6,5 @@ override_dh_install:
 	dh_install
 	install -D -m 644 services/postfix-exporter.yml \
 		debian/homelab-postfix-exporter/usr/share/homelab-postfix-exporter/services/postfix-exporter.yml
+	install -D -m 644 systemd/10-homelab-logfile.conf \
+		debian/homelab-postfix-exporter/usr/share/homelab-postfix-exporter/systemd/10-homelab-logfile.conf

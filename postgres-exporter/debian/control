@@ -12,7 +12,7 @@ Depends: prometheus-postgres-exporter, sudo, openssl
 Recommends: homelab-agent, homelab-node-exporter
 Description: PostgreSQL metrics exporter wiring for the homelab-* ecosystem
  Wraps the Ubuntu-archive prometheus-postgres-exporter for the fleet DB
- host. On configure it bootstraps a read-only 'homelab_exporter' Postgres
+ host. On configure it bootstraps a read-only 'prometheus (peer auth)' Postgres
  role (pg_monitor) using LOCAL sudo -u postgres -- never a stored network
  admin credential, same posture as homelab-database's bootstrap-app-role --
  writes the exporter's DATA_SOURCE_NAME, and advertises the exporter into
