@@ -2,5 +2,8 @@ name: postgresql
 package: homelab-database
 kind: postgres
 check:
-  systemd_unit: postgresql@18-main
-description: "Postgres 18, the shared 'homelab' database every feature's schema lives in"
+  # Patroni starts and supervises Postgres itself, so the stock
+  # postgresql@NN-main unit is inactive on a healthy node.
+  systemd_unit: patroni
+  tcp_port: 5432
+description: "PostgreSQL under Patroni, the shared 'homelab' database every feature's schema lives in"

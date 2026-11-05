@@ -598,7 +598,7 @@ sub _prom_hosts ($prom) {
 }
 # Services whose last heartbeat check failed (homelab_service_up == 0).
 sub _prom_down_services ($prom) {
-    my $res = _prom_query($prom, 'homelab_service_up==0') // [];
+    my $res = _prom_query($prom, 'max by(hostname,service_name)(homelab_service_up)==0') // [];
     return [ map { { host => ($_->{metric}{hostname} // '?'), service => ($_->{metric}{service_name} // '?') } } @$res ];
 }
 
@@ -615,8 +615,8 @@ sub admin_metrics_summary ($c) {
     my %q = (
         hosts_up       => 'count(up{job="node"}==1)',
         hosts_total    => 'count(up{job="node"})',
-        services_total => 'count(homelab_service_up)',
-        services_down  => 'count(homelab_service_up==0) or vector(0)',
+        services_total => 'count(max by(hostname,service_name)(homelab_service_up))',
+        services_down  => 'count(max by(hostname,service_name)(homelab_service_up)==0) or vector(0)',
         probes_up      => 'sum(probe_success) or vector(0)',
         probes_total   => 'count(probe_success) or vector(0)',
         cert_days_min  => '(min(probe_ssl_earliest_cert_expiry-time())/86400) or vector(0)',
