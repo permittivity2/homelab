@@ -9,6 +9,7 @@ use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
 use Homelab::API::Auth qw(hash_password verify_password generate_jwt verify_jwt generate_jti generate_refresh_token);
 use Homelab::API::Registry;
+use Homelab::API::BadIPs qw(parse_address list_bans why_address unban_address);
 use Homelab::Common::Proxy qw(forward);
 use Homelab::Common::AuditClient qw(enqueue enqueue_p);
 use Homelab::Common::Registry qw(system_agent_token);
@@ -193,6 +194,14 @@ sub startup ($self) {
     $r->get('/api/v1/admin/agent/status' => sub ($c) { $self->_agent_list_status($c) });
     $r->get('/api/v1/admin/agent/status/mismatches' => sub ($c) { $self->_agent_list_mismatches($c) });
     $r->get('/api/v1/admin/agent/topology' => sub ($c) { $self->_agent_topology($c) });
+
+    # --- bad-ips shared ban list (site_admin): what `bad_ips list|why|unban`
+    # do on a node, without SSH. See Homelab::API::BadIPs. [address => ...]
+    # because Mojolicious's default placeholder stops at a dot and an IPv4
+    # address is full of them. ----------------------------------------
+    $r->get('/api/v1/admin/bad-ips' => sub ($c) { $self->_badips_list($c) });
+    $r->get('/api/v1/admin/bad-ips/:address' => [address => qr/[0-9A-Fa-f:.]+/] => sub ($c) { $self->_badips_why($c) });
+    $r->post('/api/v1/admin/bad-ips/:address/unban' => [address => qr/[0-9A-Fa-f:.]+/] => sub ($c) { $self->_badips_unban($c) });
 
     # --- Gateway: the ONLY address a client (homelab-cli, or any
     # third-party script) should ever need -- see ../../CLAUDE.md's "one
@@ -1603,6 +1612,57 @@ sub _agent_list_mismatches ($self, $c) {
         q{SELECT hostname, service_name, package_name, kind, expected, actual, description, fronts, checked_at
           FROM api.host_service_status WHERE expected != actual ORDER BY service_name, hostname},
     )->hashes->to_array);
+}
+
+# GET /api/v1/admin/bad-ips[?limit=N] -- the active bans in the shared list.
+sub _badips_list ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    my $rows = eval { list_bans($self->pg->db, limit => $c->param('limit')) };
+    return $c->render(json => { error => 'the ban list is not available' }, status => 503) unless $rows;
+    return $c->render(json => { bans => $rows, count => scalar @$rows });
+}
+
+# GET /api/v1/admin/bad-ips/:address -- everything the list holds about one
+# address: each ban's rule and the log line behind it, and its exemptions.
+sub _badips_why ($self, $c) {
+    $self->_require_site_admin($c) or return;
+    my $ip = parse_address($c->stash('address'))
+        or return $c->render(json => { error => 'not an IP address' }, status => 400);
+    my $why = eval { why_address($self->pg->db, $ip) };
+    return $c->render(json => { error => 'the ban list is not available' }, status => 503) unless $why;
+    return $c->render(json => $why);
+}
+
+# POST /api/v1/admin/bad-ips/:address/unban { hours?, reason? } -- end every
+# active ban on the address and keep it from being banned straight back for
+# `hours` (default 24, at most a year). Audited; the edge lifts the ban from
+# its firewall within a minute.
+sub _badips_unban ($self, $c) {
+    my $admin = $self->_require_site_admin($c) or return;
+    my $ip = parse_address($c->stash('address'))
+        or return $c->render(json => { error => 'not an IP address' }, status => 400);
+    my $body  = $c->req->json // {};
+    my $hours = $body->{hours} // 24;
+    return $c->render(json => { error => 'hours must be a whole number from 1 to 8760' }, status => 400)
+        unless !ref $hours && "$hours" =~ /\A\d+\z/ && $hours >= 1 && $hours <= 8760;
+    my $reason = defined $body->{reason} && !ref $body->{reason} && length $body->{reason}
+        ? substr($body->{reason}, 0, 200) : 'unbanned by a site admin through the api';
+
+    my $ended = eval {
+        my $tx = $self->pg->db->begin;
+        my $n = unban_address($tx->db, $ip, hours => $hours + 0, reason => $reason, by => $admin->{email});
+        enqueue(
+            $tx->db, actor_email => $admin->{email}, affected_user => $admin->{email},
+            jti => $self->_jwt_jti($c), action => 'badips.unban',
+            resource_type => 'ip', resource_id => $ip, source_service => 'homelab-api',
+            ip_address => $c->tx->remote_address, user_agent => $c->req->headers->user_agent,
+            detail => { hours => $hours + 0, reason => $reason, bans_ended => $n },
+        );
+        $tx->commit;
+        $n;
+    };
+    return $c->render(json => { error => 'the ban list is not available' }, status => 503) unless defined $ended;
+    return $c->render(json => { ok => \1, address => $ip, bans_ended => $ended + 0, exempt_hours => $hours + 0 });
 }
 
 # How stale a host's last heartbeat may be before we stop trusting its

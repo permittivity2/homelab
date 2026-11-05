@@ -203,6 +203,23 @@ class Client:
     def dovecot_status(self, token):
         return self._request("GET", "/api/v1/admin/dovecot/status", headers=self._auth(token))
 
+    # --- bad-ips shared ban list (site_admin) -- the addresses the edge and
+    # mail servers have banned; see developer/reference/bad-ips.yml ---
+    def admin_bad_ips_list(self, token, limit=None):
+        kwargs = {"params": {"limit": limit}} if limit else {}
+        return self._request("GET", "/api/v1/admin/bad-ips", headers=self._auth(token), **kwargs)
+
+    def admin_bad_ips_why(self, token, address):
+        return self._request("GET", f"/api/v1/admin/bad-ips/{address}", headers=self._auth(token))
+
+    def admin_bad_ips_unban(self, token, address, hours=None, reason=None):
+        body = {}
+        if hours is not None:
+            body["hours"] = hours
+        if reason:
+            body["reason"] = reason
+        return self._request("POST", f"/api/v1/admin/bad-ips/{address}/unban", headers=self._auth(token), json=body)
+
     def admin_agent_enroll(self, token, hostname, ttl_minutes=None):
         body = {"hostname": hostname}
         if ttl_minutes is not None:

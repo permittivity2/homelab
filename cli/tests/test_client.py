@@ -837,3 +837,36 @@ def test_search_passes_date_and_type_filters_through(client):
     assert params["to"] == "2026-06-30"
     assert params["mime"] == "application/pdf"
     assert params["in_trash"] is True
+
+
+def test_admin_bad_ips_list_sends_limit_and_token(client):
+    with patch("requests.request", return_value=_mock_response(200, {"bans": [], "count": 0})) as m:
+        client.admin_bad_ips_list("the-jwt", limit=5)
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/admin/bad-ips")
+    assert m.call_args.kwargs["headers"]["Authorization"] == "Bearer the-jwt"
+    assert m.call_args.kwargs["params"] == {"limit": 5}
+
+
+def test_admin_bad_ips_why_puts_the_address_in_the_path(client):
+    with patch("requests.request", return_value=_mock_response(200, {"address": "203.0.113.7", "bans": []})) as m:
+        client.admin_bad_ips_why("t", "203.0.113.7")
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/admin/bad-ips/203.0.113.7")
+
+
+def test_admin_bad_ips_unban_posts_hours_and_reason(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.admin_bad_ips_unban("t", "203.0.113.7", hours=48, reason="hotel")
+    assert m.call_args.args[:2] == ("POST", "http://localhost:3000/api/v1/admin/bad-ips/203.0.113.7/unban")
+    assert m.call_args.kwargs["json"] == {"hours": 48, "reason": "hotel"}
+
+
+def test_admin_bad_ips_unban_defaults_send_an_empty_body(client):
+    with patch("requests.request", return_value=_mock_response(200, {"ok": True})) as m:
+        client.admin_bad_ips_unban("t", "203.0.113.7")
+    assert m.call_args.kwargs["json"] == {}
+
+
+def test_admin_bad_ips_403_raises_api_error(client):
+    with patch("requests.request", return_value=_mock_response(403, {"error": "site_admin role required"})):
+        with pytest.raises(ApiError):
+            client.admin_bad_ips_list("t")

@@ -1,0 +1,23 @@
+<div class="badips-view" data-badips-root>
+  <div class="card">
+    <h2>Banned addresses <span class="hint">the shared bad-ips ban list: what the internet edge and the mail servers have blocked</span></h2>
+    <p class="muted" style="font-size:0.85rem;margin:0 0 var(--space-3);">
+      Lifting a ban ends it everywhere and keeps the address from being banned again for the hours you choose; the edge drops it from its firewall within a minute.
+      Country and network owner: <a href="https://db-ip.com" rel="noopener">IP geolocation by DB-IP</a> (CC BY 4.0).
+    </p>
+    <div id="badips-msg"></div>
+    <div class="scrollbox">
+      <table class="dmarc-table">
+        <thead><tr>
+          <th>Address</th><th>Country</th><th>Network owner</th><th>Caught by</th>
+          <th class="num">Times</th><th>Banned until</th><th></th>
+        </tr></thead>
+        <tbody id="badips-body"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card" id="badips-why-card" hidden>
+    <h2 id="badips-why-title">Why</h2>
+    <div id="badips-why-body"></div>
+  </div>
+</div>

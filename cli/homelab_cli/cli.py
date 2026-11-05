@@ -2007,6 +2007,76 @@ def cmd_audit_list(args):
 # purpose — these just attempt the call and surface whatever the server
 # decides (a non-admin gets a clean 403, not a confusing local guess). ---
 
+def cmd_admin_bad_ips_list(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).admin_bad_ips_list(session["token"], limit=args.limit)
+    except ApiError as e:
+        _emit_error(args, f"Could not list banned addresses: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    bans = result.get("bans", [])
+    if not bans:
+        print("(no banned addresses)")
+        return 0
+    rows = [
+        [b["address"], b.get("country") or "--", b.get("network_owner") or "", b.get("rules") or "",
+         b.get("times_banned"), b.get("banned_until") or ""]
+        for b in bans
+    ]
+    _print_table(["ADDRESS", "COUNTRY", "NETWORK OWNER", "CAUGHT BY", "TIMES", "BANNED UNTIL"], rows)
+    return 0
+
+
+def cmd_admin_bad_ips_why(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).admin_bad_ips_why(session["token"], args.address)
+    except ApiError as e:
+        _emit_error(args, f"Could not look up {args.address}: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    where = result.get("where") or {}
+    print(f"{result['address']}  {where.get('country') or '--'}  {where.get('network_owner') or ''}".rstrip())
+    bans = result.get("bans", [])
+    if not bans:
+        print("  never banned")
+    for b in bans:
+        state = "banned until" if b.get("active") else "ban ended"
+        print(f"  {b.get('rule') or '?'} on {b.get('reported_by')} ({b.get('service') or '?'}): "
+              f"{state} {b.get('banned_until')}, banned {b.get('times_banned')}x, last seen {b.get('last_seen')}")
+        if b.get("summary"):
+            print(f"      matched: {b['summary']}")
+        if b.get("evidence"):
+            print(f"      log line: {b['evidence']}")
+    for e in result.get("exemptions", []):
+        state = "exempt until" if e.get("active") else "exemption ended"
+        print(f"  {state} {e.get('exempt_until')} (by {e.get('by')}: {e.get('reason')})")
+    return 0
+
+
+def cmd_admin_bad_ips_unban(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).admin_bad_ips_unban(session["token"], args.address, hours=args.hours, reason=args.reason)
+    except ApiError as e:
+        _emit_error(args, f"Could not unban {args.address}: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Unbanned {result['address']}: {result['bans_ended']} ban(s) ended, "
+          f"exempt for {result['exempt_hours']} hours. The edge lifts it within a minute.")
+    return 0
+
+
 def cmd_admin_users_list(args):
     session = _require_session(args)
     if not session:
@@ -2728,6 +2798,20 @@ def build_parser():
     p.add_argument("hostname", help="The host's own logical name, e.g. 'ct07' -- must match what its agent is configured with")
     p.add_argument("--ttl-minutes", type=int, help="How long the code stays redeemable (default: 10)")
     p.set_defaults(func=cmd_admin_agent_enroll)
+
+    bad_ips = admin_sub.add_parser("bad-ips", help="The shared ban list: see who is banned and why, lift a ban")
+    bad_ips_sub = bad_ips.add_subparsers(dest="admin_bad_ips_command", required=True)
+    p = bad_ips_sub.add_parser("list", help="List the addresses banned right now")
+    p.add_argument("--limit", type=int, help="How many addresses to show (1-1000; default 200)")
+    p.set_defaults(func=cmd_admin_bad_ips_list)
+    p = bad_ips_sub.add_parser("why", help="Everything the list holds about one address, with the log line behind each ban")
+    p.add_argument("address", help="One IPv4 or IPv6 address")
+    p.set_defaults(func=cmd_admin_bad_ips_why)
+    p = bad_ips_sub.add_parser("unban", help="End every ban on an address and keep it from being banned again for a while")
+    p.add_argument("address", help="One IPv4 or IPv6 address")
+    p.add_argument("--hours", type=int, help="How long it stays exempt, 1-8760 (default 24)")
+    p.add_argument("--reason", help="Why, in a few words")
+    p.set_defaults(func=cmd_admin_bad_ips_unban)
 
     block_link_admin = admin_sub.add_parser(
         "block-link",

@@ -244,6 +244,7 @@
         <button type="button" data-atab="topology">🗺️ Topology</button>
         <button type="button" data-atab="ha">🔺 HA</button>
         <button type="button" data-atab="dmarc">📮 DMARC reports</button>
+        <button type="button" data-atab="badips">🚫 Banned addresses</button>
 % if ($has_metrics) {
         <button type="button" data-atab="metrics">📈 Metrics</button>
 % }
@@ -624,6 +625,9 @@
           instead of the tab silently not existing. %>
       <div class="admin-panel" data-apanel="dmarc">
         %= include '_dmarc_panel'
+      </div>
+      <div class="admin-panel" data-apanel="badips">
+        %= include '_badips_panel'
       </div>
 % if ($has_metrics) {
       <div class="admin-panel" data-apanel="metrics">

@@ -1,0 +1,125 @@
+# Site admins' view of the shared ban list. See README.md for the fields.
+area: Banned addresses
+order: 145
+intro: >
+  For site admins: the addresses the internet edge and the mail servers
+  have banned. See why one was banned and lift the ban without logging in
+  to a server. Only the shared ban list is covered, not the Spamhaus
+  ranges or other outside lists.
+
+abilities:
+  - id: admin-bad-ips-list
+    title: List banned addresses
+    method: GET
+    path: /api/v1/admin/bad-ips
+    who: site-admin
+    summary: The addresses banned right now, most recently active first.
+    description: >
+      One row per address: the rules that caught it, which servers reported
+      it, how many times it has been banned, when the ban ends, and the
+      country and network owner it comes from. The log lines behind a ban
+      are not here; ask for one address to see them.
+    params:
+      - name: limit
+        in: query
+        required: false
+        about: How many addresses to return, from 1 to 1000. The default is 200.
+        example: 50
+    response: |
+      {
+        "count": 1,
+        "bans": [
+          {
+            "address": "203.0.113.7",
+            "rules": "nginx-probe",
+            "reported_by": "prod-homelab00-internet-facing",
+            "times_banned": 2,
+            "first_banned": "2026-11-05T18:34:39Z",
+            "last_seen": "2026-11-05T20:12:15Z",
+            "banned_until": "2026-11-12T20:12:15Z",
+            "country": "US",
+            "network_owner": "Example Hosting, Inc."
+          }
+        ]
+      }
+    notes:
+      - Times are UTC.
+      - If the ban list can't be reached it answers 503.
+    cli: homelab-cli admin bad-ips list
+
+  - id: admin-bad-ips-why
+    title: See why an address was banned
+    method: GET
+    path: /api/v1/admin/bad-ips/:address
+    who: site-admin
+    summary: Every ban and exemption the list holds about one address, with the log line that triggered each.
+    description: >
+      Newest first. Each ban shows the rule that matched, the server that
+      saw it and the log line behind it. `active` says whether the ban or
+      exemption is still running. An address that was never banned answers
+      200 with empty lists.
+    params:
+      - name: address
+        in: path
+        required: true
+        about: One IPv4 or IPv6 address.
+        example: 203.0.113.7
+    response: |
+      {
+        "address": "203.0.113.7",
+        "bans": [
+          {
+            "reported_by": "prod-homelab00-internet-facing",
+            "service": "nginx",
+            "rule": "nginx-probe",
+            "summary": "GET /wp-login.php",
+            "evidence": "203.0.113.7 - - [05/Nov/2026:18:34:39 +0000] \"GET /wp-login.php HTTP/1.1\" 404 153",
+            "first_banned": "2026-11-05T18:34:39Z",
+            "last_seen": "2026-11-05T18:34:39Z",
+            "banned_until": "2026-11-12T18:34:39Z",
+            "active": true,
+            "times_banned": 1
+          }
+        ],
+        "exemptions": [],
+        "where": { "country": "US", "asn": 64500, "network_owner": "Example Hosting, Inc." }
+      }
+    notes:
+      - Log lines can contain account names, which is why only site admins see them.
+      - Something that isn't an IP address answers 400.
+    cli: homelab-cli admin bad-ips why 203.0.113.7
+
+  - id: admin-bad-ips-unban
+    title: Lift the ban on an address
+    method: POST
+    path: /api/v1/admin/bad-ips/:address/unban
+    who: site-admin
+    summary: End every ban on one address and keep it from being banned again for a while.
+    description: >
+      Ends all active bans on the address at once, then exempts it for the
+      number of hours you give, so the next matching log line doesn't ban it
+      straight back. The internet edge removes it from its firewall within
+      a minute. The same thing `bad_ips unban` does on a server.
+    params:
+      - name: address
+        in: path
+        required: true
+        about: One IPv4 or IPv6 address.
+        example: 203.0.113.7
+      - name: hours
+        in: body
+        required: false
+        about: How long it stays exempt, as a whole number of hours from 1 to 8760. The default is 24.
+        example: 24
+      - name: reason
+        in: body
+        required: false
+        about: Why, in a few words. It is kept with the exemption.
+        example: customer on a hotel network
+    response: |
+      { "ok": true, "address": "203.0.113.7", "bans_ended": 1, "exempt_hours": 24 }
+    notes:
+      - Every unban is written to the audit log with who did it.
+      - An address with no active ban still gets the exemption, and answers `bans_ended` 0.
+      - Hours outside 1 to 8760 answer 400, and so does something that isn't an IP address.
+    cli: homelab-cli admin bad-ips unban 203.0.113.7 --hours 24 --reason "customer on a hotel network"

@@ -197,6 +197,9 @@ sub startup ($self) {
     $r->get('/admin/dmarc/sources')    ->to('account#admin_dmarc_sources');
     $r->get('/admin/dmarc/reports')    ->to('account#admin_dmarc_reports');
     $r->get('/admin/fleet/hosts')      ->to('account#admin_fleet_hosts');
+    $r->get('/admin/bad-ips')          ->to('account#admin_badips_list');
+    $r->get('/admin/bad-ips/why')      ->to('account#admin_badips_why');
+    $r->post('/admin/bad-ips/unban')   ->to('account#admin_badips_unban');
     $r->get('/admin/fleet/mismatches') ->to('account#admin_fleet_mismatches');
     $r->get('/admin/topology')         ->to('account#admin_topology');
     $r->get('/admin/ha/status')        ->to('account#admin_ha_status');
@@ -1579,6 +1582,41 @@ sub admin_dns_record_set ($c) {
     my $tx = $UA->post($c->app->api_base . "/api/v1/domains/" . Mojo::Util::url_escape($domain) . "/dns/records"
         => { Authorization => "Bearer $jwt" } => json => { name => $name, type => $type, content => \@content, ttl => $ttl });
     return $c->render(json => (eval { $tx->res->json } // { error => 'write failed' }), status => ($tx->res->code // 502));
+}
+# --- Banned addresses (site_admin) ---------------------------------------
+# Thin forwards to homelab-api's /api/v1/admin/bad-ips (the shared bad-ips ban
+# list). The address is checked here too, so nothing a browser sends can
+# reshape the upstream URL.
+sub _badips_addr ($c) {
+    my $a = _trim($c->param('address') // '');
+    return ($a =~ /\A[0-9A-Fa-f:.]{2,45}\z/) ? $a : undef;
+}
+sub admin_badips_list ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $r = _api_get($c, $jwt, '/api/v1/admin/bad-ips?limit=500');
+    return $c->render(json => { error => 'the ban list is not available' }, status => 503) unless $r;
+    return $c->render(json => $r);
+}
+sub admin_badips_why ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $a = _badips_addr($c) or return $c->render(json => { error => 'not an IP address' }, status => 400);
+    my $r = _api_get($c, $jwt, '/api/v1/admin/bad-ips/' . $a);
+    return $c->render(json => { error => 'the ban list is not available' }, status => 503) unless $r;
+    return $c->render(json => $r);
+}
+sub admin_badips_unban ($c) {
+    my ($email, $jwt) = _admin_auth($c);
+    return $c->render(json => { error => 'forbidden' }, status => 403) unless $email;
+    my $a = _badips_addr($c) or return $c->render(json => { error => 'not an IP address' }, status => 400);
+    my $hours = _trim($c->param('hours') // '24');
+    return $c->render(json => { error => 'hours must be a whole number from 1 to 8760' }, status => 400)
+        unless $hours =~ /\A\d+\z/ && $hours >= 1 && $hours <= 8760;
+    my $reason = _trim($c->param('reason') // '');
+    my $tx = $UA->post($c->app->api_base . '/api/v1/admin/bad-ips/' . $a . '/unban'
+        => { Authorization => "Bearer $jwt" } => json => { hours => $hours + 0, (length $reason ? (reason => $reason) : ()) });
+    return $c->render(json => (eval { $tx->res->json } // { error => 'unban failed' }), status => ($tx->res->code // 502));
 }
 # --- Fleet status dashboard (JSON, site_admin) ---------------------------
 sub admin_fleet_hosts ($c) {

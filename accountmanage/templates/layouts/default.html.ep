@@ -1112,6 +1112,79 @@
         if ((location.hash || '').indexOf('admin:dmarc') >= 0) load();
       })();
 
+      // --- Banned addresses (admin): list, why, unban --------------------
+      (function () {
+        var root = document.querySelector('[data-badips-root]');
+        if (!root) return;
+        var body = document.getElementById('badips-body');
+        var msg = document.getElementById('badips-msg');
+        var whyCard = document.getElementById('badips-why-card');
+        var inflight = false;
+        function say(text, ok) { msg.innerHTML = text ? '<p style="margin:0 0 0.6rem;color:' + (ok ? 'var(--ok)' : 'var(--danger)') + '">' + hlEsc(text) + '</p>' : ''; }
+        function when(ts) { if (!ts) return '—'; var d = new Date(ts); return isNaN(d) ? ts : d.toLocaleString(); }
+        function getJSON(path) {
+          return fetch(path, { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+        }
+        function post(path, data) {
+          var d = Object.keys(data).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(data[k]); }).join('&');
+          return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: d })
+            .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); });
+        }
+        function render(d) {
+          if (!d) { body.innerHTML = '<tr><td colspan="7" class="muted">The ban list is not available right now.</td></tr>'; return; }
+          var bans = d.bans || [];
+          if (!bans.length) { body.innerHTML = '<tr><td colspan="7" class="muted">Nobody is banned right now.</td></tr>'; return; }
+          body.innerHTML = bans.map(function (b) {
+            var a = hlEsc(b.address);
+            return '<tr><td class="mono">' + a + '</td><td>' + hlEsc(b.country || '--') + '</td><td>' + hlEsc(b.network_owner || '') + '</td>' +
+              '<td>' + hlEsc(b.rules || '') + '</td><td class="num">' + hlEsc(b.times_banned) + '</td><td>' + hlEsc(when(b.banned_until)) + '</td>' +
+              '<td><button type="button" class="btn-link" data-why="' + a + '">Why</button> ' +
+              '<button type="button" class="btn-link" data-unban="' + a + '">Unban</button></td></tr>';
+          }).join('');
+        }
+        function showWhy(addr) {
+          getJSON('/admin/bad-ips/why?address=' + encodeURIComponent(addr)).then(function (w) {
+            document.getElementById('badips-why-title').textContent = 'Why ' + addr;
+            var el = document.getElementById('badips-why-body');
+            if (!w) { el.innerHTML = '<p class="muted">Could not look that up.</p>'; whyCard.hidden = false; return; }
+            var h = '';
+            (w.bans || []).forEach(function (b) {
+              h += '<p style="margin:0 0 0.2rem"><strong>' + hlEsc(b.rule || '?') + '</strong> on ' + hlEsc(b.reported_by) + ' (' + hlEsc(b.service || '?') + '): ' +
+                (b.active ? 'banned until ' : 'ban ended ') + hlEsc(when(b.banned_until)) + ', banned ' + hlEsc(b.times_banned) + '×, last seen ' + hlEsc(when(b.last_seen)) + '</p>';
+              if (b.summary) h += '<p class="muted" style="margin:0 0 0.2rem">matched: ' + hlEsc(b.summary) + '</p>';
+              if (b.evidence) h += '<pre style="margin:0 0 0.8rem;white-space:pre-wrap;word-break:break-all;font-size:var(--app-sm)">' + hlEsc(b.evidence) + '</pre>';
+            });
+            (w.exemptions || []).forEach(function (e) {
+              h += '<p class="muted" style="margin:0 0 0.2rem">' + (e.active ? 'Exempt until ' : 'Exemption ended ') + hlEsc(when(e.exempt_until)) + ' (by ' + hlEsc(e.by) + ': ' + hlEsc(e.reason) + ')</p>';
+            });
+            el.innerHTML = h || '<p class="muted">Never banned.</p>';
+            whyCard.hidden = false;
+          });
+        }
+        function load() {
+          if (inflight) return;
+          inflight = true;
+          getJSON('/admin/bad-ips').then(render).then(function () { inflight = false; }, function () { inflight = false; });
+        }
+        body.addEventListener('click', function (ev) {
+          var w = ev.target.getAttribute && ev.target.getAttribute('data-why');
+          var u = ev.target.getAttribute && ev.target.getAttribute('data-unban');
+          if (w) return showWhy(w);
+          if (!u) return;
+          var hours = window.prompt('Lift the ban on ' + u + '. Keep it from being banned again for how many hours?', '24');
+          if (hours === null) return;
+          var reason = window.prompt('Why? (a few words, optional)', '') || '';
+          post('/admin/bad-ips/unban', { address: u, hours: hours, reason: reason }).then(function (r) {
+            if (r.ok && r.body && r.body.ok) { say('Unbanned ' + u + ' (' + r.body.bans_ended + ' ban(s) ended, exempt for ' + r.body.exempt_hours + ' hours). The edge lifts it within a minute.', true); load(); }
+            else say('Could not unban ' + u + ': ' + ((r.body && r.body.error) || 'failed'), false);
+          });
+        });
+        var tab = document.querySelector('.admin-tabs button[data-atab="badips"]');
+        if (tab) tab.addEventListener('click', load);
+        if ((location.hash || '').indexOf('admin:badips') >= 0) load();
+      })();
+
     // --- Service accounts / invite quota / a user's sessions (admin) --
     (function () {
       function post(path, body) { var d = Object.keys(body).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(body[k]); }).join('&'); return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' }, body: d }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }).catch(function () { return { ok: r.ok, body: {} }; }); }); }

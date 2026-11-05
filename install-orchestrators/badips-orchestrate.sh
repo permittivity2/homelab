@@ -43,6 +43,10 @@
 #       ROLE = block | watch | report | off   (watch = block, firewall untouched)
 #   ./badips-orchestrate.sh --static-realip
 #       prod-homelab45's nginx logs the real visitor (files/real-ip-from-edge.conf).
+#   ./badips-orchestrate.sh --api-grants
+#       post-cutover #47: give the api's database login (homelab_api_runtime)
+#       what it needs to list bans, end a ban and add an exemption on the
+#       shared ban list. Run it BEFORE the api release that uses it.
 #   ./badips-orchestrate.sh --verify [NN ...]
 #       read-only: every node against node_check (version, role, files,
 #       database and whether the daemon itself connected to it, service,
@@ -318,6 +322,30 @@ find_leader(){
 }
 
 GRAFANA_NODE="${GRAFANA_NODE:-69}"
+do_api_grants(){
+    say "give the api's database login its rights on the ban list (post-cutover #47)"
+    local leader role=homelab_api_runtime q
+    leader="$(find_leader)" || die "no Patroni leader among $DB_NODES"
+    ok "Patroni leader: prod-homelab$leader"
+    rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT to_regclass('badips.jailed_ips')\"" | grep -q jailed_ips \
+        || die "badips.jailed_ips does not exist: run --db first"
+    rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT 1 FROM pg_roles WHERE rolname='$role'\"" | grep -q 1 \
+        || die "no role $role on the database"
+    # Read the list; end a ban (only its expiry column); add an exemption. Nothing else:
+    # no DELETE, no new bans, no edits to rules or evidence.
+    { echo "GRANT USAGE ON SCHEMA badips TO $role;"
+      echo "GRANT SELECT ON badips.jailed_ips, badips.exemptions, badips.ip_geo TO $role;"
+      echo "GRANT UPDATE (expires_at) ON badips.jailed_ips TO $role;"
+      echo "GRANT INSERT ON badips.exemptions TO $role;"
+      echo "GRANT USAGE ON SEQUENCE badips.exemptions_id_seq TO $role;"; } \
+      | rsh "$leader" "sudo -u postgres psql -d homelab -X -q -v ON_ERROR_STOP=1" || die "the grants failed"
+    ok "$role: read the list, end a ban's expiry, add an exemption"
+    q="SELECT has_table_privilege('$role','badips.jailed_ips','SELECT'), has_column_privilege('$role','badips.jailed_ips','expires_at','UPDATE'), has_table_privilege('$role','badips.jailed_ips','DELETE'), has_table_privilege('$role','badips.jailed_ips','INSERT'), has_column_privilege('$role','badips.jailed_ips','matched_log_line','UPDATE'), has_table_privilege('$role','badips.exemptions','INSERT')"
+    [ "$(rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"$q\"" | tr -d '[:space:]')" = "t|t|f|f|f|t" ] \
+        && ok "can read, end bans and add exemptions; cannot delete, insert bans or edit evidence" \
+        || bad "the privileges are not what was intended: $q"
+}
+
 do_grafana_db(){
     say "a read-only login for Grafana's bad-ips panels"
     local leader pw scram p n
@@ -764,6 +792,7 @@ done
 case "$cmd" in
     --db)             do_db ;;
     --grafana-db)     do_grafana_db ;;
+    --api-grants)     do_api_grants ;;
     --proving-ground) do_proving_ground ;;
     --install)        do_install "$DEB" "${args[@]}" ;;
     --role)           [ ${#args[@]} -eq 2 ] || die "usage: --role NN block|watch|report|off"; do_role "${args[0]}" "${args[1]}" ;;
