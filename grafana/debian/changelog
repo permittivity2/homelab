@@ -1,3 +1,15 @@
+homelab-grafana (0.5.1) unstable; urgency=medium
+
+  * Release v0.5.1
+
+ -- Gardner <gardner@homelab>  Thu, 05 Nov 2026 11:34:37 -0600
+
+homelab-grafana (0.5.0) unstable; urgency=medium
+
+  * Release v0.5.0
+
+ -- Gardner <gardner@homelab>  Thu, 05 Nov 2026 11:33:50 -0600
+
 homelab-grafana (0.4.0) unstable; urgency=medium
 
   * Release v0.4.0
