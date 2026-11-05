@@ -1,3 +1,9 @@
+homelab-api (0.1.68) unstable; urgency=medium
+
+  * Release v0.1.68
+
+ -- Gardner <gardner@homelab>  Thu, 05 Nov 2026 14:55:08 -0600
+
 homelab-api (0.1.67) unstable; urgency=medium
 
   * GET /api/v1/mail/recipient-exists answers fleet services as well as

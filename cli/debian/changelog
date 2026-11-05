@@ -1,3 +1,9 @@
+homelab-cli (0.6.10) unstable; urgency=medium
+
+  * Release v0.6.10
+
+ -- Gardner <gardner@homelab>  Thu, 05 Nov 2026 14:55:12 -0600
+
 homelab-cli (0.6.9) unstable; urgency=medium
 
   * New: homelab-cli drive private <id> [--folder] [--off]. Keeps a file
