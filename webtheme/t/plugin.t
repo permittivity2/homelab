@@ -65,6 +65,7 @@ $t->get_ok('/header')->status_is(200)
 $t->get_ok('/header?who=zoe@example.test')->status_is(200)
   ->content_like(qr{profile-btn}, 'account menu appears when signed in')
   ->content_like(qr{data-menu="homelab-account-menu"}, 'trigger is wired to the panel id')
+  ->content_like(qr{href="https://search\.mailmasker\.org/">Search<}, 'default dropdown lists Search after Drive')
   ->content_like(qr{<span class="avatar" aria-hidden="true">Z</span>}, 'avatar shows the uppercased initial')
   ->content_like(qr{<form method="post" action="/bye">}, 'sign-out POSTs (a GET sign-out is prefetchable / CSRF-able)')
   ->content_unlike(qr{<a[^>]*href="/bye"}, 'sign-out is not a plain link');

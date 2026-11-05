@@ -72,12 +72,13 @@ sub register ($self, $app, $conf = {}) {
     # hardcoded in the partial because each app wants a slightly different
     # set -- myaccount has no reason to link to itself -- and because the
     # next app (chat, meetings) should be able to add itself without a
-    # change to this package. Defaults to the three that exist today.
+    # change to this package. Defaults to the four that exist today.
     $app->helper(homelab_menu_links => sub ($c) {
         $c->stash('menu_links') // $conf->{menu_links} // [
             { href => 'https://myaccount.mailmasker.org/', label => 'Manage your account' },
             { href => 'https://mail.mailmasker.org/',      label => 'Email' },
             { href => 'https://drive.mailmasker.org/',     label => 'Drive' },
+            { href => 'https://search.mailmasker.org/',    label => 'Search' },
         ]
     });
 
