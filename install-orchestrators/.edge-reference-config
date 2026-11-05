@@ -15,6 +15,7 @@
 /etc/homelab/services/certsync.yml 71180fba0437486e2ee6583316e8fdbe9d67f3e0d908a25db13f01d70563b703
 /etc/homelab/services/dnsdist.yml d1657830c908a447379b8dfedaf6bdcc4b16d2af7fe02855e9aa93c54bca2285
 /etc/homelab/services/haproxy.yml a49bff0329aa13172238c1d953335e86e9dec90c1ef492e97d7ca37ef72a8724
+/etc/homelab/services/nginx-exporter.yml 1d63903241a6e3bf77f652bf80c9434de94894917663fbe37ffaeec0863c2b9a
 /etc/homelab/services/node-exporter.yml 860d5d3399c2053484bc8c6eb6566d3d939eb871df8ef2bd83a3b2a56ca081bf
 /etc/homelab/services/webproxy.yml defeb6d3eae201f9ec548b0c9d4a222cb7c2c0f389bcaa73280124c26d16a8b2
 /etc/homelab/webproxy/sites.yml 57fe764d154cb6fe0f297301eb7fb4cbbefcf675fb8dae19db4b054d4771857d
@@ -23,10 +24,11 @@
 /etc/nftables.d/10-homelab-fleet-trust.nft c3f0cc62c1f8962f93645f5dd38557eade324a332a80059e4f77b1ef6bbae579
 /etc/nftables.d/10-homelab-metrics.nft 99791c5c67f066a36c07a747bc4d4117fa832fed306299b609aafdabb68c5cdb
 /etc/nftables.d/60-plex-egress.nft db9604fce29d973ddc985f6fe82357088fd9d7167b36d216401f8ea0c0cdcd48
-/etc/nftables.d/99-badips.nft a79fefbb0f4acd059ce4a4ac88ccccc1f7177f678fda38a2bbacbd04ccfe072e
+/etc/nftables.d/99-badips.nft 0a05152effd0f2af1a18379be49897486107ab51ebd3c12cbe00aef86f413c98
 /etc/nginx/conf.d/00-catchall.conf ed10135d5355f7413c362fd5bfde264e5b67d621fa0e59664a19baa8a34c24a5
 /etc/nginx/conf.d/blockemail.mailmasker.org-upstream.conf c896e198df0bab1f4c3ff3d26ff6a191e1ecefa6f4a2c8c1333537f5c3f09edb
 /etc/nginx/conf.d/drive.mailmasker.org-upstream.conf 74a2667d10ad57101a4df8705e01b0add3c2f2aeb159e0dd0841e4731012ee7b
+/etc/nginx/conf.d/homelab-stub-status.conf c20537082cf4f49262e637879950dbd7a8ab29ea7299f33b0d1b2f6a1c392c42
 /etc/nginx/conf.d/homelab-webproxy-websocket.conf 05bbfd1ffba7382b92fb736114b82d60f641aadc99e4ecdb274eea7d1b72aab6
 /etc/nginx/conf.d/invite.mailmasker.org-upstream.conf 5e07a5a7fe25b9dad7d9bd0b5f633cff0fe1b6aa35d9d61833f09e2a503dc11c
 /etc/nginx/conf.d/login.mailmasker.org-upstream.conf a19136261d4d43c9230fcccc050edccf9cb4473da47b8f2ddd6946562f04fb23
