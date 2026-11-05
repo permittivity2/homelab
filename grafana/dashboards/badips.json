@@ -1057,6 +1057,200 @@
       ],
       "title" : "Queued reports",
       "type" : "stat"
+    },
+    {
+      "collapsed" : false,
+      "gridPos" : {
+        "h" : 1,
+        "w" : 24,
+        "x" : 0,
+        "y" : 24
+      },
+      "id" : 19,
+      "panels" : [],
+      "title" : "Who is banned right now (from the shared ban list)",
+      "type" : "row"
+    },
+    {
+      "datasource" : {
+        "type" : "postgres",
+        "uid" : "homelab-badips-db"
+      },
+      "description" : "Active bans per country. Country data: DB-IP Lite (https://db-ip.com), CC BY 4.0.",
+      "fieldConfig" : {
+        "defaults" : {
+          "color" : {
+            "mode" : "thresholds"
+          },
+          "thresholds" : {
+            "mode" : "absolute",
+            "steps" : [
+              {
+                "color" : "green",
+                "value" : null
+              }
+            ]
+          }
+        },
+        "overrides" : []
+      },
+      "gridPos" : {
+        "h" : 12,
+        "w" : 12,
+        "x" : 0,
+        "y" : 25
+      },
+      "id" : 20,
+      "options" : {
+        "basemap" : {
+          "name" : "Basemap",
+          "type" : "default"
+        },
+        "controls" : {
+          "mouseWheelZoom" : false,
+          "showZoom" : true
+        },
+        "layers" : [
+          {
+            "config" : {
+              "showLegend" : true,
+              "style" : {
+                "color" : {
+                  "fixed" : "dark-red"
+                },
+                "opacity" : 0.6,
+                "size" : {
+                  "field" : "bans",
+                  "fixed" : 5,
+                  "max" : 40,
+                  "min" : 5
+                }
+              }
+            },
+            "location" : {
+              "gazetteer" : "public/gazetteer/countries.json",
+              "lookup" : "country",
+              "mode" : "lookup"
+            },
+            "name" : "Bans",
+            "tooltip" : true,
+            "type" : "markers"
+          }
+        ],
+        "view" : {
+          "allLayers" : true,
+          "id" : "zero",
+          "lat" : 20,
+          "lon" : 0,
+          "zoom" : 1.5
+        }
+      },
+      "targets" : [
+        {
+          "datasource" : {
+            "type" : "postgres",
+            "uid" : "homelab-badips-db"
+          },
+          "editorMode" : "code",
+          "format" : "table",
+          "rawQuery" : true,
+          "rawSql" : "SELECT country, count(*) AS bans FROM offenders WHERE country IS NOT NULL GROUP BY country",
+          "refId" : "A"
+        }
+      ],
+      "title" : "Where the banned addresses are from",
+      "type" : "geomap"
+    },
+    {
+      "datasource" : {
+        "type" : "postgres",
+        "uid" : "homelab-badips-db"
+      },
+      "description" : "Which networks the banned addresses belong to. Network data: DB-IP Lite (https://db-ip.com), CC BY 4.0.",
+      "fieldConfig" : {
+        "defaults" : {},
+        "overrides" : []
+      },
+      "gridPos" : {
+        "h" : 12,
+        "w" : 12,
+        "x" : 12,
+        "y" : 25
+      },
+      "id" : 21,
+      "options" : {
+        "showHeader" : true
+      },
+      "targets" : [
+        {
+          "datasource" : {
+            "type" : "postgres",
+            "uid" : "homelab-badips-db"
+          },
+          "editorMode" : "code",
+          "format" : "table",
+          "rawQuery" : true,
+          "rawSql" : "SELECT coalesce(network_owner, '(unknown)') AS \"network owner\", coalesce(country, '--') AS country, count(*) AS bans FROM offenders GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 25",
+          "refId" : "A"
+        }
+      ],
+      "title" : "Bans by network owner",
+      "type" : "table"
+    },
+    {
+      "datasource" : {
+        "type" : "postgres",
+        "uid" : "homelab-badips-db"
+      },
+      "description" : "The most-banned addresses still banned: why, which server caught them, and when the ban ends.",
+      "fieldConfig" : {
+        "defaults" : {},
+        "overrides" : []
+      },
+      "gridPos" : {
+        "h" : 12,
+        "w" : 24,
+        "x" : 0,
+        "y" : 37
+      },
+      "id" : 22,
+      "options" : {
+        "showHeader" : true
+      },
+      "targets" : [
+        {
+          "datasource" : {
+            "type" : "postgres",
+            "uid" : "homelab-badips-db"
+          },
+          "editorMode" : "code",
+          "format" : "table",
+          "rawQuery" : true,
+          "rawSql" : "SELECT address, rule AS \"caught by rule\", reported_by AS \"reported by\", coalesce(country, '--') AS country, network_owner AS \"network owner\", times_banned AS \"times banned\", last_seen AS \"last seen\", banned_until AS \"banned until\" FROM offenders ORDER BY times_banned DESC, last_seen DESC LIMIT 25",
+          "refId" : "A"
+        }
+      ],
+      "title" : "Top offenders",
+      "type" : "table"
+    },
+    {
+      "datasource" : {
+        "type" : "postgres",
+        "uid" : "homelab-badips-db"
+      },
+      "gridPos" : {
+        "h" : 2,
+        "w" : 24,
+        "x" : 0,
+        "y" : 49
+      },
+      "id" : 23,
+      "options" : {
+        "content" : "Country and network owner: IP geolocation by [DB-IP](https://db-ip.com), CC BY 4.0. Not-found counts on the web edge (before and after blocking) are not here yet: nginx's own counters carry no status codes.",
+        "mode" : "markdown"
+      },
+      "title" : "Credits",
+      "type" : "text"
     }
   ],
   "refresh" : "30s",

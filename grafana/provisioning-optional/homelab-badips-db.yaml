@@ -1,0 +1,27 @@
+# Managed by homelab-grafana. Provisioned ONLY when the bad-ips read-only login
+# exists on this host (/etc/homelab/grafana/badips-db.password and
+# badips-db.conf, written by install-orchestrators/badips-orchestrate.sh
+# --grafana-db); the postinst copies this file into place then. Provisioning a
+# password file that is not there would stop Grafana loading data sources.
+#
+# The login (badips_grafana) can SELECT from one view of the shared ban list --
+# the active bans with rule, reporter, country and network owner -- and nothing
+# else. Country and owner come from DB-IP Lite (https://db-ip.com, CC BY 4.0).
+apiVersion: 1
+
+datasources:
+  - name: bad-ips (shared ban list)
+    uid: homelab-badips-db
+    type: postgres
+    access: proxy
+    url: ${BADIPS_DB_HOST}:${BADIPS_DB_PORT}
+    user: badips_grafana
+    database: homelab
+    editable: false
+    jsonData:
+      sslmode: prefer
+      postgresVersion: 1600
+      maxOpenConns: 3
+      maxIdleConns: 1
+    secureJsonData:
+      password: $__file{/etc/homelab/grafana/badips-db.password}

@@ -58,6 +58,14 @@
 #       homelab web apps (the hypnotoad units) are restarted so they load the
 #       new request log -- never databases, pgbouncer, patroni or etcd -- and
 #       checked before the next node. Stops at the first problem.
+#   ./badips-orchestrate.sh --grafana-db
+#       once (re-run to rotate): a READ-ONLY login, badips_grafana, that can read
+#       one view (badips.offenders: active bans, rule, reporter, country, owner;
+#       no log lines) and nothing else. Registered with pgbouncer 09/10/11, its
+#       password written to /etc/homelab/grafana/ on the Grafana node ($GRAFANA_NODE,
+#       default 69) with the database address, and homelab-grafana reinstalled so it
+#       provisions the "bad-ips (shared ban list)" data source -- which it does only
+#       once that password file exists. Needs bad-ips 4.2 applied (--db) first.
 #   ./badips-orchestrate.sh --print-config NN
 #       print the files node NN would get (password masked); changes nothing.
 #
@@ -307,6 +315,43 @@ find_leader(){
         [ "$r" = f ] && { printf '%s' "$n"; return 0; }
     done
     return 1
+}
+
+GRAFANA_NODE="${GRAFANA_NODE:-69}"
+do_grafana_db(){
+    say "a read-only login for Grafana's bad-ips panels"
+    local leader pw scram p n
+    leader="$(find_leader)" || die "no Patroni leader among $DB_NODES"
+    ok "Patroni leader: prod-homelab$leader"
+    rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT to_regclass('badips.offenders')\"" | grep -q offenders \
+        || die "badips.offenders does not exist: run --db with bad-ips 4.2's schema.sql first"
+    pw="$(openssl rand -hex 20)"
+    # the password travels on stdin, never on a command line
+    { printf "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'badips_grafana') THEN CREATE ROLE badips_grafana LOGIN; END IF; END \$\$;\n"
+      printf "ALTER ROLE badips_grafana PASSWORD '%s';\n" "$pw"
+      echo "ALTER ROLE badips_grafana IN DATABASE homelab SET search_path = badips;"
+      echo "GRANT USAGE ON SCHEMA badips TO badips_grafana;"
+      echo "GRANT SELECT ON badips.offenders TO badips_grafana;"; } \
+      | rsh "$leader" "sudo -u postgres psql -d homelab -X -q -v ON_ERROR_STOP=1" || die "creating the login failed"
+    ok "login badips_grafana: SELECT on badips.offenders only"
+    scram="$(rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT rolpassword FROM pg_authid WHERE rolname = 'badips_grafana'\"" | tr -d '[:space:]')"
+    [ -n "$scram" ] || die "could not read the login's SCRAM secret"
+    for p in $PGB_NODES; do
+        printf "homelab-bootstrap-pgbouncer-entry --role badips_grafana --scram-secret '%s' --pgbouncer-host localhost\n" "$scram" \
+            | rsh "$p" "sudo bash -s" >/dev/null 2>&1 && ok "registered with pgbouncer on prod-homelab$p" || bad "pgbouncer registration on prod-homelab$p"
+    done
+    # end to end, as Grafana will connect: through the VIP; and it must NOT read the log lines
+    n="$(printf "PGPASSWORD='%s' psql 'host=%s port=6432 dbname=homelab user=badips_grafana sslmode=prefer' -tAXc 'SELECT count(*) FROM offenders'\n" "$pw" "$PGB_VIP" | rsh "$leader" "bash -s" 2>&1 | tr -d '[:space:]')"
+    if [[ "$n" =~ ^[0-9]+$ ]]; then ok "reads the offenders view through pgbouncer ($n rows)"; else bad "read through pgbouncer: $n"; fi
+    n="$(printf "PGPASSWORD='%s' psql 'host=%s port=6432 dbname=homelab user=badips_grafana sslmode=prefer' -tAXc 'SELECT count(*) FROM jailed_ips' 2>&1\n" "$pw" "$PGB_VIP" | rsh "$leader" "bash -s" 2>&1)"
+    if printf '%s' "$n" | grep -qi 'permission denied'; then ok "cannot read the underlying table (permission denied, as intended)"; else bad "the login can read jailed_ips: $n"; fi
+    # hand the password and the address to the Grafana node
+    printf '%s\n' "$pw" | rsh "$GRAFANA_NODE" "sudo sh -c 'install -d -m 0755 /etc/homelab/grafana; umask 027; cat > /etc/homelab/grafana/badips-db.password.new; chgrp grafana /etc/homelab/grafana/badips-db.password.new; chmod 0640 /etc/homelab/grafana/badips-db.password.new; mv -f /etc/homelab/grafana/badips-db.password.new /etc/homelab/grafana/badips-db.password'" \
+        && ok "password placed on prod-homelab$GRAFANA_NODE" || bad "placing the password"
+    printf 'BADIPS_DB_HOST=%s\nBADIPS_DB_PORT=6432\n' "$PGB_VIP" \
+        | rsh "$GRAFANA_NODE" "sudo sh -c 'cat > /etc/homelab/grafana/badips-db.conf && chmod 0644 /etc/homelab/grafana/badips-db.conf'" \
+        && ok "database address written to /etc/homelab/grafana/badips-db.conf" || bad "writing the address"
+    rsh "$GRAFANA_NODE" "sudo apt-get update -qq >/dev/null 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --reinstall homelab-grafana >/dev/null 2>&1 >/dev/null 2>&1; sleep 10; systemctl is-active grafana-server; ls /etc/grafana/provisioning/datasources/" | sed 's/^/    /'
 }
 
 do_db(){
@@ -718,6 +763,7 @@ while [ $# -gt 0 ]; do
 done
 case "$cmd" in
     --db)             do_db ;;
+    --grafana-db)     do_grafana_db ;;
     --proving-ground) do_proving_ground ;;
     --install)        do_install "$DEB" "${args[@]}" ;;
     --role)           [ ${#args[@]} -eq 2 ] || die "usage: --role NN block|watch|report|off"; do_role "${args[0]}" "${args[1]}" ;;

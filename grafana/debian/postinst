@@ -32,6 +32,30 @@ case "$1" in
         systemctl daemon-reload >/dev/null 2>&1 || true
         echo "  embed: Grafana served from $PUBLIC_ROOT_URL (auth-proxy, whitelist $AUTH_PROXY_WHITELIST)"
 
+        # The bad-ips panels read the shared ban list through a read-only login.
+        # Provision that data source only once the login's password and address
+        # are on this host (badips-orchestrate.sh --grafana-db puts them there):
+        # a provisioned password file that is missing would stop Grafana loading
+        # its data sources at all.
+        BADIPS_CONF="$HL_GRAFANA_DIR/badips-db.conf"
+        BADIPS_PW="$HL_GRAFANA_DIR/badips-db.password"
+        BADIPS_DS=/etc/grafana/provisioning/datasources/homelab-badips-db.yaml
+        if [ -s "$BADIPS_PW" ] && [ -f "$BADIPS_CONF" ]; then
+            BADIPS_DB_HOST=""; BADIPS_DB_PORT=""
+            # shellcheck disable=SC1090
+            . "$BADIPS_CONF" 2>/dev/null || true
+            if [ -n "$BADIPS_DB_HOST" ] && [ -n "$BADIPS_DB_PORT" ]; then
+                printf '[Service]\nEnvironment=BADIPS_DB_HOST=%s\nEnvironment=BADIPS_DB_PORT=%s\n' \
+                    "$BADIPS_DB_HOST" "$BADIPS_DB_PORT" > "$DROPIN_DIR/badips-db.conf"
+                install -D -m 644 "$SHARE_DIR/provisioning-optional/homelab-badips-db.yaml" "$BADIPS_DS"
+                systemctl daemon-reload >/dev/null 2>&1 || true
+                echo "  bad-ips data source: provisioned ($BADIPS_DB_HOST:$BADIPS_DB_PORT)"
+            fi
+        else
+            rm -f "$BADIPS_DS" "$DROPIN_DIR/badips-db.conf"
+            echo "  bad-ips data source: not provisioned (no read-only login here yet: run badips-orchestrate.sh --grafana-db)"
+        fi
+
         # Fleet manifest (topology/services visibility).
         mkdir -p /etc/homelab/services
         chgrp homelab /etc/homelab/services 2>/dev/null || true
