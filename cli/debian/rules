@@ -35,3 +35,15 @@ execute_after_dh_auto_build:
 	# string is always what that tool emits for an epilog, regardless
 	# of the epilog's own content.
 	sed -i 's/^\.SH COMMENTS$$/.SH EXAMPLES/' debian/homelab-cli.1
+
+# pybuild installs into /usr/lib/python3.<build-version>/dist-packages, so a
+# package built on Python 3.14 (the fleet's Ubuntu) would import nowhere on a
+# host with another Python (offsite01: Debian 13, 3.13). This is pure Python
+# (Architecture: all), so ship it in the version-independent directory.
+execute_after_dh_auto_install:
+	for d in debian/homelab-cli/usr/lib/python3.*/dist-packages; do \
+	  [ -d "$$d" ] || continue; \
+	  mkdir -p debian/homelab-cli/usr/lib/python3/dist-packages; \
+	  cp -a "$$d"/. debian/homelab-cli/usr/lib/python3/dist-packages/; \
+	  rm -rf "$$(dirname "$$d")"; \
+	done
