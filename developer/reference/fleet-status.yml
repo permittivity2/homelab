@@ -74,7 +74,7 @@ abilities:
       }
     notes:
       - For the poolers, mailbox servers and edges, `healthy` only means the node's agent checked in within the last 3 minutes, not that the service itself answered.
-      - The edges are not a failover group: all three should be powered on, and their `note` says whether that is so.
+      - The edges are not a failover group. All three should be powered on, and their `note` says whether that is so.
       - Each call asks the database nodes directly, so one that is down can slow the answer by several seconds.
     cli: none
 
