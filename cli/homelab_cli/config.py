@@ -19,6 +19,7 @@ them without re-authenticating:
 is stored — so there's no silent "which account am I running as" surprise.
 """
 
+import json
 import os
 import stat
 from pathlib import Path
@@ -39,13 +40,32 @@ _LEGACY_SESSION_FILE = CONFIG_DIR / "session.yml"
 # via the service registry server-side. This file used to also need
 # drive_base/imap_host/imap_port/smtp_host/smtp_port.
 DEFAULT_CONFIG = {
-    "api_base": "http://localhost:3000",
+    "api_base": "https://api.mailmasker.org",
 }
+
+# 0.2.x kept its settings in config.json; 0.6.x reads config.yml and would
+# otherwise silently fall back to the default address.
+_LEGACY_CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+def _migrate_legacy_config():
+    """Carry the old config.json's api_base into config.yml, once. The old
+    file is left alone (its sibling session.json is not ours to touch)."""
+    try:
+        with open(_LEGACY_CONFIG_FILE) as f:
+            base = json.load(f).get("api_base")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(base, str) or not base.startswith("http"):
+        return None
+    config = {**DEFAULT_CONFIG, "api_base": base}
+    save_config(config)
+    return config
 
 
 def load_config():
     if not CONFIG_FILE.exists():
-        return dict(DEFAULT_CONFIG)
+        return _migrate_legacy_config() or dict(DEFAULT_CONFIG)
     with open(CONFIG_FILE) as f:
         return {**DEFAULT_CONFIG, **(yaml.safe_load(f) or {})}
 

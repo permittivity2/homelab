@@ -10,7 +10,7 @@ def test_load_config_returns_default_when_no_file_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(cfgmod, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(cfgmod, "CONFIG_FILE", tmp_path / "config.yml")
     config = cfgmod.load_config()
-    assert config["api_base"] == "http://localhost:3000"
+    assert config["api_base"] == "https://api.mailmasker.org"
 
 
 def test_save_and_load_config_roundtrip(tmp_path, monkeypatch):
@@ -253,3 +253,14 @@ def test_client_wiring_no_session_means_no_refresh_token_on_the_client(tmp_path,
     monkeypatch.setattr(cfgmod, "CONFIG_FILE", tmp_path / "config.yml")
     client = _client()
     assert client.refresh_token is None
+
+
+def test_legacy_config_json_api_base_is_migrated(tmp_path, monkeypatch):
+    import json
+    from homelab_cli import config as cfg
+    monkeypatch.setattr(cfg, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(cfg, "CONFIG_FILE", tmp_path / "config.yml")
+    monkeypatch.setattr(cfg, "_LEGACY_CONFIG_FILE", tmp_path / "config.json")
+    (tmp_path / "config.json").write_text(json.dumps({"api_base": "https://api.example.org"}))
+    assert cfg.load_config()["api_base"] == "https://api.example.org"
+    assert (tmp_path / "config.yml").exists()

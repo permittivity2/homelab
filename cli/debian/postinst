@@ -14,14 +14,22 @@ set -e
 fix_old_apt_source() {
     old='projects.thedude.vip/apt'
     new='projects.thedude.vip/apt-homelab'
+    # Does the host already have the current repo as a source somewhere?
+    have_new=0
+    grep -Eqs "^[[:space:]]*deb[[:space:]].*${new}([[:space:]/]|\$)" /etc/apt/sources.list /etc/apt/sources.list.d/*.list && have_new=1
     for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
         [ -f "$f" ] || continue
         # A line for the old repo: ".../apt" followed by space or "/" or EOL.
         grep -Eq "^[[:space:]]*deb[[:space:]].*${old}([[:space:]/]|\$)" "$f" || continue
-        grep -q "projects.thedude.vip/apt-homelab" "$f" && continue
         cp -p "$f" "$f.pre-homelab-cli-fix"
-        sed -E -i "s#(^[[:space:]]*deb[[:space:]].*)${old}([[:space:]/]|\$)#\1${new}\2#" "$f"
-        echo "homelab-cli: repointed $f from the retired apt repo to $new" >&2
+        if [ "$have_new" = 1 ]; then
+            # Both families on one host is forbidden: retire the old line.
+            sed -E -i "s@^([[:space:]]*deb[[:space:]].*${old}([[:space:]/]|\$))@# retired by homelab-cli: \1@" "$f"
+            echo "homelab-cli: disabled the retired apt repo line in $f (current repo already configured)" >&2
+        else
+            sed -E -i "s#(^[[:space:]]*deb[[:space:]].*)${old}([[:space:]/]|\$)#\1${new}\2#" "$f"
+            echo "homelab-cli: repointed $f from the retired apt repo to $new" >&2
+        fi
         echo "homelab-cli: (backup: $f.pre-homelab-cli-fix) -- run 'apt update' and upgrade again" >&2
     done
 }
