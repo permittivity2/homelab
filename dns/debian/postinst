@@ -179,6 +179,72 @@ case "$1" in
             fi
         fi
 
+        # Lua records (health-checked, geography-aware answers), the location
+        # database they use, and the firewall opening their port-25 health
+        # checks need. Item 44: every public name will answer with all the
+        # live edges' addresses, dropping any edge that stops answering.
+        #
+        # Lua is on for the whole server (records only act where a LUA
+        # record exists). The geoip backend is added only when the DB-IP
+        # database file is really there: a launch line that names a missing
+        # file would stop pdns from starting at all.
+        LUA_MARKER="$PDNS_D/94-homelab-dns-lua.conf"
+        GEO_DB=/var/lib/homelab-dns/geoip/dbip-city-lite.mmdb
+        if [ ! -s "$GEO_DB" ]; then
+            echo "  fetching the DB-IP City Lite database (for pickclosest)..."
+            timeout 900 /usr/bin/homelab-dns-geoip-update >/dev/null 2>&1 || true
+        fi
+        {
+            echo "# Managed by homelab-dns -- do not hand-edit."
+            echo "enable-lua-records=yes"
+            echo "edns-subnet-processing=yes"
+            if [ -s "$GEO_DB" ]; then
+                echo "launch+=geoip"
+                echo "geoip-database-files=mmdb:$GEO_DB"
+                echo "geoip-zones-file=$SHARE_DIR/geoip-zones.yaml"
+            fi
+        } > "$LUA_MARKER"
+        chmod 640 "$LUA_MARKER"
+        chgrp pdns "$LUA_MARKER" 2>/dev/null || true
+        if [ -s "$GEO_DB" ]; then
+            echo "  wrote $LUA_MARKER (Lua records on, geoip backend on)"
+        else
+            echo "  wrote $LUA_MARKER (Lua records on; no location database yet, so pickclosest is unavailable)"
+        fi
+
+        # The Lua health check (ifportup) runs from THIS server, and the base
+        # firewall lets a DNS node out to the internet on TCP 80/443 only. To
+        # health-check mail (port 25) on the edges' public addresses, allow
+        # exactly those addresses on exactly that port. The addresses come
+        # from /etc/homelab/dns/healthcheck-targets (one per line), seeded on
+        # first install and then left alone.
+        mkdir -p /etc/homelab/dns
+        if [ ! -f /etc/homelab/dns/healthcheck-targets ]; then
+            printf '%s\n' 23.116.91.66 23.116.91.67 23.116.91.68 > /etc/homelab/dns/healthcheck-targets
+        fi
+        NFT_HC=/etc/nftables.d/51-homelab-dns-healthcheck.conf
+        HC_TARGETS="$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' /etc/homelab/dns/healthcheck-targets | paste -sd, - | sed 's/,/, /g')"
+        if [ -n "$HC_TARGETS" ] \
+           && grep -qE 'include "/etc/nftables\.d/\*"' /etc/nftables.conf 2>/dev/null \
+           && nft list table inet filter >/dev/null 2>&1; then
+            {
+                echo '#!/usr/sbin/nft -f'
+                echo '# Managed by homelab-dns -- do not edit by hand.'
+                echo "add rule inet filter output ip daddr { $HC_TARGETS } tcp dport 25 accept comment \"homelab-dns: Lua health check (SMTP)\""
+            } > "$NFT_HC"
+            chmod 0644 "$NFT_HC"
+            if nft -c -f /etc/nftables.conf >/dev/null 2>&1; then
+                if systemctl is-active --quiet nftables 2>/dev/null || systemctl is-enabled --quiet nftables 2>/dev/null; then
+                    systemctl reload nftables 2>/dev/null \
+                        || echo "  WARNING: 'systemctl reload nftables' failed -- apply $NFT_HC by hand."
+                fi
+                echo "  applied firewall drop-in $NFT_HC (TCP 25 out to: $HC_TARGETS)"
+            else
+                echo "  WARNING: nft check failed after writing $NFT_HC -- removing it, firewall unchanged."
+                rm -f "$NFT_HC"
+            fi
+        fi
+
         # Validate before touching the service. pdns.service ships with
         # NO ExecReload= at all ("Job type reload is not applicable for
         # unit pdns.service") -- unlike every other service in this
@@ -216,6 +282,16 @@ case "$1" in
             echo "WARNING: PowerDNS config check failed -- NOT touching pdns."
             echo "         Run 'pdns_server --config=check' by hand to see the error;"
             echo "         the previous running config (if any) is untouched."
+        fi
+
+        # If the geoip backend was what stopped pdns from starting (a corrupt
+        # or unreadable database), a nameserver that does not answer is far
+        # worse than one without pickclosest: drop the geoip lines and start
+        # again.
+        if ! systemctl is-active --quiet pdns && grep -q '^launch+=geoip' "$LUA_MARKER" 2>/dev/null; then
+            echo "WARNING: pdns is not running with the geoip backend -- removing it and starting again."
+            sed -i -e '/^launch+=geoip/d' -e '/^geoip-/d' "$LUA_MARKER"
+            systemctl restart pdns || echo "WARNING: pdns still failed to start -- check 'journalctl -xeu pdns' by hand."
         fi
 
         # Declarative manifest for homelab-agent (see
@@ -257,6 +333,9 @@ case "$1" in
         systemctl enable --now homelab-dns-pull.timer >/dev/null 2>&1 \
             || echo "  WARNING: could not enable homelab-dns-pull.timer -- the API allowlist won't auto-track signers."
 
+        systemctl enable homelab-dns-geoip.timer >/dev/null 2>&1 \
+            || echo "  WARNING: could not enable homelab-dns-geoip.timer -- the location database won't refresh itself."
+        systemctl start homelab-dns-geoip.timer >/dev/null 2>&1 || true
         echo ""
         ;;
 

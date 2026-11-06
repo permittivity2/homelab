@@ -1,0 +1,64 @@
+#!/usr/bin/perl
+# Fetch the free DB-IP "City Lite" database (CC BY 4.0, https://db-ip.com)
+# that PowerDNS's geoip backend uses for the Lua record function
+# pickclosest(). Safe to run any time: it downloads to a temporary file,
+# checks it is really a MaxMind-format database, and only then replaces the
+# live file in one atomic rename. A failed download leaves the old file alone.
+#
+# Exit 0 whether or not anything changed; prints "changed" or "unchanged" as
+# its last line so callers can tell. pdns reads the file when it starts, so a
+# new file takes effect at the next pdns restart (the package's postinst, or
+# an operator).
+use strict;
+use warnings;
+use POSIX qw(strftime);
+
+my $DIR  = '/var/lib/homelab-dns/geoip';
+my $LIVE = "$DIR/dbip-city-lite.mmdb";
+my $MIN_BYTES = 20_000_000;    # the real file is ~120 MB; anything small is an error page
+
+mkdir '/var/lib/homelab-dns' unless -d '/var/lib/homelab-dns';
+mkdir $DIR unless -d $DIR;
+chmod 0755, '/var/lib/homelab-dns', $DIR;
+
+# This month's file first; the new month's file appears a day or so late.
+my @t = gmtime();
+my ($y, $m) = ($t[5] + 1900, $t[4] + 1);
+my @months = (sprintf('%04d-%02d', $y, $m));
+($m == 1) ? push(@months, sprintf('%04d-12', $y - 1)) : push(@months, sprintf('%04d-%02d', $y, $m - 1));
+
+my $tmp_gz  = "$DIR/.download.mmdb.gz";
+my $tmp_db  = "$DIR/.download.mmdb";
+sub cleanup { unlink $tmp_gz, $tmp_db }
+
+my $got;
+for my $ym (@months) {
+    my $url = "https://download.db-ip.com/free/dbip-city-lite-$ym.mmdb.gz";
+    cleanup();
+    system('curl', '-fsSL', '--max-time', '600', '--retry', '2', '-o', $tmp_gz, $url) == 0 or next;
+    system("gzip -dc \Q$tmp_gz\E > \Q$tmp_db\E") == 0 or next;
+    my $size = -s $tmp_db // 0;
+    next if $size < $MIN_BYTES;
+    # A MaxMind DB ends with a metadata block introduced by this marker.
+    open my $fh, '<:raw', $tmp_db or next;
+    seek $fh, -131072, 2;
+    read $fh, my $tail, 131072;
+    close $fh;
+    next unless index($tail, "\xAB\xCD\xEFMaxMind.com") >= 0;
+    $got = $ym;
+    last;
+}
+unless ($got) {
+    cleanup();
+    print STDERR "homelab-dns-geoip-update: could not fetch a valid database; keeping the existing one\n";
+    print((-s $LIVE ? "unchanged\n" : "failed\n"));
+    exit 0;
+}
+
+chmod 0644, $tmp_db;
+my $same = (-s $LIVE && -s $LIVE == -s $tmp_db && system('cmp', '-s', $LIVE, $tmp_db) == 0);
+if ($same) { cleanup(); print "unchanged\n"; exit 0 }
+rename $tmp_db, $LIVE or die "rename: $!";
+unlink $tmp_gz;
+print "installed DB-IP City Lite $got\n";
+print "changed\n";

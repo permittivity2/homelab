@@ -1,0 +1,12 @@
+# Managed by homelab-dns. PowerDNS's geoip backend insists on a zones file
+# even when it is only wanted as the location database for Lua records
+# (pickclosest, country, continent...). This placeholder zone is never
+# queried: geo.invalid is a reserved name that cannot exist on the internet.
+domains:
+- domain: geo.invalid
+  ttl: 30
+  records:
+    geo.invalid:
+      - soa: ns1.geo.invalid hostmaster.geo.invalid 1 7200 3600 1209600 30
+      - ns: ns1.geo.invalid
+  services: {}

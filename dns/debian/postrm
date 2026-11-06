@@ -7,16 +7,22 @@ case "$1" in
     remove)
         # Only remove the drop-in THIS package created -- never touch
         # pdns.conf, never touch the powerdns database (schema or zones).
-        rm -f "$MARKER"
+        rm -f "$MARKER" /etc/powerdns/pdns.d/94-homelab-dns-lua.conf
 
         if [ -d /run/systemd/system ]; then
             systemctl disable --now homelab-dns-pull.timer >/dev/null 2>&1 || true
+            systemctl disable --now homelab-dns-geoip.timer >/dev/null 2>&1 || true
             systemctl daemon-reload >/dev/null 2>&1 || true
         fi
 
         # Drop our firewall rule too (reload rebuilds from remaining files).
         if [ -f /etc/nftables.d/50-homelab-dns.conf ]; then
             rm -f /etc/nftables.d/50-homelab-dns.conf
+            systemctl reload nftables 2>/dev/null || true
+        fi
+
+        if [ -f /etc/nftables.d/51-homelab-dns-healthcheck.conf ]; then
+            rm -f /etc/nftables.d/51-homelab-dns-healthcheck.conf
             systemctl reload nftables 2>/dev/null || true
         fi
 

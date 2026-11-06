@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh the DB-IP City Lite database used by PowerDNS Lua records
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/homelab-dns-geoip-update

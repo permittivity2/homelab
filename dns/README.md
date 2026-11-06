@@ -50,3 +50,36 @@ right, not "api" *within* the given zone.
 
 See `tests/e2e/test_dns_delegation.py` for the external-resolution
 regression test this gotcha is captured in.
+
+## Lua records, health checks and geography (item 44)
+
+`homelab-dns` writes `/etc/powerdns/pdns.d/94-homelab-dns-lua.conf`: Lua
+records on, EDNS client-subnet processing on, and (when the database file is
+present) the `geoip` backend appended with `launch+=geoip`. The database is
+DB-IP City Lite (CC BY 4.0, https://db-ip.com), refreshed monthly by
+`homelab-dns-geoip.timer` into `/var/lib/homelab-dns/geoip/`. pdns reads it at
+start, so a new file is used after the next restart. If pdns will not start
+with the geoip backend, the postinst removes the geoip lines and starts again.
+
+Health checks (`ifportup`) run from the DNS node itself. The base firewall lets
+a DNS node out on TCP 80/443 only, so the package adds
+`/etc/nftables.d/51-homelab-dns-healthcheck.conf`: TCP 25 out to the addresses
+in `/etc/homelab/dns/healthcheck-targets` (one per line, seeded with the three
+edge addresses).
+
+Writing a LUA record by hand: **use single quotes inside the Lua**, because
+`pdnsutil rrset add ... LUA 'A "ifportup(443, {'"'"'1.2.3.4'"'"'})"'` is the
+shape the zone data takes and a doubled `\"` inside the content makes the
+record answer SERVFAIL. Proven on prod-homelab47 on 2026-11-06 with a private
+pdns on port 5300:
+
+    web   LUA A "ifportup(443, {'192.0.2.1','192.0.2.2'}, {selector='all'})"
+    near  LUA A "pickclosest({'192.0.2.1','198.51.100.1'})"
+
+- `selector='all'` returns every address that passes its check; an address
+  that fails (a timeout) is left out of the answer within one check interval.
+- On the very first query, before any check has run, ifportup answers with a
+  random element; set `backupSelector='all'` to answer with everything if all
+  are down, which is the safer choice for mail.
+- `pickclosest` needs an ECS-bearing query or the resolver's own address to
+  decide; test with `dig +subnet=...`.

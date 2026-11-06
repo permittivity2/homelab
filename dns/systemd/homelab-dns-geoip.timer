@@ -1,0 +1,10 @@
+[Unit]
+Description=Monthly refresh of the DB-IP City Lite database (PowerDNS Lua records)
+
+[Timer]
+OnCalendar=monthly
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

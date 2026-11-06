@@ -80,8 +80,8 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     EDGE=$(find_edge)
     step "$NAME end to end"
 
-    R1=$(dig +short +time=3 "$NAME" A @10.50.2.147 2>/dev/null | head -1)
-    [ "$R1" = 23.116.91.66 ] && ok "DNS (authoritative): $R1" || bad "DNS authoritative returned '${R1:-nothing}'"
+    R1=$(dig +short +time=3 "$NAME" A @10.50.2.147 2>/dev/null | grep -E '^23\.116\.91\.6[678]$' | head -1)
+    [ -n "$R1" ] && ok "DNS (authoritative): $R1 (any edge address is right: names are Lua records, item 44)" || bad "DNS authoritative returned '${R1:-nothing}'"
 
     if on "$ISSUER" "sudo test -d /etc/letsencrypt/live/$NAME"; then
         S=$(on "$ISSUER" "sudo openssl x509 -in /etc/letsencrypt/live/$NAME/cert.pem -noout -subject -enddate 2>/dev/null | tr '\n' ' '" 2>/dev/null)
@@ -143,8 +143,8 @@ fi
 
 # ------------------------------------------------------------------- preflight
 step "preflight"
-R1=$(dig +short +time=3 "$NAME" A @10.50.2.147 2>/dev/null | head -1)
-[ "$R1" = 23.116.91.66 ] || die "$NAME does not resolve authoritatively (got '${R1:-nothing}').
+R1=$(dig +short +time=3 "$NAME" A @10.50.2.147 2>/dev/null | grep -E '^23\.116\.91\.6[678]$' | head -1)
+[ -n "$R1" ] || die "$NAME does not resolve authoritatively (got '${R1:-nothing}').
 DNS-01 issuance needs the zone to answer first. Add the A record, then re-run."
 ok "DNS resolves authoritatively: $R1"
 

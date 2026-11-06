@@ -74,7 +74,9 @@ find_edge(){
     done
     printf '%s' "${up# }"
 }
-resolves(){ dig +short +time=3 "$NAME" A @10.50.2.147 2>/dev/null | head -1; }
+# Names are Lua records answering several edge addresses in random order (item 44),
+# so "resolves" means "answers with some edge address", not "with exactly PUBLIC_IP".
+resolves(){ dig +short +time=3 "$NAME" A @10.50.2.147 2>/dev/null | grep -E '^23\.116\.91\.6[678]$' | head -1; }
 
 # ----------------------------------------------------------------- verify only
 if [ "$VERIFY_ONLY" = 1 ]; then
@@ -92,7 +94,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
 
     step "DNS and certificate"
     R1=$(resolves)
-    [ "$R1" = "$PUBLIC_IP" ] && ok "DNS (authoritative): $R1" || bad "DNS authoritative returned '${R1:-nothing}'"
+    [ -n "$R1" ] && ok "DNS (authoritative): $R1" || bad "DNS authoritative returned '${R1:-nothing}'"
     on "$ISSUER" "sudo test -d /etc/letsencrypt/live/$NAME" \
         && ok "issuer holds the lineage: $(on "$ISSUER" "sudo openssl x509 -in /etc/letsencrypt/live/$NAME/cert.pem -noout -enddate" 2>/dev/null)" \
         || bad "issuer has no /etc/letsencrypt/live/$NAME"
@@ -209,10 +211,10 @@ else
     fi
 fi
 for i in 1 2 3 4 5 6; do
-    [ "$(resolves)" = "$PUBLIC_IP" ] && break
+    [ -n "$(resolves)" ] && break
     sleep 5
 done
-[ "$(resolves)" = "$PUBLIC_IP" ] && ok "resolves authoritatively: $PUBLIC_IP" || die "$NAME does not resolve authoritatively yet"
+[ -n "$(resolves)" ] && ok "resolves authoritatively: $(resolves)" || die "$NAME does not resolve authoritatively yet"
 
 # ------------------------------------------------------- 3. the certificate
 step "3. certificate lineage on the issuer"
