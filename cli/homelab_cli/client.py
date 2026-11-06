@@ -28,6 +28,17 @@ class ApiError(Exception):
         super().__init__(f"{status_code}: {message}")
 
 
+def _short_error(resp, body):
+    """The JSON `error` if there is one; otherwise a one-line summary --
+    never a whole HTML error page (e.g. the Mojolicious 404 page)."""
+    if isinstance(body, dict) and body.get("error"):
+        return body["error"]
+    text = resp.text if isinstance(resp.text, str) else ""
+    if "<" in text:
+        return getattr(resp, "reason", None) or "request failed (non-JSON response)"
+    return text.strip()[:200] or "request failed"
+
+
 class Client:
     # refresh_token/on_token_refreshed are both optional so a Client used
     # only for register/login (no session yet) behaves exactly as before
@@ -114,8 +125,19 @@ class Client:
             body = {}
 
         if not resp.ok:
-            raise ApiError(resp.status_code, body.get("error", resp.text))
+            raise ApiError(resp.status_code, _short_error(resp, body))
         return body
+
+    def health(self):
+        """GET /health (unauthenticated, plain-text "ok"; not under /api/v1)."""
+        resp = self._send("GET", "/health")
+        if not resp.ok:
+            try:
+                body = resp.json()
+            except ValueError:
+                body = {}
+            raise ApiError(resp.status_code, _short_error(resp, body))
+        return {"status": (resp.text or "").strip() or "ok"}
 
     def _auth(self, token, **extra):
         return {"Authorization": f"Bearer {token}", **extra}
@@ -413,7 +435,7 @@ class Client:
         if resp.status_code == 409:
             return body
         if not resp.ok:
-            raise ApiError(resp.status_code, body.get("error", resp.text))
+            raise ApiError(resp.status_code, _short_error(resp, body))
         return body
 
     def drive_upload_chunked(self, token, path, total_size, folder_id=None,
@@ -731,6 +753,7 @@ class Client:
 
 def _error_message(resp):
     try:
-        return resp.json().get("error", resp.text)
+        body = resp.json()
     except ValueError:
-        return resp.text
+        body = {}
+    return _short_error(resp, body)

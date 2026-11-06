@@ -266,6 +266,18 @@ def cmd_login(args):
     return 0
 
 
+def cmd_health(args):
+    try:
+        result = _client(args).health()
+    except ApiError as e:
+        _emit_error(args, f"Health check failed: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(result["status"])
+    return 0
+
+
 def cmd_whoami(args):
     session = _require_session(args)
     if not session:
@@ -2347,6 +2359,9 @@ def build_parser():
     p.add_argument("email")
     p.add_argument("--password", help="Prompted for if omitted")
     p.set_defaults(func=cmd_login)
+
+    p = sub.add_parser("health", help="Check that the API is up (no login needed)")
+    p.set_defaults(func=cmd_health)
 
     p = sub.add_parser("whoami", help="Show the currently active (or --as) user")
     p.set_defaults(func=cmd_whoami)

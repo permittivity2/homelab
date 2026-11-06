@@ -870,3 +870,20 @@ def test_admin_bad_ips_403_raises_api_error(client):
     with patch("requests.request", return_value=_mock_response(403, {"error": "site_admin role required"})):
         with pytest.raises(ApiError):
             client.admin_bad_ips_list("t")
+
+
+def test_health_ok_plain_text(client):
+    resp = Mock(ok=True, status_code=200, text="ok\n")
+    with patch("requests.request", return_value=resp) as m:
+        assert client.health() == {"status": "ok"}
+    assert m.call_args.args[:2] == ("GET", "http://localhost:3000/health")
+
+
+def test_html_error_page_is_never_the_message(client):
+    resp = Mock(ok=False, status_code=404, text="<!DOCTYPE html><title>Page Not Found</title>", reason="Not Found")
+    resp.json.side_effect = ValueError
+    with patch("requests.request", return_value=resp):
+        with pytest.raises(ApiError) as exc_info:
+            client.health()
+    assert exc_info.value.status_code == 404
+    assert "<" not in exc_info.value.message

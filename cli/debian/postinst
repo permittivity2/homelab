@@ -1,0 +1,34 @@
+#!/bin/sh
+# Post-cutover #59: a host that still points at the RETIRED apt repo
+# (.../apt) is stuck on the old homelab-cli 0.2.x family, whose commands
+# ask the api for routes that no longer exist. The current packages are
+# published at .../apt-homelab. Repoint such a host here, once, so the
+# next 'apt update && apt upgrade' follows the current family.
+#
+# Touches only a source line that names projects.thedude.vip/apt (exactly,
+# not apt-homelab). Fleet nodes already use apt-homelab and are untouched.
+# Never leaves a host with BOTH sources. Any problem is a warning, never
+# a failed install.
+set -e
+
+fix_old_apt_source() {
+    old='projects.thedude.vip/apt'
+    new='projects.thedude.vip/apt-homelab'
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+        [ -f "$f" ] || continue
+        # A line for the old repo: ".../apt" followed by space or "/" or EOL.
+        grep -Eq "^[[:space:]]*deb[[:space:]].*${old}([[:space:]/]|\$)" "$f" || continue
+        grep -q "projects.thedude.vip/apt-homelab" "$f" && continue
+        cp -p "$f" "$f.pre-homelab-cli-fix"
+        sed -E -i "s#(^[[:space:]]*deb[[:space:]].*)${old}([[:space:]/]|\$)#\1${new}\2#" "$f"
+        echo "homelab-cli: repointed $f from the retired apt repo to $new" >&2
+        echo "homelab-cli: (backup: $f.pre-homelab-cli-fix) -- run 'apt update' and upgrade again" >&2
+    done
+}
+
+case "$1" in
+    configure) fix_old_apt_source || echo "homelab-cli: could not check apt sources (ignored)" >&2 ;;
+esac
+
+#DEBHELPER#
+exit 0
