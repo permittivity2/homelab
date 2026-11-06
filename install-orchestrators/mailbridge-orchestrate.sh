@@ -305,9 +305,9 @@ ssh $SSHO "$N1" "sudo debconf-set-selections" <<EOF
 homelab-mailbridge homelab-mailbridge/db_host string db.svc.homelab
 homelab-mailbridge homelab-mailbridge/pgbouncer_host string pgbouncer.svc.homelab
 homelab-mailbridge homelab-mailbridge/homelab_api_base_url string http://api.svc.homelab:3000
-homelab-mailbridge homelab-mailbridge/imap_host string 10.50.2.144
+homelab-mailbridge homelab-mailbridge/imap_host string 10.50.2.140
 homelab-mailbridge homelab-mailbridge/imap_port string 993
-homelab-mailbridge homelab-mailbridge/smtp_host string 10.50.2.144
+homelab-mailbridge homelab-mailbridge/smtp_host string 10.50.2.140
 homelab-mailbridge homelab-mailbridge/smtp_port string 587
 homelab-mailbridge homelab-mailbridge/listen_port string 2510
 homelab-mailbridge homelab-mailbridge/advertise_host string 10.50.2.180
@@ -329,5 +329,5 @@ for n in 37 38; do NODE=prod-homelab$n
   verify_mb "$NODE"
 done
 echo; echo "DONE. mailbridge on CT36/37/38 (:2510; shared homelab_mailbridge role; audit granted;"
-echo "imap/smtp -> mail HAProxy VIP 10.50.2.144 (fronts IMAPS :993 + submission :587);"
+echo "imap/smtp -> mail HAProxy VIP 10.50.2.140 (fronts IMAPS :993 + submission :587);"
 echo "the direct dovecot/postfix backends require a PROXY-protocol header mailbridge can't send)."

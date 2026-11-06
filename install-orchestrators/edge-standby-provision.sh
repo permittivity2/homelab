@@ -5,11 +5,13 @@
 # the active edge prod-homelab00, so it is ready to be powered on in 00's
 # place. Idempotent; re-runnable.
 #
-# The edges are MANUAL one-at-a-time: exactly ONE of 00/01/02 is powered on,
-# and it picks up the public .66/.68 by DHCP from the AT&T reservations keyed
-# to its eth7/eth6 MACs. There is no auto-failover and no keepalived -- that
-# was removed on purpose (it could not give flush-free failover for
-# pfSense-routed clients). "Standby" here means "cloned and ready to boot".
+# EDGE MODEL (item 44): since 2026-11-06 all three edges run at once, each
+# with its own public address by DHCP from the AT&T reservation keyed to its
+# MAC (00=.66, 01=.67, 02=.68) and the public names listing all three in DNS.
+# There is no public-address failover. Only the internal 10.50.2.140 floats,
+# via homelab-keepalived (edge-vip-orchestrate.sh). The name "standby" is
+# historical: it now means "a freshly cloned edge, ready to be given its own
+# MAC and public address and brought into service".
 #
 # What it does on the target:
 #   1. installs the edge package stack (webproxy/haproxy/dnsdist/certsync)
@@ -44,11 +46,9 @@ CLONE_PATHS="etc/letsencrypt etc/nginx/sites-available etc/nginx/sites-enabled e
 say(){ echo; echo "== $* =="; }
 
 say "[1/5] install edge stack on $TGT"
-# NO homelab-keepalived: the edges are deliberately MANUAL one-at-a-time now
-# (exactly one of 00/01/02 powered on, both public addresses arriving by DHCP
-# from the AT&T reservations), and keepalived was purged from all three. Putting
-# it back on a new standby would quietly re-introduce the auto-failover that was
-# removed on purpose.
+# NO homelab-keepalived here: it is installed and configured afterwards by
+# edge-vip-orchestrate.sh, which owns the internal 10.50.2.140 address and its
+# per-node priority. Public addresses never float.
 ssh "$TGT" 'sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     homelab-webproxy homelab-haproxy homelab-dnsdist homelab-certsync homelab-nginx-exporter 2>&1 | tail -8
   echo "installed:"; dpkg-query -W homelab-webproxy homelab-haproxy homelab-dnsdist homelab-certsync homelab-nginx-exporter'
@@ -103,4 +103,4 @@ if [ -n "$SVC_IP" ]; then
     echo -n '  dnsdist :53      : '; dig +short +time=5 +tries=1 @127.0.0.1 mailmasker.org SOA 2>&1 | head -1
   "
 fi
-echo; echo "== done: $TGT provisioned as a standby edge (no public IP yet; keepalived next) =="
+echo; echo "== done: $TGT provisioned as a standby edge (no public IP yet; give it a MAC, then run edge-vip-orchestrate.sh) =="

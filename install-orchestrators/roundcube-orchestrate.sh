@@ -294,9 +294,9 @@ homelab-roundcube homelab-roundcube/api_base_url string http://api.svc.homelab:3
 # PROXY-protocol header (haproxy_trusted_networks / smtpd_upstream_proxy_protocol)
 # that Roundcube's direct client cannot send, so a direct connection fails
 # with a storage/auth error. (Repointed live during the 2026-10 cutover.)
-homelab-roundcube homelab-roundcube/imap_host string 10.50.2.144
+homelab-roundcube homelab-roundcube/imap_host string 10.50.2.140
 homelab-roundcube homelab-roundcube/imap_port string 993
-homelab-roundcube homelab-roundcube/smtp_host string 10.50.2.144
+homelab-roundcube homelab-roundcube/smtp_host string 10.50.2.140
 homelab-roundcube homelab-roundcube/smtp_port string 587
 homelab-roundcube homelab-roundcube/cipher_key string $CIPHER_KEY
 EOF

@@ -8,10 +8,19 @@
 #
 # WHY THIS EXISTS, which is a structural problem and not a one-off.
 #
-# Exactly one of prod-homelab00/01/02 is ever powered on. Every orchestrator
-# that adds a public vhost therefore finds THE ONE RUNNING EDGE and provisions
-# that node -- search-vhost-provision.sh:151 is the pattern. It cannot do
-# anything else: the other two are off.
+# EDGE MODEL (item 44). In the "one" model exactly one of prod-homelab00/01/02
+# is powered on, and every orchestrator that adds a public vhost finds THE ONE
+# RUNNING EDGE and provisions that node -- search-vhost-provision.sh:151 is the
+# pattern. It cannot do anything else: the other two are off.
+#
+# In the "three" model (install-orchestrators/.edge-model, live since
+# 2026-11-06) all three are running and the vhost scripts provision every
+# running edge themselves. This script then only matters for an edge that is
+# STOPPED (taken down for maintenance, say): it brings that node's files in
+# step with a running edge so it comes back complete. Running edges are
+# skipped here -- they are never written to through the hypervisor.
+#
+# The rest of this comment describes the "one" model, where it was written.
 #
 # So every vhost added while a node is parked silently diverges, and the
 # divergence is invisible until a failover, which is the one moment it cannot
@@ -60,8 +69,10 @@ step(){ echo; echo "=== $* ==="; }
 pve(){ ssh -o ConnectTimeout=10 "$PVE" "$@"; }
 
 FAILS=0
+HERE="$(cd "$(dirname "$0")" && pwd)"
+EDGE_MODEL=${EDGE_MODEL:-$(cat "$HERE/.edge-model" 2>/dev/null || echo one)}
 
-step "find the live edge"
+step "find the live edge ($EDGE_MODEL model)"
 RUNNING=""; LIVE_IP=""; LIVE_N=""
 set -- $EDGES
 while [ $# -gt 0 ]; do
@@ -72,7 +83,11 @@ done
 case "$(echo $RUNNING | wc -w)" in
     0) bad "no edge node is running -- nothing to use as the reference"; exit 1 ;;
     1) ok "live edge is prod-homelab$LIVE_N ($LIVE_IP)" ;;
-    *) bad "more than one edge is running ($RUNNING) -- that is a public address conflict"; exit 1 ;;
+    *) if [ "$EDGE_MODEL" = three ]; then
+           ok "$(echo $RUNNING | wc -w) edges running (three-live model); reference is prod-homelab$LIVE_N ($LIVE_IP)"
+       else
+           bad "more than one edge is running ($RUNNING) -- that is a public address conflict"; exit 1
+       fi ;;
 esac
 
 # The reference, read from the node that is actually serving.
@@ -199,8 +214,12 @@ sync_badips(){
 
 for n in 00 01 02; do
     [ "$n" = "$LIVE_N" ] && continue
+    if [ "$EDGE_MODEL" = three ] && echo " $RUNNING " | grep -q " $n "; then
+        step "prod-homelab$n (running -- provisioned directly by the vhost scripts, skipped here)"
+        continue
+    fi
     CT=$((400 + 10#$n))
-    step "prod-homelab$n (pct $CT, parked)"
+    step "prod-homelab$n (pct $CT, stopped)"
 
     ROOT=$(pve "sudo zfs list -H -o mountpoint 2>/dev/null | grep -E '/subvol-$CT-disk-0$'" 2>/dev/null | head -1)
     if [ -z "$ROOT" ] || ! pve "sudo test -d '$ROOT/etc'" 2>/dev/null; then
@@ -216,7 +235,7 @@ done
 
 step "result"
 if [ "$FAILS" = 0 ]; then
-    echo "  ${G}the parked edge nodes match the live one: sites, lineages, base firewall, bad-ips config.${O}"
+    echo "  ${G}the stopped edge nodes match a running one: sites, lineages, base firewall, bad-ips config.${O}"
     echo "  ${D}The vhost and its certificate materialise on that node's next boot:"
     echo "   certsync installs the lineage, apply-sites generates the vhost. Prove it"
     echo "   by rotating to the node (edge-rotate.sh 01) and checking the hostname"

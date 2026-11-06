@@ -61,18 +61,20 @@ abilities:
             "name": "Internet-facing edges",
             "kind": "edges",
             "members": [
+              { "name": "prod-homelab00", "address": "192.0.2.0", "role": "powered on", "state": "serving",
+                "healthy": true, "last_heartbeat": "2026-11-06 21:42:04.661290-06" },
               { "name": "prod-homelab01", "address": "192.0.2.1", "role": "powered on", "state": "serving",
-                "healthy": true, "last_heartbeat": "2026-11-03 21:42:04.661290-06" },
-              { "name": "prod-homelab02", "address": "192.0.2.2", "role": "off", "state": "powered off",
-                "healthy": false, "last_heartbeat": "2026-10-30 08:12:44.310925-05" }
+                "healthy": true, "last_heartbeat": "2026-11-06 21:42:04.661290-06" },
+              { "name": "prod-homelab02", "address": "192.0.2.2", "role": "powered on", "state": "serving",
+                "healthy": true, "last_heartbeat": "2026-11-06 21:42:03.310925-06" }
             ],
-            "note": "NOT automatic failover, by design: exactly ONE edge is powered on at a time and is swapped by hand (pct shutdown one, pct start another). Both public addresses arrive by DHCP from the AT&T reservations keyed to that node's eth7/eth6 MACs, so whichever node is up answers on them. keepalived was removed deliberately. Exactly one is up, which is correct."
+            "note": "All three edges serve at once, each with its own public address; the public DNS names list all three and a health check drops an address that stops answering, so there is no failover to wait for. Only the internal mail address 10.50.2.140 moves between edges (keepalived). All three are up, which is correct."
           }
         ]
       }
     notes:
       - For the poolers, mailbox servers and edges, `healthy` only means the node's agent checked in within the last 3 minutes, not that the service itself answered.
-      - The edges are not a failover group. Exactly one should be powered on at a time, and their `note` says whether that is so.
+      - The edges are not a failover group: all three should be powered on, and their `note` says whether that is so.
       - Each call asks the database nodes directly, so one that is down can slow the answer by several seconds.
     cli: none
 

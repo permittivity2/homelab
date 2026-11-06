@@ -2505,11 +2505,12 @@ sub _admin_ha_status ($self, $c) {
     } @{ $cfg->{nodes} // [] };
     my ($leader) = grep { ($_->{role} // '') eq 'leader' } @pg_members;
 
-    # Edges. DELIBERATELY NOT a failover cluster: exactly ONE of the three is
-    # powered on at a time and is swapped by hand, which is why this reports
-    # "powered on"/"off" rather than active/standby -- calling a node that is
-    # switched off a "standby" would imply it takes over by itself, and the
-    # whole point of that design is that nothing does.
+    # Edges. Since 2026-11-06 (item 44) ALL THREE run at once, each with its
+    # own public address (00=.66, 01=.67, 02=.68) and every public name listing
+    # all three in DNS. There is no active/standby, which is why this reports
+    # "powered on"/"off": an edge that is off simply drops out of DNS (a health
+    # check removes its address within seconds). Only the internal 10.50.2.140
+    # floats between them (homelab-keepalived).
     #
     # The heartbeat IS the signal here: a node that is off stops heartbeating,
     # so `healthy` answers "is this the one currently serving" exactly. No
@@ -2608,15 +2609,15 @@ sub _admin_ha_status ($self, $c) {
                 name    => 'Internet-facing edges',
                 kind    => 'edges',
                 members => \@edge_members,
-                note    => 'NOT automatic failover, by design: exactly ONE edge is powered on at a '
-                         . 'time and is swapped by hand (pct shutdown one, pct start another). Both '
-                         . 'public addresses arrive by DHCP from the AT&T reservations keyed to that '
-                         . "node's eth7/eth6 MACs, so whichever node is up answers on them. "
-                         . 'keepalived was removed deliberately. '
-                         . ($edges_on == 1 ? 'Exactly one is up, which is correct.'
+                note    => 'All three edges serve at once, each with its own public address; the '
+                         . 'public DNS names list all three and a health check drops an address '
+                         . 'that stops answering, so there is no failover to wait for. Only the '
+                         . 'internal mail address 10.50.2.140 moves between edges '
+                         . '(keepalived). '
+                         . ($edges_on == 3 ? 'All three are up, which is correct.'
                           : $edges_on == 0 ? 'NONE is up -- every public service is down.'
-                          : "$edges_on are up at once -- they will fight over the public addresses; "
-                          . 'power all but one off.'),
+                          : "Only $edges_on of 3 are up -- the public names still answer on "
+                          . 'those, but capacity is reduced; power the others on.'),
             },
         ],
     });

@@ -19,8 +19,8 @@
 #   * dovecot-metrics: backup IMAP nodes before the active one (it reloads dovecot).
 #
 # Node numbers below are this fleet's layout (see post-cutover/README.md).
-# --verify exits 1 on a job with no target, or with a target down that is not a
-# parked edge node (01/02 are powered off by design).
+# --verify exits 1 on a job with no target, or with any target down (all three
+# edges are live since item 44, so none is exempt).
 # ============================================================================
 set -uo pipefail
 
@@ -72,8 +72,8 @@ do_verify(){
     for (@{ $d->{data}{activeTargets} }) {
       my ($j, $u) = ($_->{labels}{job}, $_->{scrapeUrl});
       $n{$j}++; $up{$j}++ if $_->{health} eq "up";
-      # 10.50.2.145/.146 are the parked edges 01/02, powered off on purpose.
-      push @bad, "$j $u" if $_->{health} ne "up" && $u !~ m{//10\.50\.2\.14[56]:};
+      # All three edges (10.50.2.144-146) are live since item 44, so none is exempt.
+      push @bad, "$j $u" if $_->{health} ne "up";
     }
     my $rc = 0;
     for my $j (qw(node postgres pgbouncer postfix haproxy dnsdist pdns dovecot nginx)) {
@@ -81,7 +81,7 @@ do_verify(){
       printf "  %-10s %d target(s), %d up%s\n", $j, $t, $u, $t ? "" : "   <-- NO TARGETS";
       $rc = 1 unless $t;
     }
-    if (@bad) { print "  DOWN (not a parked edge):\n", map("    $_\n", @bad); $rc = 1 }
+    if (@bad) { print "  DOWN:\n", map("    $_\n", @bad); $rc = 1 }
     exit $rc;' || rc=1
   [ $rc = 0 ] && echo "OK: every scrape job has live targets." || echo "FINDINGS above."
   return $rc
