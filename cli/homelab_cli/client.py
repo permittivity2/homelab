@@ -18,6 +18,14 @@ from . import __version__
 # User-Agent it receives, so a CLI-originated session should read
 # clearly as "this is the CLI" in `homelab-cli sessions list`, not blend
 # into whatever a browser's own UA string looks like.
+# api.mailmasker.org has several A records (one per live edge) and some
+# networks, e.g. inside the house, can reach only some of them. requests
+# tries the addresses one after another, each for the full timeout, so a
+# single dead address used to cost 10s (and two, 20s, with no output). A
+# short CONNECT timeout makes failover to the next address quick; the read
+# timeout (the caller's, or self.timeout) is unchanged.
+CONNECT_TIMEOUT = 3.05
+
 DEFAULT_USER_AGENT = f"homelab-cli/{__version__} ({platform.system()} {platform.release()})"
 
 
@@ -69,8 +77,10 @@ class Client:
         headers = dict(kwargs.get("headers") or {})
         headers.setdefault("User-Agent", DEFAULT_USER_AGENT)
         kwargs = dict(kwargs, headers=headers)
+        read_timeout = timeout or self.timeout
+        timeout = (CONNECT_TIMEOUT, read_timeout) if isinstance(read_timeout, (int, float)) else read_timeout
         try:
-            resp = requests.request(method, f"{self.api_base}{path}", timeout=timeout or self.timeout, **kwargs)
+            resp = requests.request(method, f"{self.api_base}{path}", timeout=timeout, **kwargs)
         except requests.exceptions.RequestException as e:
             raise ApiError(0, str(e)) from e
 
@@ -88,7 +98,7 @@ class Client:
                 headers["Authorization"] = f"Bearer {new_token}"
                 kwargs = dict(kwargs, headers=headers)
                 try:
-                    resp = requests.request(method, f"{self.api_base}{path}", timeout=timeout or self.timeout, **kwargs)
+                    resp = requests.request(method, f"{self.api_base}{path}", timeout=timeout, **kwargs)
                 except requests.exceptions.RequestException as e:
                     raise ApiError(0, str(e)) from e
         return resp

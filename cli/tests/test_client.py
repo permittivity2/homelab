@@ -887,3 +887,9 @@ def test_html_error_page_is_never_the_message(client):
             client.health()
     assert exc_info.value.status_code == 404
     assert "<" not in exc_info.value.message
+
+
+def test_requests_use_a_short_connect_timeout(client):
+    with patch("requests.request", return_value=_mock_response(200, {"email": "a@b.com"})) as m:
+        client.introspect("t")
+    assert m.call_args.kwargs["timeout"] == (3.05, 10)
