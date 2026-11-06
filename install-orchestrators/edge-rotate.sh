@@ -93,14 +93,21 @@ fingerprint(){
     "' 2>/dev/null | awk '{print $2, $1}' | sort
 }
 
-step "current edge state"
+# EDGE MODEL (item 44): "one" = exactly one edge on at a time (swap); "three" =
+# 00/01/02 all live, each with its own public address (00=.66 01=.67 02=.68).
+# In "three" nothing is ever shut down to make room: a running node is updated
+# in place, a stopped one is simply started. Switch by writing "three" into
+# install-orchestrators/.edge-model when the MAC split is done.
+EDGE_MODEL=${EDGE_MODEL:-$(cat "$HERE/.edge-model" 2>/dev/null || echo one)}
+
+step "current edge state ($EDGE_MODEL model)"
 EDGES=$(pve "sudo pct list" 2>/dev/null | awk '$1 ~ /^(400|401|402)$/ {print $1" "$2}')
 [ -z "$EDGES" ] && { bad "could not read container state from pve2 ($PVE)"; exit 1; }
 echo "$EDGES" | sed 's/^/  /'
 RUNNING=$(echo "$EDGES" | awk '$2 == "running" {print $1}')
 RUN_COUNT=$(echo "$RUNNING" | grep -c '[0-9]' || true)
 
-if [ "$RUN_COUNT" -gt 1 ]; then
+if [ "$RUN_COUNT" -gt 1 ] && [ "$EDGE_MODEL" != three ]; then
     bad "MORE THAN ONE edge is running ($(echo "$RUNNING" | paste -sd, -))."
     bad "That is a public address conflict. Stop one by hand before using this."
     exit 1
@@ -126,8 +133,9 @@ fi
 
 if [ "$DRY" = 1 ]; then
     echo
-    [ "$SWAP" = 1 ] && echo "  would: shutdown ${RUNNING:-none}, start $CTID, update, verify" \
-                    || echo "  would: update and verify $CTID in place"
+    if [ "$SWAP" = 1 ] && [ "$EDGE_MODEL" = three ]; then echo "  would: start $CTID (the other edges keep running), update, verify"
+    elif [ "$SWAP" = 1 ]; then echo "  would: shutdown ${RUNNING:-none}, start $CTID, update, verify"
+    else echo "  would: update and verify $CTID in place"; fi
     exit 0
 fi
 
@@ -136,7 +144,9 @@ if [ "$SWAP" = 1 ]; then
     step "bring the current edge down BEFORE starting the next one"
     echo "  Public web and mail ingress are down from here until the new node"
     echo "  has its address. This ordering is not negotiable -- see the header."
-    if [ -n "$RUNNING" ]; then
+    if [ "$EDGE_MODEL" = three ]; then
+        echo "  three-live model: the other edges keep serving; only $CTID is started."
+    elif [ -n "$RUNNING" ]; then
         echo "  shutting down $RUNNING (graceful)..."
         pve "sudo pct shutdown $RUNNING --timeout 60" >/dev/null 2>&1 || true
         for i in $(seq 1 24); do

@@ -19,6 +19,14 @@
 set -uo pipefail
 
 NN=$(printf '%02d' "$((10#${1:?usage: edge-verify.sh <00|01|02>}))")
+# EDGE MODEL (item 44). "one": exactly one edge is powered on and holds both
+# public addresses (.66 and .68) -- the model until the MAC split. "three":
+# all of 00/01/02 run at once, each holding exactly ONE public address of its
+# own (00=.66, 01=.67, 02=.68). Switch by writing the word "three" to
+# install-orchestrators/.edge-model when the split is done; absent = "one".
+HERE_V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EDGE_MODEL=${EDGE_MODEL:-$(cat "$HERE_V/.edge-model" 2>/dev/null || echo one)}
+case "$NN" in 00) OWN=23.116.91.66 ;; 01) OWN=23.116.91.67 ;; 02) OWN=23.116.91.68 ;; esac
 CTID=$((400 + 10#$NN))
 MGMT=10.20.2.$((144 + 10#$NN))
 PVE=10.20.1.8
@@ -30,11 +38,16 @@ bad(){  FAIL=$((FAIL+1)); echo "  ${R}FAIL${O} $*"; }
 warn(){ WARN=$((WARN+1)); echo "  ${Y}warn${O} $*"; }
 step(){ echo; echo "=== $* ==="; }
 
-step "exactly one edge is running, and it is prod-homelab$NN"
 RUNNING=$(ssh -o ConnectTimeout=8 "$PVE" "sudo pct list" 2>/dev/null \
     | awk '$1 ~ /^(400|401|402)$/ && $2 == "running" {print $1}' | paste -sd, -)
-[ "$RUNNING" = "$CTID" ] && ok "pct $CTID running, and it is the only edge up" \
-    || bad "expected only $CTID running, got '${RUNNING:-none}' -- two edges up means a public IP conflict"
+if [ "$EDGE_MODEL" = three ]; then
+    step "prod-homelab$NN is running (three-live model: the other edges run too)"
+    case ",$RUNNING," in *",$CTID,"*) ok "pct $CTID running (edges up: $RUNNING)" ;; *) bad "pct $CTID is not running (edges up: ${RUNNING:-none})" ;; esac
+else
+    step "exactly one edge is running, and it is prod-homelab$NN"
+    [ "$RUNNING" = "$CTID" ] && ok "pct $CTID running, and it is the only edge up" \
+        || bad "expected only $CTID running, got '${RUNNING:-none}' -- two edges up means a public IP conflict"
+fi
 
 step "the node itself"
 if timeout 6 bash -c "echo > /dev/tcp/$MGMT/22" 2>/dev/null; then
@@ -45,11 +58,20 @@ else
 fi
 
 PUB=$(ssh -o ConnectTimeout=8 "$MGMT" 'ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | grep -E "^23\." | sort | paste -sd, -' 2>/dev/null)
-case "$PUB" in
-    *23.116.91.66*) ok "holds the public addresses ($PUB)" ;;
-    "")             bad "holds NO public address -- the DHCP reservation has not landed yet" ;;
-    *)              warn "public addresses are '$PUB' (expected to include .66)" ;;
-esac
+if [ "$EDGE_MODEL" = three ]; then
+    # Exactly its own address: a second one means two nodes share a MAC.
+    case "$PUB" in
+        "$OWN") ok "holds exactly its own public address ($PUB)" ;;
+        "")     bad "holds NO public address -- the DHCP reservation for $OWN has not landed yet" ;;
+        *)      bad "public addresses are '$PUB' (expected exactly $OWN) -- a stray NIC/MAC?" ;;
+    esac
+else
+    case "$PUB" in
+        *23.116.91.66*) ok "holds the public addresses ($PUB)" ;;
+        "")             bad "holds NO public address -- the DHCP reservation has not landed yet" ;;
+        *)              warn "public addresses are '$PUB' (expected to include .66)" ;;
+    esac
+fi
 
 step "services"
 for u in nginx haproxy dnsdist homelab-agent; do
@@ -198,7 +220,9 @@ else
     # base firewall file nothing here checked -- so whenever either of them
     # was the live edge, SSH faced the internet. A dropped (filtered) or
     # refused connect both count as closed; only a completed connect is open.
-    for a in 23.116.91.66 23.116.91.68; do
+    SSH_ADDRS="23.116.91.66 23.116.91.68"
+    [ "$EDGE_MODEL" = three ] && SSH_ADDRS="$OWN"
+    for a in $SSH_ADDRS; do
         r=$(timeout 20 ssh -o ConnectTimeout=6 offsite \
             "timeout 6 bash -c 'echo > /dev/tcp/$a/22' 2>/dev/null && echo OPEN || echo closed" 2>/dev/null)
         case "$r" in
