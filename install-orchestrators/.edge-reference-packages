@@ -4,6 +4,7 @@ homelab-certsync 0.1.4
 homelab-common 0.1.35
 homelab-dnsdist 0.1.5
 homelab-haproxy 0.1.12
+homelab-keepalived 0.1.4
 homelab-nginx-exporter 0.1.0
 homelab-node-exporter 0.4.1
 homelab-webproxy 0.1.14

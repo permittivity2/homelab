@@ -87,7 +87,7 @@ fingerprint(){
     ssh -o ConnectTimeout=10 "$1" 'sudo sh -c "
       for d in /etc/nginx/sites-available /etc/nginx/conf.d /etc/haproxy /etc/dnsdist /etc/sysctl.d /etc/nftables.d /etc/homelab /etc/systemd/network /etc/systemd/system/systemd-networkd-wait-online.service.d /usr/local/etc/badips.d; do
         [ -d \"\$d\" ] || continue
-        find \"\$d\" -type f ! -name credential.yml ! -name \"*.key\" ! -name \"*.pem\" ! -name \".*\" ! -name \"*.bak-*\" ! -name \"*.pre-sync-*\" -print0 2>/dev/null | xargs -0 sha256sum 2>/dev/null
+        find \"\$d\" -type f ! -name credential.yml ! -name vrrp.yml ! -name \"*.key\" ! -name \"*.pem\" ! -name \".*\" ! -name \"*.bak-*\" ! -name \"*.pre-sync-*\" -print0 2>/dev/null | xargs -0 sha256sum 2>/dev/null
       done
       sha256sum /etc/nftables.conf 2>/dev/null
     "' 2>/dev/null | awk '{print $2, $1}' | sort
@@ -113,7 +113,7 @@ if [ "$RUN_COUNT" -gt 1 ] && [ "$EDGE_MODEL" != three ]; then
     exit 1
 fi
 
-if [ "$RUNNING" = "$CTID" ]; then
+if echo "$RUNNING" | grep -qx "$CTID" && { [ "$RUN_COUNT" -eq 1 ] || [ "$EDGE_MODEL" = three ]; }; then
     ok "prod-homelab$TARGET is already the active edge -- no swap needed"
     SWAP=0
 else
