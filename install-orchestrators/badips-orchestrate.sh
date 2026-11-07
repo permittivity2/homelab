@@ -55,7 +55,15 @@
 #       the package only (apt-get --only-upgrade), where it is installed,
 #       roles untouched -- a blocking edge keeps blocking. Use this for a
 #       version bump; --install on the live edge would reset it to watch.
+#       A shipped config file edited on the host goes back to the package's
+#       (dpkg would otherwise keep the edited copy over the new version).
 #       Each target is checked afterwards; stops at the first wrong one.
+#   ./badips-orchestrate.sh --restore-conf [NN|ALIAS ...]
+#       the package's shipped config files (badips.d/10-80, log4perl.conf)
+#       back where a host edited them, roles untouched: what --install does
+#       on the way, without --install's role reset. Nothing of the fleet's
+#       own lives in those files (that is 94/95/96; a changed rule belongs
+#       in 95-site.conf), so nothing is lost; the daemon restarts.
 #   ./badips-orchestrate.sh --publish [--deb FILE]
 #       the fleet repo (with FILE added, if given) to prod-homelab45, then
 #       asks apt on a fleet node, through aptcacher, what it now offers.
@@ -186,6 +194,15 @@ role_for(){
     case " $EDGES " in *" $1 "*) echo watch; return ;; esac
     case " $REPORTERS " in *" $1 "*) echo report; return ;; esac
     echo off
+}
+# want_for TARGET STATUS -- the role a target is checked against: what
+# --install gives it, except that a block host (an edge, or a legacy block
+# host) may be watching or blocking (--role X block switches it); STATUS is
+# the node_status line
+want_for(){
+    local want r; want="$(role_for "$1")"
+    if is_block_host "$1"; then r="$(printf '%s\n' "$2" | tr ' ' '\n' | sed -n 's/^role=//p')"; case "$r" in block|watch) want="$r" ;; esac; fi
+    printf '%s' "$want"
 }
 
 # the shared list's login a target uses: the fleet's, or the legacy host's own
@@ -335,6 +352,26 @@ grep -qsF 'projects.thedude.vip/apt-homelab' /etc/apt/sources.list /etc/apt/sour
 EOS
 }
 
+# restore_shipped_conf TARGET -- the package's shipped config files back where
+# the host edited them (dpkg -V: the md5 of a conffile differs): removed, then
+# reinstalled with --force-confmiss. Nothing of the fleet's own lives in those
+# files (that is 94/95/96, and a changed rule belongs in 95-site.conf), so
+# nothing is lost; the reinstall re-runs postinst, which restarts the daemon
+# with its role untouched. Prints one "restored shipped file(s): ..." line when
+# it did something, nothing otherwise. Also clears dpkg's parked copies.
+restore_shipped_conf(){
+    rsh "$1" "sudo bash -s" <<'EOS'
+export DEBIAN_FRONTEND=noninteractive
+mods=$(dpkg -V bad-ips 2>/dev/null | awk '$2 == "c" && substr($1, 3, 1) == "5" {print $3}' | grep -E '^/usr/local/etc/badips' || true)
+if [ -n "$mods" ]; then
+    rm -f $mods
+    apt-get install -y -q --reinstall -o Dpkg::Options::=--force-confmiss bad-ips >>/tmp/badips-install.log 2>&1 || exit 1
+    echo "restored shipped file(s): $(echo $mods | tr '\n' ' ')"
+fi
+rm -f /usr/local/etc/badips.d/*.dpkg-dist /usr/local/etc/badips.d/*.dpkg-old /usr/local/etc/badips.d/*.dpkg-new
+EOS
+}
+
 # install_pkg NN [DEB] -- install (or upgrade) then re-run postinst, so the
 # role in the config just written decides the service state.
 install_pkg(){
@@ -344,27 +381,17 @@ install_pkg(){
         rsh "$n" "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q /home/gardner/$(basename "$deb") >/tmp/badips-install.log 2>&1 \
                   && sudo dpkg-reconfigure -f noninteractive bad-ips >>/tmp/badips-install.log 2>&1; rc=\$?; rm -f /home/gardner/$(basename "$deb"); exit \$rc"
     else
-        # Shipped config files edited by an older install (dpkg -V: md5 differs
-        # on a conffile) are removed first and come back from the package
-        # (--force-confmiss), so a 3.x-era file never shadows what 4.x ships.
-        # Nothing of the fleet's own lives in them (that is 94/95/96).
-        rsh "$n" "sudo bash -s" <<'EOS'
+        rsh "$n" "sudo bash -s" <<'EOS' || return 1
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/tmp/badips-install.log 2>&1
-apt-get install -y -q bad-ips >>/tmp/badips-install.log 2>&1 || exit 1
-# Checked AFTER the install: a 3.x package did not own badips.d/* as conffiles,
-# so its copies only show up as "edited" once 4.x is on. dpkg keeps such a copy
-# (and parks the new one as .dpkg-dist); remove them and let the package put
-# its own back.
-mods=$(dpkg -V bad-ips 2>/dev/null | awk '$2 == "c" && substr($1, 3, 1) == "5" {print $3}' | grep -E '^/usr/local/etc/badips' || true)
-if [ -n "$mods" ]; then
-    rm -f $mods
-    apt-get install -y -q --reinstall -o Dpkg::Options::=--force-confmiss bad-ips >>/tmp/badips-install.log 2>&1 || exit 1
-    echo "restored shipped file(s): $(echo $mods | tr '\n' ' ')"
-fi
-rm -f /usr/local/etc/badips.d/*.dpkg-dist /usr/local/etc/badips.d/*.dpkg-old /usr/local/etc/badips.d/*.dpkg-new
-dpkg-reconfigure -f noninteractive bad-ips >>/tmp/badips-install.log 2>&1
+apt-get install -y -q bad-ips >>/tmp/badips-install.log 2>&1
 EOS
+        # Checked AFTER the install: a 3.x package did not own badips.d/* as
+        # conffiles, so its copies only show up as "edited" once 4.x is on (dpkg
+        # keeps such a copy and parks the new one as .dpkg-dist). The package's
+        # own go back, so a 3.x-era file never shadows what 4.x ships.
+        restore_shipped_conf "$n" || return 1
+        rsh "$n" "sudo dpkg-reconfigure -f noninteractive bad-ips >>/tmp/badips-install.log 2>&1"
     fi
 }
 
@@ -431,7 +458,7 @@ node_check(){
     [ "$(sf config)" = ok ]       || p+=("configuration REFUSED (sudo bad_ips --test-config says why)")
     [ "$(sf role)" = "$want" ]    || p+=("role $(sf role), want $want")
     [ "$(sf mainconf)" = absent ] || p+=("/usr/local/etc/badips.conf present")
-    [ "$(sf conffiles)" = 0 ]     || p+=("$(sf conffiles) shipped config file(s) edited (dpkg -V bad-ips); --install restores them")
+    [ "$(sf conffiles)" = 0 ]     || p+=("$(sf conffiles) shipped config file(s) edited (dpkg -V bad-ips); --restore-conf puts the package's back")
     files="$(sf files)"; expect="$SHIPPED_CONF 94-role.conf 95-fleet.conf"; [ "$want" = off ] || expect="$expect 96-fleet-db.conf"
     for x in ${files//,/ }; do case " $expect " in *" $x "*) ;; *) p+=("unexpected badips.d/$x") ;; esac; done
     for x in $expect; do case ",$files," in *",$x,"*) ;; *) p+=("missing badips.d/$x") ;; esac; done
@@ -843,7 +870,7 @@ do_upgrade(){
     load_site
     EXPECT_VERSION="${EXPECT_VERSION:-$(repo_version)}"
     say "bad-ips ${EXPECT_VERSION:-?}: upgrading the package where it is installed (${#nodes[@]} target(s)), roles untouched"
-    local n v st want why r
+    local n v rs st want why
     for n in "${nodes[@]}"; do
         n="$(nn "$n")"
         if ! up "$n"; then case " $EDGES " in *" $n "*) warn "$(label "$n"): powered off (parked edge) -- upgraded in the rotation pass" ;; *) bad "$(label "$n"): unreachable" ;; esac; continue; fi
@@ -852,10 +879,35 @@ do_upgrade(){
         if [ "$v" = "$EXPECT_VERSION" ]; then ok "$(label "$n"): already $v"; continue; fi
         rsh "$n" "sudo apt-get update -qq >/tmp/badips-upgrade.log 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --only-upgrade bad-ips >>/tmp/badips-upgrade.log 2>&1" \
             || { bad "$(label "$n"): the upgrade failed (see /tmp/badips-upgrade.log there); stopping"; return; }
-        st="$(node_status "$n")"; want="$(role_for "$n")"
-        if is_block_host "$n"; then r="$(printf '%s\n' "$st" | tr ' ' '\n' | sed -n 's/^role=//p')"; case "$r" in block|watch) want="$r" ;; esac; fi
+        # a shipped file edited on the host: dpkg keeps the edited copy over the
+        # new version (parking the new one as .dpkg-dist) and the check below
+        # would fail on it; the package's own goes back instead
+        rs="$(restore_shipped_conf "$n")" || { bad "$(label "$n"): could not put the shipped config files back (see /tmp/badips-install.log there); stopping"; return; }
+        [ -z "$rs" ] || warn "$(label "$n"): $rs(edited on the host; a changed rule belongs in 95-site.conf)"
+        st="$(node_status "$n")"; want="$(want_for "$n" "$st")"
         if why="$(node_check "$want" "$st" "$(db_user_for "$n")")"; then ok "$(label "$n") ($want): $v -> $(node_brief "$st")"
         else bad "$(label "$n") ($want): $why"; echo "  ${R}stopped: the targets after this one were not touched${O}"; return; fi
+    done
+}
+
+# --restore-conf: the package's shipped config files back where a host edited
+# them -- what --install does on the way, without --install's role reset
+do_restore_conf(){
+    local nodes=("$@"); [ ${#nodes[@]} -eq 0 ] && mapfile -t nodes < <(all_nodes)
+    load_site
+    say "putting the package's shipped config files back where a host edited them (${#nodes[@]} target(s)), roles untouched"
+    local n v rs st want why
+    for n in "${nodes[@]}"; do
+        n="$(nn "$n")"
+        if ! up "$n"; then case " $EDGES " in *" $n "*) warn "$(label "$n"): powered off (parked edge)" ;; *) bad "$(label "$n"): unreachable" ;; esac; continue; fi
+        v="$(rsh "$n" "dpkg-query -W -f='\${Version}' bad-ips 2>/dev/null")"
+        [ -n "$v" ] || { warn "$(label "$n"): bad-ips not installed -- skipped"; continue; }
+        rs="$(restore_shipped_conf "$n")" || { bad "$(label "$n"): the restore failed (see /tmp/badips-install.log there)"; continue; }
+        if [ -z "$rs" ]; then ok "$(label "$n"): nothing edited, nothing to put back"; continue; fi
+        EXPECT_VERSION="$v"                              # the host's own version: this is not an upgrade
+        st="$(node_status "$n")"; want="$(want_for "$n" "$st")"
+        if why="$(node_check "$want" "$st" "$(db_user_for "$n")")"; then ok "$(label "$n") ($want): $rs-> $(node_brief "$st")"
+        else bad "$(label "$n") ($want): $rs-> but $why"; fi
     done
 }
 
@@ -864,13 +916,11 @@ do_verify(){
     load_site                                           # roles of legacy targets
     EXPECT_VERSION="${EXPECT_VERSION:-$(repo_version)}"
     say "bad-ips ${EXPECT_VERSION:-?} on ${#nodes[@]} node(s), each against what its role needs"
-    local n st want why r
+    local n st want why
     for n in "${nodes[@]}"; do
         n="$(nn "$n")"
         if ! up "$n"; then case " $EDGES " in *" $n "*) warn "$(label "$n"): powered off (parked edge)" ;; *) bad "$(label "$n"): unreachable" ;; esac; continue; fi
-        st="$(node_status "$n")"; want="$(role_for "$n")"
-        # a block host (an edge, or a legacy block host) may be watching or blocking (--role X block switches it)
-        if is_block_host "$n"; then r="$(printf '%s\n' "$st" | tr ' ' '\n' | sed -n 's/^role=//p')"; case "$r" in block|watch) want="$r" ;; esac; fi
+        st="$(node_status "$n")"; want="$(want_for "$n" "$st")"
         if why="$(node_check "$want" "$st" "$(db_user_for "$n")")"; then ok "$(label "$n") ($want): $(node_brief "$st")"; else bad "$(label "$n") ($want): $why"; fi
         if is_block_host "$n"; then
             rsh "$n" 'sudo nft list table inet badips >/dev/null 2>&1 && command -v jq >/dev/null || exit 0
@@ -1017,7 +1067,7 @@ while [ $# -gt 0 ]; do
 done
 # every target must be a node number or a legacy alias from LEGACY_HOSTS
 check_targets(){ local a; load_site; for a in "$@"; do is_legacy "$a" && { legacy_spec "$a" >/dev/null || die "'$a' is neither a node number nor an alias in LEGACY_HOSTS ($SITE)"; }; done; }
-case "$cmd" in --install|--verify|--upgrade) check_targets "${args[@]}" ;; --role|--print-config|--db-login) [ ${#args[@]} -ge 1 ] && check_targets "${args[0]}" ;; esac
+case "$cmd" in --install|--verify|--upgrade|--restore-conf) check_targets "${args[@]}" ;; --role|--print-config|--db-login) [ ${#args[@]} -ge 1 ] && check_targets "${args[0]}" ;; esac
 case "$cmd" in
     --db)             do_db ;;
     --grafana-db)     do_grafana_db ;;
@@ -1028,6 +1078,7 @@ case "$cmd" in
     --role)           [ ${#args[@]} -eq 2 ] || die "usage: --role NN|ALIAS block|watch|report|off"; do_role "${args[0]}" "${args[1]}" ;;
     --verify)         do_verify "${args[@]}" ;;
     --upgrade)        do_upgrade "${args[@]}" ;;
+    --restore-conf)   do_restore_conf "${args[@]}" ;;
     --static-realip)  do_static_realip ;;
     --deploy-web)     do_deploy_web ;;
     --publish)        do_publish "$DEB" ;;
