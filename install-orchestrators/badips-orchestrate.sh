@@ -96,8 +96,10 @@
 #        LEGACY_HOSTS="jumper=block:eth1,wlan0 ns03=off" (alias=role[:interfaces
 #        a block host drops on]). A legacy block host watches on first install,
 #        like an edge, until --role ALIAS block; it reports under its alias
-#        (host_name) and uses its own login (--db-login ALIAS first). Legacy
-#        hosts are never part of the default 00-72 set: name them.
+#        (host_name) and uses its own login (--db-login ALIAS first). --install
+#        also moves a legacy host's apt from the old 3.x repo (/apt) to the
+#        fleet repo (/apt-homelab) -- never both. Legacy hosts are never part
+#        of the default 00-72 set: name them.
 #
 # Site values -- the never-block list for the house and offsite, and the
 # legacy hosts -- come from ../../badips-site.conf, NOT from git (both repos
@@ -142,11 +144,13 @@ LEFTOVERS="5f2a36a53e436a28e22577b4de9adb5ceece4e73082beb4afd302d942e306db2:/usr
 208a1e910406326cdb4003f34fc7f0805ff1c2a3c922d802517467ab529c4d92:/usr/local/etc/badips.conf
 dc2049c99914b934e33770c127ae242287eee399aa2542e6bf66d0a3ddec15e3:/usr/local/etc/badips.d/database.conf
 80e6fe55e390f658b5d4c890990792d02d33c73f4655cf7f9598997a7982fc59:/usr/local/etc/badips.d/90-alwaysblock.conf
-354923c0ed0824145f45a66f7e183afdef1ed9a4b00f636adcfebbfb0ed46487:/usr/local/etc/badips.d/10-sshd.conf.dpkg-dist"
-# The last four: jumper's hand-made 3.x files as read on 2026-11-07 (post-cutover
-# #61): its main config, its database file (the dead database01 and a dead
+354923c0ed0824145f45a66f7e183afdef1ed9a4b00f636adcfebbfb0ed46487:/usr/local/etc/badips.d/10-sshd.conf.dpkg-dist
+0b5e95f295498213c0cf8e898ffff09d523baa7f9ca22a2ad6e20f9efa0b8551:/usr/local/etc/badips.conf"
+# Then jumper's hand-made 3.x files as read on 2026-11-07 (post-cutover #61):
+# its main config, its database file (the dead database01 and a dead
 # credential), its 1,685-range always-block list (archived in the item's
-# evidence/ directory) and the .dpkg-dist the 4.2.0 upgrade left behind.
+# evidence/ directory) and the .dpkg-dist the 4.2.0 upgrade left behind; and
+# ns03's 3.7.0 main config (its database.conf is the fleet's known copy).
 
 G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; B=$'\033[1m'; O=$'\033[0m'
 FAILS=0
@@ -312,6 +316,25 @@ write_config(){ # TARGET ROLE
     fi
 }
 
+# fleet_repo_on TARGET -- a legacy host gets bad-ips from the fleet repo
+# (projects.thedude.vip/apt-homelab, the directory --publish fills), not from
+# the old 3.x repo (/apt). A host must never have both (bad-ips/build-package.sh):
+# the old source is removed, the fleet one added, idempotently.
+fleet_repo_on(){
+    rsh "$1" "sudo bash -s" <<'EOS'
+old='http://projects.thedude.vip/apt '
+new='deb [signed-by=/etc/apt/keyrings/silver-linings.gpg] http://projects.thedude.vip/apt-homelab unstable main'
+[ -f /etc/apt/keyrings/silver-linings.gpg ] || { echo "no /etc/apt/keyrings/silver-linings.gpg here"; exit 1; }
+for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+    [ -f "$f" ] && grep -qF "$old" "$f" || continue
+    sed -i "\#${old}#d" "$f"; echo "removed the old 3.x repo line from $f"
+    [ -s "$f" ] || { rm -f "$f"; echo "removed the now empty $f"; }
+done
+grep -qsF 'projects.thedude.vip/apt-homelab' /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+    || { printf '%s\n' "$new" > /etc/apt/sources.list.d/silver-linings-homelab.list; echo "added the fleet repo (/etc/apt/sources.list.d/silver-linings-homelab.list)"; }
+EOS
+}
+
 # install_pkg NN [DEB] -- install (or upgrade) then re-run postinst, so the
 # role in the config just written decides the service state.
 install_pkg(){
@@ -328,15 +351,19 @@ install_pkg(){
         rsh "$n" "sudo bash -s" <<'EOS'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/tmp/badips-install.log 2>&1
+apt-get install -y -q bad-ips >>/tmp/badips-install.log 2>&1 || exit 1
+# Checked AFTER the install: a 3.x package did not own badips.d/* as conffiles,
+# so its copies only show up as "edited" once 4.x is on. dpkg keeps such a copy
+# (and parks the new one as .dpkg-dist); remove them and let the package put
+# its own back.
 mods=$(dpkg -V bad-ips 2>/dev/null | awk '$2 == "c" && substr($1, 3, 1) == "5" {print $3}' | grep -E '^/usr/local/etc/badips' || true)
-opts=''
 if [ -n "$mods" ]; then
     rm -f $mods
-    opts='--reinstall -o Dpkg::Options::=--force-confmiss'
+    apt-get install -y -q --reinstall -o Dpkg::Options::=--force-confmiss bad-ips >>/tmp/badips-install.log 2>&1 || exit 1
     echo "restored shipped file(s): $(echo $mods | tr '\n' ' ')"
 fi
-apt-get install -y -q $opts bad-ips >>/tmp/badips-install.log 2>&1 \
-    && dpkg-reconfigure -f noninteractive bad-ips >>/tmp/badips-install.log 2>&1
+rm -f /usr/local/etc/badips.d/*.dpkg-dist /usr/local/etc/badips.d/*.dpkg-old /usr/local/etc/badips.d/*.dpkg-new
+dpkg-reconfigure -f noninteractive bad-ips >>/tmp/badips-install.log 2>&1
 EOS
     fi
 }
@@ -758,6 +785,9 @@ do_install(){
         if ! write_config "$n" "$role" >"$log" 2>&1; then
             echo "FAILED writing the config: $(grep -v '^removed' "$log" | paste -sd' ')" > "$tmp/$n"; return
         fi
+        if is_legacy "$n" && ! fleet_repo_on "$n" >>"$log" 2>&1; then
+            echo "FAILED switching apt to the fleet repo: $(tail -1 "$log")" > "$tmp/$n"; return
+        fi
         if ! install_pkg "$n" "$deb" >>"$log" 2>&1; then
             echo "FAILED installing (see /tmp/badips-install.log on the node)" > "$tmp/$n"; return
         fi
@@ -769,7 +799,7 @@ do_install(){
         for n in "$@"; do
             n="$(nn "$n")"; role="$(role_for "$n")"; r="$(cat "$tmp/$n" 2>/dev/null || echo 'no result')"
             lo="$(grep -c '^removed the known leftover' "$tmp/$n.log" 2>/dev/null)"; lo="${lo:-0}"
-            rs="$(grep '^restored shipped file' "$tmp/$n.log" 2>/dev/null | head -1)"
+            rs="$(grep -E '^(restored shipped file|removed the old 3.x repo|added the fleet repo)' "$tmp/$n.log" 2>/dev/null | paste -sd';' | sed 's/;/; /g')"
             case "$r" in
                 unreachable) case " $EDGES " in *" $n "*) warn "$(label "$n"): powered off (parked edge) -- done in the rotation pass" ;;
                                                *) bad "$(label "$n"): unreachable" ;; esac ;;
