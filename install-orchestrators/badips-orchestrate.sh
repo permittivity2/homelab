@@ -375,6 +375,13 @@ if [ "$a" = active ]; then
     if [ "$db" != none ]; then
         for i in $(seq 1 30); do mine | grep -q '|INFO|.*shared ban list: connected to ' && break; sleep 1; done
     fi
+    # a BLOCKING daemon builds its table right after connecting; asked a second
+    # too early (--role X block on 2026-11-07), "no firewall table" was a false
+    # failure. Give it one reconcile.
+    if [ "$r" = block ]; then
+        for i in $(seq 1 35); do nft list table inet badips >/dev/null 2>&1 && break; sleep 1; done
+        t=$(nft list table inet badips >/dev/null 2>&1 && echo yes || echo no)
+    fi
     M=$(mine)
     conn=$(printf '%s\n' "$M" | grep '|INFO|.*shared ban list: connected to ' | tail -1 | sed 's/.*connected to //')
     [ -n "$conn" ] || conn=NO
