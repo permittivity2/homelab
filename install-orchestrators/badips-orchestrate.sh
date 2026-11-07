@@ -70,17 +70,36 @@
 #       default 69) with the database address, and homelab-grafana reinstalled so it
 #       provisions the "bad-ips (shared ban list)" data source -- which it does only
 #       once that password file exists. Needs bad-ips 4.2 applied (--db) first.
-#   ./badips-orchestrate.sh --print-config NN
-#       print the files node NN would get (password masked); changes nothing.
+#   ./badips-orchestrate.sh --print-config NN|ALIAS
+#       print the files the node would get (password masked); changes nothing.
+#   ./badips-orchestrate.sh --db-login ALIAS
+#       post-cutover #61: a legacy host's OWN login on the shared list,
+#       badips_<alias>, a member of badips_runtime (same rights, now and for
+#       whatever is granted to badips_runtime later), registered with pgbouncer
+#       09/10/11, its password in ../../badips-db.<alias>.secret. One login per
+#       internet-facing host, so a compromised host is answered with
+#       ALTER ROLE badips_<alias> NOLOGIN instead of a fleet-wide rotation.
+#       Safe to re-run: an existing login with its secret file keeps its password.
 #
 # Roles: edge 00/01/02 -> watch on first install (reports, blocks nothing;
 #        switch on with --role 00 block); postfix 39/40/41 and dovecot VMs
 #        62/63/64 -> report; every other node -> off (installed, switched off).
 #
-# Site values -- the never-block list for the house and offsite -- come from
-# ../../badips-site.conf, NOT from git (both repos are public). The shared
-# list's runtime password lives in ../../badips-db.secret (written by --db,
-# mode 600). The script refuses to run without them.
+# Legacy hosts (post-cutover #61): --install, --role, --verify, --print-config
+#        and --db-login also take an ssh alias from ~/.ssh/config ("jumper")
+#        when it is listed in LEGACY_HOSTS in ../../badips-site.conf, e.g.
+#        LEGACY_HOSTS="jumper=block:eth1,wlan0 ns03=off" (alias=role[:interfaces
+#        a block host drops on]). A legacy block host watches on first install,
+#        like an edge, until --role ALIAS block; it reports under its alias
+#        (host_name) and uses its own login (--db-login ALIAS first). Legacy
+#        hosts are never part of the default 00-72 set: name them.
+#
+# Site values -- the never-block list for the house and offsite, and the
+# legacy hosts -- come from ../../badips-site.conf, NOT from git (both repos
+# are public). The shared list's runtime password lives in
+# ../../badips-db.secret (written by --db, mode 600); a legacy host's in
+# ../../badips-db.<alias>.secret (--db-login). The script refuses to run
+# without them.
 # ============================================================================
 set -uo pipefail
 
@@ -114,7 +133,15 @@ EXPECT_VERSION="${EXPECT_VERSION:-}"                    # set from the fleet rep
 # to the copies inspected that day (the same on all 71 nodes); anything else
 # stops that node's install for a human to look at.
 LEFTOVERS="5f2a36a53e436a28e22577b4de9adb5ceece4e73082beb4afd302d942e306db2:/usr/local/etc/badips.conf
-61ed4a90073312dea0fd1eafb0099a782ec831516ee0b1ad3a79e9b7fb772a4d:/usr/local/etc/badips.d/database.conf"
+61ed4a90073312dea0fd1eafb0099a782ec831516ee0b1ad3a79e9b7fb772a4d:/usr/local/etc/badips.d/database.conf
+208a1e910406326cdb4003f34fc7f0805ff1c2a3c922d802517467ab529c4d92:/usr/local/etc/badips.conf
+dc2049c99914b934e33770c127ae242287eee399aa2542e6bf66d0a3ddec15e3:/usr/local/etc/badips.d/database.conf
+80e6fe55e390f658b5d4c890990792d02d33c73f4655cf7f9598997a7982fc59:/usr/local/etc/badips.d/90-alwaysblock.conf
+354923c0ed0824145f45a66f7e183afdef1ed9a4b00f636adcfebbfb0ed46487:/usr/local/etc/badips.d/10-sshd.conf.dpkg-dist"
+# The last four: jumper's hand-made 3.x files as read on 2026-11-07 (post-cutover
+# #61): its main config, its database file (the dead database01 and a dead
+# credential), its 1,685-range always-block list (archived in the item's
+# evidence/ directory) and the .dpkg-dist the 4.2.0 upgrade left behind.
 
 G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; B=$'\033[1m'; O=$'\033[0m'
 FAILS=0
@@ -124,15 +151,50 @@ bad(){ printf '  %sFAIL%s %s\n' "$R" "$O" "$*"; FAILS=$((FAILS + 1)); }
 warn(){ printf '  %swarn%s %s\n' "$Y" "$O" "$*"; }
 die(){ printf '%sERROR:%s %s\n' "$R" "$O" "$*" >&2; exit 2; }
 
-ip_of(){ printf '10.20.2.%d' "$((144 + 10#$1))"; }
+# A target is a fleet node number (00-72 -> 10.20.2.(144+NN)) or, since
+# post-cutover #61, a legacy host's ssh alias listed in LEGACY_HOSTS ("jumper").
+is_legacy(){ case "$1" in ''|*[!0-9]*) return 0 ;; *) return 1 ;; esac; }
+ip_of(){ if is_legacy "$1"; then printf '%s' "$1"; else printf '10.20.2.%d' "$((144 + 10#$1))"; fi; }
 rsh(){ local n="$1"; shift; ssh -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new "$(ip_of "$n")" "$@"; }
 up(){ timeout 12 ssh -o BatchMode=yes -o ConnectTimeout=5 "$(ip_of "$1")" true 2>/dev/null; }
-nn(){ printf '%02d' "$((10#$1))"; }
+nn(){ if is_legacy "$1"; then printf '%s' "$1"; else printf '%02d' "$((10#$1))"; fi; }
+label(){ if is_legacy "$1"; then printf '%s' "$1"; else printf 'prod-homelab%s' "$(nn "$1")"; fi; }
 
+# legacy_spec ALIAS -> "role[:interfaces]" from LEGACY_HOSTS, or non-zero
+legacy_spec(){ local e; for e in ${LEGACY_HOSTS:-}; do [ "${e%%=*}" = "$1" ] && { printf '%s' "${e#*=}"; return 0; }; done; return 1; }
+legacy_role(){ local s; s="$(legacy_spec "$1")" || return 1; printf '%s' "${s%%:*}"; }
+# what a block host drops on: the edge's two interfaces, or the legacy host's own
+ifaces_for(){ local s; if is_legacy "$1"; then s="$(legacy_spec "$1")" && case "$s" in *:*) printf '%s' "${s#*:}" | sed 's/,/, /g' ;; esac; else printf 'eth6, eth7'; fi; }
+is_block_host(){ if is_legacy "$1"; then [ "$(legacy_role "$1" 2>/dev/null)" = block ]; else case " $EDGES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; fi; }
+
+# the role a target gets on --install: a block host WATCHES first (reports,
+# blocks nothing) until --role TARGET block
 role_for(){
+    if is_legacy "$1"; then
+        local r; r="$(legacy_role "$1")" || die "$1 is not in LEGACY_HOSTS ($SITE)"
+        [ "$r" = block ] && echo watch || echo "$r"; return
+    fi
     case " $EDGES " in *" $1 "*) echo watch; return ;; esac
     case " $REPORTERS " in *" $1 "*) echo report; return ;; esac
     echo off
+}
+
+# the shared list's login a target uses: the fleet's, or the legacy host's own
+db_user_for(){ if is_legacy "$1"; then printf 'badips_%s' "$(printf '%s' "$1" | tr -c 'a-z0-9\n' '_')"; else printf 'badips_runtime'; fi; }
+secret_file_for(){ printf '%s/badips-db.%s.secret' "$TOP" "$1"; }
+# load_secret_for TARGET -> DB_USER and DB_PASS for its 96-fleet-db.conf
+load_secret_for(){
+    if is_legacy "$1"; then
+        local f keep; f="$(secret_file_for "$1")"
+        [ -f "$f" ] || die "missing $f -- run --db-login $1 first (its own login on the shared list)"
+        keep="${BADIPS_DB_PASSWORD:-}"; BADIPS_DB_USER=''
+        # shellcheck disable=SC1090
+        . "$f"
+        DB_USER="${BADIPS_DB_USER:-}"; DB_PASS="${BADIPS_DB_PASSWORD:-}"; BADIPS_DB_PASSWORD="$keep"
+        [ "$DB_USER" = "$(db_user_for "$1")" ] && [ -n "$DB_PASS" ] || die "$f must set BADIPS_DB_USER='$(db_user_for "$1")' and BADIPS_DB_PASSWORD"
+    else
+        load_secret; DB_USER=badips_runtime; DB_PASS="$BADIPS_DB_PASSWORD"
+    fi
 }
 
 load_site(){
@@ -151,6 +213,18 @@ load_site(){
         esac
     done
     [ "$v4" -ge 2 ] && [ "$v6" -ge 1 ] || die "$SITE: NEVER_BLOCK must hold the house and offsite (2+ IPv4, 1+ IPv6 networks); it has $v4 and $v6"
+    # LEGACY_HOSTS (optional): alias=role[:iface,iface] -- the alias is an ssh
+    # config name, the role block|report|off, interfaces only (and always) with block
+    local a r
+    for e in ${LEGACY_HOSTS:-}; do
+        a="${e%%=*}"; r="${e#*=}"
+        [[ "$a" =~ ^[a-z][a-z0-9-]*$ ]] && [ "$a" != "$e" ] || die "$SITE: LEGACY_HOSTS entry '$e' is not alias=role[:interfaces]"
+        case "$r" in
+            block:*) [[ "${r#block:}" =~ ^[a-z0-9.-]+(,[a-z0-9.-]+)*$ ]] || die "$SITE: LEGACY_HOSTS '$a': block needs interfaces, e.g. block:eth1,wlan0" ;;
+            report|off) ;;
+            *) die "$SITE: LEGACY_HOSTS '$a': role must be block:IFACES, report or off (got '$r')" ;;
+        esac
+    done
 }
 # the first address of every IPv4 never-block network (each is on the list)
 never_v4(){ local e; for e in ${NEVER_BLOCK//,/ }; do case "$e" in *:*) ;; *) echo "${e%%/*}" ;; esac; done; }
@@ -163,22 +237,32 @@ load_secret(){
 
 # --- the three config files every node gets --------------------------------
 HDR="# Written by homelab install-orchestrators/badips-orchestrate.sh -- edit there, not here."
+# conf_role ROLE [IFACES] [NAME] -- IFACES: what a block host drops on (default
+# the edge's two); NAME: a legacy host, which reports under that name.
 conf_role(){
+    local ifs="${2:-eth6, eth7}" name="${3:-}"
     printf '%s\n[global]\n' "$HDR"
     case "$1" in
-        watch)  printf '# The edge, in WATCH mode: detects and reports, blocks nothing.\nrole = block\ndry_run = 1\nblock_interfaces = eth6, eth7\n' ;;
-        block)  printf '# The edge: drops shared-list and feed addresses, on its two internet-facing interfaces only.\nrole = block\ndry_run = 0\nblock_interfaces = eth6, eth7\n' ;;
+        watch)  if [ -n "$name" ]; then printf '# %s, in WATCH mode: detects and reports, blocks nothing.\n' "$name"
+                else printf '# The edge, in WATCH mode: detects and reports, blocks nothing.\n'; fi
+                printf 'role = block\ndry_run = 1\nblock_interfaces = %s\n' "$ifs" ;;
+        block)  if [ -n "$name" ]; then printf '# %s: drops shared-list and feed addresses, on its internet-facing interfaces only.\n' "$name"
+                else printf '# The edge: drops shared-list and feed addresses, on its two internet-facing interfaces only.\n'; fi
+                printf 'role = block\ndry_run = 0\nblock_interfaces = %s\n' "$ifs" ;;
         report) printf '# Reports attackers to the shared ban list; never blocks.\nrole = report\n' ;;
         off)    printf '# Installed and configured, switched off.\nrole = off\n' ;;
     esac
+    [ -z "$name" ] || printf '# A legacy host, not a prod-homelabNN: this is the name on the shared list.\nhost_name = %s\n' "$name"
 }
 conf_fleet(){
     printf '%s\n# Identical on every node.\n[global]\nnever_block_cidrs = %s\n' "$HDR" "$NEVER_BLOCK"
 }
+# conf_db -- DB_USER / DB_PASS from load_secret_for (the fleet's login, or a
+# legacy host's own)
 conf_db(){
     printf '%s\n# The shared ban list, through the pgbouncer VIP. Only on nodes whose role uses it.\n[global]\n' "$HDR"
-    printf 'db_host = %s\ndb_port = 6432\ndb_name = homelab\ndb_user = badips_runtime\ndb_password = %s\ndb_schema = badips\n' \
-        "$PGB_VIP" "$BADIPS_DB_PASSWORD"
+    printf 'db_host = %s\ndb_port = 6432\ndb_name = homelab\ndb_user = %s\ndb_password = %s\ndb_schema = badips\n' \
+        "$PGB_VIP" "${DB_USER:-badips_runtime}" "${DB_PASS:-${BADIPS_DB_PASSWORD:-}}"
 }
 
 # put NN PATH  < content   (root:badips 0640 once the group exists)
@@ -191,29 +275,34 @@ put(){
 retire_leftovers(){
     { printf 'LEFTOVERS=%q\n' "$LEFTOVERS"
       cat <<'EOS'
-rc=0
+rc=0; seen=''
+# a path may be listed with several known hashes (the fleet's copy, jumper's):
+# remove it when ANY matches; what is left afterwards is unknown
 for e in $LEFTOVERS; do
     h=${e%%:*}; f=${e#*:}
-    [ -e "$f" ] || continue
-    if [ -f "$f" ] && [ "$(sha256sum < "$f" | cut -d' ' -f1)" = "$h" ]; then
-        rm -f "$f" && echo "removed the known leftover $f"
-    else
-        echo "UNKNOWN $f: not the known leftover -- left alone, look at it"; rc=1
-    fi
+    [ -f "$f" ] || continue
+    [ "$(sha256sum < "$f" | cut -d' ' -f1)" = "$h" ] && rm -f "$f" && echo "removed the known leftover $f"
+done
+for e in $LEFTOVERS; do
+    f=${e#*:}
+    case " $seen " in *" $f "*) continue ;; esac; seen="$seen $f"
+    [ -e "$f" ] && { echo "UNKNOWN $f: not a known leftover -- left alone, look at it"; rc=1; }
 done
 exit $rc
 EOS
     } | rsh "$1" "sudo bash -s"
 }
 
-write_config(){ # NN ROLE
-    local n="$1" role="$2"
+write_config(){ # TARGET ROLE
+    local n="$1" role="$2" name=''
     retire_leftovers "$n" || return 1
-    conf_role "$role" | put "$n" "$CONFDIR/94-role.conf" || return 1
-    conf_fleet       | put "$n" "$CONFDIR/95-fleet.conf" || return 1
+    is_legacy "$n" && name="$n"
+    conf_role "$role" "$(ifaces_for "$n")" "$name" | put "$n" "$CONFDIR/94-role.conf" || return 1
+    conf_fleet                                     | put "$n" "$CONFDIR/95-fleet.conf" || return 1
     if [ "$role" = off ]; then
         rsh "$n" "sudo rm -f $CONFDIR/96-fleet-db.conf" || return 1
     else
+        load_secret_for "$n"
         conf_db | put "$n" "$CONFDIR/96-fleet-db.conf" || return 1
     fi
 }
@@ -227,8 +316,23 @@ install_pkg(){
         rsh "$n" "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q /home/gardner/$(basename "$deb") >/tmp/badips-install.log 2>&1 \
                   && sudo dpkg-reconfigure -f noninteractive bad-ips >>/tmp/badips-install.log 2>&1; rc=\$?; rm -f /home/gardner/$(basename "$deb"); exit \$rc"
     else
-        rsh "$n" "sudo apt-get update -qq >/tmp/badips-install.log 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q bad-ips >>/tmp/badips-install.log 2>&1 \
-                  && sudo dpkg-reconfigure -f noninteractive bad-ips >>/tmp/badips-install.log 2>&1"
+        # Shipped config files edited by an older install (dpkg -V: md5 differs
+        # on a conffile) are removed first and come back from the package
+        # (--force-confmiss), so a 3.x-era file never shadows what 4.x ships.
+        # Nothing of the fleet's own lives in them (that is 94/95/96).
+        rsh "$n" "sudo bash -s" <<'EOS'
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq >/tmp/badips-install.log 2>&1
+mods=$(dpkg -V bad-ips 2>/dev/null | awk '$2 == "c" && substr($1, 3, 1) == "5" {print $3}' | grep -E '^/usr/local/etc/badips' || true)
+opts=''
+if [ -n "$mods" ]; then
+    rm -f $mods
+    opts='--reinstall -o Dpkg::Options::=--force-confmiss'
+    echo "restored shipped file(s): $(echo $mods | tr '\n' ' ')"
+fi
+apt-get install -y -q $opts bad-ips >>/tmp/badips-install.log 2>&1 \
+    && dpkg-reconfigure -f noninteractive bad-ips >>/tmp/badips-install.log 2>&1
+EOS
     fi
 }
 
@@ -250,6 +354,8 @@ e=$(systemctl is-enabled bad_ips 2>/dev/null); a=$(systemctl is-active bad_ips 2
 t=$(nft list table inet badips >/dev/null 2>&1 && echo yes || echo no)
 files=$(ls /usr/local/etc/badips.d 2>/dev/null | grep '\.conf$' | paste -sd,)
 main=$([ -e /usr/local/etc/badips.conf ] && echo present || echo absent)
+# shipped config files that differ from the package (an older install's edits)
+cf=$(dpkg -V bad-ips 2>/dev/null | awk '$2 == "c" && substr($1, 3, 1) == "5" {print $3}' | grep -cE '^/usr/local/etc/badips')
 conn=-; warns=-; first=
 L=/var/log/bad_ips/bad_ips.log
 # The running daemon's own lines, oldest first, from EVERY file logrotate has
@@ -270,20 +376,23 @@ if [ "$a" = active ]; then
     warns=$(printf '%s\n' "$M" | grep -cE '^[^|]*\|[^|]*\|(WARN|ERROR|FATAL)\|')
     first=$(printf '%s\n' "$M" | grep -E '^[^|]*\|[^|]*\|(WARN|ERROR|FATAL)\|' | head -1 | cut -d'|' -f6- | cut -c1-200)
 fi
-echo "version=$v role=${r:-?} config=$([ "$tcrc" = 0 ] && echo ok || echo REFUSED) db=${db:-?} reach=${reach:--} daemon_db=$conn warns=$warns enabled=${e:-?} active=${a:-?} table=$t mainconf=$main files=${files:-none} first_warn=$first"
+echo "version=$v role=${r:-?} config=$([ "$tcrc" = 0 ] && echo ok || echo REFUSED) db=${db:-?} reach=${reach:--} daemon_db=$conn warns=$warns enabled=${e:-?} active=${a:-?} table=$t mainconf=$main files=${files:-none} conffiles=${cf:-?} first_warn=$first"
 EOS
 }
 
-# node_check WANT STATUS -> nothing and 0 when a node is exactly what its
-# role needs; else the problems and 1. The ONE definition of "right".
+# node_check WANT STATUS [DBUSER] -> nothing and 0 when a node is exactly what
+# its role needs; else the problems and 1. The ONE definition of "right".
+# DBUSER: the login this target must use (default the fleet's).
 node_check(){
-    local want="$1" st="$2" p=() x files expect fleet="badips_runtime@$PGB_VIP:6432/homelab"
+    local want="$1" st="$2" dbu="${3:-badips_runtime}" p=() x files expect fleet
+    fleet="$dbu@$PGB_VIP:6432/homelab"
     sf(){ printf '%s\n' "${st% first_warn=*}" | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1; }
     [ "$st" = unreachable ] && { echo unreachable; return 1; }
     [ -z "$EXPECT_VERSION" ] || [ "$(sf version)" = "$EXPECT_VERSION" ] || p+=("version $(sf version), want $EXPECT_VERSION")
     [ "$(sf config)" = ok ]       || p+=("configuration REFUSED (sudo bad_ips --test-config says why)")
     [ "$(sf role)" = "$want" ]    || p+=("role $(sf role), want $want")
     [ "$(sf mainconf)" = absent ] || p+=("/usr/local/etc/badips.conf present")
+    [ "$(sf conffiles)" = 0 ]     || p+=("$(sf conffiles) shipped config file(s) edited (dpkg -V bad-ips); --install restores them")
     files="$(sf files)"; expect="$SHIPPED_CONF 94-role.conf 95-fleet.conf"; [ "$want" = off ] || expect="$expect 96-fleet-db.conf"
     for x in ${files//,/ }; do case " $expect " in *" $x "*) ;; *) p+=("unexpected badips.d/$x") ;; esac; done
     for x in $expect; do case ",$files," in *",$x,"*) ;; *) p+=("missing badips.d/$x") ;; esac; done
@@ -433,6 +542,53 @@ do_db(){
     n="$(printf "PGPASSWORD='%s' psql 'host=%s port=6432 dbname=homelab user=badips_runtime sslmode=prefer' -tAXc 'SELECT count(*) FROM jailed_ips'\n" "$BADIPS_DB_PASSWORD" "$PGB_VIP" \
           | rsh "$leader" "bash -s" 2>&1 | tr -d '[:space:]')"
     if [[ "$n" =~ ^[0-9]+$ ]]; then ok "the runtime login reads the list through pgbouncer ($n rows)"; else bad "runtime login through pgbouncer: $n"; fi
+}
+
+# ============================================================================
+# --db-login ALIAS  (post-cutover #61: a legacy host's own login)
+# ============================================================================
+do_db_login(){
+    local alias="$1" role secret leader exists pw scram p n
+    load_site
+    is_legacy "$alias" && legacy_spec "$alias" >/dev/null || die "--db-login takes a legacy host alias from LEGACY_HOSTS in $SITE (e.g. jumper)"
+    [ "$(legacy_role "$alias")" != off ] || die "$alias has role off in LEGACY_HOSTS: an off host uses no database login"
+    role="$(db_user_for "$alias")"; secret="$(secret_file_for "$alias")"
+    say "$alias: its own login on the shared ban list, $role (a member of badips_runtime: the same rights, revocable alone)"
+    leader="$(find_leader)" || die "no Patroni leader among $DB_NODES"
+    ok "Patroni leader: prod-homelab$leader"
+    rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT 1 FROM pg_roles WHERE rolname = 'badips_runtime'\"" | grep -q 1 \
+        || die "no login badips_runtime on the database: run --db first"
+    exists="$(rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT 1 FROM pg_roles WHERE rolname = '$role'\"" | tr -d '[:space:]')"
+    if [ "$exists" = 1 ] && [ -f "$secret" ]; then
+        load_secret_for "$alias"; pw="$DB_PASS"
+        ok "login $role already exists; its password is kept ($secret)"
+    else
+        [ "$exists" != 1 ] || warn "login $role exists but $secret is missing: giving it a new password (re-run --install $alias afterwards)"
+        pw="$(openssl rand -hex 20)"
+        # the password travels on stdin, never on a command line
+        { printf "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '%s') THEN CREATE ROLE %s LOGIN; END IF; END \$\$;\n" "$role" "$role"
+          printf "ALTER ROLE %s PASSWORD '%s';\n" "$role" "$pw"
+          printf "ALTER ROLE %s IN DATABASE homelab SET search_path = badips;\n" "$role"
+          printf "GRANT badips_runtime TO %s;\n" "$role"; } \
+          | rsh "$leader" "sudo -u postgres psql -d homelab -X -q -v ON_ERROR_STOP=1" || die "creating the login failed"
+        ( umask 077; printf "# bad-ips shared ban list: %s's OWN login, %s -- a member of badips_runtime (same rights).\n# Revoke it alone with: ALTER ROLE %s NOLOGIN. Written by badips-orchestrate.sh --db-login on %s. Not in git.\nBADIPS_DB_USER='%s'\nBADIPS_DB_PASSWORD='%s'\n" \
+            "$alias" "$role" "$role" "$(date -Is)" "$role" "$pw" > "$secret" )
+        ok "login $role created as a member of badips_runtime (password saved to $secret)"
+    fi
+    [ "$(rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT pg_has_role('$role', 'badips_runtime', 'MEMBER')\"" | tr -d '[:space:]')" = t ] \
+        && ok "$role is a member of badips_runtime" || bad "$role is NOT a member of badips_runtime"
+    scram="$(rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT rolpassword FROM pg_authid WHERE rolname = '$role'\"" | tr -d '[:space:]')"
+    [ -n "$scram" ] || die "could not read $role's SCRAM secret"
+    for p in $PGB_NODES; do
+        printf "homelab-bootstrap-pgbouncer-entry --role %s --scram-secret '%s' --pgbouncer-host localhost\n" "$role" "$scram" \
+            | rsh "$p" "sudo bash -s" >/dev/null 2>&1 && ok "registered with pgbouncer on prod-homelab$p" || bad "pgbouncer registration on prod-homelab$p"
+    done
+    # end to end, as the host's daemon will connect: its own login, through the VIP, reading and able to report
+    n="$(printf "PGPASSWORD='%s' psql 'host=%s port=6432 dbname=homelab user=%s sslmode=prefer' -tAXc 'SELECT count(*) FROM jailed_ips'\n" "$pw" "$PGB_VIP" "$role" \
+          | rsh "$leader" "bash -s" 2>&1 | tr -d '[:space:]')"
+    if [[ "$n" =~ ^[0-9]+$ ]]; then ok "$role reads the list through pgbouncer ($n rows)"; else bad "$role through pgbouncer: $n"; fi
+    [ "$(rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT has_table_privilege('$role', 'badips.jailed_ips', 'INSERT')\"" | tr -d '[:space:]')" = t ] \
+        && ok "$role can report (INSERT on jailed_ips, inherited)" || bad "$role cannot INSERT on jailed_ips"
 }
 
 # ============================================================================
@@ -594,18 +750,19 @@ do_install(){
             echo "FAILED installing (see /tmp/badips-install.log on the node)" > "$tmp/$n"; return
         fi
         st="$(node_status "$n")"
-        if why="$(node_check "$role" "$st")"; then echo "ok|$(node_brief "$st")" > "$tmp/$n"; else echo "WRONG: $why" > "$tmp/$n"; fi
+        if why="$(node_check "$role" "$st" "$(db_user_for "$n")")"; then echo "ok|$(node_brief "$st")" > "$tmp/$n"; else echo "WRONG: $why" > "$tmp/$n"; fi
     }
     report(){
-        local n r role lo
+        local n r role lo rs
         for n in "$@"; do
             n="$(nn "$n")"; role="$(role_for "$n")"; r="$(cat "$tmp/$n" 2>/dev/null || echo 'no result')"
             lo="$(grep -c '^removed the known leftover' "$tmp/$n.log" 2>/dev/null)"; lo="${lo:-0}"
+            rs="$(grep '^restored shipped file' "$tmp/$n.log" 2>/dev/null | head -1)"
             case "$r" in
-                unreachable) case " $EDGES " in *" $n "*) warn "prod-homelab$n: powered off (parked edge) -- done in the rotation pass" ;;
-                                               *) bad "prod-homelab$n: unreachable" ;; esac ;;
-                ok\|*)       ok  "prod-homelab$n ($role): ${r#ok|}$([ "$lo" -gt 0 ] && echo "; removed $lo leftover file(s)")" ;;
-                *)           bad "prod-homelab$n ($role): $r" ;;
+                unreachable) case " $EDGES " in *" $n "*) warn "$(label "$n"): powered off (parked edge) -- done in the rotation pass" ;;
+                                               *) bad "$(label "$n"): unreachable" ;; esac ;;
+                ok\|*)       ok  "$(label "$n") ($role): ${r#ok|}$([ "$lo" -gt 0 ] && echo "; removed $lo leftover file(s)")${rs:+; $rs}" ;;
+                *)           bad "$(label "$n") ($role): $r" ;;
             esac
         done
     }
@@ -626,34 +783,36 @@ do_install(){
 do_role(){
     local n role; n="$(nn "$1")"; role="$2"
     case "$role" in block|watch|report|off) ;; *) die "role must be block, watch, report or off" ;; esac
-    load_site; [ "$role" = off ] || load_secret
-    say "prod-homelab$n -> $role"
+    load_site; [ "$role" = off ] || load_secret_for "$n"
+    case "$role" in block|watch) [ -n "$(ifaces_for "$n")" ] || die "$(label "$n") has no block interfaces (LEGACY_HOSTS: alias=block:eth1,...)" ;; esac
+    say "$(label "$n") -> $role"
     write_config "$n" "$role" || die "could not write the config"
     rsh "$n" "sudo dpkg-reconfigure -f noninteractive bad-ips" >/dev/null 2>&1 || bad "dpkg-reconfigure"
     local st why; st="$(node_status "$n")"
-    if why="$(node_check "$role" "$st")"; then ok "$(node_brief "$st")"; else bad "prod-homelab$n: $why"; fi
+    if why="$(node_check "$role" "$st" "$(db_user_for "$n")")"; then ok "$(node_brief "$st")"; else bad "$(label "$n"): $why"; fi
 }
 
 do_verify(){
     local nodes=("$@"); [ ${#nodes[@]} -eq 0 ] && mapfile -t nodes < <(all_nodes)
+    load_site                                           # roles of legacy targets
     EXPECT_VERSION="${EXPECT_VERSION:-$(repo_version)}"
     say "bad-ips ${EXPECT_VERSION:-?} on ${#nodes[@]} node(s), each against what its role needs"
     local n st want why r
     for n in "${nodes[@]}"; do
         n="$(nn "$n")"
-        if ! up "$n"; then case " $EDGES " in *" $n "*) warn "prod-homelab$n: powered off (parked edge)" ;; *) bad "prod-homelab$n: unreachable" ;; esac; continue; fi
+        if ! up "$n"; then case " $EDGES " in *" $n "*) warn "$(label "$n"): powered off (parked edge)" ;; *) bad "$(label "$n"): unreachable" ;; esac; continue; fi
         st="$(node_status "$n")"; want="$(role_for "$n")"
-        # an edge may be watching or blocking (--role NN block switches it)
-        case " $EDGES " in *" $n "*) r="$(printf '%s\n' "$st" | tr ' ' '\n' | sed -n 's/^role=//p')"; case "$r" in block|watch) want="$r" ;; esac ;; esac
-        if why="$(node_check "$want" "$st")"; then ok "prod-homelab$n ($want): $(node_brief "$st")"; else bad "prod-homelab$n ($want): $why"; fi
-        case " $EDGES " in *" $n "*)
+        # a block host (an edge, or a legacy block host) may be watching or blocking (--role X block switches it)
+        if is_block_host "$n"; then r="$(printf '%s\n' "$st" | tr ' ' '\n' | sed -n 's/^role=//p')"; case "$r" in block|watch) want="$r" ;; esac; fi
+        if why="$(node_check "$want" "$st" "$(db_user_for "$n")")"; then ok "$(label "$n") ($want): $(node_brief "$st")"; else bad "$(label "$n") ($want): $why"; fi
+        if is_block_host "$n"; then
             rsh "$n" 'sudo nft list table inet badips >/dev/null 2>&1 && command -v jq >/dev/null || exit 0
                       c(){ sudo nft -j list set inet badips "$1" 2>/dev/null | jq "[.nftables[] | select(.set) | .set.elem // [] | length] | add // 0"; }
                       echo "    blocking: $(c badipv4) addresses, $(c feedv4) + $(c feedv6) feed ranges; never-block $(c never_block) + $(c never_block_v6)"
                       sudo nft list chain inet badips preroute_block 2>/dev/null | grep -E "counter packets [1-9]" | sed "s/^\s*/    drops: /"'
-            # what a WATCHING edge would block (on a blocking edge that line is stale)
-            [ "$want" = watch ] && rsh "$n" 'sudo grep "watch mode: would block" /var/log/bad_ips/bad_ips.log 2>/dev/null | tail -1 | cut -d"|" -f1,6- | sed "s/^/    /"' ;;
-        esac
+            # what a WATCHING block host would block (on a blocking one that line is stale)
+            [ "$want" = watch ] && rsh "$n" 'sudo grep "watch mode: would block" /var/log/bad_ips/bad_ips.log 2>/dev/null | tail -1 | cut -d"|" -f1,6- | sed "s/^/    /"'
+        fi
     done
     local leader; leader="$(find_leader)" && \
         printf '  shared list: %s active bans\n' "$(rsh "$leader" "sudo -u postgres psql -d homelab -tAXc \"SELECT count(DISTINCT ip) FROM badips.jailed_ips WHERE expires_at > extract(epoch FROM now())\"" 2>/dev/null | tr -d '[:space:]')"
@@ -789,24 +948,28 @@ while [ $# -gt 0 ]; do
         *) args+=("$1"); shift ;;
     esac
 done
+# every target must be a node number or a legacy alias from LEGACY_HOSTS
+check_targets(){ local a; load_site; for a in "$@"; do is_legacy "$a" && { legacy_spec "$a" >/dev/null || die "'$a' is neither a node number nor an alias in LEGACY_HOSTS ($SITE)"; }; done; }
+case "$cmd" in --install|--verify) check_targets "${args[@]}" ;; --role|--print-config|--db-login) [ ${#args[@]} -ge 1 ] && check_targets "${args[0]}" ;; esac
 case "$cmd" in
     --db)             do_db ;;
     --grafana-db)     do_grafana_db ;;
     --api-grants)     do_api_grants ;;
     --proving-ground) do_proving_ground ;;
     --install)        do_install "$DEB" "${args[@]}" ;;
-    --role)           [ ${#args[@]} -eq 2 ] || die "usage: --role NN block|watch|report|off"; do_role "${args[0]}" "${args[1]}" ;;
+    --db-login)       [ ${#args[@]} -eq 1 ] || die "usage: --db-login ALIAS"; do_db_login "${args[0]}" ;;
+    --role)           [ ${#args[@]} -eq 2 ] || die "usage: --role NN|ALIAS block|watch|report|off"; do_role "${args[0]}" "${args[1]}" ;;
     --verify)         do_verify "${args[@]}" ;;
     --static-realip)  do_static_realip ;;
     --deploy-web)     do_deploy_web ;;
     --publish)        do_publish "$DEB" ;;
     --rollout)        do_rollout "$DEB" ;;
     --continue)       do_continue ;;
-    --print-config)   [ ${#args[@]} -eq 1 ] || die "usage: --print-config NN"
-                      load_site; BADIPS_DB_PASSWORD='********'
-                      r="$(role_for "$(nn "${args[0]}")")"
-                      echo "### prod-homelab$(nn "${args[0]}"): role $r"
-                      echo "### $CONFDIR/94-role.conf";  conf_role "$r"
+    --print-config)   [ ${#args[@]} -eq 1 ] || die "usage: --print-config NN|ALIAS"
+                      load_site; t="$(nn "${args[0]}")"; name=''; is_legacy "$t" && name="$t"
+                      r="$(role_for "$t")"; DB_USER="$(db_user_for "$t")"; DB_PASS='********'
+                      echo "### $(label "$t"): role $r"
+                      echo "### $CONFDIR/94-role.conf";  conf_role "$r" "$(ifaces_for "$t")" "$name"
                       echo "### $CONFDIR/95-fleet.conf"; conf_fleet
                       [ "$r" = off ] && echo "### (no 96-fleet-db.conf: role off does not use the database)" \
                                      || { echo "### $CONFDIR/96-fleet-db.conf"; conf_db; }
