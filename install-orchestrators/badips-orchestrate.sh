@@ -51,6 +51,11 @@
 #       read-only: every node against node_check (version, role, files,
 #       database and whether the daemon itself connected to it, service,
 #       firewall table); the edge's ban/feed counts; the shared list's count.
+#   ./badips-orchestrate.sh --upgrade [NN|ALIAS ...]
+#       the package only (apt-get --only-upgrade), where it is installed,
+#       roles untouched -- a blocking edge keeps blocking. Use this for a
+#       version bump; --install on the live edge would reset it to watch.
+#       Each target is checked afterwards; stops at the first wrong one.
 #   ./badips-orchestrate.sh --publish [--deb FILE]
 #       the fleet repo (with FILE added, if given) to prod-homelab45, then
 #       asks apt on a fleet node, through aptcacher, what it now offers.
@@ -252,7 +257,7 @@ conf_role(){
         report) printf '# Reports attackers to the shared ban list; never blocks.\nrole = report\n' ;;
         off)    printf '# Installed and configured, switched off.\nrole = off\n' ;;
     esac
-    [ -z "$name" ] || printf '# A legacy host, not a prod-homelabNN: this is the name on the shared list.\nhost_name = %s\n' "$name"
+    [ -z "$name" ] || printf '# A legacy host, not a prod-homelabNN: this is the name on the shared list,\n# and it has no node-exporter textfile directory to publish numbers into.\nhost_name = %s\nmetrics_dir =\n' "$name"
 }
 conf_fleet(){
     printf '%s\n# Identical on every node.\n[global]\nnever_block_cidrs = %s\n' "$HDR" "$NEVER_BLOCK"
@@ -792,6 +797,31 @@ do_role(){
     if why="$(node_check "$role" "$st" "$(db_user_for "$n")")"; then ok "$(node_brief "$st")"; else bad "$(label "$n"): $why"; fi
 }
 
+# --upgrade: the package only, on nodes that have it, roles untouched. The
+# postinst keeps whatever 94-role.conf says, so a blocking edge keeps blocking
+# (--install would rewrite it to watch: the item 43 trap). Stops at the first
+# node that is not right afterwards.
+do_upgrade(){
+    local nodes=("$@"); [ ${#nodes[@]} -eq 0 ] && mapfile -t nodes < <(all_nodes)
+    load_site
+    EXPECT_VERSION="${EXPECT_VERSION:-$(repo_version)}"
+    say "bad-ips ${EXPECT_VERSION:-?}: upgrading the package where it is installed (${#nodes[@]} target(s)), roles untouched"
+    local n v st want why r
+    for n in "${nodes[@]}"; do
+        n="$(nn "$n")"
+        if ! up "$n"; then case " $EDGES " in *" $n "*) warn "$(label "$n"): powered off (parked edge) -- upgraded in the rotation pass" ;; *) bad "$(label "$n"): unreachable" ;; esac; continue; fi
+        v="$(rsh "$n" "dpkg-query -W -f='\${Version}' bad-ips 2>/dev/null")"
+        [ -n "$v" ] || { warn "$(label "$n"): bad-ips not installed -- skipped"; continue; }
+        if [ "$v" = "$EXPECT_VERSION" ]; then ok "$(label "$n"): already $v"; continue; fi
+        rsh "$n" "sudo apt-get update -qq >/tmp/badips-upgrade.log 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --only-upgrade bad-ips >>/tmp/badips-upgrade.log 2>&1" \
+            || { bad "$(label "$n"): the upgrade failed (see /tmp/badips-upgrade.log there); stopping"; return; }
+        st="$(node_status "$n")"; want="$(role_for "$n")"
+        if is_block_host "$n"; then r="$(printf '%s\n' "$st" | tr ' ' '\n' | sed -n 's/^role=//p')"; case "$r" in block|watch) want="$r" ;; esac; fi
+        if why="$(node_check "$want" "$st" "$(db_user_for "$n")")"; then ok "$(label "$n") ($want): $v -> $(node_brief "$st")"
+        else bad "$(label "$n") ($want): $why"; echo "  ${R}stopped: the targets after this one were not touched${O}"; return; fi
+    done
+}
+
 do_verify(){
     local nodes=("$@"); [ ${#nodes[@]} -eq 0 ] && mapfile -t nodes < <(all_nodes)
     load_site                                           # roles of legacy targets
@@ -950,7 +980,7 @@ while [ $# -gt 0 ]; do
 done
 # every target must be a node number or a legacy alias from LEGACY_HOSTS
 check_targets(){ local a; load_site; for a in "$@"; do is_legacy "$a" && { legacy_spec "$a" >/dev/null || die "'$a' is neither a node number nor an alias in LEGACY_HOSTS ($SITE)"; }; done; }
-case "$cmd" in --install|--verify) check_targets "${args[@]}" ;; --role|--print-config|--db-login) [ ${#args[@]} -ge 1 ] && check_targets "${args[0]}" ;; esac
+case "$cmd" in --install|--verify|--upgrade) check_targets "${args[@]}" ;; --role|--print-config|--db-login) [ ${#args[@]} -ge 1 ] && check_targets "${args[0]}" ;; esac
 case "$cmd" in
     --db)             do_db ;;
     --grafana-db)     do_grafana_db ;;
@@ -960,6 +990,7 @@ case "$cmd" in
     --db-login)       [ ${#args[@]} -eq 1 ] || die "usage: --db-login ALIAS"; do_db_login "${args[0]}" ;;
     --role)           [ ${#args[@]} -eq 2 ] || die "usage: --role NN|ALIAS block|watch|report|off"; do_role "${args[0]}" "${args[1]}" ;;
     --verify)         do_verify "${args[@]}" ;;
+    --upgrade)        do_upgrade "${args[@]}" ;;
     --static-realip)  do_static_realip ;;
     --deploy-web)     do_deploy_web ;;
     --publish)        do_publish "$DEB" ;;
