@@ -60,27 +60,28 @@ echo "  staged $(du -h "$STAGE/edge.tar" | cut -f1) from $SRC"
 say "[3/5] push configs onto $TGT"
 cat "$STAGE/edge.tar" | ssh "$TGT" 'sudo tar -C / -xf - && echo "  unpacked edge configs + certs"'
 
-say "[4/5] edge firewall drop-in (mail in + plex egress) + ensure include + reload"
+say "[4/5] edge firewall: the live edge's base file + the canonical plex drop-in, then reload"
+# The three edges' firewall files must be IDENTICAL (edge-firewall-unify.sh
+# checks that; edge-rotate.sh lists any difference as drift). The base file
+# /etc/nftables.conf already opens the mail ports and keeps SSH closed on
+# every edge since 2026-11-02, so it is cloned from the source as it is, and
+# the only drop-in of the edge's own is 60-plex-egress.nft (one uncommented
+# rule, files/edge-60-plex-egress.nft). Until 2026-11-08 this step wrote a
+# 20-edge-public.nft with a mail-in accept and a commented plex rule instead,
+# which is exactly the drift unify.sh removed.
+ssh "$SRC" "sudo cat /etc/nftables.conf" > "$STAGE/nftables.conf"
+[ -s "$STAGE/nftables.conf" ] || { echo "could not read /etc/nftables.conf from $SRC"; exit 1; }
+grep -q 'include "/etc/nftables.d/\*"' "$STAGE/nftables.conf" || { echo "the source base file has no nftables.d include -- stopping"; exit 1; }
+ssh "$TGT" 'sudo tee /etc/nftables.conf >/dev/null' < "$STAGE/nftables.conf"
+ssh "$TGT" 'sudo tee /etc/nftables.d/60-plex-egress.nft >/dev/null && sudo chmod 644 /etc/nftables.d/60-plex-egress.nft' \
+    < "$(dirname "$0")/files/edge-60-plex-egress.nft"
 ssh "$TGT" 'set -e
-  # base include present? (so drop-ins load at boot)
-  grep -q "include \"/etc/nftables.d/\*\"" /etc/nftables.conf || \
-    { echo "include \"/etc/nftables.d/*\"" | sudo tee -a /etc/nftables.conf >/dev/null; echo "  added nftables.d include"; }
-  # ADDITIVE edge delta: open the mail ports on input (53/80/443 already open
-  # on this node; keep its own :22). The cloned 60-plex-egress.nft handles the
-  # plex output rule.
-  sudo tee /etc/nftables.d/20-edge-public.nft >/dev/null <<'"'"'NFT'"'"'
-# Managed by edge-standby-provision.sh -- edge deltas, ADDITIVE to the base
-# chains (the node keeps its own :22 accept for mgmt SSH).
-#  - input: open the mail ports (53/80/443 already open in the base)
-#  - output: allow egress to the plex backend (10.10.0.106:32400 is on the
-#    10.10 data plane, not covered by the base intra-fleet accepts)
-add rule inet filter input tcp dport { 25, 143, 587, 993 } accept comment "homelab-edge-mail-in"
-add rule inet filter output ip daddr 10.10.0.106 tcp dport 32400 accept comment "homelab-plex-egress"
-NFT
+  sudo rm -f /etc/nftables.d/20-edge-public.nft
   # atomic reload of base + all drop-ins (no live public traffic on a standby,
   # so a flush+reload here is safe and avoids duplicate appended rules)
-  sudo nft -f /etc/nftables.conf
-  echo "  firewall reloaded; public input now:"; sudo nft list chain inet filter input | grep -E "dport|plex" | head'
+  sudo nft -c -f /etc/nftables.conf && sudo nft -f /etc/nftables.conf
+  echo "  firewall reloaded; public input now:"; sudo nft list chain inet filter input | grep -E "dport" | head
+  echo "  plex egress:"; sudo nft list chain inet filter output | grep -F 10.10.0.106'
 
 say "[5/5] free :53 for dnsdist + (re)start & verify edge services on $TGT"
 ssh "$TGT" 'set -e

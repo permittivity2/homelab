@@ -252,7 +252,10 @@ if (@dvips) {
 # base chain (otherwise it's unnecessary and the boot-time include would
 # reference a chain that may not exist).
 if (-d '/etc/nftables.d') {
-    my $peerset = join(', ', @peers, $c->{unicast_src});
+    # Sorted, so the set reads the same on every node of a group: "peers,
+    # then self" made the three edges' copies of this file differ in element
+    # order only, and every rotation listed it as drift (fixed in 0.1.5).
+    my $peerset = join(', ', sort { _ip_key($a) cmp _ip_key($b) } @peers, $c->{unicast_src});
     my $have_out = (qx{nft list chain inet filter output 2>/dev/null} // '') =~ /policy\s+drop/;
 
     my $body = "# Managed by homelab-keepalived -- regenerated from $CFG.\n"
@@ -335,6 +338,13 @@ if (system(qw(systemctl is-active --quiet keepalived)) == 0) {
     }
 }
 exit 0;
+
+# A sort key that orders dotted quads numerically (10.50.2.9 before
+# 10.50.2.144); anything else (an IPv6 peer) sorts as text after them.
+sub _ip_key {
+    my ($ip) = @_;
+    return $ip =~ /\A(\d+)\.(\d+)\.(\d+)\.(\d+)\z/ ? sprintf('0%03d%03d%03d%03d', $1, $2, $3, $4) : "1$ip";
+}
 
 sub _nft_delete_by_comment {
     my ($chain, $comment) = @_;

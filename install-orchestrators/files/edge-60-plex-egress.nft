@@ -1,0 +1,1 @@
+add rule inet filter output ip daddr 10.10.0.106 tcp dport 32400 accept

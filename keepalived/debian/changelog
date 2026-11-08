@@ -1,3 +1,13 @@
+homelab-keepalived (0.1.5) unstable; urgency=medium
+
+  * The VRRP firewall drop-in (/etc/nftables.d/15-homelab-vrrp.nft) lists
+    the peer set sorted numerically. "Peers, then self" made each node of a
+    group write the same three addresses in a different order, so the three
+    edges' firewall files differed in that one file and every rotation
+    listed it as drift. Same rules, same packets; only the text changed.
+
+ -- Gardner <gardner@homelab>  Sun, 08 Nov 2026 09:20:00 -0600
+
 homelab-keepalived (0.1.4) unstable; urgency=medium
 
   * Release v0.1.4
