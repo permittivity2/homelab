@@ -342,6 +342,20 @@
     // [{id,email,active,roles}] for >=3-char queries, capped).
     function hlEsc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
     function hlDebounce(fn, ms) { var t; return function () { var a = arguments, self = this; clearTimeout(t); t = setTimeout(function () { fn.apply(self, a); }, ms); }; }
+    // Timestamps arrive as Postgres prints them: "2026-11-09 10:14:34.326241-06"
+    // (space separator, microseconds, bare hour offset). Date() rejects that
+    // form (NaN), which once made a 30-minute-old DMARC ingest read "over a
+    // day ago" and left raw microsecond stamps on the page. Normalise to ISO
+    // 8601 first; a string that is already ISO passes through unchanged.
+    function hlDate(ts) {
+      if (ts == null || ts === '') return null;
+      var s = String(ts).trim();
+      if (/^\d{4}-\d{2}-\d{2} \d/.test(s)) s = s.replace(' ', 'T');
+      if (/T\d{2}:\d{2}/.test(s)) s = s.replace(/(\.\d{3})\d+/, '$1').replace(/([+-]\d{2})$/, '$1:00');
+      var d = new Date(s);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    function hlWhen(ts) { var d = hlDate(ts); return d ? d.toLocaleString() : (ts == null || ts === '' ? '—' : String(ts)); }
     function hlFetchUsers(q) {
       if (!q || q.length < 3) return Promise.resolve([]);
       return fetch('/admin/users/search?q=' + encodeURIComponent(q), { headers: { 'Accept': 'application/json' } })
@@ -996,11 +1010,7 @@
         var inflight = false;
 
         function num(n) { return (n === null || n === undefined) ? '—' : Number(n).toLocaleString(); }
-        function when(ts) {
-          if (!ts) return '—';
-          var d = new Date(ts.replace(' ', 'T'));
-          return isNaN(d) ? ts : d.toLocaleString();
-        }
+        function when(ts) { return hlWhen(ts); }
         function td(v, cls) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>'; }
         function row(cells) { return '<tr>' + cells.join('') + '</tr>'; }
         function empty(body, cols, msg) {
@@ -1018,7 +1028,8 @@
               'it stays idle until <code>dmarc_reports.enabled</code> is set in that package’s config.';
             return;
           }
-          var age = (Date.now() - new Date(String(ing.last_run).replace(' ', 'T')).getTime()) / 3600000;
+          var last = hlDate(ing.last_run);
+          var age = last ? (Date.now() - last.getTime()) / 3600000 : NaN;
           // 25h, not 1h: the timer is hourly but receivers only send daily,
           // so "nothing new for an hour" is normal and must not look alarming.
           if (!(age < 25)) el.classList.add('stale');
@@ -1121,7 +1132,7 @@
         var whyCard = document.getElementById('badips-why-card');
         var inflight = false;
         function say(text, ok) { msg.innerHTML = text ? '<p style="margin:0 0 0.6rem;color:' + (ok ? 'var(--ok)' : 'var(--danger)') + '">' + hlEsc(text) + '</p>' : ''; }
-        function when(ts) { if (!ts) return '—'; var d = new Date(ts); return isNaN(d) ? ts : d.toLocaleString(); }
+        function when(ts) { return hlWhen(ts); }
         function getJSON(path) {
           return fetch(path, { headers: { 'Accept': 'application/json' } })
             .then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
@@ -1408,8 +1419,8 @@
       function truthy(v) { return v === true || v === 1 || v === 't' || v === '1'; }
       function heartbeatAge(s) {
         if (!s) return { txt: 'never', cls: 'var(--danger)' };
-        var d = new Date(String(s).replace(' ', 'T'));
-        if (isNaN(d.getTime())) return { txt: hlEsc(String(s).slice(0, 19)), cls: 'var(--muted)' };
+        var d = hlDate(s);
+        if (!d) return { txt: hlEsc(String(s).slice(0, 19)), cls: 'var(--muted)' };
         var mins = Math.round((Date.now() - d.getTime()) / 60000);
         var txt = mins < 1 ? 'just now' : mins < 60 ? (mins + ' min ago') : mins < 1440 ? (Math.round(mins / 60) + ' h ago') : (Math.round(mins / 1440) + ' d ago');
         return { txt: txt, cls: mins <= 5 ? 'var(--ok)' : mins <= 30 ? '#c90' : 'var(--danger)' };
