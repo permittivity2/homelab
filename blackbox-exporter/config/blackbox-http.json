@@ -2,13 +2,24 @@
   {
     "labels": { "probe": "http_public" },
     "targets": [
-      "https://myaccount.test.mailmasker.org",
-      "https://login.test.mailmasker.org",
-      "https://drive.test.mailmasker.org",
-      "https://mail.test.mailmasker.org",
-      "https://invite.test.mailmasker.org",
-      "https://api.test.mailmasker.org",
-      "https://blockemail.test.mailmasker.org"
+      "https://mailmasker.org",
+      "https://www.mailmasker.org",
+      "https://myaccount.mailmasker.org",
+      "https://login.mailmasker.org",
+      "https://mail.mailmasker.org",
+      "https://drive.mailmasker.org",
+      "https://search.mailmasker.org",
+      "https://invite.mailmasker.org",
+      "https://api.mailmasker.org",
+      "https://blockemail.mailmasker.org",
+      "https://developer.mailmasker.org",
+      "https://static.mailmasker.org",
+      "https://projects.thedude.vip",
+      "https://plex.forge.name",
+      "https://silverlinings.llc",
+      "https://www.silverlinings.llc",
+      "https://silverliningsllc.com",
+      "https://www.silverliningsllc.com"
     ]
   }
 ]

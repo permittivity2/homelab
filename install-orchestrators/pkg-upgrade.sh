@@ -27,20 +27,39 @@ bad(){ echo "  ${R}FAIL${O} $*"; }
 warn(){ echo "  ${Y}warn${O} $*"; }
 step(){ echo; echo "=== $* ==="; }
 
-DRY=0; PKG=""; NODES=()
+USAGE="usage: pkg-upgrade.sh [--dry-run] PACKAGE NN [NN ...]   |   pkg-upgrade.sh [--dry-run] PACKAGE --all"
+DRY=0; ALL=0; PKG=""; NODES=()
 for a in "$@"; do
     case "$a" in
         --dry-run) DRY=1 ;;
+        --all) ALL=1 ;;
         [0-9]|[0-9][0-9]) NODES+=("$(printf '%02d' "$((10#$a))")") ;;
-        -*) echo "unknown option '$a' (usage: pkg-upgrade.sh [--dry-run] PACKAGE NN [NN ...])"; exit 1 ;;
+        -*) echo "unknown option '$a' ($USAGE)"; exit 1 ;;
         *) [ -z "$PKG" ] && PKG="$a" || { echo "one package at a time (got '$PKG' and '$a')"; exit 1; } ;;
     esac
 done
-[ -n "$PKG" ] && [ ${#NODES[@]} -gt 0 ] || { echo "usage: pkg-upgrade.sh [--dry-run] PACKAGE NN [NN ...]"; exit 1; }
+[ -n "$PKG" ] || { echo "$USAGE"; exit 1; }
 
 ip_of(){ printf '10.20.2.%d' "$((144 + 10#$1))"; }
 svc_of(){ printf '10.50.2.%d' "$((144 + 10#$1))"; }
 rssh(){ ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" "${@:2}" 2>/dev/null; }
+
+# --all: every reachable fleet node (00-72) that has the package installed.
+# Nobody should be typing 56 node numbers by hand (homelab-node-exporter is on
+# every monitored node); spares and powered-off nodes drop out of the scan.
+if [ "$ALL" = 1 ]; then
+    [ ${#NODES[@]} -eq 0 ] || { echo "--all and explicit node numbers are exclusive"; exit 1; }
+    step "scanning nodes 00-72 for $PKG"
+    for i in $(seq 0 72); do
+        n=$(printf '%02d' "$i"); ip=$(ip_of "$n")
+        timeout 3 bash -c "echo > /dev/tcp/$ip/22" 2>/dev/null || continue
+        st=$(rssh "$ip" "dpkg-query -W -f='\${Status}' $PKG 2>/dev/null")
+        case "$st" in *"install ok installed"*) NODES+=("$n") ;; esac
+    done
+    [ ${#NODES[@]} -gt 0 ] || { echo "  $PKG is installed on no reachable node"; exit 1; }
+    echo "  ${#NODES[@]} node(s): ${NODES[*]}"
+fi
+[ ${#NODES[@]} -gt 0 ] || { echo "$USAGE"; exit 1; }
 
 # this node's global IPv4 addresses, one per line, sorted
 addrs(){ rssh "$(ip_of "$1")" 'ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | sort'; }

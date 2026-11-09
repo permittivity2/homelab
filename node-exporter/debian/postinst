@@ -48,6 +48,18 @@ case "$1" in
         mkdir -p "$DROPIN_DIR"
         install -m 644 "$SHARE_DIR/systemd/prometheus-node-exporter-textfile.conf" \
             "$DROPIN_DIR/homelab-textfile.conf"
+
+        # --- collector trimming: per-host flags the drop-in reads ---------
+        # Seeded once, then the host's own. The default switches off the zfs
+        # and systemd collectors: inside a container the zfs collector
+        # reports the HYPERVISOR's pools, identically on every container,
+        # which was 47% of all series on this fleet; nothing reads the
+        # systemd unit states (10% more). See the file for the numbers.
+        mkdir -p "$CONFIG_DIR"
+        if [ ! -f "$CONFIG_DIR/collectors" ]; then
+            install -m 644 "$SHARE_DIR/config/collectors.example" "$CONFIG_DIR/collectors"
+            echo "  wrote $CONFIG_DIR/collectors (zfs + systemd collectors off)"
+        fi
         systemctl daemon-reload >/dev/null 2>&1 || true
 
         # --- the exporter itself (Ubuntu package ships + enables it) -----

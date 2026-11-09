@@ -1,0 +1,18 @@
+# homelab-node-exporter: extra node_exporter flags for THIS host.
+#
+# Read by the package's systemd drop-in (EnvironmentFile). Edit, then
+# `systemctl restart prometheus-node-exporter`. Reinstalling keeps this file.
+#
+# Default: the zfs and systemd collectors are OFF. Measured 2026-11-09
+# (post-cutover #18) on a 56-host fleet holding 433k series:
+#  * zfs -- inside an LXC container /proc/spl/kstat/zfs is the HYPERVISOR's
+#    ZFS, so all 46 containers reported pve2's ~150 datasets identically:
+#    46 copies of the same 4,459 series, 205k series, 47% of everything.
+#    The VMs expose nothing there. A host with ZFS of its own can drop
+#    --no-collector.zfs here.
+#  * systemd -- node_systemd_unit_state is every unit x 5 states, ~800
+#    series per host, 45k fleet-wide (10%), and nothing reads it: the
+#    dashboards, alert rules and myaccount's Metrics tab use none of it, and
+#    homelab-agent's homelab_service_up already covers the services that
+#    matter.
+HOMELAB_COLLECTOR_ARGS="--no-collector.zfs --no-collector.systemd"

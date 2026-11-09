@@ -30,11 +30,20 @@ METRICS_NODE="${METRICS_NODE:-69}"
 VIP_PGB="10.50.2.131"
 
 install_on(){   # install_on <pkg> <node...>
-  local pkg="$1"; shift
+  local pkg="$1" n out rc; shift
   for n in "$@"; do
     echo "-- $pkg on $n"
-    ssh -o ConnectTimeout=8 "$(ip_of "$n")" "sudo apt-get update -qq 2>&1 | tail -1
-      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $pkg 2>&1 | grep -iE 'error|warning|configured' " || echo "   !! $n failed"
+    # Judge by apt's exit code, not by whether anything matched a grep: a
+    # package that is already current prints nothing grep-worthy, and the
+    # old form reported every such no-op as "failed" (seen 2026-11-09).
+    out="$(ssh -o ConnectTimeout=8 "$(ip_of "$n")" "sudo apt-get update -qq >/dev/null 2>&1
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $pkg 2>&1")"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "   !! $n failed (exit $rc):"; printf '%s\n' "$out" | tail -6 | sed 's/^/      /'
+      continue
+    fi
+    printf '%s\n' "$out" | grep -iE 'error|warning|configured|already the newest' | sed 's/^/   /'
+    printf '%s\n' "$out" | grep -qiE 'configured|already the newest' || echo "   ok (no output)"
   done
 }
 
@@ -59,8 +68,11 @@ do_install(){
   say "pgbouncer-exporter (VIP holder last)"; install_on homelab-pgbouncer-exporter $(pgb_vip_last)
   say "dovecot-metrics (backups first)";   install_on homelab-dovecot-metrics 63 64 62
   say "postfix-exporter (mail relays)";    install_on homelab-postfix-exporter 39 40 41
-  say "nginx-exporter (edge 00 + static 45; parked edges get it from edge-standby-provision)"
-  install_on homelab-nginx-exporter 00 45
+  say "nginx-exporter (all three live edges + static 45)"
+  install_on homelab-nginx-exporter 00 01 02 45
+  echo "   NB: 45 runs no homelab-agent, so it is not discovered as a target until it is enrolled."
+  say "blackbox-exporter (public HTTPS probes + cert expiry; runs on the monitoring host)"
+  install_on homelab-blackbox-exporter "$METRICS_NODE"
   echo; echo "Targets appear within ~2 minutes (homelab-prometheus-pull timer). Then: $0 --verify"
 }
 
@@ -76,7 +88,7 @@ do_verify(){
       push @bad, "$j $u" if $_->{health} ne "up";
     }
     my $rc = 0;
-    for my $j (qw(node postgres pgbouncer postfix haproxy dnsdist pdns dovecot nginx)) {
+    for my $j (qw(node postgres pgbouncer postfix haproxy dnsdist pdns dovecot nginx blackbox-http)) {
       my ($t, $u) = ($n{$j} // 0, $up{$j} // 0);
       printf "  %-10s %d target(s), %d up%s\n", $j, $t, $u, $t ? "" : "   <-- NO TARGETS";
       $rc = 1 unless $t;

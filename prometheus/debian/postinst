@@ -29,10 +29,31 @@ METRICS_CONSUMERS="10.50.2.61"
 EOF
             echo "  wrote $HL_CONFIG"
         fi
+        # TSDB storage knobs (0.8.0). Appended to a pre-0.8.0 config with the
+        # values the old drop-in hardcoded, so nothing changes until someone
+        # edits them -- but they are now visible and editable where the other
+        # parameters live, instead of needing a hand drop-in that sorts after
+        # ours (what prod-homelabvm69 had to do on 2026-10-28).
+        if ! grep -q '^TSDB_PATH=' "$HL_CONFIG"; then
+            cat >> "$HL_CONFIG" <<'EOF'
+
+# TSDB storage. Point TSDB_PATH at a mount (bind or NFS) to keep more than the
+# local disk allows: the generated unit drop-in then gains RequiresMountsFor,
+# so Prometheus refuses to start with the mount absent instead of writing into
+# the empty directory beneath it. RETENTION_SIZE "0" = no size cap (units: B,
+# KB, MB, GB, TB, PB). Change + dpkg-reconfigure homelab-prometheus to apply.
+TSDB_PATH="/var/lib/prometheus/metrics2"
+RETENTION_TIME="30d"
+RETENTION_SIZE="0"
+EOF
+            echo "  added TSDB_PATH / RETENTION_TIME / RETENTION_SIZE to $HL_CONFIG (previous hardcoded values)"
+        fi
         API_HOST="10.50.2.46"; API_PORT="3000"; FLEET_CIDR="10.50.2.0/24"; METRICS_CONSUMERS="10.50.2.61"
+        TSDB_PATH="/var/lib/prometheus/metrics2"; RETENTION_TIME="30d"; RETENTION_SIZE="0"
         # shellcheck disable=SC1090
         . "$HL_CONFIG" 2>/dev/null || true
         API_BASE="http://$API_HOST:$API_PORT"
+        [ -n "$RETENTION_SIZE" ] || RETENTION_SIZE="0"
 
         # --- config tree (readable by the 'prometheus' service user) -----
         mkdir -p "$PROM_DIR" "$TARGETS_DIR"
@@ -48,9 +69,32 @@ EOF
         chmod 755 "$PROM_DIR" "$TARGETS_DIR" "$PROM_DIR/rules"
         chmod 644 "$PROM_DIR/prometheus.yml" "$PULL_CONFIG" "$PROM_DIR"/rules/*.yml
 
-        # --- point prometheus.service at our config ----------------------
+        # --- point prometheus.service at our config + storage -----------
+        # A TSDB path of our own must exist and belong to the service user
+        # (the stock package only prepares /var/lib/prometheus/metrics2).
+        if [ ! -d "$TSDB_PATH" ]; then
+            mkdir -p "$TSDB_PATH"
+            chown prometheus:prometheus "$TSDB_PATH" 2>/dev/null || true
+        fi
         mkdir -p "$DROPIN_DIR"
-        install -m 644 "$SHARE_DIR/systemd/prometheus-homelab.conf" "$DROPIN_DIR/homelab.conf"
+        MOUNT_NOTE=""
+        {
+            if mountpoint -q "$TSDB_PATH" 2>/dev/null; then
+                MOUNT_NOTE=" (mount required)"
+                printf '[Unit]\n# %s is a mount point: refuse to start without it rather than\n# write into the empty directory underneath (the data would silently split).\nRequiresMountsFor=%s\n\n' "$TSDB_PATH" "$TSDB_PATH"
+            fi
+            sed -e "s#__TSDB_PATH__#$TSDB_PATH#g" \
+                -e "s#__RETENTION_TIME__#$RETENTION_TIME#g" \
+                -e "s#__RETENTION_SIZE__#$RETENTION_SIZE#g" \
+                "$SHARE_DIR/systemd/prometheus-homelab.conf.template"
+        } > "$DROPIN_DIR/homelab.conf"
+        chmod 644 "$DROPIN_DIR/homelab.conf"
+        echo "  storage: $TSDB_PATH, retention $RETENTION_TIME / size cap $RETENTION_SIZE$MOUNT_NOTE"
+        if [ -f "$DROPIN_DIR/zz-homelab-storage.conf" ]; then
+            echo "  NOTE: $DROPIN_DIR/zz-homelab-storage.conf still exists and overrides the"
+            echo "        values above. Move its path/retention into $HL_CONFIG, delete it,"
+            echo "        then: systemctl daemon-reload && systemctl restart prometheus."
+        fi
 
         # --- egress firewall: api + fleet exporter ports -----------------
         if [ -d /etc/nftables.d ]; then

@@ -1,0 +1,18 @@
+# Rendered by homelab-prometheus' postinst into
+# /etc/systemd/system/prometheus.service.d/homelab.conf -- do not hand-edit
+# the result; change /etc/homelab/prometheus/config and dpkg-reconfigure.
+#
+# Overrides the stock Debian prometheus.service so it reads THIS
+# deployment's config (file_sd target files kept in sync with the fleet by
+# homelab-prometheus-pull) instead of the default /etc/prometheus/prometheus.yml.
+# TSDB path and retention come from TSDB_PATH / RETENTION_TIME /
+# RETENTION_SIZE in /etc/homelab/prometheus/config (they were hardcoded here
+# until 0.8.0, which forced a later-sorting hand drop-in on any host that
+# keeps its data on a share). When TSDB_PATH is a mount point the postinst
+# prepends a [Unit] RequiresMountsFor= so Prometheus refuses to start with
+# the mount absent instead of writing into the empty directory beneath it.
+# --web.enable-lifecycle lets the pull step POST /-/reload if ever needed
+# (file_sd is auto-reloaded, so normally it isn't).
+[Service]
+ExecStart=
+ExecStart=/usr/bin/prometheus --config.file=/etc/prometheus/homelab/prometheus.yml --storage.tsdb.path=__TSDB_PATH__ --storage.tsdb.retention.time=__RETENTION_TIME__ --storage.tsdb.retention.size=__RETENTION_SIZE__ --web.listen-address=0.0.0.0:9090 --web.enable-lifecycle

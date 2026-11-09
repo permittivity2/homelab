@@ -15,9 +15,12 @@
 #     empty and Prometheus scrapes only itself.
 #   * homelab-grafana Depends: grafana, which is NOT in the Ubuntu archive.
 #     Grafana's own apt repo has to be added first.
-#   * The TSDB path and retention are hardcoded in the package's systemd
-#     drop-in, so putting the data on a big share needs a bind mount plus a
-#     later-sorting drop-in -- not just a mount.
+#   * The TSDB path and retention are deployment parameters in
+#     /etc/homelab/prometheus/config since homelab-prometheus 0.8.0 (before
+#     that they were hardcoded in the unit drop-in, which forced a
+#     later-sorting hand drop-in). Putting the data on the big share is a
+#     bind mount plus those three settings; the package adds
+#     RequiresMountsFor itself when the path is a mount point.
 #   * PowerDNS only serves /metrics to IPs in webserver-allow-from, which is
 #     maintained from /etc/homelab/dns/metrics-allow-from (default: the dead
 #     10.50.2.63).
@@ -59,6 +62,9 @@ API_HOST="$API_VIP"
 API_PORT="3000"
 FLEET_CIDR="10.50.2.0/24"
 METRICS_CONSUMERS="${ACCOUNTMANAGE//,/ }"
+TSDB_PATH="$TSDB_DST"
+RETENTION_TIME="$RETENTION_TIME"
+RETENTION_SIZE="$RETENTION_SIZE"
 EOF
 # NOTE: comma-separated, NOT space. The postinst drops this straight into a
 # systemd Environment= line, and systemd splits on whitespace -- a space-
@@ -108,18 +114,15 @@ R "sudo -n systemctl stop prometheus
    sudo -n chown -R prometheus:prometheus $TSDB_SRC
    grep -q '$TSDB_DST' /etc/fstab || printf '%s\n' '$TSDB_SRC  $TSDB_DST  none  bind,_netdev  0 0' | sudo -n tee -a /etc/fstab >/dev/null
    mountpoint -q $TSDB_DST || sudo -n mount $TSDB_DST"
-# Sorts AFTER the package's homelab.conf, so this ExecStart wins. The size cap
-# makes Prometheus evict rather than hit the ZFS quota (which would turn into
-# write errors). RequiresMountsFor stops it starting with the share absent and
-# silently writing into the empty local dir under the bind mount.
-R "sudo -n tee /etc/systemd/system/prometheus.service.d/zz-homelab-storage.conf >/dev/null" <<EOF
-[Unit]
-RequiresMountsFor=$TSDB_DST
-
-[Service]
-ExecStart=
-ExecStart=/usr/bin/prometheus --config.file=/etc/prometheus/homelab/prometheus.yml --storage.tsdb.path=$TSDB_DST --storage.tsdb.retention.time=$RETENTION_TIME --storage.tsdb.retention.size=$RETENTION_SIZE --web.listen-address=0.0.0.0:9090 --web.enable-lifecycle
-EOF
+# The path and retention are already in /etc/homelab/prometheus/config (step
+# 1). Now that the path IS a mount point, re-running the package's configure
+# renders the drop-in with RequiresMountsFor, so Prometheus refuses to start
+# with the share absent instead of silently writing into the empty local dir
+# under the bind mount. The size cap makes it evict rather than hit the ZFS
+# quota (which would turn into write errors). No hand drop-in since 0.8.0;
+# remove the pre-0.8.0 one if this host still has it, or it keeps winning.
+R "sudo -n rm -f /etc/systemd/system/prometheus.service.d/zz-homelab-storage.conf
+   sudo -n DEBIAN_FRONTEND=noninteractive dpkg-reconfigure homelab-prometheus 2>&1 | grep -E 'storage:|WARNING|NOTE' | sed 's/^/  /'"
 R "sudo -n systemctl daemon-reload && sudo -n systemctl start prometheus
    sudo -n systemctl start homelab-prometheus-pull.service
    echo -n '  node targets discovered: '; python3 -c 'import json;print(len(json.load(open(\"/etc/prometheus/homelab/targets/node.json\"))[0][\"targets\"]) if json.load(open(\"/etc/prometheus/homelab/targets/node.json\")) else 0)' 2>/dev/null || sudo -n grep -c targets /etc/prometheus/homelab/targets/node.json"

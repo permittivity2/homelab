@@ -1,0 +1,68 @@
+# Alert rules for the public HTTPS probes (blackbox_exporter behind the
+# blackbox-http scrape job). Post-cutover #18 leftover, closed 2026-11-09.
+#
+# WHY THE FIRST RULE EXISTS. The blackbox-http job sat in prometheus.yml for
+# six weeks with a file_sd target file that was never created, because
+# homelab-blackbox-exporter -- which ships that file -- was never installed on
+# the prod monitoring host. Prometheus said nothing: a scrape job with no
+# targets is not an error. These probes are the only "is it reachable over
+# TLS, and when does the certificate run out" signal the fleet has, so their
+# ABSENCE is the first thing worth an alert.
+#
+# NOTE: no Alertmanager yet (see fleet-agent.yml); these show on Prometheus's
+# Alerts page and in /api/v1/rules, and are ready the day one arrives.
+groups:
+  - name: homelab-public-probes
+    rules:
+      - alert: PublicProbesMissing
+        expr: absent(up{job="blackbox-http"})
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No public HTTPS probes are configured on this Prometheus"
+          description: >-
+            The blackbox-http scrape job has no targets. Install
+            homelab-blackbox-exporter on the monitoring host (it ships the
+            target list and the prober modules); until then nothing watches
+            the public vhosts or their certificate expiry.
+
+      - alert: PublicVhostDown
+        expr: probe_success{job="blackbox-http"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} has failed its HTTPS probe for 5 minutes"
+          description: >-
+            The http_public module accepts any served response (redirects,
+            401/403/404) and fails only on no TLS, a bad certificate, a
+            timeout or a 5xx -- so this is nginx, the certificate or the
+            upstream being down, as seen from the monitoring host through the
+            public address.
+
+      - alert: PublicCertExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="blackbox-http"} - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: 'The certificate served by {{ $labels.instance }} expires in {{ $value | printf "%.1f" }} days'
+          description: >-
+            Let's Encrypt renewal runs at 30 days left on the issuer
+            (homelab-cert-server, prod-homelab46) and homelab-certsync carries
+            the result to the hosts that serve the name. Under 14 days means
+            that chain has stalled: check homelab-cert-issue on the issuer and
+            the certsync timer on the edge serving this name.
+
+      - alert: PublicProbeExporterDown
+        expr: up{job="blackbox-http"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "blackbox_exporter did not answer the probe scrape for {{ $labels.instance }}"
+          description: >-
+            The scrape of the exporter itself failed (prometheus-blackbox-exporter
+            on the monitoring host is down or unreachable), so probe_success
+            says nothing right now.

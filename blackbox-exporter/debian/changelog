@@ -1,3 +1,9 @@
+homelab-blackbox-exporter (0.3.0) unstable; urgency=medium
+
+  * Release v0.3.0
+
+ -- Gardner <gardner@homelab>  Mon, 09 Nov 2026 12:08:25 -0600
+
 homelab-blackbox-exporter (0.2.0) unstable; urgency=medium
 
   * Release v0.2.0
