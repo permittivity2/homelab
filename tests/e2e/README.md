@@ -36,15 +36,16 @@ pytest tests/e2e/test_dns_delegation.py
     not a real run.
   - `e2e-suite-live` runs the suite for real (`pytest tests/e2e/`,
     same as "Running" above) against the live `ct-fleet` target, but
-    only on a nightly `schedule:` and on manual `workflow_dispatch` —
-    never on push/PR, since a random PR must not get live SSH
-    credentials into the fleet. It requires a **self-hosted** runner
-    (label `homelab-fleet`) that already has working SSH access to the
-    `ct-fleet` hosts configured — GitHub's hosted runners have no path
-    into this private network at all. As of this writing no such
-    runner is registered against the repo yet (`gh api
-    repos/<owner>/<repo>/actions/runners` returns zero), so
-    `e2e-suite-live` is currently scaffolding: it will queue
-    indefinitely until someone registers that runner. Until then,
-    running the suite for real is still a manual, on-demand step done
-    from a machine with fleet SSH access (see "Running" above).
+    only on manual `workflow_dispatch` — never on push/PR, since a
+    random PR must not get live SSH credentials into the fleet. It
+    requires a **self-hosted** runner (label `homelab-fleet`) that
+    already has working SSH access to the `ct-fleet` hosts configured —
+    GitHub's hosted runners have no path into this private network at
+    all. As of this writing no such runner is registered against the
+    repo (`gh api repos/<owner>/<repo>/actions/runners` returns zero),
+    so `e2e-suite-live` is scaffolding. It has no `schedule:` trigger
+    on purpose: GitHub cancels a queued job nobody picks up within 24 h
+    and fails the run, and a nightly schedule did exactly that every
+    night from 2026-10-26 to 2026-11-09. Until the runner exists,
+    running the suite for real is a manual, on-demand step done from a
+    machine with fleet SSH access (see "Running" above).
