@@ -56,7 +56,10 @@ R "if sudo -n test -f $ZZ; then sudo -n rm -f $ZZ && echo '  removed $ZZ'; else 
    sudo -n systemctl daemon-reload && sudo -n systemctl restart prometheus && echo '  prometheus restarted'"
 
 echo "== [4/4] running flags (must match the old drop-in)"
-sleep 4
-R "echo \"  unit: \$(systemctl is-active prometheus); \$(systemctl show prometheus -p RequiresMountsFor)\"
-   curl -s localhost:9090/api/v1/status/flags | tr ',' '\n' | grep -E 'storage.tsdb.(path|retention.time|retention.size)' | sed 's/^/  /'
+# Prometheus replays its WAL before it answers; on a TSDB this size that is
+# tens of seconds, so wait for /-/ready rather than reading an empty answer.
+R "for i in \$(seq 1 60); do curl -sf -m 2 localhost:9090/-/ready >/dev/null && break; sleep 2; done
+   echo \"  unit: \$(systemctl is-active prometheus); \$(systemctl show prometheus -p RequiresMountsFor)\"
+   curl -s -m 5 localhost:9090/api/v1/status/flags | tr ',' '\n' | grep -E 'storage.tsdb.(path|retention.time|retention.size)' | sed 's/^/  /'
+   echo \"  rule groups: \$(curl -s -m 5 localhost:9090/api/v1/rules | grep -o '\"name\":\"[^\"]*\",\"file\"' | cut -d'\"' -f4 | paste -sd' ' -)\"
    echo \"  drop-ins: \$(ls /etc/systemd/system/prometheus.service.d/)\""
