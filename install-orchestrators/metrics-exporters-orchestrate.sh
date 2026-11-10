@@ -88,7 +88,8 @@ do_verify(){
       push @bad, "$j $u" if $_->{health} ne "up";
     }
     my $rc = 0;
-    for my $j (qw(node postgres pgbouncer postfix haproxy dnsdist pdns dovecot nginx blackbox-http)) {
+    # pdns-recursor = ns03, a static target (STATIC_TARGETS), post-cutover #66.
+    for my $j (qw(node postgres pgbouncer postfix haproxy dnsdist pdns dovecot nginx blackbox-http pdns-recursor)) {
       my ($t, $u) = ($n{$j} // 0, $up{$j} // 0);
       printf "  %-10s %d target(s), %d up%s\n", $j, $t, $u, $t ? "" : "   <-- NO TARGETS";
       $rc = 1 unless $t;

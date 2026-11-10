@@ -48,8 +48,31 @@ RETENTION_SIZE="0"
 EOF
             echo "  added TSDB_PATH / RETENTION_TIME / RETENTION_SIZE to $HL_CONFIG (previous hardcoded values)"
         fi
+        # Static scrape targets (0.9.0): hosts the fleet API does not know,
+        # e.g. ns03 -- the sole resolver, not a fleet member, no agent. The
+        # pull rewrites targets/<job>.json every two minutes and would erase a
+        # hand entry there within one cycle, so these are rendered into a
+        # sibling directory the pull never touches (see below). Appended to a
+        # pre-0.9.0 config so the key is visible where the other parameters
+        # live.
+        if ! grep -q '^STATIC_TARGETS=' "$HL_CONFIG"; then
+            cat >> "$HL_CONFIG" <<'EOF'
+
+# Scrape targets the fleet API does not know about (no homelab-agent on them).
+# Space-separated entries JOB=HOST:ADDRESS:PORT; JOB must be a scrape job in
+# prometheus.yml (node, pdns-recursor, postgres, ...). Rendered on configure
+# into /etc/prometheus/homelab/targets-static/<job>.json with the labels
+# host=HOST and tier=legacy. Example -- ns03, the resolver (post-cutover #66):
+#   STATIC_TARGETS="node=ns03:10.20.0.140:9100 pdns-recursor=ns03:10.20.0.140:8082"
+# Change + dpkg-reconfigure homelab-prometheus to apply
+# (install-orchestrators/metrics-static-targets.sh does both).
+STATIC_TARGETS=""
+EOF
+            echo "  added STATIC_TARGETS to $HL_CONFIG (empty: no static targets until set)"
+        fi
         API_HOST="10.50.2.46"; API_PORT="3000"; FLEET_CIDR="10.50.2.0/24"; METRICS_CONSUMERS="10.50.2.61"
         TSDB_PATH="/var/lib/prometheus/metrics2"; RETENTION_TIME="30d"; RETENTION_SIZE="0"
+        STATIC_TARGETS=""
         # shellcheck disable=SC1090
         . "$HL_CONFIG" 2>/dev/null || true
         API_BASE="http://$API_HOST:$API_PORT"
@@ -68,6 +91,47 @@ EOF
         install -m 644 "$SHARE_DIR"/config/rules/*.yml "$PROM_DIR/rules/"
         chmod 755 "$PROM_DIR" "$TARGETS_DIR" "$PROM_DIR/rules"
         chmod 644 "$PROM_DIR/prometheus.yml" "$PULL_CONFIG" "$PROM_DIR"/rules/*.yml
+
+        # --- static targets: hosts outside the fleet API -------------------
+        # Declarative: the directory is rebuilt from STATIC_TARGETS on every
+        # configure, so removing an entry removes its target. One file per
+        # job, same shape as the pull's files ({targets, labels.host}) plus
+        # tier=legacy so dashboards and rules can tell them apart. prometheus.yml
+        # lists targets-static/<job>.json beside targets/<job>.json for every
+        # job; a missing file is not an error to file_sd.
+        STATIC_DIR="$PROM_DIR/targets-static"
+        mkdir -p "$STATIC_DIR"
+        rm -f "$STATIC_DIR"/*.json
+        STATIC_JOBS="$(printf '%s\n' $STATIC_TARGETS | perl -MJSON::PP -e '
+            my (%by, @order);
+            while (<STDIN>) {
+                chomp; next unless length;
+                my ($job, $rest) = split /=/, $_, 2;
+                my ($host, $addr) = split /:/, ($rest // ""), 2;
+                unless (length $job && length $host && defined $addr && $addr =~ /:\d+$/) {
+                    print STDERR "  WARNING: STATIC_TARGETS entry \x27$_\x27 is not JOB=HOST:ADDRESS:PORT -- skipped\n";
+                    next;
+                }
+                push @order, $job unless $by{$job};
+                push @{ $by{$job} }, { targets => [$addr], labels => { host => $host, tier => "legacy" } };
+            }
+            for my $job (@order) {
+                open my $fh, ">", "$ARGV[0]/$job.json" or die "$ARGV[0]/$job.json: $!";
+                print $fh JSON::PP->new->canonical->encode($by{$job}), "\n";
+                close $fh;
+                print "$job\n";
+            }' "$STATIC_DIR" | paste -sd' ' -)"
+        chmod 755 "$STATIC_DIR"
+        chmod 644 "$STATIC_DIR"/*.json 2>/dev/null || true
+        for j in $STATIC_JOBS; do
+            grep -q "^  - job_name: $j\$" "$PROM_DIR/prometheus.yml" \
+                || echo "  WARNING: STATIC_TARGETS job '$j' has no scrape job in prometheus.yml -- written but never scraped"
+        done
+        if [ -n "$STATIC_JOBS" ]; then
+            echo "  static targets: $STATIC_JOBS ($STATIC_DIR)"
+        else
+            echo "  static targets: none (STATIC_TARGETS empty)"
+        fi
 
         # --- point prometheus.service at our config + storage -----------
         # A TSDB path of our own must exist and belong to the service user

@@ -65,6 +65,9 @@ METRICS_CONSUMERS="${ACCOUNTMANAGE//,/ }"
 TSDB_PATH="$TSDB_DST"
 RETENTION_TIME="$RETENTION_TIME"
 RETENTION_SIZE="$RETENTION_SIZE"
+# Hosts the fleet API does not know (no homelab-agent): ns03, the sole resolver
+# (post-cutover #66). JOB=HOST:ADDRESS:PORT, rendered into targets-static/.
+STATIC_TARGETS="node=ns03:10.20.0.140:9100 pdns-recursor=ns03:10.20.0.140:8082"
 EOF
 # NOTE: comma-separated, NOT space. The postinst drops this straight into a
 # systemd Environment= line, and systemd splits on whitespace -- a space-

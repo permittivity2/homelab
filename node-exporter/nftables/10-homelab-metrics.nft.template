@@ -14,4 +14,8 @@
 #     the bad-ips dynamic set (runtime state, not on disk) is never lost.
 # The postinst deletes any prior rule carrying this comment before
 # re-applying, so a live re-apply never stacks duplicates.
-add rule inet filter input ip saddr { __MONITORING_HOSTS__ } tcp dport { 8081, 8083, 8404, 9100-9199, 9900 } accept comment "homelab-metrics-allow"
+#
+# Ports: 8081 PowerDNS authoritative webserver (/metrics), 8082 pdns-recursor
+# webserver (/metrics; ns03, post-cutover #66), 8083 dnsdist, 8404 haproxy,
+# 9100-9199 the exporters, 9900 dovecot metrics.
+add rule inet filter input ip saddr { __MONITORING_HOSTS__ } tcp dport { 8081, 8082, 8083, 8404, 9100-9199, 9900 } accept comment "homelab-metrics-allow"

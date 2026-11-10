@@ -1,0 +1,84 @@
+# Alert rules for the resolver (pdns-recursor on ns03) and for any other host
+# scraped through STATIC_TARGETS (they carry the label tier="legacy").
+#
+# WHY THIS FILE EXISTS. ns03 is the only resolver for every network in the
+# house and is not a fleet member: it runs no homelab-agent, so the fleet-agent
+# rules never cover it, the fleet API never lists it, and until post-cutover
+# #66 (2026-11-09) nothing watched it at all. Its two targets (node_exporter on
+# :9100, the recursor's own /metrics on :8082) come from
+# /etc/prometheus/homelab/targets-static/, rendered by the postinst from
+# STATIC_TARGETS in /etc/homelab/prometheus/config -- never from the pull.
+#
+# Baselines measured on ns03 on 2026-11-09 over 13.8 days of uptime:
+# 7.25 M questions, SERVFAIL 1.3 %, NXDOMAIN 87 % (!), outgoing timeouts
+# 0.003/s, packet-cache hit 91.6 %, record-cache hit 32 %.
+#
+# NOTE: this fleet has no Alertmanager yet (#38), so these do not page anyone.
+# They evaluate and show on Prometheus's Alerts page and /api/v1/rules.
+groups:
+  - name: homelab-resolver
+    rules:
+      # THE ONE THAT MATTERS. If the recursor is down, every network's DNS is
+      # out. The same alert also fires when only the webserver is unreachable
+      # (firewall drop-in, webserver-allow-from); `dig @10.20.0.140` tells the
+      # two apart in one command.
+      - alert: ResolverDown
+        expr: up{job="pdns-recursor"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "the resolver's metrics endpoint on {{ $labels.host }} ({{ $labels.instance }}) is down"
+          description: >-
+            Either pdns-recursor is not running -- check `systemctl status
+            pdns-recursor` on the host FIRST, DNS for the whole house is out --
+            or only its webserver is unreachable (homelab-node-exporter's
+            firewall drop-in /etc/nftables.d/10-homelab-metrics.nft, or
+            webserver-allow-from in /etc/powerdns/recursor.d/10-metrics.conf).
+            `dig @10.20.0.140 mailmasker.org` answering means the latter.
+
+      # A statically scraped host that stopped answering on :9100. Not a fleet
+      # node, so no agent heartbeat will ever report it either.
+      - alert: LegacyHostDown
+        expr: up{job="node", tier="legacy"} == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "node_exporter on {{ $labels.host }} ({{ $labels.instance }}) is unreachable"
+          description: >-
+            The host is in STATIC_TARGETS (/etc/homelab/prometheus/config), not
+            the fleet API, so nothing else watches it. Check the host, then its
+            prometheus-node-exporter unit and the firewall drop-in.
+
+      # SERVFAIL share of all answers. A jump this size almost always means the
+      # upstream path is broken (AT&T, pfsense, authoritative servers
+      # unreachable) rather than a client problem.
+      - alert: ResolverServfailRate
+        expr: >-
+          sum by (host) (rate(pdns_recursor_servfail_answers[10m]))
+            / clamp_min(sum by (host) (rate(pdns_recursor_questions[10m])), 0.1) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} is answering SERVFAIL to {{ $value | humanizePercentage }} of queries"
+          description: >-
+            Baseline 2026-11-09: 1.3 % over two weeks. Look at
+            pdns_recursor_outgoing_timeouts and the ResolverOutgoingTimeouts
+            alert; if those rise too, the internet path is the problem, not
+            the resolver.
+
+      # Outgoing queries timing out: authoritative servers unreachable from the
+      # house. Baseline 0.003/s.
+      - alert: ResolverOutgoingTimeouts
+        expr: sum by (host) (rate(pdns_recursor_outgoing_timeouts[10m])) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }}'s outgoing queries are timing out ({{ $value | humanize }}/s)"
+          description: >-
+            Sustained timeouts to authoritative servers. Check the internet
+            path (AT&T gateway, pfsense WAN) before the recursor; the recursor
+            itself is answering, just slowly and with SERVFAILs.

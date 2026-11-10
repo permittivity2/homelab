@@ -21,6 +21,8 @@ override_dh_install:
 		debian/homelab-prometheus/usr/share/homelab-prometheus/config/rules/fleet-agent.yml
 	install -D -m 644 config/rules/public-probes.yml \
 		debian/homelab-prometheus/usr/share/homelab-prometheus/config/rules/public-probes.yml
+	install -D -m 644 config/rules/resolver.yml \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/config/rules/resolver.yml
 	install -D -m 644 systemd/prometheus-homelab.conf.template \
 		debian/homelab-prometheus/usr/share/homelab-prometheus/systemd/prometheus-homelab.conf.template
 	install -D -m 644 nftables/10-homelab-prometheus-egress.nft.template \

@@ -7,6 +7,12 @@
 # (feature + port) and a matching scrape job here pointing at its
 # targets/<job>.json. A target file that doesn't exist yet (exporter not
 # deployed) is created empty by the first pull, so no scrape errors.
+#
+# Every job also reads targets-static/<job>.json: hosts the fleet API does
+# not know about (no homelab-agent), rendered by the postinst from
+# STATIC_TARGETS in /etc/homelab/prometheus/config and never touched by the
+# pull. ns03, the sole resolver, is scraped that way (post-cutover #66). A
+# static file that doesn't exist is not an error to file_sd.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -31,34 +37,34 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # Host metrics (node_exporter :9100) on every fleet host.
+  # Host metrics (node_exporter :9100) on every fleet host (+ static hosts).
   - job_name: node
     file_sd_configs:
-      - files: ['/etc/prometheus/homelab/targets/node.json']
+      - files: ['/etc/prometheus/homelab/targets/node.json', '/etc/prometheus/homelab/targets-static/node.json']
         refresh_interval: 30s
 
   # PostgreSQL (postgres_exporter :9187) -- the DB host.
   - job_name: postgres
     file_sd_configs:
-      - files: ['/etc/prometheus/homelab/targets/postgres.json']
+      - files: ['/etc/prometheus/homelab/targets/postgres.json', '/etc/prometheus/homelab/targets-static/postgres.json']
         refresh_interval: 30s
 
   # PgBouncer (pgbouncer_exporter :9127) -- the DB host.
   - job_name: pgbouncer
     file_sd_configs:
-      - files: ['/etc/prometheus/homelab/targets/pgbouncer.json']
+      - files: ['/etc/prometheus/homelab/targets/pgbouncer.json', '/etc/prometheus/homelab/targets-static/pgbouncer.json']
         refresh_interval: 30s
 
   # Postfix (postfix_exporter :9154) -- the mail-sending pool.
   - job_name: postfix
     file_sd_configs:
-      - files: ['/etc/prometheus/homelab/targets/postfix.json']
+      - files: ['/etc/prometheus/homelab/targets/postfix.json', '/etc/prometheus/homelab/targets-static/postfix.json']
         refresh_interval: 30s
 
   # HAProxy native Prometheus exporter (:8404) -- the edge.
   - job_name: haproxy
     file_sd_configs:
-      - files: ['/etc/prometheus/homelab/targets/haproxy.json']
+      - files: ['/etc/prometheus/homelab/targets/haproxy.json', '/etc/prometheus/homelab/targets-static/haproxy.json']
         refresh_interval: 30s
 
   # dnsdist native Prometheus endpoint (:8083/metrics) -- the edge DNS
@@ -69,25 +75,35 @@ scrape_configs:
       X-API-Key:
         values: ['homelab-dnsdist-metrics-ro']
     file_sd_configs:
-      - files: ['/etc/prometheus/homelab/targets/dnsdist.json']
+      - files: ['/etc/prometheus/homelab/targets/dnsdist.json', '/etc/prometheus/homelab/targets-static/dnsdist.json']
         refresh_interval: 30s
 
-  # PowerDNS native Prometheus endpoint (webserver :8081/metrics).
+  # PowerDNS native Prometheus endpoint (webserver :8081/metrics) -- the
+  # authoritative tier.
   - job_name: pdns
     file_sd_configs:
-      - files: ['/etc/prometheus/homelab/targets/pdns.json']
+      - files: ['/etc/prometheus/homelab/targets/pdns.json', '/etc/prometheus/homelab/targets-static/pdns.json']
+        refresh_interval: 30s
+
+  # PowerDNS Recursor native Prometheus endpoint (webserver :8082/metrics, no
+  # api-key, gated by webserver-allow-from). Not a fleet feature, so the pull
+  # never writes targets/pdns-recursor.json: ns03 comes from STATIC_TARGETS
+  # (post-cutover #66, 2026-11-09). Alert rules in rules/resolver.yml.
+  - job_name: pdns-recursor
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/pdns-recursor.json', '/etc/prometheus/homelab/targets-static/pdns-recursor.json']
         refresh_interval: 30s
 
   # Dovecot openmetrics (stats http listener :9900) -- the mailstore pool.
   - job_name: dovecot
     file_sd_configs:
-      - files: ['/etc/prometheus/homelab/targets/dovecot.json']
+      - files: ['/etc/prometheus/homelab/targets/dovecot.json', '/etc/prometheus/homelab/targets-static/dovecot.json']
         refresh_interval: 30s
 
   # nginx / web proxy (prometheus-nginx-exporter :9113) -- the edge.
   - job_name: nginx
     file_sd_configs:
-      - files: ['/etc/prometheus/homelab/targets/nginx.json']
+      - files: ['/etc/prometheus/homelab/targets/nginx.json', '/etc/prometheus/homelab/targets-static/nginx.json']
         refresh_interval: 30s
 
   # External/public HTTPS probes via blackbox_exporter: availability
