@@ -111,7 +111,7 @@ sys.exit(0 if \"homelab-resolver\" in gs else 1)'" || { echo "  !! homelab-resol
 
 if [ "${1:-}" = "--verify" ]; then verify; exit $?; fi
 
-say "[1/5] monitoring node $METRICS_NODE: package versions + STATIC_TARGETS"
+say "[1/6] monitoring node $METRICS_NODE: package versions + STATIC_TARGETS"
 PV="$(M "dpkg-query -W -f='\${Version}' homelab-prometheus 2>/dev/null")"
 GV="$(M "dpkg-query -W -f='\${Version}' homelab-grafana 2>/dev/null")"
 echo "  homelab-prometheus $PV, homelab-grafana $GV"
@@ -119,7 +119,7 @@ M "dpkg --compare-versions '$PV' ge 0.9.0" || "$HERE/pkg-upgrade.sh" homelab-pro
 M "dpkg --compare-versions '$GV' ge 0.7.0" || "$HERE/pkg-upgrade.sh" homelab-grafana "$METRICS_NODE" || exit 1
 "$HERE/metrics-static-targets.sh" "$METRICS_NODE" add "${ENTRIES[@]}" || exit 1
 
-say "[2/5] ns03: homelab-node-exporter (agentless, MONITORING_HOSTS=$MON_IP)"
+say "[2/6] ns03: homelab-node-exporter (agentless, MONITORING_HOSTS=$MON_IP)"
 N "sudo -n install -d -m 755 /etc/homelab/node-exporter
    if ! grep -qx 'MONITORING_HOSTS=\"$MON_IP\"' /etc/homelab/node-exporter/config 2>/dev/null; then
        printf '# ns03 is reached by the monitoring node on the 10.20 plane (metrics-ns03-orchestrate.sh).\nMONITORING_HOSTS=\"%s\"\n' '$MON_IP' | sudo -n tee /etc/homelab/node-exporter/config >/dev/null
@@ -137,7 +137,7 @@ N "sudo -n install -d -m 755 /etc/homelab/node-exporter
    sudo -n nft list chain inet filter input | grep homelab-metrics-allow | grep -qE '\b$RECURSOR_PORT\b|\b808[01]-808[2-9]\b' || { echo '  !! metrics-allow rule lacks port $RECURSOR_PORT'; exit 1; }
    echo '  (the chgrp WARNING above is expected: no homelab group here because there is no agent)'" || exit 1
 
-say "[3/5] ns03: recursor webserver config (checked before use)"
+say "[3/6] ns03: recursor webserver config (checked before use)"
 CHANGED="$(N "set -e
    sudo -n install -d -m 755 /etc/powerdns/recursor.d
    changed=0
@@ -166,7 +166,7 @@ EOF
    echo '  config check: ok' >&2
    echo \$changed")" || exit 1
 
-say "[4/5] ns03: pdns-recursor restart"
+say "[4/6] ns03: pdns-recursor restart"
 if [ "$CHANGED" = 1 ]; then
     N "t0=\$(date +%s%N); sudo -n systemctl restart pdns-recursor
        for i in \$(seq 1 30); do dig +short +time=1 +tries=1 @127.0.0.1 mailmasker.org A >/dev/null 2>&1 && break; sleep 0.5; done
@@ -189,7 +189,7 @@ N "changed=0
    if [ \$changed = 1 ]; then sudo -n systemctl daemon-reload; fi
    sudo -n systemctl enable --now recursor-top-metrics.timer >/dev/null 2>&1
    sudo -n systemctl start recursor-top-metrics.service && echo \"  ran once: \$(grep -c '^pdns_recursor_top_' /var/lib/prometheus/node-exporter/recursor_top.prom) metric line(s), top client \$(grep '^pdns_recursor_top_remote_share' /var/lib/prometheus/node-exporter/recursor_top.prom | sort -k2 -nr | head -1)\"
-   echo \"  timer: \$(systemctl is-active recursor-top-metrics.timer), next \$(systemctl show recursor-top-metrics.timer -p NextElapseUSecRealtime --value | cut -c1-25)\"" || exit 1
+   echo \"  timer: \$(systemctl is-active recursor-top-metrics.timer); \$(systemctl list-timers --no-legend recursor-top-metrics.timer | awk '{print \"next \" \$1\" \"\$2\" \"\$3\" \"\$4}')\"" || exit 1
 
 say "[6/6] verify"
 verify

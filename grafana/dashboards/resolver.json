@@ -1093,7 +1093,7 @@
             "type": "prometheus",
             "uid": "homelab-prometheus"
           },
-          "expr": "sum(pdns_recursor_top_remote_share{job=\"node\", tier=\"legacy\", client!~\"^10\\\\..*\"}) or vector(0)",
+          "expr": "sum(pdns_recursor_top_remote_share{job=\"node\", tier=\"legacy\", client!~\"^10\\\\..*\", client!=\"rest\"}) or vector(0)",
           "legendFormat": ""
         }
       ]

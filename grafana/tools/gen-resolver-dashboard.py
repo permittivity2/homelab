@@ -143,8 +143,10 @@ panels = [
     # --- rows 5-7: who asks what. From recursor-top-metrics (rec_control
     # top-*, textfile collector on the host): shares of the recursor's last
     # 10,000 queries, refreshed every 60 s. share * ring entries = count. ----
+    # The recursor adds a "rest" row (everything beyond its top 20); that is not
+    # a client, so it must not count as "outside".
     stat("Share from outside 10.0.0.0/8 (should be 0)",
-         f"sum(pdns_recursor_top_remote_share{{{N}, client!~\"^10\\\\..*\"}}) or vector(0)", 0, 6, "percentunit",
+         f"sum(pdns_recursor_top_remote_share{{{N}, client!~\"^10\\\\..*\", client!=\"rest\"}}) or vector(0)", 0, 6, "percentunit",
          [{"color": "green", "value": None}, {"color": "red", "value": 0.0001}], y=44, graph="none"),
     stat("Clients in the top 20", f"count(pdns_recursor_top_remote_share{{{N}}})", 6, 6, "short",
          [{"color": "blue", "value": None}], y=44, graph="none"),
