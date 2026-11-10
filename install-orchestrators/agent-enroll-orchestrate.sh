@@ -8,6 +8,12 @@
 # has its agent credential, its services (e.g. the retrying workers) also
 # self-register into api.service_registry, and the agent heartbeats into
 # api.hosts (the fleet view). Driven over passwordless ssh+sudo. Idempotent.
+#
+# Nodes are reached by MANAGEMENT IP (10.20.2.144+NN), like every other
+# orchestrator here: the prod-homelabNN names do not resolve from the
+# workstation (there are no ~/.ssh/config entries for the fleet), and until
+# 2026-11-09 this script used the names, so it died at find_leader with
+# "no DB primary reachable". Used that day to enrol prod-homelab45.
 # ============================================================================
 set -euo pipefail
 LOG="/tmp/agent-enroll-orchestrate.$(date +%Y%m%d-%H%M%S).log"
@@ -20,7 +26,7 @@ NODES="${*:-06 07 08 09 10 11 12 13 14 15 16 17}"
 DB_NODES="06 07 08"
 API_VIP=10.50.2.132
 
-h(){ printf 'prod-homelab%s' "$1"; }
+h(){ printf '10.20.2.%d' "$((144 + 10#$1))"; }   # management IP of prod-homelabNN
 say(){ printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 can_ssh(){ ssh -o BatchMode=yes -o ConnectTimeout=5 "$(h "$1")" true 2>/dev/null; }
 
@@ -124,7 +130,15 @@ for n in $NODES; do
   adv="10.50.2.$((144 + 10#$n))"      # 10# forces base-10 so 08/09 aren't read as octal
   say "agent enroll CT$n ($hn, advertise $adv)"
   ensure_source "$n"
-  ssh "$(h "$n")" "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends homelab-agent homelab-node-exporter"
+  # The agent FIRST, the exporter in a second apt run: homelab-node-exporter's
+  # postinst hands the textfile directory to the `homelab` group, which only
+  # exists once homelab-common (pulled in by the agent) has created it. In one
+  # apt run apt may configure the exporter first (no dependency between them),
+  # and then the agent can never publish its health metrics from that host
+  # (seen on prod-homelab45, 2026-11-09: "WARNING: could not chgrp ... to
+  # 'homelab'"; fixed there with dpkg-reconfigure homelab-node-exporter).
+  ssh "$(h "$n")" "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends homelab-agent
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends homelab-node-exporter"
   # Force a CLEAN re-provision. A pre-existing config/credential (e.g. a stale
   # one from the base image pointing at the wrong api_base, or a lapsed
   # refresh_token) makes the agent postinst's "exists -> leave untouched" skip

@@ -5,6 +5,14 @@
 # ports (node_exporter :9100 and any other homelab exporter on this
 # host). Used on package configure to generate
 # /etc/nftables.d/10-homelab-metrics.nft. Defaults to the fleet
-# monitoring host (ct19). Edit + `dpkg-reconfigure homelab-node-exporter`
-# (or reinstall) to change.
-MONITORING_HOSTS="10.50.2.63"
+# monitoring host, prod-homelabvm69's service-plane address. Edit +
+# `dpkg-reconfigure homelab-node-exporter` (or reinstall) to change.
+#
+# Until 2026-11-09 this defaulted to 10.50.2.63 (the pre-cutover ct19
+# monitoring host), so every fleet node's drop-in names an address that
+# no longer scrapes anything. Nothing broke because homelab-agent's
+# fleet-trust baseline (10-homelab-fleet-trust.nft) accepts all of
+# 10.50/10.45/10.20 anyway; this rule only matters on a host WITHOUT the
+# agent. Existing hosts keep their file (seeded once) -- correct them with
+# this value + dpkg-reconfigure if the agent is ever removed from one.
+MONITORING_HOSTS="10.50.2.213"
