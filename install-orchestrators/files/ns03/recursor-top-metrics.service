@@ -1,0 +1,12 @@
+# Installed on ns03 by install-orchestrators/metrics-ns03-orchestrate.sh (post-cutover #66).
+# Writes pdns-recursor's top-clients / top-names rankings as node_exporter
+# textfile metrics. Fired by recursor-top-metrics.timer every 60 s.
+[Unit]
+Description=pdns-recursor top-clients/top-names rankings -> node_exporter textfile metrics
+After=pdns-recursor.service
+ConditionPathIsDirectory=/var/lib/prometheus/node-exporter
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/recursor-top-metrics /var/lib/prometheus/node-exporter/recursor_top.prom
+Nice=10

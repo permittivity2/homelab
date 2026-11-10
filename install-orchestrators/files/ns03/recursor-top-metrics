@@ -1,0 +1,78 @@
+#!/usr/bin/perl
+# recursor-top-metrics -- turn pdns-recursor's `rec_control top-*` rankings into
+# node_exporter textfile metrics, so Grafana can show queries by CLIENT and by
+# NAME. Installed on ns03 by install-orchestrators/metrics-ns03-orchestrate.sh
+# (post-cutover #66), run every 60 s by recursor-top-metrics.timer as root (the
+# control socket belongs to pdns; the textfile directory to root).
+#
+# WHAT THE NUMBERS ARE. The recursor keeps a ring of its last
+# stats-ringbuffer-entries queries (10,000 on ns03; raise it in
+# recursor.d/10-metrics.conf for a longer window -- needs a restart). Each
+# ranking is "share of that ring", 0-1, top 20 entries:
+#   top-remotes           every client address            -> *_top_remote_share{client}
+#   top-queries           cache-MISSING queries by name   -> *_top_query_share{name,qtype}
+#                         (packet-cache hits never reach this ring, so its N is smaller)
+#   top-servfail-remotes  clients whose queries SERVFAILed -> *_top_servfail_remote_share{client}
+#   top-servfail-queries  names that SERVFAILed            -> *_top_servfail_query_share{name,qtype}
+#   top-timeouts          authoritative servers that timed out -> *_top_timeout_server_share{server}
+# plus pdns_recursor_top_ringbuffer_entries{ranking} = the N of each ring, so
+# share * entries is the approximate query count inside the window.
+#
+# Written atomically (temp file + rename) so node_exporter never reads a half
+# file. Exits 0 even when the recursor is down, writing an empty file with the
+# timestamp, so a stale file is visible as a stale timestamp, not an error.
+use strict;
+use warnings;
+use File::Basename qw(dirname);
+use File::Temp qw(tempfile);
+
+my $out = $ARGV[0] // '/var/lib/prometheus/node-exporter/recursor_top.prom';
+
+# ranking => [ metric, label(s), help ]
+my @rankings = (
+    [ 'remotes',          'pdns_recursor_top_remote_share',          ['client'],         'Share (0-1) of the last N queries that came from this client address (rec_control top-remotes, top 20).' ],
+    [ 'queries',          'pdns_recursor_top_query_share',           ['name', 'qtype'],  'Share (0-1) of the last N cache-missing queries that asked for this name and type (rec_control top-queries, top 20).' ],
+    [ 'servfail-remotes', 'pdns_recursor_top_servfail_remote_share', ['client'],         'Share (0-1) of the last N SERVFAIL answers that went to this client (rec_control top-servfail-remotes).' ],
+    [ 'servfail-queries', 'pdns_recursor_top_servfail_query_share',  ['name', 'qtype'],  'Share (0-1) of the last N SERVFAIL answers that were for this name and type (rec_control top-servfail-queries).' ],
+    [ 'timeouts',         'pdns_recursor_top_timeout_server_share',  ['server'],         'Share (0-1) of the last N outgoing timeouts that were to this authoritative server (rec_control top-timeouts).' ],
+);
+
+sub esc { my $s = shift; $s =~ s/\\/\\\\/g; $s =~ s/"/\\"/g; $s =~ s/\n/\\n/g; return $s }
+
+my @lines;
+my @entries;    # ringbuffer sizes per ranking
+for my $r (@rankings) {
+    my ($cmd, $metric, $labels, $help) = @$r;
+    my $text = `rec_control top-$cmd 2>/dev/null`;
+    my $n = ($text =~ /^Over last (\d+) entries/m) ? $1 : 0;
+    push @entries, qq{pdns_recursor_top_ringbuffer_entries{ranking="$cmd"} $n};
+    push @lines, "# HELP $metric $help", "# TYPE $metric gauge";
+    for my $line (split /\n/, $text) {
+        next unless $line =~ /^\s*([\d.]+)%\s+(\S.*?)\s*$/;
+        my ($pct, $what) = ($1, $2);
+        my %lab;
+        if (@$labels == 2) {
+            # "name|TYPE"; a name can itself contain '|' only in theory, so
+            # split on the LAST one.
+            my ($name, $type) = $what =~ /^(.*)\|([^|]*)$/ ? ($1, $2) : ($what, '');
+            $name =~ s/\.$// if length $name > 1;      # drop the trailing dot
+            %lab = ($labels->[0] => $name, $labels->[1] => $type);
+        } else {
+            %lab = ($labels->[0] => $what);
+        }
+        my $ls = join ',', map { $_ . '="' . esc($lab{$_}) . '"' } @$labels;
+        push @lines, sprintf '%s{%s} %.6f', $metric, $ls, $pct / 100;
+    }
+}
+push @lines,
+    '# HELP pdns_recursor_top_ringbuffer_entries Number of queries in the recursor statistics ring behind each top-* ranking (share * entries = approximate count).',
+    '# TYPE pdns_recursor_top_ringbuffer_entries gauge', @entries,
+    '# HELP pdns_recursor_top_metrics_timestamp_seconds When recursor-top-metrics last ran (stale = the timer or rec_control is broken).',
+    '# TYPE pdns_recursor_top_metrics_timestamp_seconds gauge',
+    'pdns_recursor_top_metrics_timestamp_seconds ' . time;
+
+my ($fh, $tmp) = tempfile('recursor_top.XXXXXX', DIR => dirname($out), UNLINK => 0);
+print $fh map { "$_\n" } @lines;
+close $fh or die "close $tmp: $!";
+chmod 0644, $tmp;
+rename $tmp, $out or die "rename $tmp -> $out: $!";

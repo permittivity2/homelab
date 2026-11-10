@@ -1,0 +1,11 @@
+# Installed on ns03 by install-orchestrators/metrics-ns03-orchestrate.sh (post-cutover #66).
+[Unit]
+Description=Refresh pdns-recursor top-clients/top-names metrics every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

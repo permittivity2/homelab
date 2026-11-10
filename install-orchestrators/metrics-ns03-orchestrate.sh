@@ -29,8 +29,16 @@
 #   [4] ns03: ONE `systemctl restart pdns-recursor` if [3] changed anything (a
 #       webserver cannot be enabled live). DNS for every network blips for
 #       about a second; dig is checked immediately after.
-#   [5] verify from the monitoring node: both ns03 targets up, the
-#       homelab-resolver rule group loaded, /metrics NOT reachable from here.
+#   [5] ns03: queries by CLIENT and by NAME. The recursor's /metrics has no
+#       per-client numbers, but `rec_control top-remotes` / `top-queries` /
+#       `top-servfail-*` / `top-timeouts` rank the last 10,000 queries.
+#       files/ns03/recursor-top-metrics (Perl) turns those into node_exporter
+#       textfile metrics every 60 s (recursor-top-metrics.timer, root: the
+#       control socket is pdns's, the textfile dir root's). Read-only against
+#       the recursor; nothing to restart.
+#   [6] verify from the monitoring node: both ns03 targets up, the
+#       homelab-resolver rule group loaded, the rankings fresh, /metrics NOT
+#       reachable from here.
 # ============================================================================
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -69,7 +77,8 @@ verify(){
        echo \"  firewall: \$(sudo -n nft list chain inet filter input | grep -c homelab-metrics-allow) metrics-allow rule(s): \$(sudo -n nft list chain inet filter input | grep homelab-metrics-allow | sed 's/^[[:space:]]*//' | cut -c1-90)\"
        echo \"  recursor.d: \$(ls /etc/powerdns/recursor.d/ 2>/dev/null | paste -sd' ' -); include-dir: \$(grep -c '^include-dir=' /etc/powerdns/recursor.conf)\"
        echo \"  memory: \$(free -m | awk 'NR==2{print \$7\" MB available of \"\$2}')\"
-       echo \"  dig @127.0.0.1 mailmasker.org: \$(dig +short +time=2 +tries=1 @127.0.0.1 mailmasker.org A | head -1)\""
+       echo \"  dig @127.0.0.1 mailmasker.org: \$(dig +short +time=2 +tries=1 @127.0.0.1 mailmasker.org A | head -1)\"
+       echo \"  rankings: timer \$(systemctl is-active recursor-top-metrics.timer 2>/dev/null); recursor_top.prom \$(stat -c '%y' /var/lib/prometheus/node-exporter/recursor_top.prom 2>/dev/null | cut -c1-19 || echo MISSING), \$(grep -c '^pdns_recursor_top_remote_share' /var/lib/prometheus/node-exporter/recursor_top.prom 2>/dev/null) client row(s)\""
     say "[verify] from the monitoring node ($MON_IP)"
     M "printf '  node_ metrics: %s\n' \"\$(curl -s -m 5 http://$NS03_IP:9100/metrics | grep -c '^node_')\"
        printf '  recursor metrics: %s\n' \"\$(curl -s -m 5 http://$NS03_IP:$RECURSOR_PORT/metrics | grep -E '^pdns_recursor_(questions|cache_hits|servfail_answers) ' | paste -sd' ' -)\"
@@ -167,5 +176,20 @@ else
     echo "  nothing changed in [3], no restart"
 fi
 
-say "[5/5] verify"
+say "[5/6] ns03: client / name rankings -> textfile metrics (recursor-top-metrics)"
+FILES="$HERE/files/ns03"
+scp -q "$FILES/recursor-top-metrics" "$FILES/recursor-top-metrics.service" "$FILES/recursor-top-metrics.timer" "$NS03:/tmp/" || exit 1
+N "changed=0
+   for f in recursor-top-metrics:/usr/local/sbin/recursor-top-metrics:755 recursor-top-metrics.service:/etc/systemd/system/recursor-top-metrics.service:644 recursor-top-metrics.timer:/etc/systemd/system/recursor-top-metrics.timer:644; do
+       src=/tmp/\${f%%:*}; rest=\${f#*:}; dst=\${rest%%:*}; mode=\${rest##*:}
+       if ! sudo -n cmp -s \"\$src\" \"\$dst\"; then sudo -n install -m \"\$mode\" \"\$src\" \"\$dst\" && echo \"  installed \$dst\"; changed=1; fi
+       rm -f \"\$src\"
+   done
+   perl -c /usr/local/sbin/recursor-top-metrics 2>&1 | grep -v 'syntax OK' || true
+   if [ \$changed = 1 ]; then sudo -n systemctl daemon-reload; fi
+   sudo -n systemctl enable --now recursor-top-metrics.timer >/dev/null 2>&1
+   sudo -n systemctl start recursor-top-metrics.service && echo \"  ran once: \$(grep -c '^pdns_recursor_top_' /var/lib/prometheus/node-exporter/recursor_top.prom) metric line(s), top client \$(grep '^pdns_recursor_top_remote_share' /var/lib/prometheus/node-exporter/recursor_top.prom | sort -k2 -nr | head -1)\"
+   echo \"  timer: \$(systemctl is-active recursor-top-metrics.timer), next \$(systemctl show recursor-top-metrics.timer -p NextElapseUSecRealtime --value | cut -c1-25)\"" || exit 1
+
+say "[6/6] verify"
 verify
