@@ -1547,7 +1547,23 @@ sub _agent_heartbeat ($self, $c) {
             unless defined $body->{$field};
     }
 
-    $self->pg->db->query(
+    # The whole report lands in ONE transaction, on one connection. These
+    # used to be separate autocommitted statements, so between the DELETE
+    # below and the last INSERT a reader saw this host with no services
+    # at all. The gap is only milliseconds wide, but 56 agents open it
+    # every minute, and on 2026-11-09 a homelab-prometheus-pull read of
+    # /agent/feature-backends landed in it and dropped two hosts'
+    # exporters from the scrape targets until the next pull; haproxy and
+    # the DNS allowlists consume the same endpoint and could lose a
+    # backend the same way. Under Postgres's READ COMMITTED a reader now
+    # sees either the previous report or this one, never the gap -- and
+    # an INSERT that dies rolls the DELETE back ($tx is a guard: leaving
+    # scope without commit is a rollback), so a bad report leaves the
+    # previous one standing instead of an empty host.
+    my $db = $self->pg->db;
+    my $tx = $db->begin;
+
+    $db->query(
         q{INSERT INTO api.hosts (hostname, address, agent_port, agent_version, last_heartbeat)
           VALUES (?, ?, ?, ?, NOW())
           ON CONFLICT (hostname) DO UPDATE
@@ -1566,10 +1582,10 @@ sub _agent_heartbeat ($self, $c) {
     # rows first and re-inserting exactly what THIS heartbeat reports
     # makes the table an accurate mirror of the current manifest, not
     # an accumulating superset of every manifest this host has ever had.
-    $self->pg->db->query('DELETE FROM api.host_service_status WHERE hostname = ?', $body->{hostname});
+    $db->query('DELETE FROM api.host_service_status WHERE hostname = ?', $body->{hostname});
 
     for my $svc (@{ $body->{services} // [] }) {
-        $self->pg->db->query(
+        $db->query(
             q{INSERT INTO api.host_service_status
                   (hostname, service_name, package_name, kind, expected, actual, description, fronts, checked_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())},
@@ -1578,6 +1594,7 @@ sub _agent_heartbeat ($self, $c) {
         );
     }
 
+    $tx->commit;
     return $c->render(json => { ok => \1 });
 }
 
