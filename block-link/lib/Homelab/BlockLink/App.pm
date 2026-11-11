@@ -31,10 +31,11 @@ sub startup ($self) {
 
     # Shared web chrome (homelab-webtheme): the top bar, the footer and
     # theme.css from static.mailmasker.org, the same as drive, search and
-    # myaccount. Someone opening a link from an email is usually NOT signed
-    # in here -- the link's token is enough to block that message's own
-    # addresses -- and then the top bar shows just the logo and the app name.
-    # Signed in, it shows the same account menu as every other app.
+    # myaccount. Someone opening a link from an email is sent to sign in
+    # first (0.1.6, item 69: the link alone blocks nothing), so the page is
+    # nearly always seen signed in, with the same account menu as every other
+    # app; signed out (a dead session, or no sso: block) the top bar shows
+    # just the logo and the app name.
     my $theme = $config->{web_theme} // {};
     $self->plugin('Homelab::WebTheme' => {
         app_name    => 'Block email',
@@ -162,18 +163,19 @@ sub startup ($self) {
     $r->get('/internal/v1/block-link/domains/:domain' => [domain => qr/[^\/]+/]) ->to('block_link#domain_show');
     $r->put('/internal/v1/block-link/domains/:domain' => [domain => qr/[^\/]+/]) ->to('block_link#domain_set');
 
-    # --- Public, no auth: fronted by homelab-webproxy's own
-    # blockemail.<domain> vhost. :token needs the same [^\/]+
-    # placeholder-regex override every other non-numeric identifier in
-    # this ecosystem needs. ---------------------------------------------
+    # --- The link page: fronted by homelab-webproxy's own blockemail.<domain>
+    # vhost, reachable by anyone, usable only signed in (item 69). GET sends a
+    # signed-out visitor to homelab-sso before the link is looked up; the two
+    # POSTs take the page's CSRF token and a live sign-in as one of the
+    # link's accounts, since the session cookie, not the link, is their
+    # credential. :token needs the same [^\/]+ placeholder-regex override
+    # every other non-numeric identifier in this ecosystem needs. ----------
     $r->get('/l/:token' => [token => qr/[^\/]+/])  ->to('block_link#show');
     $r->post('/l/:token' => [token => qr/[^\/]+/]) ->to('block_link#submit');
-    # Signed in only, and only from the page itself (a CSRF token): the one
-    # route here whose credential is the session cookie, not the link.
     $r->post('/l/:token/unblock' => [token => qr/[^\/]+/])->to('block_link#unblock');
 
-    # Sign-in, for the signed-in view of a link (see Visibility.pm). Without
-    # an sso: block these lead back to the front page.
+    # Sign-in (see Visibility.pm). Without an sso: block these lead back to
+    # the front page, and the link page can only point at Manage Account.
     $r->get('/login')          ->to('block_link#login');
     $r->get('/oauth/callback') ->to('block_link#oauth_callback');
     $r->post('/logout')        ->to('block_link#logout');

@@ -47,11 +47,13 @@ block_link:
   # the same addresses.
   # manage_account_url: https://myaccount.test.mailmasker.org/#mailself
 
-# Optional: sign-in through homelab-sso, so a signed-in visitor sees their
-# own whole block list on the link page (see README.md, "Who sees which
-# addresses"). Without these two blocks the page is link-only. Written by
-# install-orchestrators/block-link-sso-provision.sh, with the client
-# registered on the SSO nodes first; the client_secret matches theirs.
+# Sign-in through homelab-sso. The link page works only for a visitor signed
+# in as the account the message was delivered to (see README.md, "Who sees
+# which addresses"): the link alone shows and blocks nothing. Without these
+# two blocks nobody can sign in here, so the page can only point at Manage
+# Account. Written by install-orchestrators/block-link-sso-provision.sh,
+# with the client registered on the SSO nodes first; the client_secret
+# matches theirs.
 # sso:
 #   base_url: https://login.test.mailmasker.org        # the BROWSER goes here: the public SSO name
 #   internal_base_url: http://sso.example.internal:2502 # this app's own server-to-server code exchange

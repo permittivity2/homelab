@@ -153,6 +153,38 @@ $t->post_ok("/l/$token/unblock" => { 'X-CSRF-Token' => $csrf } => json => { addr
   ->json_like('/error', qr/sign-in has ended/, 'the right token, but the session\'s sign-in is dead: refused, and it says why');
 $t->get_ok("/l/$token/unblock")->status_is(404, 'unblock is POST only');
 
+# --- the link page itself needs a sign-in (post-cutover item 69) ---
+# Both checks come before the link is looked up, which is why they can be
+# tested here with no database: a stranger holding a forwarded link learns
+# nothing from this site, not even whether the link is valid.
+my $anon = Test::Mojo->new($app);
+$anon->get_ok("/l/$token")->status_is(302)
+  ->header_is(Location => "/login?next=%2Fl%2F$token", 'signed out, no session: straight to sign-in, and back to this link');
+$anon->get_ok("/l/$token" => { Accept => 'text/html' })->status_is(302, '... whatever it asks for');
+ok !$anon->tx->res->body || $anon->tx->res->body !~ /blockform|name="block"/, '... with nothing of the page in the answer';
+# A session that holds a token which no longer introspects (expired, revoked
+# elsewhere, or the api unreachable -- here, always) gets the page with a Sign
+# in button rather than another redirect, so a sign-in that comes back and
+# still cannot be checked can never loop between the two sites.
+$t->get_ok('/t/set-token')->content_is('set');
+$t->get_ok("/l/$token")->status_is(200)
+  ->content_like(qr{href="/login\?next=%2Fl%2F$token"}, 'a dead sign-in: the page, with a Sign in button')
+  ->content_unlike(qr{id="blockform"|name="block"},     '... and no form, no address')
+  ->content_like(qr{Nothing on this page works without signing in}, '... saying so');
+$t->get_ok('/t/who')->content_is('who=', '... and the dead token was dropped from the session');
+$t->get_ok("/l/$token")->status_is(302, '... so the next visit is sent to sign in again');
+
+# Add to Block List: the same two guards as unblock, in the same order, before
+# the link is looked up.
+$anon->post_ok("/l/$token" => json => { block => ['a@b.example'] })->status_is(403)
+  ->json_like('/error', qr/out of date/, 'a block without the page\'s token: refused (the link alone is no credential)');
+$anon->post_ok("/l/$token" => { 'X-CSRF-Token' => 'f' x 40 } => json => { block => ['a@b.example'] })->status_is(403)
+  ->json_like('/error', qr/out of date/, '... and with the wrong one');
+$t->post_ok("/l/$token" => { 'X-CSRF-Token' => $theirs } => json => { block => ['a@b.example'] })->status_is(403,
+  '... and with another browser\'s');
+$t->post_ok("/l/$token" => { 'X-CSRF-Token' => $csrf } => json => { block => ['a@b.example'] })->status_is(401)
+  ->json_like('/error', qr/sign-in has ended/, 'the right token, but no live sign-in: refused, and it says why');
+
 # --- /logout ---
 $t->post_ok('/logout')->status_is(302)->header_is(Location => 'https://login.example.test/logout',
     'sign-out hands off to homelab-sso\'s single sign-out');

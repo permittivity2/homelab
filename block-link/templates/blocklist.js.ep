@@ -330,8 +330,10 @@ var BlockList = (function () {
         btn.disabled = true;
         var finished = false;
         try {
+          // The page's CSRF token goes with it: signed in is the credential
+          // for a block, and the server refuses a request without it.
           var r = await fetch('/l/' + encodeURIComponent(form.dataset.token), {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': form.dataset.csrf || '' },
             body: JSON.stringify({ block: checked })
           });
           var j = await r.json().catch(function () { return {}; });

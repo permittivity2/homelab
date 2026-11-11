@@ -101,10 +101,22 @@ sub domain_set ($c) {
     return $c->render(json => $row);
 }
 
-# GET /l/:token -- public, unauthenticated. No DB mutation here -- see
-# README.md's "Why GET never mutates" section: automated mail-security
-# link-prescanners fetch every link in incoming mail before a human opens
-# it, and this link lives INSIDE a real delivered email.
+# GET /l/:token -- the page a link in a delivered email opens. Sign-in
+# required (post-cutover item 69, 0.1.6): the link alone is no credential,
+# because the footer that carries it is quoted into every reply and forward.
+#
+# Nobody signed in here: straight to homelab-sso and back, BEFORE the link is
+# looked up, so an anonymous visitor (a stranger holding a forwarded link, a
+# mail gateway's link-prescanner) learns nothing from this site, not even
+# whether the link is valid. Someone already signed in to webmail or
+# myaccount passes through homelab-sso without seeing its form. The one
+# exception to the redirect is a session that holds a token which no longer
+# introspects (expired, revoked by a sign-out elsewhere, or the api cannot be
+# asked just now): that gets the page with a Sign in button instead, so a
+# sign-in that comes back and still cannot be checked never loops between
+# the two sites.
+#
+# No DB mutation here, ever -- see README.md's "Why GET never mutates".
 #
 # What the page shows depends on who is looking -- see Visibility.pm for the
 # rule and why it exists. Signed in as the link's account, it also shows that
@@ -112,6 +124,23 @@ sub domain_set ($c) {
 # api call myaccount uses; nothing here can read a list any other way.
 sub show ($c) {
     my $token = $c->stash('token');
+    my $me    = $c->session_email;
+    unless (length $me) {
+        return $c->redirect_to(_login_url($token)) if $c->app->sso && !$c->session('token');
+        delete @{ $c->session }{qw(token refresh_token)};
+        return $c->render(
+            template   => 'manage',
+            token      => $token,
+            view       => view([], ''),
+            add        => [],
+            blocked    => [],
+            list_error => 0,
+            signed_in  => '',
+            can_sign_in => ($c->app->sso ? 1 : 0),
+            manage_url => $c->app->manage_account_url,
+        );
+    }
+
     my $row = $c->app->pg->db->query(
         q{SELECT *, (expires_at <= NOW()) AS is_expired FROM block_link.pending_links WHERE token = ?}, $token,
     )->hash;
@@ -123,7 +152,7 @@ sub show ($c) {
     # decoded explicitly before use (real bug hit on first live GET,
     # not caught by t/basic.t since that test asserts on rendered HTML
     # content, not on this code path directly).
-    my $view = view(decode_json($row->{candidates}), $c->session_email);
+    my $view = view(decode_json($row->{candidates}), $me);
 
     my ($blocked, $list_error) = ([], 0);
     if ($view->{mode} eq 'owner') {
@@ -143,10 +172,15 @@ sub show ($c) {
         add        => \@add,
         blocked    => $blocked,
         list_error => $list_error,
-        signed_in  => $c->session_email,
+        signed_in  => $me,
         can_sign_in => ($c->app->sso ? 1 : 0),
         manage_url => $c->app->manage_account_url,
     );
+}
+
+# Where a signed-out visitor is sent: a sign-in that comes back to this link.
+sub _login_url ($token) {
+    return '/login?next=' . url_escape("/l/$token");
 }
 
 # The signed-in account's blocked addresses, sorted the way the page first
@@ -170,22 +204,36 @@ sub _my_block_list ($c) {
     ];
 }
 
-# POST /l/:token {block: [address, ...]} -- public, unauthenticated.
-# The token itself IS the authentication for this action -- an
-# unguessable 32-byte value, validated server-side against
-# pending_links, same trust model as every other capability-token
-# design in this ecosystem -- but only for what view() offers this
-# visitor, the same rule the page was drawn with. Calls homelab-domain-
-# admin's own system_agent-gated on-behalf endpoint for each address --
-# this service never writes domainadmin.recipient_access directly (see
-# README.md's architecture note: this is a new delivery path into an
-# existing blocking mechanism, not a new one).
+# POST /l/:token {block: [address, ...]} -- Add to Block List. Signed in
+# only (post-cutover item 69, 0.1.6): the session is the credential, and the
+# token only says which message. So the same guards as unblock, in the same
+# order, before anything is looked up: the CSRF token the page was drawn
+# with (the cookie alone can be made to travel cross-site; the page's token
+# cannot), then a live sign-in. Then the link, then that the visitor is one
+# of its accounts, then only what view() offers that account -- the same
+# rule the page was drawn with. Calls homelab-domain-admin's own
+# system_agent-gated on-behalf endpoint for each address -- this service
+# never writes domainadmin.recipient_access directly (see README.md's
+# architecture note: this is a new delivery path into an existing blocking
+# mechanism, not a new one), and view() has already pinned every address to
+# the signed-in account.
 sub submit ($c) {
+    my $csrf = $c->req->headers->header('X-CSRF-Token') // '';
+    return $c->render(json => { error => 'This page is out of date. Reload it and try again.' }, status => 403)
+        unless length $csrf && secure_compare($csrf, $c->csrf_token);
+    my $me = $c->session_email;
+    return $c->render(json => { error => 'Your sign-in has ended. Reload the page and sign in again.' }, status => 401)
+        unless $me;
+
     my $token = $c->stash('token');
     my $row = $c->app->pg->db->query(
         q{SELECT * FROM block_link.pending_links WHERE token = ? AND expires_at > NOW()}, $token,
     )->hash;
     return $c->render(json => { error => 'this link is no longer valid' }, status => 410) unless $row;
+
+    my $view = view(decode_json($row->{candidates}), $me);
+    return $c->render(json => { error => 'This link is for another account.' }, status => 403)
+        unless $view->{mode} eq 'owner';
 
     my $body = $c->req->json // {};
     my $list = ref $body->{block} eq 'ARRAY' ? $body->{block} : [];
@@ -193,13 +241,11 @@ sub submit ($c) {
     my @asked = grep { !$asked{ lc $_ }++ } grep { defined($_) && !ref($_) && length($_) } @$list;
     return $c->render(json => { error => 'Tick at least one address to add.' }, status => 400) unless @asked;
 
-    my $view = view(decode_json($row->{candidates}), $c->session_email);
     if (my @refused = @{ refused_addresses($view, \@asked) }) {
         my %main = map { lc($_->{address}) => 1 } @{ $view->{main} };
         my $error = (grep { $main{ lc $_ } } @refused)
             ? "Your account's main address can't be blocked: that would stop all of your mail."
-            : 'These addresses can\'t be blocked from this link: ' . join(', ', @refused)
-              . ($view->{mode} eq 'several' && !$c->session_email ? '. Sign in to block the ones that are yours.' : '.');
+            : 'These addresses can\'t be blocked from this link: ' . join(', ', @refused) . '.';
         return $c->render(json => { error => $error }, status => 403);
     }
 

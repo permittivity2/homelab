@@ -99,7 +99,7 @@ $r->get('/t/several'       => sub ($c) { page($c, candidates => $two) });
 $r->get('/t/several-other' => sub ($c) { page($c, candidates => $two, signed_in => 'carol@example.test') });
 $r->get('/t/several-alice' => sub ($c) { page($c, candidates => $two, signed_in => $alice, blocked => []) });
 $r->get('/t/link-other'    => sub ($c) { page($c, candidates => $one, signed_in => 'carol@example.test') });
-$r->get('/t/main'          => sub ($c) { page($c, candidates => [
+$r->get('/t/main'          => sub ($c) { page($c, signed_in => $alice, candidates => [
     { account_email => $alice, address => $alice },
     { account_email => $alice, address => 'shop1@alice.example' } ]) });
 $r->get('/t/notice' => sub ($c) {
@@ -129,32 +129,39 @@ $t->get_ok('/t/owner')
   ->content_like(qr{class="who">alice\@example\.test<}, '... with the address')
   ->content_like(qr{<form method="post" action="/logout">}, '... and Sign out posts to /logout');
 
-# --- one account on the link, signed out: the one-click block, no list ---
+# --- one account on the link, signed out: nothing but a Sign in button (item 69) ---
 $t->get_ok('/t/link')
   ->content_like(qr{<h1>Manage blocked addresses</h1>},  'heading unchanged')
-  ->content_like(qr{id="blockform"},                     'the form the script binds to')
-  ->content_like(qr{data-token="$token"},                'the token the form posts back to')
-  ->content_like(qr{name="block" value="shop1\@alice\.example" checked}, 'each address is a pre-checked box')
-  ->content_like(qr{>Add to Block List</button>},       'the button says Add to Block List')
-  ->content_unlike(qr{>Save<},                           'not Save')
+  ->content_unlike(qr{id="blockform"},                   'NO form: the link alone blocks nothing')
+  ->content_unlike(qr{shop1\@alice|name="block"},        '... and no address of the message is on the page')
+  ->content_unlike(qr{>Add to Block List</button>},      '... nor the button')
   ->content_like(qr{id="msg"},                           'the status line')
   ->content_unlike(qr{id="bl-list"},                     'no block list without signing in')
   ->content_unlike(qr{data-csrf=|id="bl-confirm"},       '... so nothing to unblock with either')
   ->content_like(qr{href="/login\?next=%2Fl%2F$token"},  'a sign-in button that comes back to this link')
-  ->content_like(qr{Sign in to see your block list},     '... saying what it is for');
+  ->content_like(qr{Nothing on this page works without signing in}, '... saying so plainly');
 my $link_html = $t->tx->res->body;
 my @manage = $link_html =~ m{<a class="btn" href="https://myaccount\.example\.test/\#mailself">Manage Account</a>}g;
 is(scalar @manage, 2, 'two Manage Account buttons, both to myaccount\'s Mail section');
-like($link_html, qr{Manage Account</a>.*id="add-section".*id="blocklist-section".*Manage Account</a>}s,
-    '... one above the add section, one below the list');
+like($link_html, qr{Manage Account</a>.*href="/login.*id="blocklist-section".*Manage Account</a>}s,
+    '... one above the sign-in, one below the list');
+my @signin = $link_html =~ m{href="/login\?next=}g;
+is(scalar @signin, 1, 'one Sign in button, not one per section');
 
 $t->get_ok('/t/link-nosso')
   ->content_unlike(qr{href="/login}, 'no sign-in configured: no sign-in button')
-  ->content_like(qr{Your whole block list is in Manage Account}, '... points at Manage Account instead');
+  ->content_unlike(qr{id="blockform"|shop1\@alice}, '... and still no form and no address')
+  ->content_like(qr{sign-in isn't set up here}, '... it says why')
+  ->content_like(qr{Your whole block list is in Manage Account}, '... and points at Manage Account instead');
 
-# --- signed in as the link's account: the whole list ---
+# --- signed in as the link's account: the form and the whole list ---
 $t->get_ok('/t/owner')
   ->content_like(qr{<section id="add-section">},               'the add section, shown')
+  ->content_like(qr{<form id="blockform" class="panel" data-token="$token" data-csrf="[0-9a-f]{40}">},
+                 '... its form carries the token and what Add to Block List sends back')
+  ->content_like(qr{name="block" value="shop1\@alice\.example" checked}, '... each address is a pre-checked box')
+  ->content_like(qr{>Add to Block List</button>},               '... the button says Add to Block List')
+  ->content_unlike(qr{>Save<},                                   '... not Save')
   ->content_like(qr{<div class="cand-row" data-addr="shop1\@alice\.example"><label class="check"><input type="checkbox" name="block" value="shop1\@alice\.example" checked>},
                  '... with what is not blocked yet, ticked')
   ->content_like(qr{<div class="cand-row hide" data-addr="&quot;&gt;&lt;script[^"]*"><label class="check"><input type="checkbox" name="block" value="[^"]*" disabled>},
@@ -189,33 +196,36 @@ $t->get_ok('/t/owner-error')
   ->content_unlike(qr{id="bl-confirm"},          '... nor anything to unblock with')
   ->content_like(qr{<section id="add-section">.*value="shop1\@alice\.example" checked}s, '... but the add section still works');
 
-# --- the regression: a link that covers two accounts ---
+# --- the item-48 regression: a link that covers two accounts ---
 $t->get_ok('/t/several')
   ->content_unlike(qr{secret-bcc},               'signed out: the other account\'s (Bcc\'d) address is not on the page')
   ->content_unlike(qr{shop1\@alice},             '... nor this one: nothing until you sign in')
   ->content_unlike(qr{id="blockform"},           '... no form to block anything with')
-  ->content_like(qr{more than one account},      '... it says why')
   ->content_like(qr{href="/login\?next=},        '... and offers a sign-in');
 $t->get_ok('/t/several-alice')
   ->content_like(qr{value="shop1\@alice\.example"}, 'signed in as alice: her address')
   ->content_unlike(qr{secret-bcc},                  '... and NOT bob\'s');
 $t->get_ok('/t/several-other')
   ->content_unlike(qr{secret-bcc|shop1\@alice}, 'signed in as neither: no addresses')
-  ->content_like(qr{isn't one of them},        '... and it says so');
+  ->content_unlike(qr{id="blockform"},          '... no form')
+  ->content_like(qr{This link is for another account}, '... and it says so')
+  ->content_unlike(qr{href="/login},            '... with no Sign in button: they are signed in already');
 $t->get_ok('/t/link-other')
-  ->content_like(qr{value="shop1\@alice\.example"}, 'one-account link, signed in as someone else: the link still blocks')
-  ->content_like(qr{This link is for another account}, '... but the list is not theirs to see here')
-  ->content_unlike(qr{id="bl-list"},                 '... and no list is drawn')
-  ->content_unlike(qr{data-csrf=|id="bl-confirm"},   '... nor anything to unblock with');
+  ->content_unlike(qr{shop1\@alice|name="block"},      'one-account link, signed in as someone else: no address, no box')
+  ->content_unlike(qr{id="blockform"},                 '... no form (item 69: the link alone blocks nothing)')
+  ->content_like(qr{This link is for another account}, '... it says whose it is not')
+  ->content_like(qr{sign in as the account this message was delivered to}, '... and what to do')
+  ->content_unlike(qr{id="bl-list"},                   '... and no list is drawn')
+  ->content_unlike(qr{data-csrf=|id="bl-confirm"},     '... nor anything to unblock with');
 
-# --- an account's main address ---
+# --- an account's main address (signed in as that account) ---
 $t->get_ok('/t/main')
   ->content_unlike(qr{name="block" value="alice\@example\.test"}, 'the main address is not a checkbox')
   ->content_like(qr{your account's main address},                 '... the page says why')
   ->content_like(qr{name="block" value="shop1\@alice\.example"},  '... the others still are');
 
-# --- escaping ---
-for my $path ('/t/link', '/t/owner') {
+# --- escaping (the addresses are only ever drawn for their owner) ---
+for my $path ('/t/owner', '/t/owner-error') {
     $t->get_ok($path)
       ->content_unlike(qr{<script>alert\('xss'\)</script>}, "$path: an address cannot inject markup")
       ->content_like(qr{&lt;script&gt;},                    "$path: it is escaped, not dropped");

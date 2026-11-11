@@ -1,3 +1,27 @@
+homelab-block-link (0.1.6) unstable; urgency=high
+
+  * SECURITY (post-cutover #69): the link page works only for a visitor
+    signed in as the account the message was delivered to. Until now a
+    link covering ONE account kept a one-click block for whoever held it
+    ("the token is the credential"), and the footer that carries the link
+    is quoted into every reply and forward: since #67 the original sender
+    routinely held a working link and could block the alias they were
+    writing to. Visibility.pm now has two modes, owner and guest; guest
+    sees and may block nothing.
+  * GET /l/:token with nobody signed in redirects to /login (and back to
+    the link) BEFORE the link is looked up, so an anonymous visitor learns
+    nothing, not even whether the link is valid. A session whose token no
+    longer introspects gets the page with a Sign in button instead, so a
+    sign-in that comes back unverifiable can never loop.
+  * POST /l/:token takes the same guards as unblock, in the same order:
+    the page's CSRF token (X-CSRF-Token, from the form's data-csrf), then a
+    live sign-in, then the link, then that the visitor is one of its
+    accounts. Signed in as another account: 403 "for another account".
+  * Tests (visibility, chrome, signin, basic), README and the example
+    config follow the new rule.
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 03:30:00 -0600
+
 homelab-block-link (0.1.5) unstable; urgency=medium
 
   * Unblock from the list: signed in, each row of the block list has an x.

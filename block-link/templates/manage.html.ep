@@ -2,9 +2,11 @@
 % title 'Manage blocked addresses';
 %# The page a link in a delivered email opens. Opening it never changes
 %# anything (see README.md, "Why GET never mutates"); only Add to Block List
-%# and, signed in, a row's unblock button do.
-%#   $view        Visibility::view() -- mode owner | link | several, and the
-%#                addresses this visitor may block (offer) or not (main)
+%# and a row's unblock button do, and both need the visitor signed in as the
+%# account the message was delivered to (item 69): the link alone shows and
+%# blocks nothing.
+%#   $view        Visibility::view() -- mode owner | guest, and the addresses
+%#                this visitor may block (offer) or not (main)
 %#   $add         $view->{offer} minus what is already on the block list
 %#   $blocked     the signed-in account's block list, sorted (owner only)
 %#   $list_error  the list could not be read just now
@@ -27,7 +29,10 @@
 % my %todo = map { lc($_->{address}) => 1 } @$add;
 % if (@{ $view->{offer} }) {
 <section id="add-section"<%== @$add ? '' : ' class="hide"' %>>
-<form id="blockform" class="panel" data-token="<%= $token %>">
+%# data-csrf is what Add to Block List sends back to show it came from this
+%# page: the session cookie is the credential, so the request must prove it
+%# was not made from another site.
+<form id="blockform" class="panel" data-token="<%= $token %>" data-csrf="<%= csrf_token %>">
   <div class="panel__body stack">
     <p class="text-muted">This message was sent to the address<span id="add-es"><%= @$add == 1 ? '' : 'es' %></span> below. Uncheck any you do NOT want to block.</p>
     %# .check is inline-flex, so each one gets its own line, and its words sit
@@ -51,15 +56,15 @@
 <p class="banner banner--info"><span>This message was sent to <strong class="cand"><%= $cand->{address} %></strong>, your account's main address. It can't be blocked: that would stop all of your mail.</span></p>
 % }
 
-% if ($mode eq 'several') {
+% if ($mode eq 'guest') {
 <div class="panel"><div class="panel__body stack">
   % if (length $signed_in) {
-  <p>This message went to more than one account, and you're signed in as <strong class="cand"><%= $signed_in %></strong>, which isn't one of them.</p>
+  <p>This link is for another account. You're signed in as <strong class="cand"><%= $signed_in %></strong>; sign out, then sign in as the account this message was delivered to.</p>
   % } elsif ($can_sign_in) {
-  <p>This message went to more than one account, so its addresses aren't shown until you sign in. Signed in, you'll see the ones that are yours.</p>
+  <p>Sign in to see the address this message was sent to, block it, and manage your block list. Nothing on this page works without signing in.</p>
   <div class="form-actions"><a class="btn btn-primary" href="<%= $login %>">Sign in</a></div>
   % } else {
-  <p>This message went to more than one account, so its addresses aren't shown here. Your own block list is in Manage Account.</p>
+  <p>This page needs a sign-in, and sign-in isn't set up here. Your block list is in Manage Account.</p>
   % }
 </div></div>
 % }
@@ -96,8 +101,7 @@
   % } elsif (length $signed_in) {
     <p class="text-muted">This link is for another account, so your own block list isn't shown here.</p>
   % } elsif ($can_sign_in) {
-    <p class="text-muted">Sign in to see every address you've blocked, sort it and filter it.</p>
-    <div class="form-actions"><a class="btn btn-primary" href="<%= $login %>">Sign in to see your block list</a></div>
+    <p class="text-muted">Signed in, every address you've blocked is listed here, to sort, filter and unblock.</p>
   % } else {
     <p class="text-muted">Your whole block list is in Manage Account.</p>
   % }

@@ -72,13 +72,17 @@ my $effective2 = $t->get_ok('/internal/v1/block-link/account' => $auth)->status_
 is($effective2->{enabled}, 0, 'account override (disabled) beats the domain default (enabled)');
 is($effective2->{domain_default}, 1, 'domain_default field reports the real domain setting, unaffected by the override');
 
-# --- Public link page (no DB mutation on GET) -----------------------------
+# --- The link page needs a sign-in (post-cutover item 69) -------------------
+# Signed out, the page is never drawn and the link is never looked up: with
+# an sso: block a visitor is sent to sign in, without one they get a page
+# that only points at Manage Account. Either way no address, no form.
+my $signed_out = $t->app->sso ? 302 : 200;
 my $bogus_token = 'not-a-real-token-at-all';
-$t->get_ok("/l/$bogus_token")->status_is(404, 'a garbage token is a clean 404')
-    ->content_like(qr{class="topbar"}, 'the invalid-link page has the shared top bar');
+$t->get_ok("/l/$bogus_token")->status_is($signed_out, 'a garbage token, signed out: no 404 to learn from')
+    ->content_unlike(qr{not valid}, '... the link is not even looked up');
 
 # Insert a real pending_links row directly (this is what the milter would
-# do live) to test the public page against real data.
+# do live) to test the page against real data.
 my $token = join '', map { sprintf('%02x', int(rand(256))) } 1 .. 32;
 $t->app->pg->db->query(
     q{INSERT INTO block_link.pending_links (token, candidates, expires_at)
@@ -86,10 +90,17 @@ $t->app->pg->db->query(
     $token, encode_json([{ account_email => $email, address => "victim\@$domain" }]),
 );
 
-$t->get_ok("/l/$token")->status_is(200, 'a real pending link renders the management page')
-    ->content_like(qr/checked/, 'the candidate checkbox is pre-checked by default')
-    ->content_like(qr{theme/v1/theme\.css}, 'the real page is on the shared theme')
-    ->content_like(qr{>Add to Block List</button>}, 'the button says Add to Block List');
+$t->get_ok("/l/$token")->status_is($signed_out, 'a real pending link, signed out: not shown')
+    ->content_unlike(qr{victim\@}, '... the address is not on the page')
+    ->content_unlike(qr{>Add to Block List</button>}, '... and there is nothing to block with');
+$t->post_ok("/l/$token" => json => { block => ["victim\@$domain"] })
+    ->status_is(403, 'blocking from the link alone is refused');
+is $t->app->pg->db->query(
+    'SELECT count(*) FROM domainadmin.recipient_access WHERE lower(recipient) = lower(?)', "victim\@$domain",
+)->array->[0], 0, '... and nothing was blocked';
+# The signed-in page (the form, the block list, Add to Block List, unblock)
+# needs a browser sign-in through homelab-sso: see the live check in
+# post-cutover item 69's record (tools/e2e69.sh), run from offsite.
 
 # --- Regression (post-cutover item 48): one link, two accounts -------------
 # One message to two accounts gets ONE link. Signed out, nobody may see or
@@ -104,7 +115,7 @@ $t->app->pg->db->query(
         { account_email => "someone-else\@$domain", address => "bcc-copy\@$domain" },
     ]),
 );
-$t->get_ok("/l/$token2")->status_is(200)
+$t->get_ok("/l/$token2")->status_is($signed_out)
     ->content_unlike(qr{bcc-copy\@}, 'a two-account link does not show the other account\'s address')
     ->content_unlike(qr{mine\@},     '... nor any address, until you sign in');
 $t->post_ok("/l/$token2" => json => { block => ["bcc-copy\@$domain"] })

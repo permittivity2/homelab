@@ -6,26 +6,31 @@ our @EXPORT_OK = qw(view refused_addresses);
 
 # Who may see, and block, which of a link's addresses.
 #
-# WHY THIS EXISTS. homelab-postfix-block-link makes ONE link per message, and
-# a message can reach several mailmasker accounts in one delivery (To, Cc or
-# Bcc): its envrcpt callback collects every enabled recipient, eom writes one
-# pending_links row, and the same link goes into every copy. Until 2026-11-03
-# the page showed every address on the link to whoever opened it, with every
-# box checked -- so each recipient saw the others' addresses, even a Bcc'd
-# one, and one person's Save blocked the other person's address, on the other
-# person's account. A milter cannot give each recipient a different link (one
-# shared body and header set per transaction), so the rule lives here instead,
-# at the only place that knows who is looking.
-#
-# THE RULE, decided with the owner 2026-11-03 (post-cutover item 48):
-#   - Signed in as one of the link's accounts ("owner"): that account's
-#     addresses only, plus its own block list.
-#   - Otherwise, a link that covers ONE account ("link") keeps the one-click
-#     block it always had: the token in the email is the credential, the same
-#     trust model as before.
-#   - Otherwise ("several"): nothing until you sign in as one of them.
+# THE RULE (post-cutover item 69, 2026-11-11): the link alone is NOT a
+# credential. Only someone signed in (through homelab-sso) as one of the
+# accounts the message was delivered to sees anything, and then only that
+# account's addresses:
+#   - 'owner': signed in as one of the link's accounts -> that account's
+#     addresses from the message, and its own block list.
+#   - 'guest': anyone else -- not signed in, or signed in as some other
+#     account -> nothing: no address, no form, nothing to block.
 # show() and submit() both call view(), so the page can never offer something
 # the server would then refuse, or the other way round.
+#
+# WHY. Until 0.1.6 a link that covered ONE account kept a one-click block for
+# whoever held it ("the token in the email is the credential", item 48), on
+# the reasoning that only the recipient ever opened their own mail. That
+# stopped being true: the footer line that carries the link is quoted into
+# every reply and forward, and since item 67 (replies go out from the alias
+# the message came to) the original sender routinely ends up holding a
+# working link -- and could block the very alias they were writing to. The
+# owner's decision on 2026-11-11: sign-in, with no exception.
+#
+# A link can also cover SEVERAL accounts: homelab-postfix-block-link makes
+# one link per message (one shared body and header set per transaction), and
+# a message can reach several mailmasker accounts in one delivery (To, Cc or
+# Bcc). The owner view scopes to the signed-in account, so each recipient
+# sees and blocks only their own addresses, never another's Bcc'd copy.
 #
 # An account's MAIN address is never offered, whatever the mode: blocking it
 # stops all of that account's mail, password resets included. homelab-domain-
@@ -35,7 +40,7 @@ our @EXPORT_OK = qw(view refused_addresses);
 sub _norm ($s) { return lc($s // '') }
 
 # view(\@candidates, $signed_in_email) -> {
-#     mode      => 'owner' | 'link' | 'several',
+#     mode      => 'owner' | 'guest',
 #     offer     => [ candidates that may be blocked from this page ],
 #     main      => [ in-scope candidates that are an account's main address ],
 #     accounts  => number of distinct accounts on the link,
@@ -56,17 +61,10 @@ sub view ($candidates, $signed_in = '') {
     my %accounts = map { _norm($_->{account_email}) => 1 } @valid;
     my $me = _norm($signed_in);
 
-    my ($mode, @scope);
+    my ($mode, @scope) = ('guest');
     if (length $me && $accounts{$me}) {
         $mode  = 'owner';
         @scope = grep { _norm($_->{account_email}) eq $me } @valid;
-    }
-    elsif (keys %accounts <= 1) {
-        $mode  = 'link';
-        @scope = @valid;
-    }
-    else {
-        $mode = 'several';
     }
 
     my (@offer, @main);
