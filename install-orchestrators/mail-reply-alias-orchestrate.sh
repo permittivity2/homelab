@@ -37,7 +37,7 @@ rssh(){ ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" "${@:2}" 2>/dev/null; }
 MAIL_NODES="39 40 41"
 DB_NODES="06 07 08"
 ACCOUNTMANAGE_NODES="27 28 29"
-WANT_DA=0.1.44; WANT_PF=0.1.27; WANT_BL=0.2.1; WANT_DEV=0.1.4; WANT_CLI=0.6.15; WANT_AM=0.1.46
+WANT_DA=0.1.44; WANT_PF=0.1.27; WANT_BL=0.2.2; WANT_DEV=0.1.4; WANT_CLI=0.6.15; WANT_AM=0.1.46
 
 TEST_ACCOUNT="${TEST_ACCOUNT:-testaccountforclaude@mailmasker.org}"
 # The test account's password stays in a file outside this repository; only

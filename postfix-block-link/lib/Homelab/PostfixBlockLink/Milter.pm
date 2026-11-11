@@ -10,6 +10,7 @@ our @EXPORT_OK = qw(
     normalise_message_id last_reference_id parse_header_addresses is_safe_address
     choose_reply_address rewrite_address_header
     reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
+    single_account reply_footer_line footer_text_lines footer_html
 );
 
 # Replicates Postfix's OWN virtual_alias_maps resolution for one envelope
@@ -344,6 +345,65 @@ sub allowed_to_send_as {
         $login, $address, '@' . $domain,
     )->hash;
     return $row ? 1 : 0;
+}
+
+# ===== the footer: block link + "Reply from the alias" line (0.2.2) ========
+#
+# A milter edits ONE body per transaction, shared by every recipient, so a
+# per-account line can only be written when the transaction has exactly one
+# destination account. With two accounts (a message to Jeff's alias and
+# Kristine's) the line would have to name both choices -- one person's
+# alias is nobody else's business -- so it is left out. Gardner, 2026-11-11.
+
+# The envelope's recipients ([ { address, account }, ... ]) -> the single
+# destination account they all resolve to, or undef when there are none or
+# more than one.
+sub single_account {
+    my ($recipients) = @_;
+    my %seen = map { lc($_->{account} // '') => 1 } @{ $recipients // [] };
+    delete $seen{''};
+    my @accounts = keys %seen;
+    return @accounts == 1 ? $accounts[0] : undef;
+}
+
+# The one line a user sees under a message that came to one of their aliases
+# while their switch is on. Starts with the setting's own name (findable in
+# myaccount), names only the alias -- never the real address, the thing the
+# feature hides -- and footers get forwarded.
+sub reply_footer_line {
+    my ($alias) = @_;
+    return "Reply from the alias: a reply to this message goes out from $alias.";
+}
+
+# The text lines of the footer, in order: the reply line (if any) ABOVE the
+# block link (if any). The caller adds the signature separator and the line
+# endings its path needs (CRLF straight to replacebody, LF through
+# Email::MIME).
+sub footer_text_lines {
+    my (%o) = @_;
+    my @lines;
+    push @lines, reply_footer_line($o{reply_alias}) if defined $o{reply_alias};
+    push @lines, "Don't want mail like this? Manage blocked addresses: $o{block_url}" if defined $o{block_url};
+    return @lines;
+}
+
+sub _html_escape {
+    my ($s) = @_;
+    $s =~ s/&/&amp;/g; $s =~ s/</&lt;/g; $s =~ s/>/&gt;/g; $s =~ s/"/&quot;/g;
+    return $s;
+}
+
+# The same footer for text/html leaf parts: one muted block, one line per
+# item, the reply line first. Returns undef when there is nothing to say.
+sub footer_html {
+    my (%o) = @_;
+    my @lines;
+    push @lines, _html_escape(reply_footer_line($o{reply_alias})) if defined $o{reply_alias};
+    push @lines, qq{Don't want mail like this? <a href="} . _html_escape($o{block_url}) . qq{">Manage blocked addresses</a>}
+        if defined $o{block_url};
+    return undef unless @lines;
+    return qq{<div style="margin-top:1em;padding-top:0.6em;border-top:1px solid #ccc;font-size:12px;color:#777;font-family:sans-serif">}
+        . join('<br>', @lines) . '</div>';
 }
 
 1;

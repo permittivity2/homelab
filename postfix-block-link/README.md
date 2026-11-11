@@ -65,6 +65,10 @@ If any resolved recipient on the transaction is enabled, `eom` mints one
     multipart message got the header but no footer — the common case,
     now fixed.)
 
+Since 0.2.2 the same footer can also carry the "Reply from the alias"
+line (see that section below) — above the block link, or on its own when
+the message gets no block link.
+
 **Mixed-mode transactions**: if a message has multiple enabled
 recipients across domains with different modes, the body gets included if
 *any* of them wants it — a milter operates on one shared body per
@@ -156,9 +160,32 @@ brackets, spaces or control characters) before it is written anywhere.
 The lookup is keyed by the authenticated account, so a forged
 `In-Reply-To` naming another account's message finds nothing.
 
+3. **The footer line (0.2.2).** When the message came to an alias of the
+   **one** account it is for and that account's switch is on, the body gets
+   one line, right above the block link (or alone when the message gets no
+   block link):
+
+       Reply from the alias: a reply to this message goes out from shop01@forge.name.
+
+   It starts with the setting's own name so a reader knows where to look,
+   and names only the alias — never the real address, the thing the
+   feature hides, and footers get forwarded. It is written only when the
+   row from step 1 exists, so it never promises a rewrite step 2 cannot
+   find. Not written: when the message went to the real address (nothing
+   changes for it), when the switch is off, when the message is PGP/S-MIME
+   signed, and when the transaction has **more than one destination
+   account** — a milter edits one body shared by every recipient, and one
+   person's alias is nobody else's business. The line reflects the switch
+   at the time the message arrived: switching off later leaves older
+   messages carrying it. Decided at `eoh` (`single_account`, one
+   `mail_reply_identity` lookup) so the body callback knows to buffer;
+   written by the same code path as the block-link footer
+   (`footer_text_lines`/`footer_html` in `Milter.pm`), text and html leaf
+   parts alike. Log line: `footer: reply line for <account> names <alias>`.
+
 Log lines (journald, `homelab-postfix-block-link`): `reply-identity:
 recorded …`, `reply-identity: rewrote …`, `reply-identity: … left alone
-(<reason>)`, and the tempfail cases below.
+(<reason>)`, `footer: reply line …`, and the tempfail cases below.
 
 ## Fail open — with one deliberate exception
 

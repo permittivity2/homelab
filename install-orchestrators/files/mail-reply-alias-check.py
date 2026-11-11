@@ -228,6 +228,33 @@ def imap_headers(m, num):
     return None
 
 
+def imap_text(m, num):
+    """The decoded text/plain content of one stored message (every text/plain
+    leaf joined) -- where the milter's footer lines end up."""
+    typ, data = m.fetch(num, "(BODY.PEEK[])")
+    if typ != "OK":
+        return ""
+    raw = b""
+    for part in data:
+        if isinstance(part, tuple):
+            raw = part[1]
+            break
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    texts = []
+    for part in msg.walk():
+        if part.get_content_type() == "text/plain":
+            try:
+                texts.append(part.get_content())
+            except Exception:  # an undecodable part is not what we are testing
+                pass
+    return "\n".join(texts)
+
+
+def reply_line(alias):
+    """The footer line block-link 0.2.2 writes under a message that came to an alias."""
+    return f"Reply from the alias: a reply to this message goes out from {alias}."
+
+
 def wait_for(m, criterion, timeout=90, want=1):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -370,6 +397,13 @@ def mode_roundtrip(args, password):
         h = imap_headers(m, nums1[0])
         print(f"      To: {h.get('To')}")
         print(f"      Delivered-To: {h.get('Delivered-To')}")
+        # 3b. the footer line (block-link 0.2.2): switch on, one account, came to an alias
+        text = imap_text(m, nums1[0])
+        line = reply_line(first_alias)
+        if report(line in text, "footer line names the chosen alias", line if line in text else f"text ends: ...{text[-160:]!r}"):
+            block = text.find("Manage blocked addresses")
+            if block >= 0:
+                report(text.find(line) < block, "footer line sits above the blocked-addresses line")
 
     # 4./5. the reply, From the login address, must leave as the alias
     msgid2 = f"<reply67-reply-{tag}@check.homelab.invalid>"
@@ -390,6 +424,8 @@ def mode_roundtrip(args, password):
         report(f"d={alias_domain}" in dkim.replace(" ", ""), "DKIM-signed for the alias domain",
                f"d= in: {dkim[:120]}..." if dkim else "no DKIM-Signature header")
         report(str(h.get("In-Reply-To") or "").strip() == msgid1, "threading header untouched", str(h.get("In-Reply-To")))
+        # this reply was addressed to the REAL address: nothing changes for it, so no footer line
+        report("Reply from the alias:" not in imap_text(m, nums2[0]), "a message to the real address gets no footer line")
 
     # 6a. switch off -> untouched
     setting_set(args.api_base, token, False)
@@ -403,6 +439,15 @@ def mode_roundtrip(args, password):
         h = imap_headers(m, nums3[0])
         report(addr_of(h.get("From")) == account, "switch OFF: From left alone", f"From: {h.get('From')}")
         report(addr_of(h.get("Return-Path")) == account, "switch OFF: Return-Path left alone", f"Return-Path: {h.get('Return-Path')}")
+    # 6a'. switch still off: a new original to the aliases gets no footer line
+    msgid6 = f"<reply67-off-orig-{tag}@check.homelab.invalid>"
+    created_ids.append(msgid6)
+    submit(args, password, account, aliases,
+           build_message(f"Outside Sender <{account}>", ", ".join(aliases), f"reply67 switch-off original {tag}", msgid6,
+                         "Original to the aliases with the switch OFF: must carry no footer line.\n"))
+    nums6 = wait_for(m, f'HEADER Message-ID "{msgid6}"')
+    if report(len(nums6) >= 1, "switch-off original delivered"):
+        report("Reply from the alias:" not in imap_text(m, nums6[0]), "switch OFF: no footer line")
     setting_set(args.api_base, token, True)
 
     # 6b. a foreign In-Reply-To -> untouched

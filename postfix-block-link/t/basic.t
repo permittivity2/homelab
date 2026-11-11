@@ -13,6 +13,7 @@ use Homelab::PostfixBlockLink::Milter qw(
     normalise_message_id last_reference_id parse_header_addresses is_safe_address
     choose_reply_address rewrite_address_header
     reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
+    single_account reply_footer_line footer_text_lines footer_html
 );
 
 # --- Pure functions -- no DB, no Sendmail::PMilter, run everywhere ------
@@ -119,6 +120,39 @@ is(rewrite_address_header("Jeff\r\n <TEST\@mailmasker.org>", $old, $new), 'Jeff 
 is(rewrite_address_header('Jeff <test@mailmasker.org>, Two <two@x.org>', $old, $new), undef, 'two addresses -> undef (left alone)');
 is(rewrite_address_header('Jeff <other@mailmasker.org>', $old, $new), undef, 'a different address -> undef');
 is(rewrite_address_header(undef, $old, $new), undef, 'no From at all -> undef');
+
+# --- the footer line (0.2.2, pure) ----------------------------------------
+
+is(single_account([]), undef, 'no recipients -> no single account');
+is(single_account([ { address => 'a@forge.name', account => 'test@mailmasker.org' },
+                    { address => 'b@forge.name', account => 'TEST@mailmasker.org' } ]),
+    'test@mailmasker.org', 'several aliases of ONE account -> that account (case-insensitive)');
+is(single_account([ { address => 'a@forge.name', account => 'test@mailmasker.org' },
+                    { address => 'k@forge.name', account => 'other@mailmasker.org' } ]),
+    undef, 'two accounts on one transaction -> undef (no per-account line can be written)');
+
+is(reply_footer_line('shop01@forge.name'),
+    'Reply from the alias: a reply to this message goes out from shop01@forge.name.',
+    'the footer line starts with the setting name and names only the alias');
+
+is_deeply([ footer_text_lines(reply_alias => 'shop01@forge.name', block_url => 'https://b.example/l/tok') ],
+    [ 'Reply from the alias: a reply to this message goes out from shop01@forge.name.',
+      "Don't want mail like this? Manage blocked addresses: https://b.example/l/tok" ],
+    'both lines, the reply line ABOVE the block link');
+is_deeply([ footer_text_lines(block_url => 'https://b.example/l/tok') ],
+    [ "Don't want mail like this? Manage blocked addresses: https://b.example/l/tok" ],
+    'block link alone is exactly the pre-0.2.2 footer text');
+is_deeply([ footer_text_lines(reply_alias => 'shop01@forge.name') ],
+    [ 'Reply from the alias: a reply to this message goes out from shop01@forge.name.' ],
+    'the reply line can stand alone (no block link for this message)');
+is_deeply([ footer_text_lines() ], [], 'nothing to say -> no lines');
+
+my $fh = footer_html(reply_alias => 'shop01@forge.name', block_url => 'https://b.example/l/tok');
+like($fh, qr{goes out from shop01\@forge\.name\.<br>Don't want mail like this\? <a href="https://b\.example/l/tok">Manage blocked addresses</a></div>\z},
+    'html footer: reply line first, then the link, one block');
+like(footer_html(reply_alias => 'a<b>@forge.name'), qr{a&lt;b&gt;\@forge\.name}, 'html footer escapes the alias');
+unlike(footer_html(reply_alias => 'shop01@forge.name'), qr/Manage blocked/, 'html footer with the reply line alone has no link');
+is(footer_html(), undef, 'html footer with nothing to say is undef');
 
 # --- DB-backed functions -- real Postgres only, same "no mocks" -----------
 # convention as every other homelab-* test suite. Point

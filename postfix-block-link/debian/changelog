@@ -1,3 +1,9 @@
+homelab-postfix-block-link (0.2.2) unstable; urgency=medium
+
+  * Release v0.2.2
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 02:30:18 -0600
+
 homelab-postfix-block-link (0.2.1) unstable; urgency=medium
 
   * Release v0.2.1

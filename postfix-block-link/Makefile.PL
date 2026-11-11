@@ -4,7 +4,7 @@ use ExtUtils::MakeMaker;
 
 WriteMakefile(
     NAME         => 'Homelab::PostfixBlockLink',
-    VERSION      => '0.2.0',
+    VERSION      => '0.2.2',
     ABSTRACT     => 'Postfix milter add-on: click-to-block link on inbound mail; replies go out from the alias they were sent to',
     AUTHOR       => 'Jeff Gardner <mailmasker-api01@forge.name>',
     LICENSE      => 'agpl_3',
