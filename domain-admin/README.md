@@ -260,6 +260,47 @@ Gateway route added to `homelab-api` (`api/lib/Homelab/API/App.pm`):
 `/api/v1/domains/*` → this service, `strip_prefix => '/api/v1/domains'`,
 `backend_prefix => '/internal/v1'`.
 
+## Reply from the alias a message was sent to (post-cutover #67)
+
+A per-user switch, off by default: `GET`/`PUT /internal/v1/domains/
+mail-reply-identity/mine` (`{reply_from_alias: true|false}`; JWT-only,
+`authenticated_email_any`, a user sees and sets only their own row;
+audited as `mail_reply_identity.enable`/`.disable`). Gatewayed as
+`/api/v1/domains/mail-reply-identity/mine`; myaccount's Mail section and
+`homelab-cli mail reply-from-alias show|enable|disable` are the clients.
+
+This service owns the two tables (migration `009-mail-reply-identity.
+sql`) but does little with them — the work happens on the mail pool, in
+the `homelab-postfix-block-link` milter, which holds `SELECT` on
+`mail_reply_identity` and `SELECT, INSERT` on `mail_received_via`:
+
+- **Inbound (any port), for every account:** when a message was addressed
+  to one of the recipient's aliases (an exact `mail_aliases` row or a
+  `@domain` catch-all), the milter records `(account, Message-ID) →
+  chosen address`. The rule when several of the account's addresses are
+  on one message: the first of them on the **To** line, else the first on
+  **Cc**, else the first envelope recipient (Bcc, mailing lists). Nothing
+  is recorded when the winner is the real address.
+- **Submission (587), only with the switch on:** a reply whose `From:` is
+  the login address and whose `In-Reply-To` (else last `References`) names
+  a recorded message gets its `From:` (and a `Reply-To:`/`Sender:` naming
+  the login) and its envelope sender swapped to the recorded alias — after
+  re-checking the user may still send as it (`mail_aliases` `active AND
+  send_enabled`, exact or catch-all). OpenDKIM runs after the milter on
+  587 and signs the rewritten From with that domain's key. Mail already
+  sent From an alias (a Roundcube identity, `mail send --from`) is never
+  touched.
+
+Why the switch lives here and not in `block_link`: it is mail-routing
+identity state, the sibling of `mail_aliases`; the block-link package
+owns the click-to-block feature only. Why recording is unconditional: a
+user who switches this on wants it to work for mail already in the
+inbox, not just from the next message on. Retention:
+`reply_identity.retention_days` (default 400), pruned hourly by
+`_prune_received_via` in batches with `FOR UPDATE SKIP LOCKED`. What is
+stored: the account, its own address(es) on the message, the Message-ID
+and a timestamp — never the sender, subject or body.
+
 ## Self-service address blocking
 
 `/mine` (JWT-only, no `site_admin` requirement — `authenticated_email_

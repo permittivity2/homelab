@@ -1273,6 +1273,49 @@ def cmd_mail_block_link_disable(args):
     return _cmd_mail_block_link_set(args, False)
 
 
+# --- mail reply-from-alias (post-cutover #67): replies from any mail app go
+# out from the alias the original was sent to. Setting owned by
+# homelab-domain-admin; applied by the mail pool's block-link milter. ---
+def cmd_mail_reply_from_alias_show(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        setting = _client(args).reply_from_alias_show(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not show the reply-from-alias setting: {e.message}")
+        return 1
+    if _emit(args, setting):
+        return 0
+    print(f"reply from the alias a message was sent to: {'on' if setting.get('reply_from_alias') else 'off'}")
+    if setting.get("updated_at"):
+        print(f"last changed: {setting['updated_at']}")
+    return 0
+
+
+def _cmd_mail_reply_from_alias_set(args, enabled):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).reply_from_alias_set(session["token"], enabled)
+    except ApiError as e:
+        _emit_error(args, f"Could not update the reply-from-alias setting: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Replying from the alias a message was sent to is now {'on' if enabled else 'off'} for your account")
+    return 0
+
+
+def cmd_mail_reply_from_alias_enable(args):
+    return _cmd_mail_reply_from_alias_set(args, True)
+
+
+def cmd_mail_reply_from_alias_disable(args):
+    return _cmd_mail_reply_from_alias_set(args, False)
+
+
 # --- drive: homelab-api's /api/v1/drive/* gateway -> homelab-drive's
 # own JSON API (see ../../drive/README.md's "JSON API" section). -------
 
@@ -2583,6 +2626,18 @@ def build_parser():
     p.set_defaults(func=cmd_mail_block_link_enable)
     p = block_link_sub.add_parser("disable", help="Turn off click-to-block links for your account, overriding the domain default")
     p.set_defaults(func=cmd_mail_block_link_disable)
+
+    reply_alias = mail_sub.add_parser(
+        "reply-from-alias",
+        help="Your own setting: a reply to mail that came to one of your aliases is sent FROM that alias, from any mail app",
+    )
+    reply_alias_sub = reply_alias.add_subparsers(dest="mail_reply_from_alias_command", required=True)
+    p = reply_alias_sub.add_parser("show", help="Show whether replies are sent from the alias a message was sent to")
+    p.set_defaults(func=cmd_mail_reply_from_alias_show)
+    p = reply_alias_sub.add_parser("enable", help="Turn it on (first of your addresses on the To line, else Cc, else the delivered-to address)")
+    p.set_defaults(func=cmd_mail_reply_from_alias_enable)
+    p = reply_alias_sub.add_parser("disable", help="Turn it off: replies go out from your main address, as before")
+    p.set_defaults(func=cmd_mail_reply_from_alias_disable)
 
     p = sub.add_parser("search", help="Search your email and files together")
     p.add_argument("query", nargs="?", default="", help='Words, "a phrase", or -exclude')

@@ -90,28 +90,98 @@ either way, untrustworthy. Detected via `Content-Type`:
 `application/pkcs7-signature`. The header is unaffected by the body
 signature and is still injected.
 
-## Why this milter must run *after* OpenDKIM
+## Where this milter sits relative to OpenDKIM (per listener)
 
-Postfix's `smtpd_milters`/`non_smtpd_milters` execute in list order, each
-milter seeing the previous one's changes. `postinst` appends this
-milter's `inet:HOST:PORT` entry to whatever's already configured — the
-*same* idempotent read-current-then-append `postconf -e` pattern
-`homelab-postfix`'s own postinst already uses to wire in OpenDKIM (see
-that package's postinst, "DKIM" section). Appending (never overwriting)
-means this milter naturally lands after OpenDKIM if OpenDKIM is enabled
-on the host, which is the order that matters: OpenDKIM's own inbound
-`Authentication-Results` verification should reflect the *untouched*
-original message, not one this milter has already added a header/footer
-to.
+Postfix's milter lists execute in order, each milter seeing the previous
+one's changes. Until 0.2.0 the postinst appended this milter's entry
+"if missing", which left the order to whichever postinst ran last —
+prod ended up with this milter *before* OpenDKIM on 25, so OpenDKIM
+verified inbound mail that already carried our header/footer. Since
+0.2.0 both postinsts (this one and `homelab-postfix`'s DKIM block) apply
+the same fixed rules, so they converge whatever the run order:
 
-## Fail open, always
+| list | order | why |
+|---|---|---|
+| `smtpd_milters` (25) | OpenDKIM first, this milter **last** | inbound `Authentication-Results` verification must see the untouched original |
+| `non_smtpd_milters` (pickup/sendmail) | this milter **first**, OpenDKIM last | sign local mail after everything else is done with it |
+| `submission/inet` (587, a `postconf -P` per-service override) | this milter **first**, OpenDKIM last | the reply rewrite below changes `From:`; the signature must cover that From and use that domain's key |
 
-Every DB-touching operation (`envrcpt`, `eom`) is wrapped in `eval {}`. On
-any error — DB unreachable, query failure, anything — it logs to stderr
-(journald, via systemd) and returns `SMFIS_CONTINUE` with the message
-unmodified. This milter sits on the hot SMTP delivery path for every host
-it's installed on; it must never become a new way to reject, defer, or
-delay real mail.
+The 587 override also sets `milter_default_action=tempfail` (see "Fail
+open — with one deliberate exception"). Check with `postconf -h
+smtpd_milters`, `postconf -h non_smtpd_milters` and `postconf -Ph
+submission/inet/smtpd_milters`.
+
+## Reply from the alias a message was sent to (post-cutover #67)
+
+Phone mail apps always send a reply *From* the account's primary address,
+and catch-all aliases are invented on the spot, so no client can be told
+about them in advance. Since 0.2.0 this milter makes the alias behave as
+the sending identity anyway, with nothing to configure per alias:
+
+1. **Inbound, every message, every account** (fails open): for each
+   destination account on the transaction, `choose_reply_address`
+   (`Milter.pm`) picks which of the account's own addresses the message
+   was addressed to — the first of them on the **To** line, else the first
+   on **Cc**, else the first envelope recipient (Bcc, mailing lists). To/Cc
+   addresses are resolved through the same `resolve_recipient` lookup, not
+   just matched against this transaction's envelope, so a message split
+   over several deliveries reaches the same answer. If the winner is an
+   alias, one row `(account, Message-ID) → chosen` goes into
+   `domainadmin.mail_received_via` (`ON CONFLICT DO NOTHING`; owned and
+   pruned by homelab-domain-admin, migration 009). The real address
+   winning records nothing. Recorded regardless of the user's setting, so
+   switching it on later works for mail already received.
+2. **Submission (587, `{daemon_name}` = `ORIGINATING`), authenticated
+   user, switch on** (`domainadmin.mail_reply_identity`, set in myaccount):
+   if the message is a reply (`In-Reply-To`, else the last `References`
+   id), its `From:` is exactly the login address, and a row exists for
+   `(login, parent id)`, then the `From:` (and a `Reply-To:`/`Sender:` that
+   also names the login) is rewritten to the recorded alias — keeping the
+   display name, dropping it if it *contains* the real address — and the
+   envelope sender is replaced (`chgfrom`), so `Return-Path` and bounces
+   follow the alias too. Mail already From an alias (Roundcube identity,
+   `homelab-cli mail send --from`) has `From ≠ login` and is never touched.
+
+**The authorization boundary moved here on purpose.** Postfix's
+`reject_authenticated_sender_login_mismatch` on 587 checks the client's
+MAIL FROM *before* this milter runs and never re-checks after `chgfrom`.
+So `allowed_to_send_as` re-applies the same rule as
+`pgsql-sender-login-maps.cf` for the authenticated login (its own
+address; an `active AND send_enabled` `mail_aliases` row, exact or
+`@domain`, whose destination is the login) at reply time — a revoked or
+suspended alias is never used even if it was recorded earlier. The
+recorded address itself came from somebody else's To/Cc header, so it
+must also pass `is_safe_address` (plain atext@dns-name, no quotes,
+brackets, spaces or control characters) before it is written anywhere.
+The lookup is keyed by the authenticated account, so a forged
+`In-Reply-To` naming another account's message finds nothing.
+
+Log lines (journald, `homelab-postfix-block-link`): `reply-identity:
+recorded …`, `reply-identity: rewrote …`, `reply-identity: … left alone
+(<reason>)`, and the tempfail cases below.
+
+## Fail open — with one deliberate exception
+
+Every inbound operation (`envrcpt`, block-link injection, recording the
+alias) is wrapped in `eval {}`. On any error — DB unreachable, query
+failure, anything — it logs to stderr (journald, via systemd) and
+returns `SMFIS_CONTINUE` with the message unmodified. This milter sits
+on the hot SMTP delivery path for every host it's installed on; it must
+never become a new way to reject, defer, or delay real inbound mail.
+
+The exception is the #67 reply rewrite on 587: when an authenticated
+reply from the login address *could* be owed a rewrite and the database
+cannot be consulted (or the rewrite fails midway), the milter answers
+`451 4.7.1` and Postfix defers the message — the phone keeps it in its
+outbox and retries. Letting it through would mean silently sending from
+the real address, the very thing the user switched the feature on to
+prevent. Gardner's decision (2026-11-10); `reply_identity.on_db_error:
+accept` in `config.yml` is the operator's escape hatch. For the same
+reason the postinst sets `milter_default_action=tempfail` on the 587
+service only (25 keeps `accept`): if this milter is unreachable,
+submissions wait until it is back (`Restart=on-failure`, seconds), rather
+than leak. Postfix's own sender-login lookup on 587 is a pgsql map, so a
+database outage already deferred submissions before this change.
 
 ## Why no per-connection DB handle is created at file scope
 

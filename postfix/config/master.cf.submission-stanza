@@ -9,4 +9,8 @@ submission inet n       -       n       -       -       smtpd
   -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
   -o smtpd_sender_restrictions=reject_authenticated_sender_login_mismatch,permit_sasl_authenticated
   -o milter_macro_daemon_name=ORIGINATING
+#   smtpd_milters and milter_default_action for this service are kept by the
+#   postinsts with 'postconf -P' (rewrite milter first, OpenDKIM last,
+#   tempfail when a milter is down) -- not in this file, which is appended
+#   once and never edited again. See post-cutover #67.
 # END homelab-postfix managed

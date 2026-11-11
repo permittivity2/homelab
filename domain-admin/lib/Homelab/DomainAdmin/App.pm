@@ -271,6 +271,13 @@ sub startup ($self) {
     $r->patch('/internal/v1/domains/mail-aliases/:source_pattern' => [source_pattern => qr/[^\/]+/])->to('mail_aliases#update');
     $r->delete('/internal/v1/domains/mail-aliases/:source_pattern' => [source_pattern => qr/[^\/]+/])->to('mail_aliases#delete_entry');
 
+    # Post-cutover #67: the per-user "reply from the alias a message was
+    # sent to" switch -- self-service only (authenticated_email_any), same
+    # tier as mail-aliases/mine; registered before the greedy /:domain
+    # routes for the same reason as every literal segment above.
+    $r->get('/internal/v1/domains/mail-reply-identity/mine')->to('mail_reply_identity#mine');
+    $r->put('/internal/v1/domains/mail-reply-identity/mine')->to('mail_reply_identity#set_mine');
+
     # Domain catch-all routing ("all mail for a domain -> one mailbox").
     # Literal "catch-alls" registered here BEFORE the /:domain routes below
     # for the same greedy-:domain-placeholder reason as mail-aliases above.
@@ -362,6 +369,30 @@ sub startup ($self) {
     Mojo::IOLoop->timer(5 => sub { $self->_materialize_dkim });
     Mojo::IOLoop->recurring(60 => sub { $self->_materialize_dkim });
 
+    # #67: domainadmin.mail_received_via grows by one row per inbound
+    # message that went to an alias (written by the block-link milter on
+    # the mail pool); prune what no reply could sensibly refer to any more.
+    # Hourly, batched, FOR UPDATE SKIP LOCKED -- same reasoning as the two
+    # timers above for a multi-worker hypnotoad on three hosts.
+    Mojo::IOLoop->timer(120 => sub { $self->_prune_received_via });
+    Mojo::IOLoop->recurring(3600 => sub { $self->_prune_received_via });
+
+    return;
+}
+
+sub _prune_received_via ($self) {
+    my $days = $self->config->{reply_identity}{retention_days} // 400;
+    eval {
+        my $n = $self->pg->db->query(
+            q{DELETE FROM domainadmin.mail_received_via WHERE id IN (
+                  SELECT id FROM domainadmin.mail_received_via
+                   WHERE received_at < NOW() - (? || ' days')::INTERVAL
+                   ORDER BY id LIMIT 5000 FOR UPDATE SKIP LOCKED)},
+            $days,
+        )->rows;
+        $self->log->info("mail_received_via: pruned $n row(s) older than $days days") if $n;
+    };
+    $self->log->warn("mail_received_via prune failed: $@") if $@;
     return;
 }
 

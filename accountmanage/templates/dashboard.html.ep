@@ -176,6 +176,10 @@
         <div id="ms-blocklink"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
+        <h2>Reply from the alias <span class="hint">a reply keeps the address the mail was sent to, from any mail app</span></h2>
+        <div id="ms-replyalias"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
         <h2>Blocked addresses <span id="ms-blocked-count" class="hint"></span> <span class="hint">reject all mail to one of your own addresses</span></h2>
         %# .scrollbox caps the height and scrolls. Without it this list grew
         %# the Mail pane without limit -- past ~10-15 entries everything below

@@ -158,3 +158,44 @@ abilities:
     response: |
       { "enabled": true, "mode": "both", "domain_default": false }
     cli: homelab-cli mail block-link enable
+
+  - id: reply-from-alias-setting
+    title: See your reply-from-alias setting
+    method: GET
+    path: /api/v1/domains/mail-reply-identity/mine
+    who: signed-in
+    summary: Whether a reply to mail that came to one of your aliases is sent from that alias.
+    description: >
+      Phone mail apps always send a reply from your main address. With this
+      on, the server swaps the From address (and the envelope sender) of a
+      reply to the alias the original message was sent to, so the other
+      side keeps seeing the address they wrote to. Off for everyone until
+      you turn it on. `updated_at` is null if you never changed it.
+    response: |
+      { "reply_from_alias": false, "updated_at": null }
+    cli: homelab-cli mail reply-from-alias show
+
+  - id: reply-from-alias-set
+    title: Turn reply-from-alias on or off
+    method: PUT
+    path: /api/v1/domains/mail-reply-identity/mine
+    who: signed-in
+    summary: Choose whether replies go out from the alias the original was sent to.
+    description: >
+      Applies to replies you send through the mail server (any app, any
+      device) whose From is your main address and which answer a message
+      the server delivered to one of your aliases -- an exact alias or any
+      address at a domain that forwards to you. If the original was sent to
+      several of your addresses, the first one on its To line is used, then
+      the first on Cc, then the address it was actually delivered to. Only
+      addresses you are allowed to send as are ever used. New messages, and
+      replies you already send from an alias, are left as they are.
+    params:
+      - name: reply_from_alias
+        in: body
+        required: true
+        about: true to reply from the alias, false to reply from your main address.
+        example: true
+    response: |
+      { "reply_from_alias": true, "updated_at": "2026-11-10T21:00:00-06:00" }
+    cli: homelab-cli mail reply-from-alias enable

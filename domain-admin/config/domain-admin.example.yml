@@ -82,6 +82,14 @@ dmarc_reports:
   # Anything WITHOUT a report attachment is left in INBOX untouched.
   processed_folder: DMARC/Processed
 
+# Post-cutover #67, "reply from the alias a message was sent to". The
+# block-link milter on the mail pool records, per inbound message, which of
+# the recipient's aliases it was sent to (domainadmin.mail_received_via);
+# this service prunes those rows once a reply to them is implausible.
+# Optional; 400 days when absent.
+reply_identity:
+  retention_days: 400
+
 # What this instance announces itself as in homelab-api's service
 # registry -- host/port only, deliberately no public_base_url: nothing
 # external ever connects to this directly.

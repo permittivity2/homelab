@@ -97,15 +97,46 @@ case "$1" in
             MILTER_LISTEN="${MILTER_LISTEN:-inet:8892@127.0.0.1}"
         fi
 
-        # --- Wire into Postfix's own milter chain, same idempotent
-        # read-current-then-append postconf -e pattern homelab-postfix's
-        # own postinst already uses for OpenDKIM (see its DKIM section).
-        # Appending -- never overwriting -- means this milter lands
-        # AFTER whatever's already in the list (OpenDKIM included, if
-        # enabled on this host), which is the correct order: OpenDKIM's
-        # own inbound Authentication-Results verification should see the
-        # untouched original message, not one this milter has already
-        # added a header/footer to.
+        # --- Grants, re-applied on EVERY configure. The bootstrap above runs
+        # only when config.yml is first written, so a GRANT added by a later
+        # release (0.2.0: the #67 reply-identity tables) would never reach an
+        # already-installed host. On the DB host itself this applies them
+        # directly; anywhere else it writes the SQL to the pending directory
+        # and install-orchestrators/mail-reply-alias-orchestrate.sh applies
+        # the same text (--print-grants) on the DB primary from the
+        # workstation. No SSH from here: fleet guests hold no trust to the
+        # database hosts.
+        ROLE_IN_CONFIG="$(sed -n 's/^  user: \(.*\)$/\1/p' "$CONFIG_FILE" | head -1)"
+        db_get homelab-postfix-block-link/db_host || true; GRANT_DB_HOST="${RET:-localhost}"
+        if [ -n "$ROLE_IN_CONFIG" ]; then
+            homelab-postfix-block-link-bootstrap-role --grants-only --role "$ROLE_IN_CONFIG" --db-host "$GRANT_DB_HOST" </dev/null \
+                || echo "  WARNING: grants step failed -- see output above. Apply 'homelab-postfix-block-link-bootstrap-role --print-grants --role $ROLE_IN_CONFIG' on the DB primary by hand."
+        else
+            echo "  WARNING: could not read database.user from $CONFIG_FILE -- grants not re-applied"
+        fi
+
+        # --- Wire into Postfix's milter chains. The ORDER relative to
+        # OpenDKIM (inet:*:8891) matters and differs per listener, so this
+        # no longer appends-if-missing (which left the order to whichever
+        # postinst ran last -- prod had this milter BEFORE OpenDKIM on 25,
+        # so OpenDKIM verified inbound mail that already carried our footer):
+        #
+        #   smtpd_milters (25 and anything else using main.cf's list):
+        #       OpenDKIM first (verification sees the untouched original),
+        #       this milter LAST.
+        #   non_smtpd_milters (pickup/sendmail, local mail):
+        #       this milter FIRST, the signer last.
+        #   submission/inet (587) -- a per-service override via postconf -P:
+        #       this milter FIRST so the #67 From/envelope rewrite happens
+        #       before OpenDKIM signs (the signature then covers the
+        #       rewritten From and uses the alias domain's key), OpenDKIM
+        #       LAST. And milter_default_action=tempfail there: if this
+        #       milter is unreachable, a reply is deferred (phones retry)
+        #       rather than sent from the user's real address. Gardner's
+        #       decision, 2026-11-10 (#67). Inbound (25) keeps 'accept'.
+        #
+        # homelab-postfix's own postinst applies the same rules for the
+        # OpenDKIM entry, so the two converge whatever the run order.
         #
         # Postfix's own smtpd_milters/non_smtpd_milters connect syntax
         # is "inet:HOST:PORT" -- the REVERSE of Sendmail::PMilter's own
@@ -116,21 +147,46 @@ case "$1" in
         MILTER_HOST="$(echo "$MILTER_LISTEN" | sed -n 's/^inet:[0-9]*@\(.*\)/\1/p')"
         if [ -n "$MILTER_PORT" ] && [ -n "$MILTER_HOST" ]; then
             MILTER_CONNECT="inet:$MILTER_HOST:$MILTER_PORT"
+            SELF_GLOB="inet:*:$MILTER_PORT"
 
-            CURRENT_SMTPD_MILTERS="$(postconf -h smtpd_milters 2>/dev/null || true)"
-            CURRENT_NON_SMTPD_MILTERS="$(postconf -h non_smtpd_milters 2>/dev/null || true)"
-            case "$CURRENT_SMTPD_MILTERS" in
-                *"$MILTER_CONNECT"*) ;;
-                "") postconf -e "smtpd_milters = $MILTER_CONNECT" ;;
-                *)  postconf -e "smtpd_milters = $CURRENT_SMTPD_MILTERS, $MILTER_CONNECT" ;;
-            esac
-            case "$CURRENT_NON_SMTPD_MILTERS" in
-                *"$MILTER_CONNECT"*) ;;
-                "") postconf -e "non_smtpd_milters = $MILTER_CONNECT" ;;
-                *)  postconf -e "non_smtpd_milters = $CURRENT_NON_SMTPD_MILTERS, $MILTER_CONNECT" ;;
-            esac
+            # $1 = comma-separated milter list, $2 = glob; echoes the list
+            # without the entries matching the glob, trimmed, ", "-joined.
+            _list_without() {
+                _out=""
+                _oldifs="$IFS"; IFS=','
+                for _m in $1; do
+                    _m="$(printf '%s' "$_m" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                    [ -z "$_m" ] && continue
+                    case "$_m" in $2) continue ;; esac
+                    if [ -z "$_out" ]; then _out="$_m"; else _out="$_out, $_m"; fi
+                done
+                IFS="$_oldifs"
+                printf '%s' "$_out"
+            }
+
+            REST="$(_list_without "$(postconf -h smtpd_milters 2>/dev/null || true)" "$SELF_GLOB")"
+            postconf -e "smtpd_milters = ${REST:+$REST, }$MILTER_CONNECT"
+
+            REST="$(_list_without "$(postconf -h non_smtpd_milters 2>/dev/null || true)" "$SELF_GLOB")"
+            postconf -e "non_smtpd_milters = $MILTER_CONNECT${REST:+, $REST}"
+
+            # NB: postconf -P refuses whitespace in a master.cf -o value
+            # ("-Pe does not accept whitespace in parameter value"), so the
+            # 587 list is comma-separated WITHOUT the spaces main.cf uses.
+            if postconf -Mf submission/inet >/dev/null 2>&1; then
+                CUR_SUB="$(postconf -Ph submission/inet/smtpd_milters 2>/dev/null || true)"
+                [ -n "$CUR_SUB" ] || CUR_SUB="$(postconf -h smtpd_milters 2>/dev/null || true)"
+                REST="$(_list_without "$CUR_SUB" "$SELF_GLOB")"
+                postconf -P "submission/inet/smtpd_milters=$(printf '%s' "$MILTER_CONNECT${REST:+,$REST}" | tr -d ' ')"
+                postconf -P 'submission/inet/milter_default_action=tempfail'
+            else
+                echo "  NOTE: no submission (587) service in master.cf yet -- its milter order is set when homelab-postfix adds it"
+            fi
+
             postconf -e 'milter_default_action = accept' 'milter_protocol = 6'
-            echo "  added $MILTER_CONNECT to smtpd_milters/non_smtpd_milters"
+            echo "  milter chains: 25 -> $(postconf -h smtpd_milters)"
+            echo "                 587 -> $(postconf -Ph submission/inet/smtpd_milters 2>/dev/null || echo '(no submission service)')"
+            echo "                 local -> $(postconf -h non_smtpd_milters)"
         else
             echo "  WARNING: could not parse milter.listen ('$MILTER_LISTEN') as inet:PORT@HOST --"
             echo "           NOT wiring into Postfix's milter chain. Fix milter.listen in $CONFIG_FILE"
@@ -163,6 +219,7 @@ case "$1" in
         echo "milter socket: $MILTER_LISTEN"
         echo "Next steps:"
         echo "  homelab-cli admin block-link domain set <domain> --enabled --mode header"
+        echo "  homelab-cli mail reply-from-alias enable      (per user; replies go out from the alias they were sent to)"
         echo ""
         ;;
 

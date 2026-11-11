@@ -19,6 +19,22 @@ block_link:
   public_base_url: https://blockemail.test.mailmasker.org
   link_ttl_days: 90
 
+# Post-cutover #67, "reply from the alias a message was sent to". Both keys
+# are optional; a config.yml written before 0.2.0 has no section at all and
+# gets exactly these defaults from the code.
+reply_identity:
+  # When an authenticated submission on 587 is a reply from the login
+  # address and the database cannot be consulted to decide whether it
+  # should go out from an alias instead: "tempfail" defers the message
+  # (451; the phone retries from its outbox) so nothing ever leaves from
+  # the real address by accident; "accept" lets it out unchanged. Inbound
+  # mail (25) always fails open regardless of this setting.
+  on_db_error: tempfail
+  # How many addresses of one To:/Cc: header are considered when picking
+  # which of the user's addresses the message was sent to (each one may
+  # cost a database lookup).
+  header_address_limit: 50
+
 milter:
   # inet:PORT@HOST, matching Sendmail::PMilter's own setconn() syntax
   # and the same style OpenDKIM's own Socket directive already uses in

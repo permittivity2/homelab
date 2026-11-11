@@ -1,14 +1,24 @@
 #!/usr/bin/env perl
-# The milter half of the click-to-block-link mechanism. Real
+# The milter half of the click-to-block-link mechanism and, since 0.2.0,
+# of "reply from the alias a message was sent to" (post-cutover #67). Real
 # Sendmail::PMilter API confirmed against the actual installed module
 # source (/usr/share/perl5/Sendmail/PMilter{,/Context}.pm) before
 # writing this, not assumed -- see block-link's own plan/README for
-# the citations. Fails open throughout: any DB error or unexpected
-# exception logs and lets the message through completely unmodified,
-# never rejects/defers/delays real mail delivery over this feature
-# (see README.md's "Fail open" section) -- a milter sitting on the hot
-# SMTP delivery path for every host it's installed on must never
-# become a new way to break core mail.
+# the citations.
+#
+# Fail-open and fail-closed, deliberately split:
+#   * INBOUND work (block-link injection; remembering which alias a message
+#     came through) fails OPEN: any DB error or unexpected exception logs
+#     and lets the message through completely unmodified -- a milter on the
+#     hot SMTP delivery path must never become a new way to break mail.
+#   * The SUBMISSION rewrite (587, authenticated user replying from the
+#     login address) fails CLOSED when the database cannot be consulted:
+#     the reply is deferred (451, the phone retries from its outbox) rather
+#     than silently sent from the user's real address -- the very thing the
+#     feature exists to prevent. Gardner's decision, 2026-11-10;
+#     reply_identity.on_db_error in config.yml is the operator's escape
+#     hatch. Postfix's own sender-login lookup on 587 is a pgsql map, so a
+#     database outage already defers submissions; this adds no new outage.
 use strict;
 use warnings;
 
@@ -21,6 +31,9 @@ use Homelab::Common::DB qw(runtime_pg);
 use Homelab::PostfixBlockLink::Milter qw(
     resolve_recipient effective_setting is_signed_mime
     generate_token build_header_value insert_pending_link
+    normalise_message_id last_reference_id parse_header_addresses is_safe_address
+    choose_reply_address rewrite_address_header
+    reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
 );
 use Mojo::JSON qw(encode_json);
 use Email::MIME;
@@ -28,6 +41,12 @@ use Email::MIME;
 my $config = load_config('HOMELAB_POSTFIX_BLOCK_LINK_CONFIG', '/etc/homelab/postfix-block-link/config.yml');
 my $bl_cfg = $config->{block_link} // die "config: block_link.* is required\n";
 my $listen = $config->{milter}{listen} // die "config: milter.listen is required\n";
+# Hosts installed before 0.2.0 have no reply_identity section in their
+# config.yml (it is written once, at first install) -- these defaults ARE
+# the shipped behaviour, the example yml only documents them.
+my $ri_cfg      = $config->{reply_identity} // {};
+my $ON_DB_ERROR = $ri_cfg->{on_db_error} // 'tempfail';
+my $HDR_LIMIT   = $ri_cfg->{header_address_limit} // 50;
 
 sub log_line { print STDERR "[homelab-postfix-block-link] @_\n" }
 
@@ -50,6 +69,16 @@ sub _pg {
     return $pg;
 }
 
+# Macros are per protocol stage inside PMilter: the CONNECT set
+# ({daemon_name}) lives for the whole connection, the MAIL set
+# ({auth_authen}) until the next MAIL/ABORT; getsymval searches every
+# stage, so reading both at eom is correct. Never die over a macro.
+sub _macro {
+    my ($ctx, $name) = @_;
+    my $v = eval { $ctx->getsymval($name) };
+    return defined $v ? $v : '';
+}
+
 my %cbs;
 
 # START OF EACH MESSAGE. Without this, per-message state only ever got
@@ -70,11 +99,13 @@ my %cbs;
 #
 # envfrom is the canonical per-message boundary, so the reset belongs here.
 $cbs{envfrom} = sub {
-    my ($ctx) = @_;
+    my ($ctx, $from) = @_;
+    (my $clean = $from // '') =~ s/^<//;
+    $clean =~ s/>$//;
     # Deliberately a fresh hashref rather than deleting known keys: anything
     # a future callback adds is then reset too, instead of silently becoming
     # the next instance of this bug.
-    $ctx->setpriv({});
+    $ctx->setpriv({ envelope_from => lc $clean, recipients => [], candidates => [], headers => {} });
     return SMFIS_CONTINUE;
 };
 
@@ -91,6 +122,15 @@ $cbs{envrcpt} = sub {
     my ($ctx, $addr, @esmtp) = @_;
     my $priv = $ctx->getpriv() // {};
     $priv->{candidates} //= [];
+    $priv->{recipients} //= [];
+
+    # Postfix also reports recipients it REJECTED when the milter protocol
+    # negotiation asks for them (PMilter echoes Postfix's full offer, so it
+    # does); those carry {rcpt_mailer}=error and are nobody's mail.
+    if (_macro($ctx, '{rcpt_mailer}') eq 'error') {
+        $ctx->setpriv($priv);
+        return SMFIS_CONTINUE;
+    }
 
     # Strip SMTP envelope angle brackets ("<user@domain>" -> "user@domain")
     # -- PMilter hands this callback the raw envelope token verbatim.
@@ -100,6 +140,11 @@ $cbs{envrcpt} = sub {
     eval {
         my $account = resolve_recipient(_pg()->db, $clean);
         if ($account) {
+            # Every local recipient, in RCPT order (#67 needs them all, with
+            # the ORIGINAL address: by LMTP time Postfix has rewritten the
+            # envelope to the mailbox and the alias is gone).
+            push @{ $priv->{recipients} }, { address => lc $clean, account => $account };
+
             my $setting = effective_setting(_pg()->db, $account);
             push @{ $priv->{candidates} }, {
                 address => $clean, account_email => $account,
@@ -113,14 +158,27 @@ $cbs{envrcpt} = sub {
     return SMFIS_CONTINUE;
 };
 
+# Headers #67 needs besides Content-Type/Message-ID. To/Cc may legally
+# repeat (RFC 5322 allows one each, real mail does not care) -- joined so
+# every address counts; the rest keep their first occurrence.
+my %JOIN_HEADERS  = map { $_ => 1 } qw(to cc);
+my %FIRST_HEADERS = map { $_ => 1 } qw(from reply-to sender in-reply-to references);
+
 $cbs{header} = sub {
     my ($ctx, $name, $value) = @_;
     my $priv = $ctx->getpriv() // {};
-    if (lc($name) eq 'content-type') {
+    my $n = lc($name // '');
+    if ($n eq 'content-type') {
         $priv->{content_type} = $value;
     }
-    elsif (lc($name) eq 'message-id') {
+    elsif ($n eq 'message-id') {
         $priv->{message_id} = $value;
+    }
+    elsif ($JOIN_HEADERS{$n}) {
+        $priv->{headers}{$n} = defined $priv->{headers}{$n} ? "$priv->{headers}{$n}, $value" : $value;
+    }
+    elsif ($FIRST_HEADERS{$n}) {
+        $priv->{headers}{$n} //= $value;
     }
     $ctx->setpriv($priv);
     return SMFIS_CONTINUE;
@@ -129,8 +187,14 @@ $cbs{header} = sub {
 $cbs{body} = sub {
     my ($ctx, $chunk) = @_;
     my $priv = $ctx->getpriv() // {};
-    $priv->{body} = '' unless defined $priv->{body};
-    $priv->{body} .= $chunk;
+    # Only block-link's footer injection ever needs the body, and only when
+    # an enabled recipient is on the message. Not buffering it otherwise
+    # keeps every outgoing message on 587 (attachments included) and every
+    # inbound message for a non-enabled account out of memory.
+    if (@{ $priv->{candidates} // [] }) {
+        $priv->{body} = '' unless defined $priv->{body};
+        $priv->{body} .= $chunk;
+    }
     $ctx->setpriv($priv);
     return SMFIS_CONTINUE;
 };
@@ -138,9 +202,63 @@ $cbs{body} = sub {
 $cbs{eom} = sub {
     my ($ctx) = @_;
     my $priv = $ctx->getpriv() // {};
-    my @enabled = grep { $_->{enabled} } @{ $priv->{candidates} // [] };
+    _record_received_via($priv);             # (a) #67 inbound half -- fails open
+    _inject_block_link($ctx, $priv);         # (b) click-to-block link -- fails open, unchanged behaviour
+    return _rewrite_reply($ctx, $priv);      # (c) #67 submission half -- fails closed on DB error
+};
 
-    return SMFIS_CONTINUE unless @enabled;
+$cbs{close} = sub {
+    my ($ctx) = @_;
+    $ctx->setpriv(undef);
+    return SMFIS_CONTINUE;
+};
+
+# (a) For every destination account on this message, work out which of the
+# account's own addresses the reply should come from (the rule lives in
+# Milter.pm's choose_reply_address) and remember it under the Message-ID.
+# Recorded for EVERY account, not only those with the setting on, so
+# switching the setting on later works for mail already received; the
+# setting gates the rewrite only. Nothing is recorded when the winner is the
+# account's real address -- there is nothing to rewrite to.
+sub _record_received_via {
+    my ($priv) = @_;
+    my @recipients = @{ $priv->{recipients} // [] };
+    return unless @recipients;
+
+    my $mid = normalise_message_id($priv->{message_id});
+    unless (defined $mid) {
+        log_line('reply-identity: no usable Message-ID, nothing recorded');
+        return;
+    }
+
+    my %accounts = map { $_->{account} => 1 } @recipients;
+    my ($to, $cc);
+    for my $account (sort keys %accounts) {
+        eval {
+            my $db = _pg()->db;
+            $to //= parse_header_addresses($priv->{headers}{to}, $HDR_LIMIT);
+            $cc //= parse_header_addresses($priv->{headers}{cc}, $HDR_LIMIT);
+            my $d = choose_reply_address(
+                account => $account, to => $to, cc => $cc, envelope => \@recipients,
+                resolve => sub { resolve_recipient($db, $_[0]) },
+            );
+            return unless $d && $d->{chosen} ne $account;
+            my $n = record_received_via(
+                $db, account => $account, message_id => $mid, chosen => $d->{chosen},
+                via => $d->{via}, candidates_json => encode_json($d->{candidates}),
+            );
+            log_line("reply-identity: recorded account=$account msgid=<$mid> chosen=$d->{chosen} via=$d->{via}") if $n;
+        };
+        log_line("reply-identity: recording for $account failed (failing open): $@") if $@;
+    }
+    return;
+}
+
+# (b) Exactly the pre-0.2.0 end-of-message behaviour.
+sub _inject_block_link {
+    my ($ctx, $priv) = @_;
+    my @enabled = grep { $_->{enabled} } @{ $priv->{candidates} // [] };
+    return unless @enabled;
 
     eval {
         my $token = generate_token();
@@ -192,15 +310,88 @@ $cbs{eom} = sub {
     if ($@) {
         log_line("eom injection failed (failing open, message delivered unmodified): $@");
     }
+    return;
+}
 
+# (c) An authenticated submission (587 sets milter_macro_daemon_name=
+# ORIGINATING) that is a reply (In-Reply-To, else the last References id)
+# and whose From: is the login address itself: if the user has the setting
+# on and we remember which of their aliases the original was sent to, and
+# they are still allowed to send as it, swap the From: (and a Reply-To:/
+# Sender: that also names the login) and the envelope sender to the alias.
+# OpenDKIM runs after this milter on 587 and signs the rewritten From with
+# the alias domain's key. Mail already From an alias (a Roundcube identity,
+# `mail send --from`) is untouched: From ne login.
+sub _rewrite_reply {
+    my ($ctx, $priv) = @_;
+    return SMFIS_CONTINUE unless _macro($ctx, '{daemon_name}') eq 'ORIGINATING';
+    my $login = lc _macro($ctx, '{auth_authen}');
+    return SMFIS_CONTINUE unless length $login;
+
+    my $from_raw = $priv->{headers}{from};
+    my $from = parse_header_addresses($from_raw, 2);
+    return SMFIS_CONTINUE unless @$from == 1 && $from->[0] eq $login;
+
+    my $parent = normalise_message_id($priv->{headers}{'in-reply-to'})
+        // last_reference_id($priv->{headers}{references});
+    return SMFIS_CONTINUE unless defined $parent;
+
+    my ($alias, $skip);
+    my $decided = eval {
+        my $db = _pg()->db;
+        if (!reply_from_alias_enabled($db, $login))     { $skip = 'setting off';                               return 1 }
+        my $chosen = lookup_received_via($db, $login, $parent);
+        if (!defined $chosen)                           { $skip = 'no record of the original';                 return 1 }
+        if ($chosen eq $login)                          { $skip = 'original went to the real address';         return 1 }
+        if (!is_safe_address($chosen))                  { $skip = "recorded address '$chosen' is not safe";    return 1 }
+        if (!allowed_to_send_as($db, $login, $chosen))  { $skip = "$login may not send as $chosen any more";   return 1 }
+        $alias = $chosen;
+        1;
+    };
+    if (!$decided) {
+        log_line("reply-identity: cannot decide for $login (in-reply-to <$parent>): $@");
+        return _fail_closed($ctx);
+    }
+    if (!defined $alias) {
+        log_line("reply-identity: $login reply to <$parent> left alone ($skip)");
+        return SMFIS_CONTINUE;
+    }
+
+    my $done = eval {
+        my $new_from = rewrite_address_header($from_raw, $login, $alias)
+            // die "From header could not be rewritten\n";
+        $ctx->chgheader('From', 1, $new_from);
+        for my $h (qw(reply-to sender)) {
+            my $raw = $priv->{headers}{$h};
+            next unless defined $raw;
+            my $p = parse_header_addresses($raw, 2);
+            next unless @$p == 1 && $p->[0] eq $login;
+            my $v = rewrite_address_header($raw, $login, $alias);
+            next unless defined $v;
+            $ctx->chgheader($h eq 'reply-to' ? 'Reply-To' : 'Sender', 1, $v);
+        }
+        $ctx->chgfrom("<$alias>");
+        1;
+    };
+    if (!$done) {
+        # A half-applied rewrite must not leave: TEMPFAIL makes Postfix drop
+        # every edit of this message along with the message itself.
+        log_line("reply-identity: rewrite for $login failed midway: $@");
+        return _fail_closed($ctx);
+    }
+    log_line("reply-identity: rewrote login=$login to=$alias in-reply-to=<$parent>");
     return SMFIS_CONTINUE;
-};
+}
 
-$cbs{close} = sub {
+sub _fail_closed {
     my ($ctx) = @_;
-    $ctx->setpriv(undef);
-    return SMFIS_CONTINUE;
-};
+    if ($ON_DB_ERROR eq 'accept') {
+        log_line('reply-identity: on_db_error=accept -- letting the message through unchanged');
+        return SMFIS_CONTINUE;
+    }
+    eval { $ctx->setreply('451', '4.7.1', 'Reply identity check temporarily unavailable, try again later') };
+    return SMFIS_TEMPFAIL;
+}
 
 # Inject the block-link footer into a multipart / text/html message.
 # Returns the new BODY (for replacebody) or undef if nothing was touched
@@ -253,7 +444,10 @@ sub _inject_mime_footer {
 
 my $milter = Sendmail::PMilter->new();
 $milter->setconn($listen) or die "cannot bind to $listen: $!\n";
-$milter->register('homelab-postfix-block-link', \%cbs, SMFIF_ADDHDRS | SMFIF_CHGBODY);
+# CHGHDRS + CHGFROM are what #67's From/envelope rewrite needs; PMilter
+# refuses (dies -> TEMPFAIL) any action whose flag was not registered.
+$milter->register('homelab-postfix-block-link', \%cbs,
+    SMFIF_ADDHDRS | SMFIF_CHGBODY | SMFIF_CHGHDRS | SMFIF_CHGFROM);
 
 my $dispatcher = Sendmail::PMilter::prefork_dispatcher(
     max_children => 10,
@@ -261,5 +455,5 @@ my $dispatcher = Sendmail::PMilter::prefork_dispatcher(
 );
 $milter->set_dispatcher($dispatcher);
 
-log_line("listening on $listen");
+log_line("listening on $listen (reply-identity on_db_error=$ON_DB_ERROR)");
 $milter->main();

@@ -688,6 +688,18 @@ class Client:
     def block_link_set(self, token, enabled):
         return self._request("PUT", "/api/v1/block-link/account", headers=self._auth(token), json={"enabled": enabled})
 
+    # --- Reply from the alias a message was sent to (post-cutover #67), via
+    # homelab-api's /api/v1/domains/* gateway -> homelab-domain-admin.
+    # Self-service: any logged-in user, own account only. ---
+    def reply_from_alias_show(self, token):
+        return self._request("GET", "/api/v1/domains/mail-reply-identity/mine", headers=self._auth(token))
+
+    def reply_from_alias_set(self, token, enabled):
+        return self._request(
+            "PUT", "/api/v1/domains/mail-reply-identity/mine", headers=self._auth(token),
+            json={"reply_from_alias": enabled},
+        )
+
     def block_link_domain_show(self, token, domain_name):
         return self._request("GET", f"/api/v1/block-link/domains/{domain_name}", headers=self._auth(token))
 

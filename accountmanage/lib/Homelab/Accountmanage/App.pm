@@ -148,6 +148,7 @@ sub startup ($self) {
     # Self-service Mail settings (any logged-in user; own account only).
     $r->get('/mail/self')       ->to('account#mail_self');
     $r->post('/mail/block-link')->to('account#mail_set_block_link');
+    $r->post('/mail/reply-identity')->to('account#mail_set_reply_identity');
     $r->post('/mail/block')     ->to('account#mail_block');
     $r->post('/mail/unblock')   ->to('account#mail_unblock');
     # Invites (self-service) + account activity (self-scoped audit).
@@ -1165,10 +1166,23 @@ sub mail_self ($c) {
     my ($email, $jwt) = _current_auth($c);
     return $c->render(json => {}, status => 401) unless $email;
     return $c->render(json => {
-        send_as    => (_api_get($c, $jwt, '/api/v1/domains/mail-aliases/mine') // {}),
-        block_link => (_api_get($c, $jwt, '/api/v1/block-link/account') // {}),
-        blocked    => (_api_get($c, $jwt, '/api/v1/domains/recipient-access/mine') // []),
+        send_as        => (_api_get($c, $jwt, '/api/v1/domains/mail-aliases/mine') // {}),
+        block_link     => (_api_get($c, $jwt, '/api/v1/block-link/account') // {}),
+        blocked        => (_api_get($c, $jwt, '/api/v1/domains/recipient-access/mine') // []),
+        reply_identity => (_api_get($c, $jwt, '/api/v1/domains/mail-reply-identity/mine') // {}),
     });
+}
+
+# POST /mail/reply-identity {enabled} -- post-cutover #67: replies go out from
+# the alias the original was sent to. homelab-domain-admin owns the setting
+# (self-service /mine route); the mail pool's block-link milter does the work.
+sub mail_set_reply_identity ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    my $on = $c->param('enabled') ? \1 : \0;
+    my $tx = $UA->put($c->app->api_base . '/api/v1/domains/mail-reply-identity/mine'
+        => { Authorization => "Bearer $jwt" } => json => { reply_from_alias => $on });
+    return $c->render(json => (eval { $tx->res->json } // {}), status => ($tx->res->code // 502));
 }
 
 # POST /mail/block-link {enabled} -- toggle the caller's own click-to-block link.

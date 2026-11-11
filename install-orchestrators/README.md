@@ -63,6 +63,7 @@ Two scripts take an environment variable rather than carrying a value:
 |---|---|---|
 | `SMOKETEST_PW` | `migration-readiness-test.sh` | the login keystone check skips |
 | `EXT_TEST_ADDR` | `migration-readiness-test.sh` | printed mail round-trip instructions show a placeholder |
+| `TEST_ACCOUNT_PW_FILE` | `mail-reply-alias-orchestrate.sh` (via `files/mail-reply-alias-check.py`) | a default path on the admin workstation is tried; the file holds the test account's password and is read by the checker itself, never passed as an argument |
 
 ```sh
 SMOKETEST_PW='...' EXT_TEST_ADDR='you@example.com' ./migration-readiness-test.sh

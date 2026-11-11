@@ -646,6 +646,18 @@
           post('/mail/block-link', { enabled: this.checked ? '1' : '' }).then(function (r) { st.textContent = r.ok ? 'Saved.' : ('Failed: ' + ((r.body && r.body.error) || '')); });
         });
 
+        // #67: reply from the alias a message was sent to. The setting lives
+        // in homelab-domain-admin; the mail pool's milter applies it on 587.
+        var ra = d.reply_identity || {};
+        document.getElementById('ms-replyalias').innerHTML =
+          '<label style="display:flex;align-items:center;gap:0.5rem;"><input type="checkbox" id="ms-ra-toggle"' + (ra.reply_from_alias ? ' checked' : '') + '> Reply from the address a message was sent to</label>'
+          + '<p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">When you answer a message that came to one of your other addresses (an alias, or any address at a domain that forwards to you), the reply goes out from that address instead of your main one. Works from any mail app, with nothing to set up per alias. If the message went to several of your addresses, the first one on its To line is used, then Cc, then the address it was actually delivered to. Only addresses you are allowed to send as are used. New messages, and replies you already send from an alias, are left as they are.</p>'
+          + '<div id="ms-ra-status" class="usage-note"></div>';
+        document.getElementById('ms-ra-toggle').addEventListener('change', function () {
+          var st = document.getElementById('ms-ra-status'); st.textContent = 'Saving…';
+          post('/mail/reply-identity', { enabled: this.checked ? '1' : '' }).then(function (r) { st.textContent = r.ok ? 'Saved.' : ('Failed: ' + ((r.body && r.body.error) || '')); });
+        });
+
         // Normalised once here so the filter/sort/render path below never has
         // to care that the API may hand back either plain strings or full
         // rows. `created_at` is a real column on domainadmin.recipient_access

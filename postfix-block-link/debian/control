@@ -16,19 +16,28 @@ Depends: perl (>= 5.36),
          libmojo-pg-perl,
          libsendmail-pmilter-perl,
          libemail-mime-perl,
+         libemail-address-xs-perl,
          adduser,
          sudo
 Recommends: homelab-block-link, homelab-domain-admin, homelab-api, homelab-agent
-Description: Postfix add-on: injects a click-to-block link into inbound mail
+Description: Postfix add-on: click-to-block link on inbound mail; replies from the alias
  A Perl Sendmail-Milter-protocol daemon (Sendmail::PMilter), installed
  onto an already-running homelab-postfix host (hard Depends -- this
- package is nothing standalone) and wired into its smtpd_milters/
- non_smtpd_milters chain the same idempotent postconf -e
- read-current-then-append pattern homelab-postfix's own postinst
- already uses for OpenDKIM -- lands after OpenDKIM by construction
- (milters see each other's changes in list order), so OpenDKIM's own
- inbound Authentication-Results verification always reflects the
- untouched original message.
+ package is nothing standalone) and wired into its milter chains with a
+ fixed order per listener: after OpenDKIM on 25 (inbound verification
+ sees the untouched original), before OpenDKIM on 587 (the signature
+ covers the rewritten From, below).
+ .
+ Reply from the alias a message was sent to (per-user setting, see
+ homelab-domain-admin's mail-reply-identity routes and myaccount): for
+ every inbound message it remembers which of the recipient's own
+ addresses the message was addressed to (first on To, then Cc, then the
+ delivered-to address); when that user later replies over 587 from an
+ ordinary mail app -- which always sends From the account's primary
+ address -- the From header and the envelope sender are swapped to that
+ alias, after re-checking that the user may still send as it. On 587 the
+ rewrite fails CLOSED (the reply is deferred, never sent from the real
+ address by accident); inbound work always fails open.
  .
  For each inbound recipient, resolves the envelope address to a
  destination account using the SAME domainadmin.mail_aliases exact-

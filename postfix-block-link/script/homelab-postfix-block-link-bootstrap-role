@@ -24,6 +24,24 @@
 #   SCRAM_SECRET=<secret>
 #
 # Usage: homelab-postfix-block-link-bootstrap-role --db-host HOST [--db homelab] [--role-suffix SUFFIX]
+#
+# Two more modes, added for post-cutover #67 because the full bootstrap
+# runs ONLY ONCE per host (the postinst calls it when config.yml is first
+# written), so a GRANT added in a later release never reached existing
+# hosts on upgrade (same trap homelab-postfix hit once, see its README):
+#
+#   --print-grants [--role-suffix S | --role R]
+#       Print the idempotent GRANT statements for the role to stdout and
+#       exit. No database access. This is what the workstation orchestrator
+#       (install-orchestrators/mail-reply-alias-orchestrate.sh) pipes into
+#       `sudo -u postgres psql` on the Patroni leader, so the GRANT text has
+#       one source of truth. Prints no CREATE/ALTER ROLE and no password.
+#   --grants-only --db-host HOST [--role-suffix S | --role R]
+#       Re-apply the grants: directly when HOST is this machine, otherwise
+#       written to $PENDING_DIR for the orchestrator/operator to apply on the
+#       DB primary. Deliberately NO SSH tier -- fleet guests must never hold
+#       SSH trust to the database hosts. The postinst runs this on EVERY
+#       configure. Prints GRANTS=applied or GRANTS=pending.
 
 use strict;
 use warnings;
@@ -34,24 +52,34 @@ use IPC::Open2 qw(open2);
 my $DB      = 'homelab';
 my $DB_HOST = '';
 my $ROLE_SUFFIX = '';
+my $ROLE_NAME   = '';
 my $ROLE_BASE   = 'homelab_postfix_block_link_runtime';
+my ($PRINT_GRANTS, $GRANTS_ONLY) = (0, 0);
 our $ROLE;
 
 GetOptions(
     'db-host=s'     => \$DB_HOST,
     'db=s'          => \$DB,
     'role-suffix=s' => \$ROLE_SUFFIX,
+    'role=s'        => \$ROLE_NAME,
+    'print-grants'  => \$PRINT_GRANTS,
+    'grants-only'   => \$GRANTS_ONLY,
 ) or die usage();
 
-die usage() unless $DB_HOST;
+die usage() unless $DB_HOST || $PRINT_GRANTS;
 
-$ROLE = length($ROLE_SUFFIX) ? "${ROLE_BASE}_${ROLE_SUFFIX}" : $ROLE_BASE;
+$ROLE = length($ROLE_NAME)   ? $ROLE_NAME
+      : length($ROLE_SUFFIX) ? "${ROLE_BASE}_${ROLE_SUFFIX}"
+      :                        $ROLE_BASE;
+die_msg("refusing role name '$ROLE' (letters, digits and underscores only)") unless $ROLE =~ /\A[a-z_][a-z0-9_]*\z/;
 
 my @SSH_OPTS    = ('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new');
 my $PENDING_DIR = '/var/lib/homelab-database/pending';
 
 sub usage {
-    return "Usage: $0 --db-host HOST [--db homelab] [--role-suffix SUFFIX]\n";
+    return "Usage: $0 --db-host HOST [--db homelab] [--role-suffix SUFFIX]\n"
+         . "       $0 --print-grants [--role-suffix SUFFIX | --role ROLE]\n"
+         . "       $0 --grants-only --db-host HOST [--role-suffix SUFFIX | --role ROLE]\n";
 }
 
 sub log_msg  { print STDERR "[postfix-block-link-bootstrap-role] @_\n" }
@@ -84,6 +112,11 @@ sub sql_escape {
 
 sub build_sql {
     my (%opts) = @_;
+    return build_role_sql(%opts) . build_grant_sql();
+}
+
+sub build_role_sql {
+    my (%opts) = @_;
     my $pw_esc   = sql_escape($opts{password});
     my $role_esc = sql_escape($ROLE);
 
@@ -99,6 +132,15 @@ BEGIN
 END
 \$\$;
 
+SQL
+}
+
+# Idempotent: GRANT on an already-granted privilege is a no-op in Postgres,
+# so this block is safe to re-run on every configure (--grants-only) and
+# from the orchestrator (--print-grants).
+sub build_grant_sql {
+    return <<SQL;
+-- grants for "$ROLE" (homelab-postfix-block-link-bootstrap-role --print-grants)
 -- Recipient validation, same column-scoped shape as homelab-postfix's
 -- own grant (never password_hash -- this milter never authenticates
 -- anyone, only decides whether to inject a link).
@@ -130,6 +172,15 @@ GRANT SELECT ON block_link.account_settings TO "$ROLE";
 -- rediscovered the hard way here.
 GRANT INSERT ON block_link.pending_links TO "$ROLE";
 GRANT USAGE ON block_link.pending_links_id_seq TO "$ROLE";
+
+-- Post-cutover #67, "reply from the alias a message was sent to" (tables
+-- owned by homelab-domain-admin, migration 009). The milter READS the
+-- per-user setting, WRITES one row per inbound message naming which of
+-- the user's own addresses it was sent to, and READS that row back when
+-- the user replies on 587. Never UPDATE/DELETE: pruning is domain-admin's.
+GRANT SELECT ON domainadmin.mail_reply_identity TO "$ROLE";
+GRANT SELECT, INSERT ON domainadmin.mail_received_via TO "$ROLE";
+GRANT USAGE ON SEQUENCE domainadmin.mail_received_via_id_seq TO "$ROLE";
 SQL
 }
 
@@ -157,7 +208,11 @@ sub run_query_stdin_local_or_remote {
 sub check_exists {
     my ($regclass, @cmd) = @_;
     my $out = run_query_stdin_local_or_remote(sprintf(q{SELECT to_regclass('%s')}, $regclass), @cmd);
-    return defined $out && length $out;
+    return 0 unless defined $out;
+    # psql -tA prints an EMPTY LINE for a NULL result, so "\n" used to count
+    # as "exists" and a missing table only surfaced later, at the GRANT.
+    $out =~ s/\s+//g;
+    return length $out ? 1 : 0;
 }
 
 sub fetch_scram_secret {
@@ -166,7 +221,10 @@ sub fetch_scram_secret {
     return run_query_stdin_local_or_remote($query, @cmd);
 }
 
-my @REQUIRED_TABLES = qw(api.users domainadmin.domains domainadmin.mail_aliases block_link.pending_links);
+my @REQUIRED_TABLES = qw(
+    api.users domainadmin.domains domainadmin.mail_aliases block_link.pending_links
+    domainadmin.mail_reply_identity domainadmin.mail_received_via
+);
 
 sub check_all_exist {
     my (@cmd) = @_;
@@ -255,7 +313,39 @@ MSG
     }
 }
 
+# --grants-only: no role creation, no password, no SSH. Local DB host ->
+# applied now; anything else -> pending file for the orchestrator/operator.
+sub run_grants_only {
+    if (is_local_host($DB_HOST)) {
+        my @psql_prefix = ('sudo', '-u', 'postgres', 'psql');
+        check_all_exist(@psql_prefix, '-d', $DB, '-X', '-tA');
+        log_msg("re-applying grants for '$ROLE' locally (db-host is this host)");
+        run_sql_local_or_remote(build_grant_sql(), @psql_prefix, '-q', '-d', $DB, '-X', '-v', 'ON_ERROR_STOP=1')
+            or die_msg("applying grants for '$ROLE' failed -- see psql output above");
+        print "GRANTS=applied\n";
+        return;
+    }
+
+    make_path($PENDING_DIR, { mode => 0700 });
+    my $pending_file = "$PENDING_DIR/homelab-postfix-block-link-grants.sql";
+    open(my $fh, '>', $pending_file) or die_msg("cannot write $pending_file: $!");
+    print $fh build_grant_sql();
+    close($fh);
+    chmod(0600, $pending_file);
+    log_msg("grants for '$ROLE' written to $pending_file (this host is not the DB host and never SSHes to it);"
+          . " apply on the DB primary: sudo -u postgres psql -d $DB -v ON_ERROR_STOP=1 -f $pending_file"
+          . " -- install-orchestrators/mail-reply-alias-orchestrate.sh does exactly that from the workstation");
+    print "GRANTS=pending\n";
+    return;
+}
+
 sub main {
+    if ($PRINT_GRANTS) {
+        print build_grant_sql();
+        return;
+    }
+    return run_grants_only() if $GRANTS_ONLY;
+
     my %opts = (password => random_password());
 
     my $secret =

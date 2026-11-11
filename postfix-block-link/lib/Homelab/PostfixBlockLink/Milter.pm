@@ -2,43 +2,66 @@ package Homelab::PostfixBlockLink::Milter;
 use strict;
 use warnings;
 use Exporter 'import';
+use Email::Address::XS qw(parse_email_groups);
 
 our @EXPORT_OK = qw(
     resolve_recipient effective_setting is_signed_mime
     generate_token build_header_value insert_pending_link
+    normalise_message_id last_reference_id parse_header_addresses is_safe_address
+    choose_reply_address rewrite_address_header
+    reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
 );
 
-# Replicates Postfix's OWN exact-then-catch-all virtual_alias_maps
-# lookup (postfix/config/pgsql-virtual-alias-maps.cf.template's query,
-# reused verbatim) -- Postfix does this fallback automatically inside
-# its own map-lookup code when IT queries mail_aliases directly for
-# routing, but this milter is a separate program and gets no such
-# behavior for free; it has to replicate the same two-step lookup
-# itself to resolve an envelope address to the same destination
-# account Postfix will actually deliver to. Single-hop only (an alias
-# resolving to another alias is not re-resolved), matching Postfix's
-# own virtual_alias_maps behavior, not a shortcut taken here.
+# Replicates Postfix's OWN virtual_alias_maps resolution for one envelope
+# address, in the SAME order as postfix/config/pgsql-virtual-alias-maps.cf
+# .template's query plus Postfix's own @domain fallback:
 #
-# Returns the destination account email, or undef if this address
-# isn't a valid, active local mailbox at all (should be rare in
-# practice -- Postfix's own recipient restrictions normally reject an
-# invalid RCPT TO before this milter ever sees it -- but never assumed).
+#   1. an explicit, active mail_aliases row for the exact address wins;
+#   2. otherwise an ACTIVE REAL MAILBOX maps to itself (this is what keeps
+#      a domain catch-all from stealing mail addressed to a real account
+#      at that domain -- Postfix's query gained this branch 2026-10-27);
+#   3. otherwise the domain's '@domain' catch-all row, if any.
+#
+# Until 0.2.0 this sub checked the catch-all BEFORE the real mailbox, so a
+# real account at a catch-all domain (e.g. testaccountforclaude@mailmasker
+# .org, with the @mailmasker.org catch-all pointing elsewhere) resolved to
+# the catch-all's destination: block-link then applied the wrong account's
+# settings and minted links that would have blocked senders for the wrong
+# account (318 of 318 messages, checked 2026-11-10). Postfix itself always
+# delivered correctly; only this milter's view was wrong.
+#
+# Single-hop (an alias whose destination is itself an alias is not
+# re-resolved; every destination in this system is a real mailbox, which
+# domain-admin enforces when a catch-all is set).
+#
+# Returns the destination account email (lowercase, as stored in
+# api.users), or undef if the address is not a valid, active local
+# mailbox at all.
 sub resolve_recipient {
     my ($db, $address) = @_;
-    my $lc = lc($address);
+    my $lc = lc($address // '');
+    return undef unless $lc =~ /\@/;
 
+    my $account;
     my $alias = $db->query(
         q{SELECT destination FROM domainadmin.mail_aliases WHERE source_pattern = ? AND active = true},
         $lc,
     )->hash;
-    unless ($alias) {
+    if ($alias) {
+        $account = lc $alias->{destination};
+    }
+    else {
+        my $self_row = $db->query('SELECT email FROM api.users WHERE email = ? AND active = true', $lc)->hash;
+        return $self_row->{email} if $self_row;
+
         my ($domain) = $lc =~ /\@(.+)$/;
-        $alias = $db->query(
+        my $catchall = $db->query(
             q{SELECT destination FROM domainadmin.mail_aliases WHERE source_pattern = ? AND active = true},
             '@' . ($domain // ''),
-        )->hash if defined $domain;
+        )->hash;
+        return undef unless $catchall;
+        $account = lc $catchall->{destination};
     }
-    my $account = $alias ? $alias->{destination} : $lc;
 
     my $user = $db->query('SELECT email FROM api.users WHERE email = ? AND active = true', $account)->hash;
     return $user ? $user->{email} : undef;
@@ -107,6 +130,220 @@ sub insert_pending_link {
           VALUES (?, ?, ?, NOW() + (? || ' days')::INTERVAL)},
         $opts{token}, $opts{candidates_json}, $opts{message_id}, $opts{ttl_days},
     );
+}
+
+# ===== #67: reply from the alias a message was sent to =====================
+#
+# Two halves, both keyed by (destination account, Message-ID):
+#   * inbound (any port): choose_reply_address + record_received_via remember
+#     which of the user's own addresses the message was addressed to;
+#   * submission (587, authenticated): lookup_received_via + allowed_to_send_as
+#     decide whether a reply's From/envelope may be swapped to that address.
+# Everything here is pure or plain SQL so it runs under CI's `prove -I lib`
+# without Sendmail::PMilter; the daemon script only wires the pieces together.
+
+# A Message-ID or In-Reply-To value -> the bare id between the angle
+# brackets (the first one, if several), or a bare "left@right" token when the
+# client omitted the brackets. Whitespace is dropped; CASE IS KEPT -- RFC 5322
+# ids are compared byte for byte, and phones copy them verbatim into
+# In-Reply-To. Capped at 998 (one header line) so a pathological header can
+# never become a huge index key.
+sub normalise_message_id {
+    my ($raw) = @_;
+    return undef unless defined $raw;
+    my ($id) = $raw =~ /<\s*([^<>\s]+)\s*>/;
+    ($id) = $raw =~ /\A\s*([^\s<>]+\@[^\s<>]+)\s*\z/ unless defined $id;
+    return undef unless defined $id && length $id && length $id <= 998;
+    return $id;
+}
+
+# The LAST id in a References: header is the direct parent (RFC 5322 3.6.4);
+# used only when a client sent References but no In-Reply-To.
+sub last_reference_id {
+    my ($raw) = @_;
+    return undef unless defined $raw;
+    my @ids = $raw =~ /<\s*([^<>\s]+)\s*>/g;
+    return @ids ? $ids[-1] : undef;
+}
+
+# An address header value (To, Cc, From, ...) -> arrayref of the bare
+# addresses in it, lowercased, in header order, groups flattened, invalid
+# mailboxes skipped, folded lines unfolded first. $limit (default 50) bounds
+# how many a 1000-address To: can turn into (each one may cost the caller a
+# resolver query).
+sub parse_header_addresses {
+    my ($raw, $limit) = @_;
+    $limit //= 50;
+    return [] unless defined $raw && length $raw;
+    (my $v = $raw) =~ s/\r?\n[ \t]+/ /g;
+
+    my @out;
+    my @groups = parse_email_groups($v);
+    while (@groups) {
+        my ($name, $addrs) = splice(@groups, 0, 2);
+        for my $a (@{ $addrs // [] }) {
+            next unless $a->is_valid;
+            my $addr = $a->address;
+            next unless defined $addr && length $addr;
+            push @out, lc $addr;
+            return \@out if @out >= $limit;
+        }
+    }
+    return \@out;
+}
+
+# Only an address that is plain RFC 5322 atext@dns-name may ever be written
+# into a header or an envelope by this milter -- every address it rewrites TO
+# originally arrived in somebody else's To:/Cc: header. No quotes, brackets,
+# spaces, comments or control characters; at least one dot in the domain.
+sub is_safe_address {
+    my ($a) = @_;
+    return 0 unless defined $a && length $a && length $a <= 254;
+    return $a =~ m{\A[A-Za-z0-9!#\$%&'*+/=?^_`{|}~.-]{1,64}
+                   \@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?
+                   (?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+\z}x ? 1 : 0;
+}
+
+# THE DECISION RULE (Gardner, 2026-11-10): when a message was addressed to
+# several of the user's own addresses, the reply comes from the first of
+# them on the To: line; if none there, the first on Cc:; if none there
+# either (Bcc, mailing list), the first envelope recipient that resolved to
+# the user. If the winner is the user's real address, the caller records
+# nothing and the reply is left alone.
+#
+#   account  => destination account (lowercase)
+#   to, cc   => arrayrefs from parse_header_addresses
+#   envelope => [ { address => ..., account => ... }, ... ] in RCPT order
+#   resolve  => sub { address -> account or undef } (resolve_recipient-backed
+#               in the daemon; a hash in tests)
+#
+# To:/Cc: addresses are resolved through `resolve`, NOT just matched against
+# this transaction's envelope: Postfix may split one message's recipients
+# over several transactions (a 451 on one RCPT, a retry), and every copy
+# must reach the same answer.
+#
+# Returns { chosen, via ('to'|'cc'|'envelope'), candidates => [ {address, via}, ... ] }
+# or undef when none of the user's addresses appears anywhere.
+sub choose_reply_address {
+    my (%a) = @_;
+    my $account = lc($a{account} // '');
+    return undef unless length $account;
+
+    my %account_of;
+    for my $r (@{ $a{envelope} // [] }) {
+        $account_of{ lc($r->{address} // '') } = lc($r->{account} // '');
+    }
+    my $resolve = $a{resolve} // sub { undef };
+    my $acct_of = sub {
+        my ($addr) = @_;
+        $account_of{$addr} = lc($resolve->($addr) // '') unless exists $account_of{$addr};
+        return $account_of{$addr};
+    };
+
+    my (@cands, %seen);
+    for my $via (qw(to cc)) {
+        for my $addr (@{ $a{$via} // [] }) {
+            $addr = lc $addr;
+            next if $seen{$addr}++;
+            next unless is_safe_address($addr);
+            next unless $acct_of->($addr) eq $account;
+            push @cands, { address => $addr, via => $via };
+        }
+    }
+    for my $r (@{ $a{envelope} // [] }) {
+        my $addr = lc($r->{address} // '');
+        next if $seen{$addr}++;
+        next unless lc($r->{account} // '') eq $account;
+        push @cands, { address => $addr, via => 'envelope' };
+    }
+    return undef unless @cands;
+    return { chosen => $cands[0]{address}, via => $cands[0]{via}, candidates => \@cands };
+}
+
+# Rebuild a single-mailbox address header (From, Reply-To, Sender) with the
+# address swapped from $old to $new, keeping everything else -- in
+# particular an encoded-word display name ("=?UTF-8?Q?...?=") byte for byte,
+# which Email::Address::XS->format would re-quote and break. Rules:
+#   * exactly one valid mailbox, whose address is $old -- else undef (the
+#     caller leaves the header alone);
+#   * a display name that IS or CONTAINS the real address is dropped (a
+#     reply "permittivity@... <alias>" would leak what we are hiding);
+#   * "Name <old>" -> "Name <new>" by substituting the bracketed token;
+#   * a bare "old" -> "new";
+#   * anything else is rebuilt from the parsed parts.
+sub rewrite_address_header {
+    my ($raw, $old, $new) = @_;
+    return undef unless defined $raw && defined $old && defined $new;
+    (my $v = $raw) =~ s/\r?\n[ \t]+/ /g;
+    $v =~ s/^\s+|\s+$//g;
+
+    my @parsed;
+    my @groups = parse_email_groups($v);
+    while (@groups) {
+        my ($name, $addrs) = splice(@groups, 0, 2);
+        push @parsed, @{ $addrs // [] };
+    }
+    return undef unless @parsed == 1 && $parsed[0]->is_valid;
+    return undef unless lc($parsed[0]->address // '') eq lc $old;
+
+    my $phrase = $parsed[0]->phrase;
+    return $new if defined $phrase && index(lc $phrase, lc $old) >= 0;
+    return $v   if $v =~ s/<\s*\Q$old\E\s*>/<$new>/i;
+    return $new if lc($v) eq lc($old);
+    return Email::Address::XS->new(phrase => $phrase, address => $new, comment => $parsed[0]->comment)->format;
+}
+
+sub reply_from_alias_enabled {
+    my ($db, $account) = @_;
+    my $row = $db->query(
+        'SELECT reply_from_alias FROM domainadmin.mail_reply_identity WHERE user_email = ?', lc($account // ''),
+    )->hash;
+    return ($row && $row->{reply_from_alias}) ? 1 : 0;
+}
+
+# One row per (account, Message-ID); a second copy of the same message (N
+# aliases in one transaction, or a retry) is a no-op. Returns rows inserted.
+sub record_received_via {
+    my ($db, %o) = @_;
+    return $db->query(
+        q{INSERT INTO domainadmin.mail_received_via (account, message_id, chosen, chosen_via, candidates)
+          VALUES (?, ?, ?, ?, ?::jsonb) ON CONFLICT (account, message_id) DO NOTHING},
+        lc $o{account}, $o{message_id}, lc $o{chosen}, $o{via}, $o{candidates_json},
+    )->rows;
+}
+
+sub lookup_received_via {
+    my ($db, $account, $message_id) = @_;
+    my $row = $db->query(
+        'SELECT chosen FROM domainadmin.mail_received_via WHERE account = ? AND message_id = ?',
+        lc($account // ''), $message_id,
+    )->hash;
+    return $row ? lc $row->{chosen} : undef;
+}
+
+# The milter's own copy of Postfix's smtpd_sender_login_maps rule
+# (postfix/config/pgsql-sender-login-maps.cf.template), restricted to one
+# login: the login itself, or an active+send_enabled mail_aliases row whose
+# destination is the login and whose source is the exact address or its
+# '@domain' catch-all. Postfix checks that rule against the client's MAIL
+# FROM BEFORE this milter runs and never re-checks after chgfrom, so this
+# is the real boundary for what a reply may be rewritten to.
+sub allowed_to_send_as {
+    my ($db, $login, $address) = @_;
+    $login   = lc($login   // '');
+    $address = lc($address // '');
+    return 0 unless length $login && length $address;
+    return 1 if $login eq $address;
+    my ($domain) = $address =~ /\@(.+)\z/;
+    return 0 unless defined $domain && length $domain;
+    my $row = $db->query(
+        q{SELECT 1 AS ok FROM domainadmin.mail_aliases
+          WHERE active = true AND send_enabled = true AND destination = ?
+            AND (source_pattern = ? OR source_pattern = ?)
+          LIMIT 1},
+        $login, $address, '@' . $domain,
+    )->hash;
+    return $row ? 1 : 0;
 }
 
 1;

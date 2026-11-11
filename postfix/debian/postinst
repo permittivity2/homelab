@@ -460,10 +460,25 @@ case "$1" in
             # repointed host carry two :8891 milters and DKIM-sign every
             # message twice (two Authentication-Results/DKIM-Signature
             # headers), which some receivers treat as suspicious.
+            #
+            # WHERE the one OpenDKIM entry goes differs per list (post-cutover
+            # #67; homelab-postfix-block-link's postinst applies the mirror
+            # image of these rules for its own entry, so the two converge
+            # whatever the run order):
+            #   smtpd_milters (25):      OpenDKIM FIRST -- inbound verification
+            #                            must see the untouched original, before
+            #                            any other milter adds a header/footer.
+            #   non_smtpd_milters:       OpenDKIM LAST -- sign local mail after
+            #                            every other milter is done with it.
+            #   submission/inet (587):   OpenDKIM LAST -- the block-link milter
+            #                            rewrites a reply's From to the alias it
+            #                            was sent to; the signature must cover
+            #                            that From and use that domain's key.
+            #                            Set below, after the stanza exists.
             _dkim_milter_rebuild() {
-                # $1 = current comma-separated milter value; echoes the
-                # rebuilt value with all inet:*:8891 entries dropped and
-                # exactly one inet:$DKIM_MILTER_HOST:8891 appended.
+                # $1 = current comma-separated milter value, $2 = prepend|append;
+                # echoes the rebuilt value with all inet:*:8891 entries dropped
+                # and exactly one inet:$DKIM_MILTER_HOST:8891 put first or last.
                 _out=""
                 _oldifs="$IFS"; IFS=','
                 for _m in $1; do
@@ -473,13 +488,15 @@ case "$1" in
                     if [ -z "$_out" ]; then _out="$_m"; else _out="$_out, $_m"; fi
                 done
                 IFS="$_oldifs"
-                if [ -z "$_out" ]; then printf 'inet:%s:8891' "$DKIM_MILTER_HOST"
-                else printf '%s, inet:%s:8891' "$_out" "$DKIM_MILTER_HOST"; fi
+                _dkim="inet:$DKIM_MILTER_HOST:8891"
+                if [ -z "$_out" ]; then printf '%s' "$_dkim"
+                elif [ "$2" = "prepend" ]; then printf '%s, %s' "$_dkim" "$_out"
+                else printf '%s, %s' "$_out" "$_dkim"; fi
             }
             CURRENT_SMTPD_MILTERS="$(postconf -h smtpd_milters 2>/dev/null || true)"
             CURRENT_NON_SMTPD_MILTERS="$(postconf -h non_smtpd_milters 2>/dev/null || true)"
-            postconf -e "smtpd_milters = $(_dkim_milter_rebuild "$CURRENT_SMTPD_MILTERS")"
-            postconf -e "non_smtpd_milters = $(_dkim_milter_rebuild "$CURRENT_NON_SMTPD_MILTERS")"
+            postconf -e "smtpd_milters = $(_dkim_milter_rebuild "$CURRENT_SMTPD_MILTERS" prepend)"
+            postconf -e "non_smtpd_milters = $(_dkim_milter_rebuild "$CURRENT_NON_SMTPD_MILTERS" append)"
             postconf -e 'milter_default_action = accept' 'milter_protocol = 6'
 
             echo "  DKIM milter wiring complete -- use 'homelab-cli dns dkim rotate/activate <domain>' to actually sign mail"
@@ -559,6 +576,25 @@ case "$1" in
                 cat "$SHARE_DIR/config/master.cf.submission-stanza"
             } >> "$MASTER_CF"
             echo "  activated the submission service (587) in $MASTER_CF"
+        fi
+
+        # 587's own milter list is a per-service override kept with
+        # `postconf -P`, not a line in the stanza file (the stanza is
+        # appended once and never edited, so it cannot carry anything that
+        # has to follow main.cf). OpenDKIM must be LAST there: the block-link
+        # milter rewrites a reply's From to the alias it was sent to (#67)
+        # and the signature must cover that From with that domain's key.
+        # Starts from the existing override, else from main.cf's list, so
+        # every other milter keeps its place. Never written when DKIM is
+        # off -- an empty override would silence the whole chain on 587.
+        # NB: postconf -P refuses whitespace in a master.cf -o value
+        # ("-Pe does not accept whitespace in parameter value"), so the
+        # list is written comma-separated WITHOUT the spaces main.cf uses.
+        if [ "$ENABLE_DKIM" = "true" ] && postconf -Mf submission/inet >/dev/null 2>&1; then
+            CUR_SUB_MILTERS="$(postconf -Ph submission/inet/smtpd_milters 2>/dev/null || true)"
+            [ -n "$CUR_SUB_MILTERS" ] || CUR_SUB_MILTERS="$(postconf -h smtpd_milters 2>/dev/null || true)"
+            postconf -P "submission/inet/smtpd_milters=$(_dkim_milter_rebuild "$CUR_SUB_MILTERS" append | tr -d ' ')"
+            echo "  587 milter order: $(postconf -Ph submission/inet/smtpd_milters)"
         fi
 
         if postfix check >/dev/null 2>&1; then
