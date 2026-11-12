@@ -64,6 +64,12 @@
 #       on the way, without --install's role reset. Nothing of the fleet's
 #       own lives in those files (that is 94/95/96; a changed rule belongs
 #       in 95-site.conf), so nothing is lost; the daemon restarts.
+#   ./badips-orchestrate.sh --fleet-conf [NN|ALIAS ...]
+#       95-fleet.conf (NEVER_BLOCK from badips-site.conf) on every node that
+#       has bad-ips, roles untouched; the daemon is reconfigured only where
+#       the file differs, and a block host's live never-block sets are then
+#       checked for every network. The path for a never-block change (the
+#       house's IPv6 /60 came in with post-cutover #64).
 #   ./badips-orchestrate.sh --publish [--deb FILE]
 #       the fleet repo (with FILE added, if given) to prod-homelab45, then
 #       asks apt on a fleet node, through aptcacher, what it now offers.
@@ -911,6 +917,44 @@ do_restore_conf(){
     done
 }
 
+# --fleet-conf: 95-fleet.conf (never_block_cidrs from $SITE) on every node that
+# has bad-ips, roles untouched; the daemon is reconfigured only where the file
+# differs. On a block host the live never-block sets are then checked for every
+# network in NEVER_BLOCK. This is the path for a never-block change (post-cutover
+# #64 added the house's IPv6 /60; dns-ipv6-orchestrate.sh --prefix-changed
+# points here). Legacy hosts (jumper) are named explicitly, as everywhere.
+do_fleet_conf(){
+    local nodes=("$@"); [ ${#nodes[@]} -eq 0 ] && mapfile -t nodes < <(all_nodes)
+    load_site
+    local want_conf; want_conf="$(conf_fleet)"
+    say "95-fleet.conf: never_block_cidrs = $NEVER_BLOCK (${#nodes[@]} target(s)), roles untouched"
+    local n v have st want why e set missing
+    for n in "${nodes[@]}"; do
+        n="$(nn "$n")"
+        if ! up "$n"; then case " $EDGES " in *" $n "*) warn "$(label "$n"): powered off (parked edge) -- done in the rotation pass" ;; *) bad "$(label "$n"): unreachable" ;; esac; continue; fi
+        v="$(rsh "$n" "dpkg-query -W -f='\${Version}' bad-ips 2>/dev/null")"
+        [ -n "$v" ] || { warn "$(label "$n"): bad-ips not installed -- skipped"; continue; }
+        have="$(rsh "$n" "sudo cat $CONFDIR/95-fleet.conf 2>/dev/null")"
+        if [ "$have" = "$want_conf" ]; then ok "$(label "$n"): 95-fleet.conf already current"
+        else
+            conf_fleet | put "$n" "$CONFDIR/95-fleet.conf" || { bad "$(label "$n"): could not write 95-fleet.conf; stopping"; return; }
+            rsh "$n" "sudo dpkg-reconfigure -f noninteractive bad-ips" >/dev/null 2>&1 || { bad "$(label "$n"): dpkg-reconfigure failed; stopping"; return; }
+            EXPECT_VERSION="$v"                          # the host's own version: this is not an upgrade
+            st="$(node_status "$n")"; want="$(want_for "$n" "$st")"
+            if why="$(node_check "$want" "$st" "$(db_user_for "$n")")"; then ok "$(label "$n") ($want): 95-fleet.conf updated -> $(node_brief "$st")"
+            else bad "$(label "$n") ($want): 95-fleet.conf updated, but $why"; echo "  ${R}stopped: the targets after this one were not touched${O}"; return; fi
+        fi
+        if is_block_host "$n"; then
+            missing=""
+            for e in ${NEVER_BLOCK//,/ }; do
+                case "$e" in *:*) set=never_block_v6; e="${e%/128}" ;; *) set=never_block; e="${e%/32}" ;; esac   # nft prints a host without its /32 or /128
+                rsh "$n" "sudo nft list set inet badips $set 2>/dev/null" | grep -qF "$e" || missing="$missing $e"
+            done
+            [ -z "$missing" ] && ok "$(label "$n"): the live never-block sets hold every network" || bad "$(label "$n"): not in the live never-block sets:$missing"
+        fi
+    done
+}
+
 do_verify(){
     local nodes=("$@"); [ ${#nodes[@]} -eq 0 ] && mapfile -t nodes < <(all_nodes)
     load_site                                           # roles of legacy targets
@@ -1067,7 +1111,7 @@ while [ $# -gt 0 ]; do
 done
 # every target must be a node number or a legacy alias from LEGACY_HOSTS
 check_targets(){ local a; load_site; for a in "$@"; do is_legacy "$a" && { legacy_spec "$a" >/dev/null || die "'$a' is neither a node number nor an alias in LEGACY_HOSTS ($SITE)"; }; done; }
-case "$cmd" in --install|--verify|--upgrade|--restore-conf) check_targets "${args[@]}" ;; --role|--print-config|--db-login) [ ${#args[@]} -ge 1 ] && check_targets "${args[0]}" ;; esac
+case "$cmd" in --install|--verify|--upgrade|--restore-conf|--fleet-conf) check_targets "${args[@]}" ;; --role|--print-config|--db-login) [ ${#args[@]} -ge 1 ] && check_targets "${args[0]}" ;; esac
 case "$cmd" in
     --db)             do_db ;;
     --grafana-db)     do_grafana_db ;;
@@ -1079,6 +1123,7 @@ case "$cmd" in
     --verify)         do_verify "${args[@]}" ;;
     --upgrade)        do_upgrade "${args[@]}" ;;
     --restore-conf)   do_restore_conf "${args[@]}" ;;
+    --fleet-conf)     do_fleet_conf "${args[@]}" ;;
     --static-realip)  do_static_realip ;;
     --deploy-web)     do_deploy_web ;;
     --publish)        do_publish "$DEB" ;;

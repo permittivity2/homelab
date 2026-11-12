@@ -690,7 +690,8 @@ prefix_changed(){
   step "[prefix] what cannot be done from here"
   echo "  1. Registry glue: for every domain, namecheap domains.ns.update <domain> ns1.<domain> <old v6> <new v6> (and ns2),"
   echo "     if the API took IPv6 at --glue; otherwise the ticket below. The old addresses are in git history of $IPV6_FILE."
-  echo "  2. bad-ips never-block: NEVER_BLOCK in github-repos/homelab/badips-site.conf carries the house /60; update it and re-apply."
+  echo "  2. bad-ips never-block: NEVER_BLOCK in github-repos/homelab/badips-site.conf carries the house /60; put the new one"
+  echo "     there and run ./badips-orchestrate.sh --fleet-conf (then ... --fleet-conf jumper)."
   glue_ticket
 }
 
