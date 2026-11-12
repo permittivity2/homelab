@@ -1,3 +1,12 @@
+homelab-dnsdist (0.1.6) unstable; urgency=medium
+
+  * Release v0.1.6
+  * listen_addresses: a list, one addLocal() per entry, so an edge answers
+    DNS over IPv4 and IPv6 ("0.0.0.0:53" + "[::]:53"); the old scalar
+    listen_address still works. Post-cutover #64.
+
+ -- Gardner <gardner@homelab>  Wed, 12 Nov 2026 08:30:00 -0600
+
 homelab-dnsdist (0.1.5) unstable; urgency=medium
 
   * Release v0.1.5

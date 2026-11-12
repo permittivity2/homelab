@@ -30,7 +30,9 @@ proxy. But for DNS specifically, `dnsdist` is the better fit:
 2. Edit `/etc/homelab/dnsdist/backends.yml` (postinst seeds a starter
    copy from `config/backends.example.yml` on first install):
    ```yaml
-   listen_address: 0.0.0.0:53
+   listen_addresses:        # one addLocal() each; "[::]:53" = answer over IPv6 too
+     - 0.0.0.0:53
+     - "[::]:53"
    servers:
      - 10.50.2.162:53
    check_interval: 10
@@ -67,6 +69,19 @@ internal test correctly still had every real external query
 (1.1.1.1, 8.8.8.8, ...) time out until this was added -- the same
 public exposure PowerDNS itself already had with no ACL at all before
 this package existed, not a new risk.
+
+## IPv6 (post-cutover #64)
+
+`listen_addresses` is a list and gets one `addLocal()` per entry. The edges
+carry `0.0.0.0:53` and `"[::]:53"`, so dnsdist answers over both families
+on one port (dnsdist sets `IPV6_V6ONLY` on its IPv6 sockets, so the two
+wildcards coexist). The wildcard is deliberate: the house IPv6 prefix is a
+lease from AT&T, and an address written here would go stale the day the
+prefix changes. The backends stay IPv4 on the service plane; an IPv6
+client's address reaches PowerDNS inside the PROXY protocol v2 header like
+any other, so the Lua steering records see it unchanged. How the edges get
+their IPv6 addresses, and the AAAA/glue side, live in
+`install-orchestrators/dns-ipv6-orchestrate.sh`.
 
 ## PROXY protocol
 

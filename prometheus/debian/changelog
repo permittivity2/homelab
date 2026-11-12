@@ -1,3 +1,13 @@
+homelab-prometheus (0.10.1) unstable; urgency=medium
+
+  * Rules for DNS over IPv6 (post-cutover #64): DnsIPv6FrontendIdle (an
+    edge busy on its IPv4 listener but silent on [::]:53 for 2 h) and
+    ResolverIPv6Idle (ns03 answering nothing over IPv6 for 6 h while IPv4
+    questions keep coming). Symptom-based: the monitoring host has no IPv6
+    of its own to probe with.
+
+ -- Gardner <gardner@homelab>  Wed, 12 Nov 2026 09:40:00 -0600
+
 homelab-prometheus (0.10.0) unstable; urgency=medium
 
   * Alertmanager (post-cutover #38): Depends on prometheus-alertmanager and

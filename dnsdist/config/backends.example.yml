@@ -2,12 +2,18 @@
 # homelab-dnsdist-apply-backends (postinst does this automatically on
 # every install/upgrade once the real file exists).
 #
-# listen_address: where dnsdist itself accepts DNS queries (UDP+TCP
-# both, from one bind) -- wildcard is fine here, same "bind broadly,
+# listen_addresses: where dnsdist itself accepts DNS queries (UDP+TCP
+# both, from each bind) -- wildcards are fine here, same "bind broadly,
 # firewall is the boundary" convention this project already uses for
 # haproxy/webproxy; the existing input-chain rule already allows
-# inbound 53.
-listen_address: 0.0.0.0:53
+# inbound 53 for both families. Both wildcards together make the node
+# answer over IPv4 and IPv6 (dnsdist sets IPV6_V6ONLY on the IPv6
+# socket, so they coexist). "[::]" rather than the node's own IPv6
+# address: the house prefix is a lease, a wildcard never goes stale.
+# (The older single `listen_address: 0.0.0.0:53` still works.)
+listen_addresses:
+  - 0.0.0.0:53
+  - "[::]:53"
 
 # Deliberately a flat list, not multiple named pools -- dnsdist only
 # routes queries to a named pool if a rule says so, and this project

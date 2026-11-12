@@ -1,0 +1,52 @@
+# DNS over IPv6 (post-cutover #64). The IPv6 path has no probe of its own:
+# the monitoring host sits on a VLAN without IPv6, so it cannot ask the
+# nameservers over IPv6. What it CAN see is the symptom: dnsdist counts
+# queries per listener, and once the AAAA records and the registry glue are
+# out, the world's resolvers keep both listeners busy around the clock. An
+# edge whose IPv4 listener is busy while its IPv6 listener is silent has
+# lost its IPv6 one way or another: the SLAAC address is gone (RA stopped),
+# the house prefix changed and the published addresses are stale (run
+# install-orchestrators/dns-ipv6-orchestrate.sh --prefix-changed), or the
+# AT&T gateway's Reflexive ACL is On again and drops inbound IPv6.
+#
+# Edge 01 (.67) is not a nameserver and gets almost no DNS traffic, so the
+# IPv4 floor keeps it out of this; it would otherwise warn forever.
+groups:
+  - name: homelab-dns-ipv6
+    rules:
+      - alert: DnsIPv6FrontendIdle
+        expr: >-
+          sum by (host) (increase(dnsdist_frontend_queries{frontend=~"\\[.*\\]:53"}[2h])) == 0
+          and on (host)
+          sum by (host) (increase(dnsdist_frontend_queries{frontend="0.0.0.0:53"}[2h])) > 200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} answers DNS over IPv4 but has had no IPv6 query for 2 hours"
+          description: >-
+            Lost IPv6 address (ip -6 addr on the public NIC), stale AAAA/glue
+            after a prefix change (dns-ipv6-orchestrate.sh --verify, then
+            --prefix-changed), or the gateway blocks inbound IPv6 again
+            (Reflexive ACL must stay Off). dnsdist itself is fine: its IPv4
+            listener is busy.
+
+      # ns03, once pfsense hands VLAN 60 clients the resolver's IPv6 (RDNSS):
+      # phones on the house Wi-Fi ask over IPv6 all day. Silence there while
+      # IPv4 questions keep coming means the RDNSS points at a stale address
+      # (prefix change) or the recursor lost its :: listener.
+      - alert: ResolverIPv6Idle
+        expr: >-
+          increase(pdns_recursor_ipv6_questions{job="pdns-recursor"}[6h]) == 0
+          and on (instance)
+          increase(pdns_recursor_questions{job="pdns-recursor"}[6h]) > 1000
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "ns03 has answered no query over IPv6 in 6 hours"
+          description: >-
+            Either VLAN 60's router advertisement no longer carries ns03's
+            current IPv6 (pfsense > Services > Router Advertisement, DNS
+            servers) or the recursor is not listening on :: (ss -lnup on
+            ns03; dns-ipv6-orchestrate.sh --verify).

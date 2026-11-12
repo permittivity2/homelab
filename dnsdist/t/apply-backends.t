@@ -67,7 +67,7 @@ local $ENV{HOMELAB_DNSDIST_CONFIG}   = $dnsdist_config;
 
 my $output = `perl script/homelab-dnsdist-apply-backends 2>&1`;
 is($? >> 8, 0, 'script exits 0 on a valid config') or diag($output);
-like($output, qr/applied 1 server\(s\), restarted/, 'reports servers applied');
+like($output, qr/applied 1 server\(s\), listening on 0\.0\.0\.0:53, restarted/, 'reports servers applied and the listener');
 
 ok(-f $dnsdist_config, 'dnsdist.conf was written');
 my $cfg = do { local (@ARGV, $/) = $dnsdist_config; <> };
@@ -90,9 +90,9 @@ is(( () = $cfg2 =~ /newServer/g ), 1, 'backend is not duplicated on a second run
 # Validation failure must NOT clobber the previously-working config.
 open(my $bfh, '>', $backends_yml) or die $!;
 print $bfh <<YAML;
-listen_address: BROKEN_CONFIG_MARKER
+listen_address: 0.0.0.0:53
 servers:
-  - 10.50.2.162:53
+  - BROKEN_CONFIG_MARKER:53
 YAML
 close($bfh);
 
@@ -131,7 +131,7 @@ close($mfh);
 
 my $output5 = `perl script/homelab-dnsdist-apply-backends 2>&1`;
 is($? >> 8, 0, 'script exits 0 with multiple servers') or diag($output5);
-like($output5, qr/applied 2 server\(s\), restarted/, 'reports both servers applied');
+like($output5, qr/applied 2 server\(s\), listening on 0\.0\.0\.0:53, restarted/, 'reports both servers applied');
 my $cfg5 = do { local (@ARGV, $/) = $dnsdist_config; <> };
 is(( () = $cfg5 =~ /newServer/g ), 2, 'both servers get their own newServer entry');
 unlike($cfg5, qr/pool\s*=/, 'still no pool= parameter with multiple servers');
@@ -159,5 +159,57 @@ my $output6 = `perl script/homelab-dnsdist-apply-backends 2>&1`;
 is($? >> 8, 0, 'script exits 0 with an explicit acl') or diag($output6);
 my $cfg6 = do { local (@ARGV, $/) = $dnsdist_config; <> };
 like($cfg6, qr/setACL\(\{"0\.0\.0\.0\/0", "::\/0"\}\)/, 'setACL() emitted with the configured CIDRs when acl is set');
+
+# listen_addresses (post-cutover #64): a list gives one addLocal() per
+# entry, so the edges answer on IPv4 and IPv6; the manifest's tcp_port
+# comes from the first entry.
+my $manifest_dir = "$work/services";
+make_path($manifest_dir);
+local $ENV{HOMELAB_SERVICES_MANIFEST_DIR} = $manifest_dir;
+open(my $lfh, '>', $backends_yml) or die $!;
+print $lfh <<YAML;
+listen_addresses:
+  - 0.0.0.0:53
+  - "[::]:53"
+servers:
+  - 10.50.2.162:53
+YAML
+close($lfh);
+
+my $output7 = `perl script/homelab-dnsdist-apply-backends 2>&1`;
+is($? >> 8, 0, 'script exits 0 with two listen addresses') or diag($output7);
+like($output7, qr/listening on 0\.0\.0\.0:53, \[::\]:53, restarted/, 'reports both listeners');
+my $cfg7 = do { local (@ARGV, $/) = $dnsdist_config; <> };
+like($cfg7, qr/addLocal\("0\.0\.0\.0:53"\)\naddLocal\("\[::\]:53"\)/, 'one addLocal() per listen address, in order');
+is(( () = $cfg7 =~ /addLocal/g ), 2, 'exactly two listeners');
+ok(-f "$manifest_dir/dnsdist.yml", 'manifest written');
+my $manifest = do { local (@ARGV, $/) = "$manifest_dir/dnsdist.yml"; <> };
+like($manifest, qr/tcp_port:\s*'?53'?/, 'manifest check port comes from the first listen address');
+
+# A single `listen_addresses` scalar is accepted too; an entry without a
+# port is refused before dnsdist ever sees it.
+open(my $sfh2, '>', $backends_yml) or die $!;
+print $sfh2 <<YAML;
+listen_addresses: "[::]:53"
+servers:
+  - 10.50.2.162:53
+YAML
+close($sfh2);
+my $output8 = `perl script/homelab-dnsdist-apply-backends 2>&1`;
+is($? >> 8, 0, 'a scalar listen_addresses is accepted') or diag($output8);
+my $cfg8 = do { local (@ARGV, $/) = $dnsdist_config; <> };
+like($cfg8, qr/addLocal\("\[::\]:53"\)/, 'scalar listen_addresses becomes the one listener');
+
+open(my $sfh3, '>', $backends_yml) or die $!;
+print $sfh3 <<YAML;
+listen_addresses:
+  - 0.0.0.0
+servers:
+  - 10.50.2.162:53
+YAML
+close($sfh3);
+my $output9 = `perl script/homelab-dnsdist-apply-backends 2>&1`;
+isnt($? >> 8, 0, 'a listen address without a port is refused');
+like($output9, qr/must be host:port/, 'says why');
 
 done_testing;

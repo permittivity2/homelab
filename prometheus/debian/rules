@@ -25,6 +25,8 @@ override_dh_install:
 		debian/homelab-prometheus/usr/share/homelab-prometheus/config/rules/resolver.yml
 	install -D -m 644 config/rules/fleet-basics.yml \
 		debian/homelab-prometheus/usr/share/homelab-prometheus/config/rules/fleet-basics.yml
+	install -D -m 644 config/rules/dns-ipv6.yml \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/config/rules/dns-ipv6.yml
 	install -D -m 644 config/alertmanager.yml.template \
 		debian/homelab-prometheus/usr/share/homelab-prometheus/config/alertmanager.yml.template
 	install -D -m 644 config/alertmanager-unconfigured.yml \

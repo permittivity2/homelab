@@ -53,7 +53,18 @@ unless (-f $BACKENDS_CONFIG) {
 }
 
 my $config  = LoadFile($BACKENDS_CONFIG);
-my $listen  = $config->{listen_address} // '0.0.0.0:53';
+# listen_addresses: a list, one addLocal() each (post-cutover #64: the edges
+# answer DNS over IPv6 too, so the site file carries "0.0.0.0:53" AND
+# "[::]:53"). dnsdist sets IPV6_V6ONLY on its IPv6 sockets, so the two
+# wildcards coexist on one port. "[::]" rather than the node's own IPv6
+# address because the house prefix is a lease from AT&T: an address written
+# here would go stale the day the prefix changes, a wildcard never does.
+# The old scalar `listen_address` keeps working (one listener).
+my @listen = ref($config->{listen_addresses}) eq 'ARRAY' ? @{ $config->{listen_addresses} }
+           : defined $config->{listen_addresses}          ? ($config->{listen_addresses})
+           :                                                ($config->{listen_address} // '0.0.0.0:53');
+die "backends.yml: 'listen_addresses' must name at least one address:port\n" unless @listen;
+die "backends.yml: every listen address must be host:port (got '$_')\n" for grep { !/:\d+$/ } @listen;
 my $servers = $config->{servers} // [];
 
 die "backends.yml: no servers declared (need at least one entry under 'servers:')\n" unless @$servers;
@@ -74,9 +85,9 @@ my $cfg = <<HEADER;
 -- hand-edit; edit /etc/homelab/dnsdist/backends.yml and re-run
 -- homelab-dnsdist-apply-backends instead. Regenerated wholesale on
 -- every run, not merged.
-addLocal("$listen")
-
 HEADER
+$cfg .= qq{addLocal("$_")\n} for @listen;
+$cfg .= "\n";
 
 # dnsdist's own built-in default ACL is RFC1918 + loopback + link-local
 # ONLY -- it deliberately refuses public-internet queries out of the
@@ -139,7 +150,7 @@ rename($tmp, $DNSDIST_CONFIG) or die "Cannot install $DNSDIST_CONFIG: $!\n";
 system('systemctl', 'restart', 'dnsdist') == 0
     or die "dnsdist config validated and installed but restart failed — check 'systemctl status dnsdist'\n";
 
-print 'homelab-dnsdist: applied ' . scalar(@$servers) . " server(s), restarted.\n";
+print 'homelab-dnsdist: applied ' . scalar(@$servers) . ' server(s), listening on ' . join(', ', @listen) . ", restarted.\n";
 
 # Fleet-topology visibility -- same pattern as
 # homelab-haproxy-apply-backends. A local tcp_port check on dnsdist's
@@ -149,7 +160,7 @@ print 'homelab-dnsdist: applied ' . scalar(@$servers) . " server(s), restarted.\
 # checks and automatic failover handle that at the query-routing
 # layer, invisibly to clients, the same way a real outage of one
 # postfix/dovecot HA instance is invisible behind haproxy).
-my ($listen_port) = $listen =~ /:(\d+)$/;
+my ($listen_port) = $listen[0] =~ /:(\d+)$/;
 $listen_port //= 53;
 my $manifest_dir  = $ENV{HOMELAB_SERVICES_MANIFEST_DIR} // '/etc/homelab/services';
 my $manifest_file = "$manifest_dir/dnsdist.yml";

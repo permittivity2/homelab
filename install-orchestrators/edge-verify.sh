@@ -73,6 +73,22 @@ else
     esac
 fi
 
+# IPv6 (post-cutover #64): the public NIC carries one SLAAC address with the
+# fixed token <prefix>:23:116:91:NN, dnsdist listens on [::]:53, and the
+# address is recorded in .edge-ipv6. Skipped with a warning until that file
+# names this edge.
+IPV6_FILE=/home/gardner/claude/general/github-repos/homelab/git/install-orchestrators/.edge-ipv6
+V6=$( [ -s "$IPV6_FILE" ] && awk -v k="$OWN" '$1==k {print $2; exit}' "$IPV6_FILE")
+step "IPv6 on the public NIC"
+if [ -z "$V6" ]; then
+    warn "no IPv6 recorded for $OWN in $IPV6_FILE (dns-ipv6-orchestrate.sh --edges not run for this edge)"
+else
+    LIVE6=$(ssh -o ConnectTimeout=8 "$MGMT" 'ip -6 -o addr show scope global -tentative | awk "{print \$4}" | cut -d/ -f1 | grep ":23:116:91:" | head -1' 2>/dev/null)
+    [ "$LIVE6" = "$V6" ] && ok "holds its IPv6 $V6" || bad "IPv6 is '${LIVE6:-none}', recorded $V6 (prefix changed? dns-ipv6-orchestrate.sh --prefix-changed)"
+    ssh -o ConnectTimeout=8 "$MGMT" 'ip -6 route show default' 2>/dev/null | grep -q default && ok "IPv6 default route present" || bad "no IPv6 default route"
+    ssh -o ConnectTimeout=8 "$MGMT" 'sudo -n ss -lnup' 2>/dev/null | grep -q '\[::\]:53 ' && ok "dnsdist listens on [::]:53" || bad "dnsdist does not listen on [::]:53"
+fi
+
 step "services"
 for u in nginx haproxy dnsdist homelab-agent; do
     if ssh -o ConnectTimeout=6 "$MGMT" "systemctl is-active --quiet $u" 2>/dev/null; then ok "$u active"
@@ -152,6 +168,18 @@ else
     # the sites someone remembered.
     probe_http https://search.mailmasker.org/           "200 301 302"
     probe_http https://developer.mailmasker.org/        "200"
+    # IPv6 (post-cutover #64): this edge's own IPv6 address must answer
+    # DNS (UDP and TCP) and HTTPS from the internet.
+    if [ -n "${V6:-}" ]; then
+        r=$(timeout 20 ssh -o ConnectTimeout=6 offsite "ping -6 -c 1 -W 3 $V6 >/dev/null 2>&1 && echo pong" 2>/dev/null)
+        [ "$r" = pong ] && ok "$V6 answers ping over IPv6" || bad "$V6 does not answer ping over IPv6"
+        r=$(timeout 20 ssh -o ConnectTimeout=6 offsite "dig -6 +short +time=4 +tries=1 @$V6 mailmasker.org SOA" 2>/dev/null)
+        case "$r" in ns1.*) ok "DNS over IPv6/UDP on $V6" ;; *) bad "no DNS answer over IPv6/UDP on $V6 ('$r')" ;; esac
+        r=$(timeout 20 ssh -o ConnectTimeout=6 offsite "dig -6 +tcp +short +time=4 +tries=1 @$V6 mailmasker.org SOA" 2>/dev/null)
+        case "$r" in ns1.*) ok "DNS over IPv6/TCP on $V6" ;; *) bad "no DNS answer over IPv6/TCP on $V6 ('$r')" ;; esac
+        r=$(timeout 25 ssh -o ConnectTimeout=6 offsite "curl -6 -s -o /dev/null -w '%{http_code}' -m 15 --resolve 'mailmasker.org:443:[$V6]' https://mailmasker.org/" 2>/dev/null)
+        case "$r" in 200|301|302) ok "https://mailmasker.org/ over IPv6 on $V6 -> $r" ;; *) bad "https://mailmasker.org/ over IPv6 on $V6 -> '$r'" ;; esac
+    fi
     # Mail ingress: haproxy binds *:25/587/143/993 on this node.
     #
     # :25 CANNOT be probed from offsite -- its provider blocks outbound port 25

@@ -1,3 +1,12 @@
+homelab-grafana (0.7.4) unstable; urgency=medium
+
+  * Release v0.7.4
+  * DNS dashboard: queries per dnsdist listener (IPv4 vs IPv6) per edge;
+    resolver dashboard: ns03's questions received and queries sent over
+    IPv6. Post-cutover #64.
+
+ -- Gardner <gardner@homelab>  Wed, 12 Nov 2026 09:40:00 -0600
+
 homelab-grafana (0.7.3) unstable; urgency=medium
 
   * Release v0.7.3
