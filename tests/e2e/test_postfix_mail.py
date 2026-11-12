@@ -231,6 +231,50 @@ def test_smtps_implicit_tls_relay_is_permitted(ssh_host, mail_account):
             s.mail(email)
             code, msg = s.rcpt("someone-external@example.com")
             assert code == 250, f"an authenticated user was denied relay over 465: {code} {msg}"
+            assert not s.has_extn("vrfy"), "465 advertises VRFY (post-cutover #65 turned it off everywhere)"
+        finally:
+            with contextlib.suppress(Exception):
+                s.quit()
+
+
+def test_port25_offers_no_auth_no_vrfy_and_requires_helo(ssh_host):
+    """Post-cutover #65: the public MX answers only what an MX needs. No
+    AUTH is advertised or accepted on 25 (nothing legitimate ever
+    authenticated there; the 587/465 stanzas keep their own TLS-only
+    AUTH), VRFY is disabled (502), and MAIL FROM before HELO/EHLO is
+    refused (503)."""
+    with _tunnel(ssh_host, LOCAL_SMTP_PORT, 25) as port:
+        s = smtplib.SMTP("127.0.0.1", port, timeout=10)
+        try:
+            code, _ = s.docmd("MAIL FROM:<e2e-sender@example.com>")
+            assert code == 503, f"MAIL before HELO/EHLO was not refused on 25: {code}"
+            s.ehlo("e2e-test-client")
+            assert not s.has_extn("auth"), "port 25 advertises AUTH"
+            assert not s.has_extn("vrfy"), "port 25 advertises VRFY"
+            code, _ = s.docmd("VRFY postmaster")
+            assert code == 502, f"VRFY was not disabled on 25: {code}"
+            code, _ = s.docmd("AUTH PLAIN AGUyZQBlMmU=")
+            assert code in (502, 503), f"AUTH was accepted or offered on 25: {code}"
+        finally:
+            with contextlib.suppress(Exception):
+                s.quit()
+
+
+def test_submission_offers_auth_only_inside_tls_and_no_vrfy(ssh_host):
+    """Post-cutover #65 companion: 587 keeps AUTH, but only after STARTTLS
+    (smtpd_tls_auth_only), and VRFY is gone there too."""
+    with _tunnel(ssh_host, LOCAL_SUBMISSION_PORT, 587) as port:
+        s = smtplib.SMTP("127.0.0.1", port, timeout=10)
+        try:
+            s.ehlo("e2e-test-client")
+            assert not s.has_extn("auth"), "587 advertises AUTH before STARTTLS"
+            assert s.has_extn("starttls"), "587 does not offer STARTTLS"
+            assert not s.has_extn("vrfy"), "587 advertises VRFY"
+            s.starttls(context=_tls_context())
+            s.ehlo("e2e-test-client")
+            assert s.has_extn("auth"), "587 offers no AUTH inside TLS"
+            code, _ = s.docmd("VRFY postmaster")
+            assert code == 502, f"VRFY was not disabled on 587: {code}"
         finally:
             with contextlib.suppress(Exception):
                 s.quit()

@@ -207,6 +207,30 @@ submissions until 0.1.30 added the line (2026-11-11). Running the filter
 as `opendkim` is also simply the right privilege, and what Debian's own
 default config does.
 
+## What port 25 does not offer (0.1.31, post-cutover #65)
+
+The public MX answers only what an MX needs. Three `postconf` settings in
+`postinst`, re-applied on every configure:
+
+- `smtpd_sasl_auth_enable = no` (main.cf) — **no AUTH on 25**: not
+  advertised, `AUTH …` → `503`. The submission (587) and smtps (465)
+  stanzas set `-o smtpd_sasl_auth_enable=yes -o smtpd_tls_auth_only=yes`
+  for themselves, so authenticated sending is unchanged and TLS-only.
+  Fourteen days of logs on all three signers showed zero AUTH attempts on
+  25 (successful or failed) before the change; `smtpd_tls_auth_only =
+  yes` is also the global default now, for any future listener.
+- `disable_vrfy_command = yes` — EHLO stops advertising VRFY on every
+  listener and `VRFY x` → `502 5.5.1 VRFY command is disabled`. Scanners
+  flag it; no MTA or client uses it. EXPN was never implemented (`500`).
+- `smtpd_helo_required = yes` — `MAIL FROM` before HELO/EHLO → `503
+  5.5.1 Error: send HELO/EHLO first`. Every real MTA and mail app sends
+  EHLO; this turns away the laziest bots.
+
+Not changed, by design: `RCPT TO` on 25 still rejects unknown mailboxes
+(an MX must; accepting everything and bouncing later causes backscatter).
+Checks: `tests/e2e/test_postfix_mail.py` and
+`install-orchestrators/mail-hardening-orchestrate.sh --verify`.
+
 ## `master.cf`'s submission (587) and smtps (465) services
 
 Postfix ships `master.cf` with the submission (587) and submissions

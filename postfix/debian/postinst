@@ -116,6 +116,16 @@ case "$1" in
             echo "       'dpkg-reconfigure homelab-postfix' to pick it up."
         fi
 
+        # Mail-port hardening (post-cutover #65, 0.1.31): the public MX (25)
+        # offers no AUTH at all -- smtpd_sasl_auth_enable=no here; the 587
+        # and 465 stanzas re-enable it for themselves, TLS-only -- so no
+        # password can ever be sent to port 25 and bots have nothing to
+        # brute-force there (14 days of logs showed zero AUTH on 25). VRFY
+        # is off everywhere (scanners flag it; no MTA uses it; EXPN was
+        # never implemented) and HELO/EHLO is required before MAIL (every
+        # real MTA and mail app sends it; it turns away the laziest bots).
+        # smtpd_tls_auth_only=yes is the global default should any future
+        # listener turn AUTH on.
         postconf -e \
             "myhostname = $HOSTNAME" \
             "mydomain = $MAIL_DOMAIN" \
@@ -128,9 +138,12 @@ case "$1" in
             "virtual_transport = lmtp:inet:$DOVECOT_HOST:24" \
             'smtpd_sasl_type = dovecot' \
             "smtpd_sasl_path = inet:$DOVECOT_HOST:12345" \
-            'smtpd_sasl_auth_enable = yes' \
+            'smtpd_sasl_auth_enable = no' \
+            'smtpd_tls_auth_only = yes' \
             'smtpd_sasl_security_options = noanonymous' \
             'broken_sasl_auth_clients = yes' \
+            'disable_vrfy_command = yes' \
+            'smtpd_helo_required = yes' \
             "smtpd_tls_cert_file = $TLS_CERT" \
             "smtpd_tls_key_file = $TLS_KEY" \
             'smtpd_tls_security_level = may' \
@@ -694,7 +707,7 @@ case "$1" in
         echo "sender login map: $SENDER_LOGIN_CF"
         echo "submission (587): SASL via Dovecot ($DOVECOT_HOST:12345), TLS required (STARTTLS), sender-login-mismatch enforced"
         echo "smtps (465):      the same service, implicit TLS (the handshake first) for mail apps set to SSL/TLS"
-        echo "smtp (25):        virtual_mailbox_domains=$CURRENT_VMD, LMTP to $DOVECOT_HOST:24"
+        echo "smtp (25):        virtual_mailbox_domains=$CURRENT_VMD, LMTP to $DOVECOT_HOST:24; no AUTH, no VRFY, HELO required (#65)"
         if [ "$BEHIND_HAPROXY" = "true" ]; then
             echo "haproxy:          expected in front (behind_haproxy=true) -- SMTP/submission reject direct"
             echo "                  connections until homelab-haproxy is actually proxying to this host with"

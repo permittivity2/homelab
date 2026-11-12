@@ -1,3 +1,13 @@
+homelab-postfix (0.1.31) unstable; urgency=medium
+
+  * Mail-port hardening (post-cutover #65): no AUTH on port 25
+    (smtpd_sasl_auth_enable=no in main.cf; the 587/465 stanzas keep their
+    own TLS-only AUTH), smtpd_tls_auth_only=yes as the global default,
+    disable_vrfy_command=yes and smtpd_helo_required=yes on every listener.
+    Fourteen days of logs showed zero AUTH on 25 and zero VRFY/EXPN.
+
+ -- Gardner <gardner@homelab>  Thu, 12 Nov 2026 00:35:00 -0600
+
 homelab-postfix (0.1.30) unstable; urgency=high
 
   * opendkim.conf: UserID opendkim. The template never set it, so OpenDKIM
