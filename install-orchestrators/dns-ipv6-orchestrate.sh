@@ -315,7 +315,7 @@ edge_checks(){ # $1 = NN
   rssh "$ip" 'sudo -n ss -lnup' | grep -q '0\.0\.0\.0:53 ' && ok "$n dnsdist still listens on 0.0.0.0:53" || bad "$n IPv4 listener gone"
   x=$(retry 4 5 'ns1.*' offsite "dig -6 +short +time=4 +tries=1 @$v6 $PROBE_NAME SOA") && ok "$n answers SOA over IPv6/UDP from offsite" || bad "$n no SOA over IPv6/UDP from offsite ('$x')"
   x=$(retry 4 5 'ns1.*' offsite "dig -6 +tcp +short +time=4 +tries=1 @$v6 $PROBE_NAME SOA") && ok "$n answers SOA over IPv6/TCP from offsite" || bad "$n no SOA over IPv6/TCP from offsite ('$x')"
-  x=$(retry 4 5 '*23.116.91.6*' offsite "dig -6 +short +time=4 +tries=1 @$v6 $PROBE_NAME A | tr '\n' ' '") && ok "$n Lua-steered A answer for an IPv6 client -> $x" || bad "$n Lua answer for an IPv6 client: '$x'"
+  x=$(retry 4 5 '*23.116.91.6*' offsite "dig -6 +short +time=4 +tries=1 @$v6 $PROBE_NAME A | grep -v '^;' | tr '\n' ' '") && ok "$n Lua-steered A answer for an IPv6 client -> $x" || bad "$n Lua answer for an IPv6 client: '$x'"
 }
 
 edges_check(){ # --check: the read-only edge checks, recording the address when an edge is clean (a re-run after a transient failure)
@@ -384,13 +384,13 @@ zones_check(){
   v66=$(v6_of "$NS1_V4"); v68=$(v6_of "$NS2_V4")
   step "[zones] every zone's ns1/ns2 AAAA, asked of $NS1_V4 from offsite (IPv4 transport)"
   for z in $(zones); do
-    x=$(offsite "dig +short +time=4 +tries=1 AAAA ns1.$z @$NS1_V4; dig +short +time=4 +tries=1 AAAA ns2.$z @$NS1_V4" | paste -sd' ' -)
+    x=$(offsite "dig +short +time=4 +tries=1 AAAA ns1.$z @$NS1_V4; dig +short +time=4 +tries=1 AAAA ns2.$z @$NS1_V4" | grep -v '^;' | paste -sd' ' -)   # dig's error lines (';; ... timed out') name the server: never let them match
     n=$((n+1))
     [ "$x" = "$v66 $v68" ] && echo "       ok $z" || { bad "$z: ns1/ns2 AAAA -> '$x'"; f=1; }
   done
   [ "$f" = 0 ] && ok "$n zones answer ns1/ns2 AAAA correctly"
   step "[zones] the same over IPv6 transport, asked of ns1 and ns2 themselves"
-  x=$(offsite "dig -6 +short +time=4 +tries=1 AAAA ns1.$PROBE_NAME @$v66; dig -6 +short +time=4 +tries=1 AAAA ns2.$PROBE_NAME @$v68" | paste -sd' ' -)
+  x=$(offsite "dig -6 +short +time=4 +tries=1 AAAA ns1.$PROBE_NAME @$v66; dig -6 +short +time=4 +tries=1 AAAA ns2.$PROBE_NAME @$v68" | grep -v '^;' | paste -sd' ' -)
   [ "$x" = "$v66 $v68" ] && ok "ns1/ns2.$PROBE_NAME AAAA over IPv6 -> $x" || bad "over IPv6: '$x'"
 }
 
@@ -504,7 +504,13 @@ web_apply(){
       total=$((total+1))
       code=$(offsite "curl -6 -s -o /dev/null -w '%{http_code}' -m 15 --resolve '$n:443:[$v6]' https://$n/")
       case "$code" in
-        000|"") bad "$n on $v6 ($v4): no TLS answer over IPv6"; f=1 ;;
+        000|"") # the same over IPv4: a name with no vhost on the edge fails on both families (forge.name, 2026-11-12:
+                # TLS "unrecognized name" either way) -- that is not an IPv6 gap, so it is a warning, not a stop
+                code4=$(offsite "curl -4 -s -o /dev/null -w '%{http_code}' -m 15 --resolve '$n:443:$v4' https://$n/")
+                case "$code4" in
+                  000|"") warn "$n on $v4: no TLS answer over IPv6 NOR over IPv4 (no vhost for it on the edge; pre-existing, same on both families)" ;;
+                  *) bad "$n on $v6 ($v4): no TLS answer over IPv6, but $code4 over IPv4"; f=1 ;;
+                esac ;;
         *) echo "       ok   $n on $v4 -> $code" ;;
       esac
     done
@@ -521,8 +527,10 @@ web_check(){
   names=$(web_names)
   step "[web] AAAA for every web name, asked of ns1 over IPv6 from offsite (authoritative, no resolver cache)"
   for n in $names; do
-    x=$(offsite "dig -6 +short +time=4 +tries=1 AAAA $n @$v6" | tr '\n' ' ')
-    [[ "$x" == *:23:116:91:6* ]] && echo "       ok   $n -> $x" || { bad "$n AAAA -> '$x'"; f=1; }
+    # answer lines only (an error line names the server and would match the pattern); retried: right after the
+    # rolling pdns restart a query can land on the backend that is restarting (seen 2026-11-12, two timeouts)
+    x=$(retry 3 5 '*:23:116:91:6*' offsite "dig -6 +short +time=4 +tries=1 AAAA $n @$v6 | grep -v '^;' | tr '\n' ' '") \
+      && echo "       ok   $n -> $x" || { bad "$n AAAA -> '$x'"; f=1; }
   done
   [ "$f" = 0 ] && ok "$(printf '%s\n' $names | wc -l) web names answer AAAA"
   x=$(offsite "dig +short +time=4 +tries=1 AAAA mail.$PROBE_NAME @$NS1_V4"); [ -z "$x" ] && ok "mail.$PROBE_NAME has no AAAA (mail stays IPv4)" || bad "mail.$PROBE_NAME answers AAAA '$x'"
