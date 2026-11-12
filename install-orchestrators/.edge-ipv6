@@ -1,0 +1,3 @@
+# public IPv4 -> IPv6 of each live edge (post-cutover #64). Written by dns-ipv6-orchestrate.sh --edges;
+# read by dns-lua-orchestrate.sh (Lua AAAA maps), edge-verify.sh and --verify. Re-made by --prefix-changed.
+23.116.91.66 2600:1702:85f0:4340:23:116:91:66

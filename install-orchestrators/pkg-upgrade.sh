@@ -95,9 +95,19 @@ for n in "${ORDER[@]}"; do
     OUT=$(rssh "$ip" "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --only-upgrade -o Dpkg::Options::=--force-confold $PKG 2>&1")
     RC=$?
     printf '%s\n' "$OUT" | grep -vE '^\s*$|^\(Reading database|^Preparing|^Unpacking|^Selecting|^Setting up' | sed 's/^/    /'
-    [ $RC -eq 0 ] || { bad "apt-get exited $RC"; FAILS=$((FAILS+1)); break; }
-
     NOW=$(rssh "$ip" "dpkg-query -W -f='\${Version}' $PKG 2>/dev/null")
+    if [ $RC -ne 0 ]; then
+        # apt-get itself can die after dpkg has finished: the OOM killer in a
+        # 512 MB container takes the biggest process, and that is apt-get
+        # (seen on prod-homelab00, 2026-11-12, exit 137). If the package is
+        # at the published version and dpkg has nothing half-done, the
+        # upgrade happened; say so and carry on with the checks below.
+        if [ "$NOW" = "$CAND" ] && [ -z "$(rssh "$ip" 'sudo dpkg --audit 2>/dev/null')" ]; then
+            warn "apt-get exited $RC (SIGKILL = 137: the OOM killer in a small container?) but $PKG $NOW is installed and dpkg is clean"
+        else
+            bad "apt-get exited $RC"; FAILS=$((FAILS+1)); break
+        fi
+    fi
     [ "$NOW" = "$CAND" ] && ok "now $NOW" || { bad "version is '$NOW' after the upgrade, wanted $CAND"; FAILS=$((FAILS+1)); break; }
 
     sleep 3    # units restarted by the postinst settle

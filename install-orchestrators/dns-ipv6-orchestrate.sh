@@ -6,6 +6,7 @@
 #
 #   ./dns-ipv6-orchestrate.sh --preflight             read-only: is everything in place to start
 #   ./dns-ipv6-orchestrate.sh --edges [NN...]         IPv6 on the edges (00 01 02), one at a time, each verified
+#   ./dns-ipv6-orchestrate.sh --check [NN...]         read-only: the per-edge checks again (after a transient failure), records the address
 #   ./dns-ipv6-orchestrate.sh --zones                 AAAA for ns1/ns2 in every zone (+ rolling pdns restart)
 #   ./dns-ipv6-orchestrate.sh --glue --probe DOMAIN   one Namecheap API call on a retired domain, then check the registry
 #   ./dns-ipv6-orchestrate.sh --glue                  IPv6 glue for every domain through the Namecheap API
@@ -56,6 +57,19 @@ FAILS=0
 h(){ printf '10.20.2.%d' "$((144 + 10#$1))"; }
 rssh(){ ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" "${@:2}" 2>/dev/null; }
 offsite(){ ssh -n -o ConnectTimeout=10 -o BatchMode=yes offsite "$@" 2>/dev/null; }
+# retry TRIES PAUSE PATTERN CMD...: run CMD until its output matches the bash
+# pattern (up to TRIES times, PAUSE seconds apart); prints the last output and
+# returns 0 only on a match. The probes right after a dnsdist restart need this:
+# on 2026-11-12 edge 00 answered UDP but not TCP for a few seconds while the
+# 512 MB container was under memory pressure (the OOM killer had just fired).
+retry(){
+  local tries=$1 pause=$2 pat=$3 i x; shift 3
+  for ((i = 1; i <= tries; i++)); do
+    x=$("$@"); [[ "$x" == $pat ]] && { printf '%s' "$x"; return 0; }
+    [ "$i" -lt "$tries" ] && sleep "$pause"
+  done
+  printf '%s' "$x"; return 1
+}
 
 EDGE_NODES="00 01 02"
 DNS_NODE=${DNS_NODE:-10.20.2.147}
@@ -77,14 +91,14 @@ ICMP6_OUT='meta l4proto ipv6-icmp accept'
 MODE=""; PROBE=""; NODES=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --preflight|--edges|--zones|--glue|--web|--ns03|--verify|--prefix-changed) MODE=${1#--} ;;
+    --preflight|--edges|--check|--zones|--glue|--web|--ns03|--verify|--prefix-changed) MODE=${1#--} ;;
     --probe) PROBE=${2:-}; shift ;;
     0[0-2]) NODES="$NODES $1" ;;
-    *) echo "usage: $0 --preflight | --edges [00 01 02] | --zones | --glue [--probe DOMAIN] | --web | --ns03 | --verify | --prefix-changed"; exit 1 ;;
+    *) echo "usage: $0 --preflight | --edges [00 01 02] | --check [00 01 02] | --zones | --glue [--probe DOMAIN] | --web | --ns03 | --verify | --prefix-changed"; exit 1 ;;
   esac
   shift
 done
-[ -n "$MODE" ] || { echo "usage: $0 --preflight | --edges [00 01 02] | --zones | --glue [--probe DOMAIN] | --web | --ns03 | --verify | --prefix-changed"; exit 1; }
+[ -n "$MODE" ] || { echo "usage: $0 --preflight | --edges [00 01 02] | --check [00 01 02] | --zones | --glue [--probe DOMAIN] | --web | --ns03 | --verify | --prefix-changed"; exit 1; }
 [ -n "$NODES" ] || NODES=$EDGE_NODES
 
 LOG="/home/gardner/claude/temp/dns-ipv6-orchestrate-$MODE-$(date +%Y%m%d-%H%M%S).log"
@@ -257,9 +271,9 @@ EOF
   case "$out" in *"RESULT: changed"*) ok "prod-homelab$n: IPv6 $v6 on $nic (changed)" ;; *) ok "prod-homelab$n: IPv6 $v6 on $nic (already there)" ;; esac
 
   step "[edge] prod-homelab$n: reachable over IPv6 from the internet, and nginx answers there (before DNS is touched)"
-  offsite "ping -6 -c 2 -W 3 $v6 >/dev/null 2>&1 && echo pong" | grep -q pong && ok "offsite pings $v6" || bad "offsite cannot ping $v6 -- inbound IPv6 is not reaching this edge"
-  local code; code=$(offsite "curl -6 -s -o /dev/null -w '%{http_code}' -m 15 --resolve '$PROBE_NAME:443:[$v6]' https://$PROBE_NAME/")
-  case "$code" in 200|301|302) ok "https://$PROBE_NAME/ over IPv6 on this edge -> $code" ;; *) bad "https://$PROBE_NAME/ over IPv6 on this edge -> '${code:-none}'" ;; esac
+  retry 3 5 pong offsite "ping -6 -c 2 -W 3 $v6 >/dev/null 2>&1 && echo pong" >/dev/null && ok "offsite pings $v6" || bad "offsite cannot ping $v6 -- inbound IPv6 is not reaching this edge"
+  local code; code=$(retry 3 5 '[23]0[0-9]' offsite "curl -6 -s -o /dev/null -w '%{http_code}' -m 15 --resolve '$PROBE_NAME:443:[$v6]' https://$PROBE_NAME/") \
+    && ok "https://$PROBE_NAME/ over IPv6 on this edge -> $code" || bad "https://$PROBE_NAME/ over IPv6 on this edge -> '${code:-none}'"
 
   step "[edge] prod-homelab$n: dnsdist listens on [::]:53 (site file, then homelab-dnsdist -> $WANT_DD applies it in ONE restart)"
   rssh "$ip" 'sudo -n bash -c "
@@ -299,9 +313,22 @@ edge_checks(){ # $1 = NN
   rssh "$ip" 'sudo -n ss -lnup' | grep -q '\[::\]:53 ' && ok "$n dnsdist listens on [::]:53 (udp)" || bad "$n nothing listens on [::]:53 udp"
   rssh "$ip" 'sudo -n ss -lntp' | grep -q '\[::\]:53 ' && ok "$n dnsdist listens on [::]:53 (tcp)" || bad "$n nothing listens on [::]:53 tcp"
   rssh "$ip" 'sudo -n ss -lnup' | grep -q '0\.0\.0\.0:53 ' && ok "$n dnsdist still listens on 0.0.0.0:53" || bad "$n IPv4 listener gone"
-  x=$(offsite "dig -6 +short +time=4 +tries=1 @$v6 $PROBE_NAME SOA"); [[ "$x" == ns1.* ]] && ok "$n answers SOA over IPv6/UDP from offsite" || bad "$n no SOA over IPv6/UDP from offsite ('$x')"
-  x=$(offsite "dig -6 +tcp +short +time=4 +tries=1 @$v6 $PROBE_NAME SOA"); [[ "$x" == ns1.* ]] && ok "$n answers SOA over IPv6/TCP from offsite" || bad "$n no SOA over IPv6/TCP from offsite ('$x')"
-  x=$(offsite "dig -6 +short +time=4 +tries=1 @$v6 $PROBE_NAME A" | tr '\n' ' '); [[ "$x" == *23.116.91.6* ]] && ok "$n Lua-steered A answer for an IPv6 client -> $x" || bad "$n Lua answer for an IPv6 client: '$x'"
+  x=$(retry 4 5 'ns1.*' offsite "dig -6 +short +time=4 +tries=1 @$v6 $PROBE_NAME SOA") && ok "$n answers SOA over IPv6/UDP from offsite" || bad "$n no SOA over IPv6/UDP from offsite ('$x')"
+  x=$(retry 4 5 'ns1.*' offsite "dig -6 +tcp +short +time=4 +tries=1 @$v6 $PROBE_NAME SOA") && ok "$n answers SOA over IPv6/TCP from offsite" || bad "$n no SOA over IPv6/TCP from offsite ('$x')"
+  x=$(retry 4 5 '*23.116.91.6*' offsite "dig -6 +short +time=4 +tries=1 @$v6 $PROBE_NAME A | tr '\n' ' '") && ok "$n Lua-steered A answer for an IPv6 client -> $x" || bad "$n Lua answer for an IPv6 client: '$x'"
+}
+
+edges_check(){ # --check: the read-only edge checks, recording the address when an edge is clean (a re-run after a transient failure)
+  local n nic v4 v6 tok before
+  for n in $NODES; do
+    step "[check] prod-homelab$n"
+    before=$FAILS
+    edge_checks "$n"
+    if [ "$FAILS" = "$before" ]; then
+      read -r nic v4 <<<"$(edge_pub "$n")"; tok=$(token_of "$v4"); v6=$(edge_live_v6 "$n" "$nic" "$tok")
+      [ -n "$v6" ] && record_v6 "$v4" "$v6" && ok "recorded $v4 -> $v6 in $IPV6_FILE"
+    fi
+  done
 }
 
 edges_deploy(){
@@ -672,6 +699,7 @@ prefix_changed(){
 case "$MODE" in
   preflight) preflight ;;
   edges) edges_deploy ;;
+  check) edges_check ;;
   zones) zones_apply ;;
   glue) if [ -n "$PROBE" ]; then glue_probe "$PROBE"; else glue_apply; fi ;;
   web) web_apply ;;
