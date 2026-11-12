@@ -1,10 +1,10 @@
 bad-ips 4.3.2
 homelab-agent 0.1.9
 homelab-certsync 0.1.4
-homelab-common 0.1.35
-homelab-dnsdist 0.1.5
-homelab-haproxy 0.1.12
+homelab-common 0.1.36
+homelab-dnsdist 0.1.6
+homelab-haproxy 0.1.13
 homelab-keepalived 0.1.5
 homelab-nginx-exporter 0.1.0
-homelab-node-exporter 0.4.1
+homelab-node-exporter 0.5.0
 homelab-webproxy 0.1.14
