@@ -1,0 +1,29 @@
+{{/* homelab Alertmanager notification templates (post-cutover #38).
+     Installed as /etc/prometheus/homelab/alertmanager.tmpl by homelab-prometheus.
+     Plain text on purpose: readable in every mail app, greppable, no images. */}}
+
+{{ define "homelab.subject" -}}
+[homelab] {{ if eq .Status "firing" }}FIRING{{ if gt (len .Alerts.Firing) 1 }} x{{ len .Alerts.Firing }}{{ end }}{{ else }}RESOLVED{{ end }}: {{ .CommonLabels.alertname }}{{ if .CommonLabels.host }} on {{ .CommonLabels.host }}{{ end }}
+{{- end }}
+
+{{ define "homelab.text" -}}
+{{ if gt (len .Alerts.Firing) 0 -}}
+Firing ({{ len .Alerts.Firing }}):
+{{ range .Alerts.Firing }}
+* {{ .Labels.alertname }}{{ if .Labels.host }} on {{ .Labels.host }}{{ end }}{{ if .Labels.instance }} [{{ .Labels.instance }}]{{ end }} -- {{ .Labels.severity }}, since {{ .StartsAt.Format "2006-01-02 15:04 MST" }}
+  {{ .Annotations.summary }}
+{{- if .Annotations.description }}
+  {{ .Annotations.description }}
+{{- end }}
+{{ end }}
+{{- end }}
+{{- if gt (len .Alerts.Resolved) 0 }}
+Resolved ({{ len .Alerts.Resolved }}):
+{{ range .Alerts.Resolved }}
+* {{ .Labels.alertname }}{{ if .Labels.host }} on {{ .Labels.host }}{{ end }} -- fired {{ .StartsAt.Format "2006-01-02 15:04 MST" }}, resolved {{ .EndsAt.Format "15:04 MST" }}
+{{ end }}
+{{- end }}
+
+Metrics tab: https://myaccount.mailmasker.org/ (Metrics)
+Silence: on the metrics host, `amtool silence add alertname={{ .CommonLabels.alertname }}{{ if .CommonLabels.host }} host={{ .CommonLabels.host }}{{ end }} -d 4h -c "reason"`
+{{- end }}

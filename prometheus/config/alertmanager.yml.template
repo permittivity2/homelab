@@ -1,0 +1,59 @@
+# Alertmanager for the homelab fleet -- rendered by homelab-prometheus's
+# postinst from /etc/homelab/prometheus/config (ALERT_* keys); do not
+# hand-edit, edit that file and dpkg-reconfigure homelab-prometheus.
+# Post-cutover #38 (2026-11-12).
+#
+# One receiver: email through the fleet's own authenticated submission path
+# (the service mailbox, STARTTLS on 587 via the mail VIP; the password lives
+# in its own root:prometheus 0640 file, never here). Alertmanager listens on
+# 127.0.0.1:9093 only -- Prometheus on this host is its only client.
+#
+# Routing: critical pages at once (30 s to collect siblings) and repeats every
+# 4 h while it stays firing; warning waits 5 min, batches for 10 min and
+# repeats daily. A critical for a host silences that host's warnings. Every
+# notification also reports when the alert resolves. The Watchdog rule fires
+# forever on purpose and goes nowhere: `amtool alert query` showing it is the
+# proof that Prometheus -> Alertmanager is alive.
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: '__SMTP_HOST__'
+  smtp_from: '__MAIL_FROM__'
+  smtp_hello: '__HELLO__'
+  smtp_auth_username: '__SMTP_USER__'
+  smtp_auth_password_file: '/etc/homelab/prometheus/alert-smtp.pw'
+  smtp_require_tls: true
+
+templates:
+  - '/etc/prometheus/homelab/alertmanager.tmpl'
+
+route:
+  receiver: mail
+  group_by: ['alertname', 'host']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['alertname="Watchdog"']
+      receiver: 'null'
+    - matchers: ['severity="warning"']
+      group_wait: 5m
+      group_interval: 10m
+      repeat_interval: 24h
+
+inhibit_rules:
+  - source_matchers: ['severity="critical"']
+    target_matchers: ['severity="warning"']
+    equal: ['host']
+
+receivers:
+  - name: 'null'
+  - name: mail
+    email_configs:
+      - to: '__MAIL_TO__'
+        send_resolved: true
+        headers:
+          Subject: '{{ template "homelab.subject" . }}'
+        text: '{{ template "homelab.text" . }}'
+        html: ''
+        tls_config:
+          server_name: '__SMTP_SERVER_NAME__'

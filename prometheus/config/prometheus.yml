@@ -19,10 +19,19 @@ global:
   external_labels:
     fleet: homelab
 
-# Alert rules. No Alertmanager on this fleet yet, so these evaluate and surface
-# in Prometheus's own Alerts page / /api/v1/rules rather than paging anyone --
-# which is still the difference between a condition being visible and a node
-# being dead for four days before anyone notices (see rules/fleet-agent.yml).
+# Alerting (post-cutover #38, 0.10.0): the Alertmanager this package installs
+# and configures on this same host, loopback only. It mails the fleet's
+# operator through the service mailbox (see alertmanager.yml.template) and
+# the myaccount Metrics tab shows what is firing. Before 0.10.0 the rules
+# below evaluated and surfaced only in Prometheus's own Alerts page --
+# visible, but a node could still be dead for four days before anyone looked
+# (see rules/fleet-agent.yml).
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['127.0.0.1:9093']
+
+# Alert rules.
 # This MUST match the postinst's $PROM_DIR/rules -- prometheus.service runs with
 # --config.file=/etc/prometheus/homelab/prometheus.yml, not the stock
 # /etc/prometheus/prometheus.yml. A rule_files glob that matches nothing is NOT

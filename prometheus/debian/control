@@ -10,6 +10,7 @@ Package: homelab-prometheus
 Architecture: all
 Depends: perl (>= 5.36),
          prometheus,
+         prometheus-alertmanager,
          homelab-common,
          libyaml-libyaml-perl,
          libmojolicious-perl

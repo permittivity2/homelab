@@ -605,6 +605,30 @@ sub _prom_down_services ($prom) {
     my $res = _prom_query($prom, 'max by(hostname,service_name)(homelab_service_up)==0') // [];
     return [ map { { host => ($_->{metric}{hostname} // '?'), service => ($_->{metric}{service_name} // '?') } } @$res ];
 }
+# Alerts Prometheus is currently evaluating as firing or pending (post-cutover
+# #38): the same set Alertmanager mails, shown where the admin already looks.
+# The Watchdog (fires forever on purpose, routed nowhere) is left out.
+# Critical first, then warning; firing before pending; then by name and host.
+sub _prom_alerts ($prom) {
+    my $tx = $UA->get(Mojo::URL->new("$prom/api/v1/alerts"));
+    return undef if $tx->error;
+    my $j = eval { $tx->result->json };
+    return undef unless $j && ($j->{status} // '') eq 'success';
+    my %sev = (critical => 0, warning => 1);
+    my @out = map {
+        my $a = $_;
+        {   name     => $a->{labels}{alertname} // '?',
+            severity => $a->{labels}{severity}  // 'warning',
+            state    => $a->{state} // 'firing',
+            host     => $a->{labels}{host} // $a->{labels}{instance} // '',
+            since    => $a->{activeAt} // '',
+            summary  => $a->{annotations}{summary} // '',
+        }
+    } grep { ($_->{labels}{alertname} // '') ne 'Watchdog' } @{ $j->{data}{alerts} // [] };
+    return [ sort { ($sev{$a->{severity}} // 2) <=> ($sev{$b->{severity}} // 2)
+                 || ($a->{state} eq 'firing' ? 0 : 1) <=> ($b->{state} eq 'firing' ? 0 : 1)
+                 || $a->{name} cmp $b->{name} || $a->{host} cmp $b->{host} } @out ];
+}
 
 # GET /admin/metrics/summary -- curated fleet-health summary from
 # Prometheus, metrics.view gated. A FIXED set of instant queries (no
@@ -632,6 +656,7 @@ sub admin_metrics_summary ($c) {
     $out{$_} = _prom_scalar($prom, $q{$_}) for keys %q;
     $out{hosts}              = _prom_hosts($prom);
     $out{services_down_list} = _prom_down_services($prom);
+    $out{alerts}             = _prom_alerts($prom);    # undef when Prometheus did not answer
 
     # Signal an unreachable Prometheus distinctly from a healthy-but-empty
     # fleet so the UI can say "metrics unavailable" rather than "0 hosts".

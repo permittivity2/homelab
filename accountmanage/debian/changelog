@@ -1,3 +1,12 @@
+homelab-accountmanage (0.1.47) unstable; urgency=medium
+
+  * Metrics tab (post-cutover #38): shows the alerts Prometheus is evaluating
+    right now -- firing in red, pending in amber, critical first, with host,
+    since-when and the rule's summary -- from /api/v1/alerts through the same
+    metrics.view-gated BFF; the Watchdog is left out. Hidden when clean.
+
+ -- Gardner <gardner@homelab>  Thu, 12 Nov 2026 01:20:00 -0600
+
 homelab-accountmanage (0.1.46) unstable; urgency=medium
 
   * Release v0.1.46

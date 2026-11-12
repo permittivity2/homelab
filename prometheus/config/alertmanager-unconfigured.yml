@@ -1,0 +1,16 @@
+# Alertmanager for the homelab fleet, UNCONFIGURED: ALERT_MAIL_TO is empty in
+# /etc/homelab/prometheus/config (or the SMTP password file is missing), so
+# alerts are received and visible (`amtool alert query`, the myaccount Metrics
+# tab) but nothing is sent anywhere. Set ALERT_MAIL_TO, put the service
+# mailbox's SMTP password in /etc/homelab/prometheus/alert-smtp.pw
+# (root:prometheus 0640), then dpkg-reconfigure homelab-prometheus.
+# Post-cutover #38.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: 'null'
+  group_by: ['alertname', 'host']
+
+receivers:
+  - name: 'null'

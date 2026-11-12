@@ -237,6 +237,8 @@
     .mcard.warn .mval { color: var(--warning); }
     .mcard.crit .mval { color: var(--error); }
     .metrics-down { background: rgba(216,92,92,0.10); border: 1px solid rgba(216,92,92,0.35); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); margin-bottom: var(--space-3); font-size: var(--app-sm); }
+    .metrics-down.metrics-pending { background: rgba(214,158,46,0.10); border-color: rgba(214,158,46,0.40); }
+    .metrics-down .alert-critical { font-weight: 600; }
     .metrics-hosts-wrap { overflow-x: auto; }
     .metrics-hosts { width: 100%; border-collapse: collapse; font-size: var(--app-sm); }
     .metrics-hosts th, .metrics-hosts td { text-align: left; padding: 0.3rem var(--space-2); border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -1748,6 +1750,24 @@
                 down.innerHTML = '<strong>' + d.services_down_list.length + ' service(s) down:</strong> ' +
                   d.services_down_list.map(function (s) { return s.host + '/' + s.service; }).join(', ');
               } else { down.hidden = true; }
+            }
+            // #38: the alerts Prometheus is evaluating right now -- the same set
+            // Alertmanager mails. Firing in red, pending (condition seen, not yet
+            // for its full `for:`) in amber. Hidden when there is nothing.
+            var al = document.getElementById('metrics-alerts');
+            if (al) {
+              var alerts = d.alerts || [];
+              if (alerts.length) {
+                var firing = alerts.filter(function (a) { return a.state === 'firing'; }).length;
+                al.hidden = false;
+                al.classList.toggle('metrics-pending', firing === 0);
+                al.innerHTML = '<strong>' + (firing ? firing + ' alert(s) firing' : alerts.length + ' alert(s) pending') + ':</strong> ' +
+                  alerts.map(function (a) {
+                    var when = a.since ? ' since ' + hlWhen(a.since) : '';
+                    return '<span class="alert-' + hlEsc(a.severity) + '">' + hlEsc(a.name) + (a.host ? ' on ' + hlEsc(a.host) : '') +
+                      (a.state === 'pending' ? ' (pending)' : '') + when + (a.summary ? ' — ' + hlEsc(a.summary) : '') + '</span>';
+                  }).join('<br>');
+              } else { al.hidden = true; }
             }
             var up = document.getElementById('metrics-updated'); if (up) up.textContent = new Date().toLocaleTimeString();
           })

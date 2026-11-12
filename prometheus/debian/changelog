@@ -1,3 +1,22 @@
+homelab-prometheus (0.10.0) unstable; urgency=medium
+
+  * Alertmanager (post-cutover #38): Depends on prometheus-alertmanager and
+    configures it on this host, loopback only (127.0.0.1:9093, no cluster),
+    from new ALERT_* keys in /etc/homelab/prometheus/config: one email
+    receiver through the fleet's service mailbox (STARTTLS on 587 via the
+    mail VIP, password in /etc/homelab/prometheus/alert-smtp.pw root:prometheus
+    0640, TLS verified against ALERT_SMTP_SERVER_NAME). critical pages at once
+    and repeats every 4 h, warning batches 5-10 min and repeats daily, a
+    critical silences the host's warnings, resolved notices on. Plain-text
+    subject/body templates. With ALERT_MAIL_TO empty or the password file
+    missing an unconfigured Alertmanager (null receiver) is installed instead,
+    loudly. prometheus.yml gains the alerting block; amtool is pointed at it.
+  * New rules/fleet-basics.yml: HostDown, RootDiskFilling, MailQueueExpiring,
+    DatabaseExporterDown, Watchdog (fires forever, routed nowhere: the proof
+    the pipeline is alive).
+
+ -- Gardner <gardner@homelab>  Thu, 12 Nov 2026 01:20:00 -0600
+
 homelab-prometheus (0.9.0) unstable; urgency=medium
 
   * Release v0.9.0

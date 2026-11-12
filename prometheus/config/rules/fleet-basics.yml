@@ -1,0 +1,69 @@
+# The plain ones (post-cutover #38, homelab-prometheus 0.10.0). Until now the
+# rule set covered the agent, the public probes and the resolver, and not the
+# most basic question of all: is the host there at all. Routed by Alertmanager
+# like every other rule: critical pages at once, warning batches and repeats
+# daily (see alertmanager.yml.template).
+groups:
+  - name: homelab-basics
+    rules:
+      # A fleet host's node_exporter has not answered for 10 minutes. Scrapes
+      # run every 15 s, so this is 40 missed scrapes -- a down host or a dead
+      # network path, not a blip. `host` comes from the pull's target labels.
+      - alert: HostDown
+        expr: up{job="node"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} is not answering (node_exporter down for 10 minutes)"
+          description: >-
+            Either the host is down or nothing reaches it. If it is a parked
+            edge or a deliberately stopped guest, silence it:
+            amtool silence add alertname=HostDown host={{ $labels.host }} -d 24h -c "parked".
+
+      # The root filesystem past 85 % for half an hour. Containers here are
+      # small; a log or spool filling a root disk takes a service down next.
+      - alert: RootDiskFilling
+        expr: (1 - node_filesystem_avail_bytes{job="node",mountpoint="/"} / node_filesystem_size_bytes{job="node",mountpoint="/"}) * 100 > 85
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} root filesystem is {{ $value | printf \"%.0f\" }}% full"
+          description: "Find what grew: journalctl --disk-usage, /var/log, /var/cache/apt, the service's spool."
+
+      # Mail waiting in a Postfix queue: more than 50 messages for 30 minutes
+      # means deliveries are deferring (a dead LMTP target, a milter down, an
+      # outbound 25 blocked), not normal traffic on this fleet.
+      - alert: MailQueueBacklog
+        expr: postfix_showq_queue_depth > 50
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} has {{ $value }} messages in Postfix's {{ $labels.queue }} queue for 30 minutes"
+          description: "On the node: postqueue -p | tail -1; journalctl -u postfix --since -1h | grep -E 'deferred|refused|timed out'."
+
+      # The PostgreSQL exporter on a database node gone for 5 minutes: the
+      # exporter dies with the database, so this is the earliest cheap signal
+      # for the tier everything else depends on (Patroni handles the failover;
+      # this says that it had to).
+      - alert: DatabaseExporterDown
+        expr: up{job="postgres"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "postgres exporter on {{ $labels.host }} is not answering"
+          description: "Check Patroni on 06/07/08 (patronictl list) and the exporter unit on the host."
+
+      # Fires forever on purpose and is routed to Alertmanager's null receiver.
+      # Its presence in `amtool alert query` proves Prometheus evaluates rules
+      # and reaches Alertmanager; its absence is the alarm nobody else can
+      # raise. Never mailed.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Always firing: Prometheus -> Alertmanager pipeline is alive"

@@ -70,9 +70,37 @@ STATIC_TARGETS=""
 EOF
             echo "  added STATIC_TARGETS to $HL_CONFIG (empty: no static targets until set)"
         fi
+        # Alerting (0.10.0, post-cutover #38): who gets mail, through which
+        # service mailbox. The password is NOT a key here -- it lives in its
+        # own file (see below). Appended to an older config so the keys are
+        # visible where the other parameters live; empty ALERT_MAIL_TO means
+        # Alertmanager runs unconfigured (alerts visible, nothing sent).
+        if ! grep -q '^ALERT_MAIL_TO=' "$HL_CONFIG"; then
+            cat >> "$HL_CONFIG" <<'EOF'
+
+# Alerting (post-cutover #38). Alertmanager runs on this host (loopback only)
+# and mails ALERT_MAIL_TO (one address or several, comma-separated) through
+# the fleet's service mailbox: STARTTLS on ALERT_SMTP_HOST (the mail VIP),
+# authenticated as ALERT_SMTP_USER with the password read from
+# /etc/homelab/prometheus/alert-smtp.pw (root:prometheus 0640 -- write it
+# there, never here). ALERT_SMTP_SERVER_NAME is the name on the mail
+# certificate (the VIP is an address, so TLS is verified against this name).
+# Empty ALERT_MAIL_TO = alerts are received and visible but nobody is mailed.
+# Change + dpkg-reconfigure homelab-prometheus to apply
+# (install-orchestrators/alerting-orchestrate.sh does all of it).
+ALERT_MAIL_TO=""
+ALERT_MAIL_FROM="noreply@mailmasker.org"
+ALERT_SMTP_HOST="10.50.2.140:587"
+ALERT_SMTP_USER="noreply@mailmasker.org"
+ALERT_SMTP_SERVER_NAME="mail.mailmasker.org"
+EOF
+            echo "  added ALERT_MAIL_TO / ALERT_MAIL_FROM / ALERT_SMTP_* to $HL_CONFIG (empty recipient: Alertmanager runs unconfigured until set)"
+        fi
         API_HOST="10.50.2.46"; API_PORT="3000"; FLEET_CIDR="10.50.2.0/24"; METRICS_CONSUMERS="10.50.2.61"
         TSDB_PATH="/var/lib/prometheus/metrics2"; RETENTION_TIME="30d"; RETENTION_SIZE="0"
         STATIC_TARGETS=""
+        ALERT_MAIL_TO=""; ALERT_MAIL_FROM="noreply@mailmasker.org"; ALERT_SMTP_HOST="10.50.2.140:587"
+        ALERT_SMTP_USER="noreply@mailmasker.org"; ALERT_SMTP_SERVER_NAME="mail.mailmasker.org"
         # shellcheck disable=SC1090
         . "$HL_CONFIG" 2>/dev/null || true
         API_BASE="http://$API_HOST:$API_PORT"
@@ -91,6 +119,60 @@ EOF
         install -m 644 "$SHARE_DIR"/config/rules/*.yml "$PROM_DIR/rules/"
         chmod 755 "$PROM_DIR" "$TARGETS_DIR" "$PROM_DIR/rules"
         chmod 644 "$PROM_DIR/prometheus.yml" "$PULL_CONFIG" "$PROM_DIR"/rules/*.yml
+
+        # --- Alertmanager (0.10.0, post-cutover #38) ---------------------
+        # Loopback only, our config, our templates. With a recipient AND the
+        # password file present the mail receiver is rendered; otherwise the
+        # unconfigured config (null receiver) goes in and the summary says so,
+        # so a fresh install never half-configures and never fails to start.
+        AM_CONFIG="$PROM_DIR/alertmanager.yml"
+        AM_PW_FILE="$HL_CONFIG_DIR/alert-smtp.pw"
+        AM_STORAGE=/var/lib/prometheus/alertmanager
+        install -m 644 "$SHARE_DIR/config/alertmanager.tmpl" "$PROM_DIR/alertmanager.tmpl"
+        AM_MODE=unconfigured
+        if [ -n "$ALERT_MAIL_TO" ] && [ -s "$AM_PW_FILE" ]; then
+            sed -e "s#__MAIL_TO__#$ALERT_MAIL_TO#g" \
+                -e "s#__MAIL_FROM__#$ALERT_MAIL_FROM#g" \
+                -e "s#__SMTP_HOST__#$ALERT_SMTP_HOST#g" \
+                -e "s#__SMTP_USER__#$ALERT_SMTP_USER#g" \
+                -e "s#__SMTP_SERVER_NAME__#$ALERT_SMTP_SERVER_NAME#g" \
+                -e "s#__HELLO__#$(hostname -f 2>/dev/null || hostname)#g" \
+                "$SHARE_DIR/config/alertmanager.yml.template" > "$AM_CONFIG.new"
+            AM_MODE=mail
+        else
+            install -m 644 "$SHARE_DIR/config/alertmanager-unconfigured.yml" "$AM_CONFIG.new"
+            [ -n "$ALERT_MAIL_TO" ] && echo "  WARNING: ALERT_MAIL_TO is set but $AM_PW_FILE is missing or empty -- Alertmanager runs UNCONFIGURED (nothing mailed) until the service mailbox password is there (root:prometheus 0640)."
+        fi
+        if command -v amtool >/dev/null 2>&1 && ! amtool check-config "$AM_CONFIG.new" >/dev/null 2>&1; then
+            echo "  WARNING: the rendered Alertmanager config does not pass 'amtool check-config':"
+            amtool check-config "$AM_CONFIG.new" 2>&1 | sed 's/^/           /' | head -5
+            rm -f "$AM_CONFIG.new"
+            if [ -f "$AM_CONFIG" ]; then
+                echo "           keeping the previous $AM_CONFIG."
+            else
+                install -m 644 "$SHARE_DIR/config/alertmanager-unconfigured.yml" "$AM_CONFIG"
+                echo "           installed the unconfigured config so Alertmanager still starts."
+                AM_MODE=unconfigured
+            fi
+        else
+            mv "$AM_CONFIG.new" "$AM_CONFIG"
+        fi
+        chmod 644 "$AM_CONFIG"
+        if [ -f "$AM_PW_FILE" ]; then
+            chown root:prometheus "$AM_PW_FILE" 2>/dev/null || true
+            chmod 0640 "$AM_PW_FILE"
+        fi
+        mkdir -p "$AM_STORAGE"
+        chown prometheus:prometheus "$AM_STORAGE" 2>/dev/null || true
+        # The Debian unit runs `prometheus-alertmanager $ARGS` with no config
+        # path of its own: ours, loopback, no gossip cluster.
+        cat > /etc/default/prometheus-alertmanager <<EOF
+# Managed by homelab-prometheus's postinst -- do not hand-edit.
+ARGS="--config.file=$AM_CONFIG --storage.path=$AM_STORAGE --web.listen-address=127.0.0.1:9093 --cluster.listen-address="
+EOF
+        mkdir -p /etc/amtool
+        printf 'alertmanager.url: http://127.0.0.1:9093\n' > /etc/amtool/config.yml
+        chmod 644 /etc/amtool/config.yml
 
         # --- static targets: hosts outside the fleet API -------------------
         # Declarative: the directory is rebuilt from STATIC_TARGETS on every
@@ -193,6 +275,10 @@ EOF
 
         # --- start/refresh prometheus with our config --------------------
         systemctl daemon-reload >/dev/null 2>&1 || true
+        systemctl enable prometheus-alertmanager >/dev/null 2>&1 || true
+        systemctl restart prometheus-alertmanager \
+            || echo "  WARNING: prometheus-alertmanager failed to (re)start -- check 'journalctl -xeu prometheus-alertmanager'."
+        echo "  alertmanager: $AM_MODE$( [ "$AM_MODE" = mail ] && printf ' -> %s via %s as %s' "$ALERT_MAIL_TO" "$ALERT_SMTP_HOST" "$ALERT_SMTP_USER" ), 127.0.0.1:9093"
         systemctl enable prometheus >/dev/null 2>&1 || true
         systemctl restart prometheus \
             || echo "  WARNING: prometheus failed to (re)start -- check 'journalctl -xeu prometheus'."
@@ -230,7 +316,7 @@ EOF
         systemctl enable --now homelab-prometheus-pull.timer >/dev/null 2>&1 \
             || echo "  WARNING: could not enable homelab-prometheus-pull.timer -- scrape targets won't auto-refresh."
 
-        echo "homelab-prometheus configured (Prometheus on :9090)."
+        echo "homelab-prometheus configured (Prometheus on :9090, Alertmanager on 127.0.0.1:9093 [$AM_MODE])."
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)

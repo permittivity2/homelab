@@ -23,6 +23,14 @@ override_dh_install:
 		debian/homelab-prometheus/usr/share/homelab-prometheus/config/rules/public-probes.yml
 	install -D -m 644 config/rules/resolver.yml \
 		debian/homelab-prometheus/usr/share/homelab-prometheus/config/rules/resolver.yml
+	install -D -m 644 config/rules/fleet-basics.yml \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/config/rules/fleet-basics.yml
+	install -D -m 644 config/alertmanager.yml.template \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/config/alertmanager.yml.template
+	install -D -m 644 config/alertmanager-unconfigured.yml \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/config/alertmanager-unconfigured.yml
+	install -D -m 644 config/alertmanager.tmpl \
+		debian/homelab-prometheus/usr/share/homelab-prometheus/config/alertmanager.tmpl
 	install -D -m 644 systemd/prometheus-homelab.conf.template \
 		debian/homelab-prometheus/usr/share/homelab-prometheus/systemd/prometheus-homelab.conf.template
 	install -D -m 644 nftables/10-homelab-prometheus-egress.nft.template \

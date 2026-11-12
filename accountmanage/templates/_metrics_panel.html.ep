@@ -8,6 +8,7 @@
     <div class="mcard"><div class="mval" id="m-mem">—</div><div class="mlabel">Max memory</div></div>
     <div class="mcard"><div class="mval" id="m-disk">—</div><div class="mlabel">Max root disk</div></div>
   </div>
+  <div id="metrics-alerts" class="metrics-down" hidden></div>
   <div id="metrics-down" class="metrics-down" hidden></div>
   <div class="metrics-hosts-wrap">
     <table class="metrics-hosts">
