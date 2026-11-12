@@ -13,23 +13,29 @@
 # verifies a signature (that's a pure DNS TXT lookup) -- so a 'pending'
 # or 'retiring' selector correctly has no KeyTable/SigningTable entry
 # at all, even though its key file and TXT record both still exist.
-# OpenDKIM refuses to sign with a key if its own "safe keys" check
-# considers the key file's group insecure -- which trips UNCONDITIONALLY
-# under this design, on every install, not just as some edge case: the
-# opendkim daemon account's own primary group already IS `opendkim`,
-# and `homelab` (homelab-domain-admin's service account, which needs
-# write access to generate/rotate keys) is a second, deliberately-added
-# member of that same group -- two members is already "multiple users"
-# to this check, regardless of anyone else. A real `homelab-cli dns
-# dkim rotate` -> real send caught this outright ("key data is not
-# secure: root is in group ... which has multiple users") -- disabling
-# the check is the correct call here, not a weakening of an otherwise-
-# avoidable risk: the actual security boundary this design relies on is
-# "only opendkim and homelab can read /etc/opendkim/keys at all" (mode
-# 640, group opendkim, no other members ever added -- see README.md),
-# which RequireSafeKeys has no way to distinguish from a genuinely
-# loosely-shared key directory.
-RequireSafeKeys no
+# "Safe keys" (post-cutover #68, homelab-postfix 0.1.29 with
+# homelab-domain-admin >= 0.1.45): every private key under
+# /etc/opendkim/keys is opendkim:opendkim mode 0600, put there by root --
+# homelab-domain-admin writes its own copy under /var/lib/homelab/opendkim
+# and hands it over with `sudo homelab-opendkim-install` -- so OpenDKIM's
+# own check passes and stays ON. Before 0.1.29 the keys were shared through
+# group opendkim with the homelab service user as a second member; the
+# check could never pass, it was disabled here, and OpenDKIM warned "key
+# data is not secure: root is in group ... which has multiple users" once
+# per signature (benign, but on every signed message). The postinst writes
+# `no` here only while an older homelab-domain-admin is still installed.
+#
+# UserID: the daemon must RUN as opendkim for those keys to count as safe
+# -- the check compares the key directory's owner with the executing uid,
+# and until 0.1.30 this template had no UserID line at all, so OpenDKIM
+# ran as root (the Debian unit sets no User=) and refused the handed-over
+# keys with "/etc/opendkim/keys is writeable and owned by uid N which is
+# not the executing uid (0)" (found live on prod-homelab39, 2026-11-11).
+# Debian's own default config has this line; it is also simply the right
+# privilege for a mail filter. /run/opendkim (PidFile) is owned by opendkim
+# via the package's tmpfiles entry; the inet socket is unprivileged.
+RequireSafeKeys yes
+UserID          opendkim
 Syslog          yes
 UMask           007
 Mode            sv

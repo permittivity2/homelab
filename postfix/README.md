@@ -148,14 +148,17 @@ prepares the filesystem, it never generates or touches key material
 itself.
 
 When enabled, `postinst`:
-- Adds `homelab` (the account `homelab-domain-admin` runs as) as a
-  second member of the `opendkim` group, and creates `/etc/opendkim/
-  keys` owned `opendkim:opendkim`, mode `2770` (setgid, so new key
-  files/directories `homelab-domain-admin` creates underneath
-  automatically inherit the `opendkim` group without an extra `chgrp`
-  step) — this is the write access `homelab-domain-admin` needs to
-  generate and rotate keys on this same host.
-- Creates empty `KeyTable`/`SigningTable` (`homelab-domain-admin`
+- Creates `/etc/opendkim/keys` owned `opendkim:opendkim`, mode `0700`,
+  and makes every key already there `opendkim:opendkim` 0600 (since
+  0.1.29, post-cutover #68). `homelab-domain-admin` >= 0.1.45 does not
+  write here: it writes its own staging tree under
+  `/var/lib/homelab/opendkim` and hands it to root
+  (`sudo homelab-opendkim-install`, its own sudoers rule), which mirrors
+  it in. If an OLDER `homelab-domain-admin` is still installed the
+  postinst keeps the legacy layout instead (`homelab` in group
+  `opendkim`, dir `2770`, keys 0640, `RequireSafeKeys no`) and says so;
+  upgrade it, then `dpkg-reconfigure homelab-postfix`.
+- Creates empty `KeyTable`/`SigningTable` (0640; `homelab-domain-admin`
   rebuilds their real content on every rotate/activate/retire — this
   package only creates them so OpenDKIM has something to point at from
   first boot) and an empty `TrustedHosts`.
@@ -179,28 +182,30 @@ wiring logic and the debconf template's own description text; DMARC
 policy enforcement is explicitly out of scope for this package for now,
 not an oversight.
 
-### Gotcha: `RequireSafeKeys` must be `no`
+### Safe keys: the hand-off through root (`RequireSafeKeys yes` since 0.1.29)
 
-`opendkim.conf.template` sets `RequireSafeKeys no`, which looks like a
-security downgrade but is structurally required by this exact design,
-not an unconsidered weakening. OpenDKIM's own "safe keys" check
-(enabled by default) refuses to sign with any key file whose group has
-more than one member — and the `opendkim` daemon account's own primary
-group already *is* `opendkim`, with `homelab` added as a second,
-deliberate member of that same group (see above — that's the whole
-point, it's how `homelab-domain-admin` gets write access to rotate
-keys). Two members is already "multiple users" to this check, so with
-the default `RequireSafeKeys yes` it fires on **every single signing
-attempt**, not as some rare edge case — caught by a real `homelab-cli
-dns dkim rotate` → real send coming back "key data is not secure: root
-is in group ... which has multiple users". The actual security boundary
-this design relies on instead is "only `opendkim` and `homelab` can
-read `/etc/opendkim/keys` at all" (mode `640` on each key file, group
-`opendkim`, and this package never adds a third member to that group) —
-which `RequireSafeKeys` has no way to distinguish from a genuinely,
-carelessly shared key directory, so disabling that specific check is
-the correct call here rather than a real loosening of the actual
-threat model.
+OpenDKIM's "safe keys" check wants a private key readable by its owner
+only. Until 0.1.28 that could never pass here: `homelab-domain-admin`
+(running as `homelab`) wrote the keys straight into `/etc/opendkim/keys`
+and the daemon read them through group `opendkim`, with `homelab` a
+second member of that group — "multiple users" to the check. So the
+template set `RequireSafeKeys no`; signing worked, and OpenDKIM logged
+"key data is not secure: root is in group ... which has multiple users"
+on **every** signature (post-cutover #68 counted 13–24 lines a day per
+node). Since 0.1.29 (with `homelab-domain-admin` >= 0.1.45) the keys
+are written by root from the service's staging tree as
+`opendkim:opendkim` 0600, `homelab` is out of the group, and the check
+is on. The one remaining knob is the postinst's legacy fallback for a
+host whose `homelab-domain-admin` is still older — see above.
+
+Two lines belong together here: `RequireSafeKeys yes` **and** `UserID
+opendkim`. The check compares the key directory's owner with the
+*executing* uid, and this template never set `UserID`, so OpenDKIM had
+been running as root (the Debian unit sets no `User=`); 0.1.29 turned the
+check on without it and the first signer refused every key and tempfailed
+submissions until 0.1.30 added the line (2026-11-11). Running the filter
+as `opendkim` is also simply the right privilege, and what Debian's own
+default config does.
 
 ## `master.cf`'s submission (587) and smtps (465) services
 

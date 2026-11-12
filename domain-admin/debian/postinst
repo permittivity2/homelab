@@ -19,6 +19,14 @@ case "$1" in
         mkdir -p /var/lib/homelab "$CONFIG_DIR"
         chown homelab:homelab /var/lib/homelab
 
+        # The DKIM staging tree (post-cutover #68): this service writes its
+        # own copy of the keys and signing tables here as `homelab`; root
+        # mirrors it into /etc/opendkim with homelab-opendkim-install (the
+        # sudoers rule below), so OpenDKIM's keys are opendkim-only.
+        mkdir -p /var/lib/homelab/opendkim/keys
+        chown -R homelab:homelab /var/lib/homelab/opendkim
+        chmod 0700 /var/lib/homelab/opendkim
+
         # Shared manifest dir -- may not exist yet if homelab-agent
         # isn't installed on this host first (install order isn't
         # guaranteed either way); ensure it, then drop this package's
@@ -264,16 +272,17 @@ case "$1" in
 
         # Narrow, explicit sudoers grant -- lets the unprivileged `homelab`
         # user restart pdns after a DNS write PowerDNS won't otherwise
-        # serve until restarted (see README.md), and manage opendkim (used
-        # starting in a later phase -- granted now since this is one
-        # static file, not something worth a second sudoers rewrite when
-        # that phase lands). Nothing else. Validated with visudo before
-        # being activated -- prefer leaving the OLD file (or none) in
-        # place over activating a broken one.
+        # serve until restarted (see README.md), reload/restart opendkim
+        # after a key change, and run the DKIM key installer (#68: it
+        # takes NO arguments -- the trailing "" enforces that -- has fixed
+        # paths, and only mirrors this service's staging tree into
+        # /etc/opendkim as opendkim:opendkim 0600). Nothing else. Validated
+        # with visudo before being activated -- prefer leaving the OLD file
+        # (or none) in place over activating a broken one.
         TMP_SUDOERS="$(mktemp)"
         cat > "$TMP_SUDOERS" <<'SUDOERS'
 # Managed by homelab-domain-admin's postinst -- do not hand-edit.
-homelab ALL=(root) NOPASSWD: /usr/bin/systemctl restart pdns, /usr/bin/systemctl reload opendkim, /usr/bin/systemctl restart opendkim
+homelab ALL=(root) NOPASSWD: /usr/bin/systemctl restart pdns, /usr/bin/systemctl reload opendkim, /usr/bin/systemctl restart opendkim, /usr/sbin/homelab-opendkim-install ""
 SUDOERS
         if visudo -c -f "$TMP_SUDOERS" >/dev/null 2>&1; then
             install -m 0440 "$TMP_SUDOERS" "$SUDOERS_FILE"

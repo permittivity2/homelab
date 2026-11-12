@@ -367,6 +367,9 @@ def mode_reply(args, password):
             for k in ("From", "Return-Path", "Reply-To", "DKIM-Signature"):
                 if h.get(k):
                     print(f"      {k}: {str(h.get(k))[:160]}")
+        if getattr(args, "delete_after", False) and nums:
+            imap_delete(m, nums)
+            print(f"      deleted {len(nums)} test message(s)")
         m.logout()
 
 
@@ -531,6 +534,7 @@ def main():
     y.add_argument("--in-reply-to", required=True, help="Message-ID of the original, with angle brackets")
     y.add_argument("--to", required=True)
     y.add_argument("--subject", default="Re: reply67 external test")
+    y.add_argument("--delete-after", action="store_true", help="when --to is the account itself: delete the delivered copy after printing its headers")
     y.add_argument("--body", default="This reply was sent from the account's primary address; the server should have swapped it to the alias.")
 
     args = p.parse_args()

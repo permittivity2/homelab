@@ -23,10 +23,30 @@ use Fcntl qw(O_WRONLY O_CREAT O_TRUNC);
 # The private key is thus generated once, stored envelope-encrypted in
 # the DB, and materialized to each host's local disk from there -- it is
 # never copied host-to-host and never crosses the network in the clear.
+#
+# WHERE THE FILES GO (post-cutover #68, 0.1.45). This service runs as the
+# unprivileged `homelab` user and must not own anything OpenDKIM reads, so
+# it writes its OWN copy -- a staging tree under /var/lib/homelab/opendkim
+# (keys 0600, KeyTable, SigningTable) -- and then asks root to mirror it
+# into /etc/opendkim with `sudo /usr/sbin/homelab-opendkim-install` (no
+# arguments: the installer has fixed paths, copies regular files with
+# expected names only, sets opendkim:opendkim 0600 on keys and 0640 on the
+# tables, and installs keys before tables, tables before removals). So
+# OpenDKIM reads keys only it can read, its "safe keys" check passes
+# (RequireSafeKeys yes, homelab-postfix >= 0.1.29) and `homelab` needs no
+# membership of group opendkim. Before this the keys were shared through
+# that group and OpenDKIM warned "key data is not secure" once per
+# signature. The KeyTable this service writes names the LIVE paths, the
+# ones OpenDKIM opens.
 
-my $KEYS_DIR      = '/etc/opendkim/keys';
-my $KEYTABLE      = '/etc/opendkim/KeyTable';
-my $SIGNINGTABLE  = '/etc/opendkim/SigningTable';
+my $STAGE_DIR       = '/var/lib/homelab/opendkim';     # ours, written as homelab
+my $KEYS_DIR        = "$STAGE_DIR/keys";
+my $KEYTABLE        = "$STAGE_DIR/KeyTable";
+my $SIGNINGTABLE    = "$STAGE_DIR/SigningTable";
+my $LIVE_DIR        = '/etc/opendkim';                  # OpenDKIM's; written only by the root installer
+my $LIVE_KEYS_DIR   = "$LIVE_DIR/keys";
+my $INSTALLER       = '/usr/sbin/homelab-opendkim-install';
+my $INSTALL_PENDING = "$STAGE_DIR/.install-pending";    # a failed hand-off, retried every tick
 
 sub _slurp ($path) {
     open(my $fh, '<', $path) or return undef;
@@ -51,17 +71,13 @@ sub _slurp ($path) {
 #  * Perms/ownership are RE-ASSERTED even when the content is unchanged,
 #    so a file left with the wrong mode by an older code path (or an
 #    interrupted write) is corrected rather than silently persisting.
-# In-place content-compare write for the KeyTable/SigningTable. Unlike
-# the per-domain key dir (/etc/opendkim/keys, mode 2770 so the homelab
-# service user -- a member of group opendkim -- can create files there),
-# the tables live directly in /etc/opendkim, whose PARENT dir is NOT
-# group-writable (only the table FILES are, at 0660 group opendkim). So a
-# temp-file+rename can't create its temp there; we truncate-and-write the
-# existing file in place instead (same inode, perms/owner preserved).
-# That's not atomic, but it's what these tables need and can have: they
-# are tiny, written in a single print, and opendkim only re-reads them on
-# the SIGHUP reload we trigger AFTER the write returns -- never mid-write.
-# Returns 1 if the content changed, 0 otherwise.
+# In-place content-compare write for the staged KeyTable/SigningTable.
+# (It dates from when the tables lived directly in /etc/opendkim, whose
+# parent dir was not writable by this user, so temp+rename could not be
+# used; in the staging dir it simply stays the small single-print write it
+# always was. OpenDKIM never reads these files -- it reads root's mirror
+# of them, installed whole by rename.) Returns 1 if the content changed,
+# 0 otherwise.
 sub _write_table_if_changed ($path, $content) {
     my $existing = _slurp($path);
     return 0 if defined $existing && $existing eq $content;
@@ -160,20 +176,23 @@ sub _rebuild_opendkim_tables ($app) {
     my ($keytable, $signingtable) = ('', '');
     for my $row (@$active) {
         my ($domain, $selector) = @{$row}{qw(domain_name selector)};
-        my $path = _key_dir($domain) . "/$selector.private";
+        my $path = _key_dir($domain) . "/$selector.private";          # our staged copy
+        my $live = "$LIVE_KEYS_DIR/$domain/$selector.private";        # root's mirror, the file OpenDKIM opens
         # CRITICAL for HA: only advertise a selector this host can
         # actually sign with. If the local key file isn't present yet
         # (KEK missing on this host, or not-yet-materialized during
         # rollout), listing it in KeyTable would make opendkim reject the
         # WHOLE table on reload -- the host would then sign NOTHING for
         # ANY domain. Omitting it instead just means this host doesn't
-        # sign for that one selector until its key materializes.
+        # sign for that one selector until its key materializes. (The
+        # installer re-checks this against the live tree before it
+        # installs a table.)
         unless (-e $path) {
             $app->log->warn("active DKIM selector $domain/$selector has no local key file yet -- omitting from this host's signing tables until it materializes");
             next;
         }
         my $name = _dkim_dns_name($domain, $selector);
-        $keytable     .= "$name $domain:$selector:$path\n";
+        $keytable     .= "$name $domain:$selector:$live\n";
         $signingtable .= "$domain $name\n";
     }
 
@@ -203,6 +222,17 @@ sub _rebuild_opendkim_tables ($app) {
 #   4. Reload opendkim exactly once, only if anything changed.
 sub _materialize_dkim ($app) {
     my $log = $app->log;
+    # Not a signer host (no homelab-postfix here, e.g. the admin-only
+    # domain-admin nodes -- which may still have an /etc/opendkim from the
+    # bare opendkim package): there is nothing to materialize into and
+    # nothing to reload. Quietly skipped rather than failing every tick,
+    # which until 0.1.44 logged "cannot write /etc/opendkim/KeyTable" every
+    # minute on those nodes.
+    return unless -d $LIVE_DIR && -e '/etc/homelab/services/postfix.yml';
+    unless (-d $KEYS_DIR) {
+        system('mkdir', '-p', $KEYS_DIR);
+        chmod 0700, $STAGE_DIR;
+    }
     my $kek = _kek($app);
     my $db  = $app->pg->db;
 
@@ -222,8 +252,10 @@ sub _materialize_dkim ($app) {
         $want{$path} = 1;
 
         if (!defined $enc) {
-            # No ciphertext in the DB yet.
-            my $on_disk = _slurp($path);
+            # No ciphertext in the DB yet. Look in our staging tree, then
+            # at the live copy (readable to us only on a host still on the
+            # pre-0.1.45 shared-group layout -- the one-time adopt case).
+            my $on_disk = _slurp($path) // _slurp("$LIVE_KEYS_DIR/$domain/$selector.private");
             if (defined $on_disk && $kek) {
                 # Adopt this host's on-disk key into the DB (backfill).
                 # Guarded on IS NULL so concurrent workers/hosts don't
@@ -250,9 +282,9 @@ sub _materialize_dkim ($app) {
         if (!defined $pt) { $log->error("cannot decrypt DKIM key $domain/$selector: $@"); next; }
 
         system('mkdir', '-p', $dir);
-        # Atomic, mode 0640, group opendkim from creation (the daemon
-        # reads keys via group opendkim, not as the writing user).
-        my $wrote = eval { _atomic_write($path, $pt, 0640, 'opendkim') };
+        # Atomic, mode 0600, ours alone: the daemon reads root's mirror of
+        # this file (opendkim:opendkim 0600), never this copy.
+        my $wrote = eval { _atomic_write($path, $pt, 0600) };
         if ($@) { $log->error("$@"); next; }
         if ($wrote) {
             $changed++;
@@ -288,14 +320,34 @@ sub _materialize_dkim ($app) {
         }
     }
 
-    # Tables + single reload.
+    # Tables, then the hand-off to root, then a single reload. The hand-off
+    # is also retried when an earlier one failed (marker file), so a missed
+    # ordering at install time heals on the next tick without a change.
     $changed += eval { _rebuild_opendkim_tables($app) } // 0;
     $log->error("DKIM table rebuild failed: $@") if $@;
-    if ($changed) {
-        system('/usr/bin/sudo', '/usr/bin/systemctl', 'reload', 'opendkim');
-        $log->warn('opendkim reload may have failed (exit code ' . ($? >> 8) . ')') if $? != 0;
+    if ($changed || -e $INSTALL_PENDING) {
+        if (_install_live($app)) {
+            system('/usr/bin/sudo', '/usr/bin/systemctl', 'reload', 'opendkim');
+            $log->warn('opendkim reload may have failed (exit code ' . ($? >> 8) . ')') if $? != 0;
+        }
     }
     return;
+}
+
+# Mirror the staging tree into /etc/opendkim as root (see the header
+# comment). Returns 1 on success. On failure OpenDKIM keeps signing with
+# whatever it last loaded -- the installer renames every file into place
+# and installs keys before the tables that name them, so the live tree is
+# never half-written -- and a marker makes the next materialize retry.
+sub _install_live ($app) {
+    system('/usr/bin/sudo', $INSTALLER);
+    if ($? == 0) {
+        unlink $INSTALL_PENDING;
+        return 1;
+    }
+    $app->log->error('homelab-opendkim-install failed (exit code ' . ($? >> 8) . ') -- OpenDKIM keeps its current keys; retrying on the next materialize');
+    if (open(my $fh, '>>', $INSTALL_PENDING)) { close $fh }
+    return 0;
 }
 
 # Extracts the base64 DER-encoded public key from a just-generated
@@ -376,13 +428,12 @@ sub rotate ($c) {
 
     system('mkdir', '-p', $key_dir);
     system('opendkim-genkey', '-D', $key_dir, '-d', $domain, '-s', $selector, '-b', 2048);
-    return $fail->('opendkim-genkey failed (is opendkim-tools installed? is /etc/opendkim/keys writable by the homelab user?)', 502) if $? != 0;
+    return $fail->('opendkim-genkey failed (is opendkim-tools installed? is /var/lib/homelab/opendkim writable by the homelab user?)', 502) if $? != 0;
 
-    # opendkim-genkey writes 0600 owned by the invoking user (homelab);
-    # the opendkim DAEMON reads via group opendkim, so make it group-
-    # readable. (_materialize_dkim re-asserts this on every host too.)
-    system('chgrp', 'opendkim', $private_path);
-    system('chmod', '640', $private_path);
+    # opendkim-genkey writes 0600 owned by the invoking user (homelab) --
+    # exactly what the staging tree wants. The copy OpenDKIM reads is made
+    # by the root installer in _materialize_dkim below.
+    chmod 0600, $private_path;
 
     my $public_key = eval { _public_key_b64($private_path) };
     return $fail->("key generated but public key extraction failed: $@", 502) if $@;

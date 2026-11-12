@@ -402,30 +402,56 @@ case "$1" in
             if [ "$RUN_LOCAL_OPENDKIM" = "true" ]; then
                 db_get homelab-postfix/dkim_milter_bind_address || true; DKIM_MILTER_BIND_ADDRESS="${RET:-localhost}"
 
-                # homelab is the user homelab-domain-admin's systemd unit
-                # actually runs as -- group membership is what lets it
-                # write new key files/KeyTable/SigningTable without either
-                # service needing to run as the other's user.
-                usermod -aG opendkim homelab 2>/dev/null \
-                    || echo "  WARNING: could not add 'homelab' to the 'opendkim' group -- is homelab-domain-admin installed yet? DKIM key writes will fail until this succeeds (rerun: usermod -aG opendkim homelab)."
-
-                mkdir -p /etc/opendkim/keys
-                chown opendkim:opendkim /etc/opendkim/keys
-                # setgid so every NEW per-domain subdirectory
-                # opendkim-genkey creates also inherits group opendkim,
-                # without needing this postinst to chgrp each one by hand.
-                chmod 2770 /etc/opendkim/keys
+                # Who may read the keys (post-cutover #68). homelab-domain-admin
+                # >= 0.1.45 writes its own copy under /var/lib/homelab/opendkim
+                # and hands it to root (`sudo homelab-opendkim-install`), which
+                # installs the keys here as opendkim:opendkim 0600 -- so
+                # OpenDKIM's "safe keys" check passes, RequireSafeKeys stays on,
+                # and `homelab` needs no group membership at all. With an OLDER
+                # homelab-domain-admin still on this host the legacy layout is
+                # kept (homelab in group opendkim, keys 0640, dir 2770,
+                # RequireSafeKeys no) or key rotation would break: upgrade it,
+                # then dpkg-reconfigure homelab-postfix.
+                DA_VER="$(dpkg-query -W -f='${Version}' homelab-domain-admin 2>/dev/null || true)"
+                if [ -n "$DA_VER" ] && dpkg --compare-versions "$DA_VER" lt 0.1.45; then
+                    KEY_LAYOUT=legacy
+                    echo "  WARNING: homelab-domain-admin $DA_VER is older than 0.1.45 -- keeping the legacy shared-group key layout (RequireSafeKeys no). Upgrade it, then: dpkg-reconfigure homelab-postfix"
+                    usermod -aG opendkim homelab 2>/dev/null \
+                        || echo "  WARNING: could not add 'homelab' to the 'opendkim' group (rerun: usermod -aG opendkim homelab)."
+                    mkdir -p /etc/opendkim/keys
+                    chown opendkim:opendkim /etc/opendkim/keys
+                    chmod 2770 /etc/opendkim/keys
+                    TABLE_MODE=0660
+                else
+                    KEY_LAYOUT=safe
+                    if id -nG homelab 2>/dev/null | tr ' ' '\n' | grep -qx opendkim; then
+                        gpasswd -d homelab opendkim >/dev/null 2>&1 \
+                            && echo "  removed 'homelab' from group 'opendkim' (keys are handed over by root now)" \
+                            || echo "  WARNING: could not remove 'homelab' from group 'opendkim' (rerun: gpasswd -d homelab opendkim)"
+                    fi
+                    mkdir -p /etc/opendkim/keys
+                    # Hand over whatever is already there (an upgrade from the
+                    # shared-group layout): the daemon's own files, nobody else's.
+                    chown -R opendkim:opendkim /etc/opendkim/keys
+                    find /etc/opendkim/keys -type d -exec chmod 0700 {} +
+                    find /etc/opendkim/keys -type f -name '*.private' -exec chmod 0600 {} +
+                    TABLE_MODE=0640
+                fi
 
                 for f in /etc/opendkim/KeyTable /etc/opendkim/SigningTable; do
                     [ -f "$f" ] || : > "$f"
                     chown opendkim:opendkim "$f"
-                    chmod 0660 "$f"
+                    chmod "$TABLE_MODE" "$f"
                 done
                 [ -f /etc/opendkim/TrustedHosts ] || printf '127.0.0.1\n::1\n' > /etc/opendkim/TrustedHosts
 
                 sed -e "s#__MILTER_BIND_ADDRESS__#$DKIM_MILTER_BIND_ADDRESS#g" \
                     "$SHARE_DIR/config/opendkim.conf.template" > /etc/opendkim.conf
+                if [ "$KEY_LAYOUT" = legacy ]; then
+                    sed -i 's/^RequireSafeKeys .*/RequireSafeKeys no/' /etc/opendkim.conf
+                fi
                 chmod 644 /etc/opendkim.conf
+                echo "  key layout: $KEY_LAYOUT ($(grep '^RequireSafeKeys' /etc/opendkim.conf))"
 
                 if command -v opendkim >/dev/null 2>&1; then
                     systemctl enable opendkim >/dev/null 2>&1 || true

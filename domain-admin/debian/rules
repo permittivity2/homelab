@@ -34,3 +34,7 @@ override_dh_install:
 		debian/homelab-domain-admin/usr/share/homelab-domain-admin/pdns.d/95-homelab-domain-admin-api.conf.template
 	find migrations -type f -exec install -D -m 644 {} \
 		debian/homelab-domain-admin/usr/share/homelab-domain-admin/{} \;
+	# The root half of the DKIM key hand-off (#68): run by homelab through
+	# sudo with no arguments, so it lives in /usr/sbin, root-owned, 0755.
+	install -D -m 755 sbin/homelab-opendkim-install \
+		debian/homelab-domain-admin/usr/sbin/homelab-opendkim-install

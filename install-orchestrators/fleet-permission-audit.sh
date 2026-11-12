@@ -94,7 +94,7 @@ done
 #    group OR other unless the group is the single service that needs it.
 #    Reported for a human to judge; the mode and group are in the detail.
 find /etc/homelab /etc/opendkim /var/lib/homelab -xdev -type f \
-     \( -name '*.key' -o -name 'privkey*' -o -name '*.pem' -o -name '*kek*' \) \
+     \( -name '*.key' -o -name 'privkey*' -o -name '*.pem' -o -name '*kek*' -o -name '*.private' \) \
      \( -perm -o+r -o -perm -g+r \) \
      -printf 'CRIT|private-key-readable|%p|mode=%m owner=%u:%g\n' 2>/dev/null
 

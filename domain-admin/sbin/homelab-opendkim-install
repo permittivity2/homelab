@@ -1,0 +1,173 @@
+#!/usr/bin/perl
+# homelab-opendkim-install -- the root half of the DKIM key hand-off
+# (post-cutover #68, homelab-domain-admin 0.1.45).
+#
+# Mirrors the staging tree homelab-domain-admin writes as the unprivileged
+# `homelab` user,
+#     /var/lib/homelab/opendkim/keys/<domain>/<selector>.private
+#     /var/lib/homelab/opendkim/{KeyTable,SigningTable}
+# into what OpenDKIM reads,
+#     /etc/opendkim/keys/<domain>/<selector>.private   opendkim:opendkim 0600
+#     /etc/opendkim/{KeyTable,SigningTable}            opendkim:opendkim 0640
+# so OpenDKIM's "safe keys" check passes and nothing but the daemon can read
+# a private key.
+#
+# Invoked by homelab-domain-admin through sudo with NO arguments (the sudoers
+# rule allows none): every path is fixed here, only regular files with the
+# expected names are copied (symlinks are never followed, nothing larger
+# than 16 KiB), nothing outside /etc/opendkim is written, and no key material
+# is ever printed. The order protects a daemon that may reload at any moment:
+# new or changed keys first, then the tables (each checked to name only keys
+# that are now installed), then the removal of keys no longer staged -- a
+# KeyTable never names a key that is not there. Every file lands by rename.
+# Does NOT reload opendkim: the caller does that, only when this succeeded.
+#
+# Exit 0 means the live tree matches the staging tree; one summary line is
+# printed. For tests: HOMELAB_OPENDKIM_INSTALL_TEST_ROOT=<dir> uses
+# <dir>/stage and <dir>/live and skips chown (refused when running as root).
+use strict;
+use warnings;
+use v5.36;
+use Fcntl qw(O_WRONLY O_CREAT O_TRUNC);
+
+my ($STAGE, $LIVE, $do_chown) = ('/var/lib/homelab/opendkim', '/etc/opendkim', 1);
+if (my $root = $ENV{HOMELAB_OPENDKIM_INSTALL_TEST_ROOT}) {
+    die "HOMELAB_OPENDKIM_INSTALL_TEST_ROOT is for unprivileged test runs only\n" if $> == 0;
+    ($STAGE, $LIVE, $do_chown) = ("$root/stage", "$root/live", 0);
+}
+elsif ($> != 0) {
+    die "homelab-opendkim-install must run as root (homelab-domain-admin calls it through sudo)\n";
+}
+die "no staging tree at $STAGE/keys -- nothing to install\n" unless -d "$STAGE/keys";
+die "no live tree at $LIVE -- is homelab-postfix (OpenDKIM) installed here?\n" unless -d $LIVE;
+
+my ($uid, $gid) = (-1, -1);
+if ($do_chown) {
+    $uid = (getpwnam('opendkim'))[2];
+    $gid = (getgrnam('opendkim'))[2];
+    die "no 'opendkim' user/group on this host\n" unless defined $uid && defined $gid;
+}
+
+my $DOMAIN_RE = qr/\A[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\z/;
+my $KEY_RE    = qr/\A[A-Za-z0-9][A-Za-z0-9_-]*\.private\z/;
+my $MAX_BYTES = 16 * 1024;
+
+# lstat, so a symlink is never "a regular file" and never followed.
+sub regular_file ($p) { return (lstat($p) && -f _) ? 1 : 0 }
+sub real_dir ($p)     { return (lstat($p) && -d _) ? 1 : 0 }
+
+sub slurp ($p) {
+    open(my $fh, '<:raw', $p) or die "cannot read $p: $!\n";
+    local $/;
+    my $c = <$fh>;
+    close $fh;
+    return $c;
+}
+
+sub ensure_dir ($d, $mode) {
+    unless (real_dir($d)) {
+        die "$d exists but is not a directory\n" if lstat($d);
+        mkdir $d, $mode or die "cannot mkdir $d: $!\n";
+    }
+    chmod $mode, $d or die "cannot chmod $d: $!\n";
+    chown $uid, $gid, $d if $do_chown;
+}
+
+# Content AND owner/mode already exactly right?
+sub same ($path, $content, $mode) {
+    return 0 unless regular_file($path);
+    my @st = stat _;
+    return 0 unless ($st[2] & 07777) == $mode;
+    return 0 if $do_chown && ($st[4] != $uid || $st[5] != $gid);
+    return slurp($path) eq $content ? 1 : 0;
+}
+
+# Create with the final mode and owner BEFORE any content lands, then
+# rename into place: a reader sees the whole old file or the whole new one.
+sub put ($path, $content, $mode) {
+    my $tmp = "$path.tmp.$$";
+    sysopen(my $fh, $tmp, O_WRONLY | O_CREAT | O_TRUNC, $mode) or die "cannot create $tmp: $!\n";
+    chmod $mode, $tmp or die "cannot chmod $tmp: $!\n";
+    if ($do_chown) { chown $uid, $gid, $tmp or do { unlink $tmp; die "cannot chown $tmp: $!\n" } }
+    print {$fh} $content;
+    close $fh or do { unlink $tmp; die "cannot write $tmp: $!\n" };
+    rename $tmp, $path or do { unlink $tmp; die "cannot rename $tmp into place: $!\n" };
+}
+
+sub entries ($dir) {
+    opendir(my $dh, $dir) or die "cannot list $dir: $!\n";
+    my @e = sort grep { !/^\./ } readdir $dh;
+    closedir $dh;
+    return @e;
+}
+
+# (Separate declarations on purpose: a hash in a list assignment swallows
+# every value after it, which once left %staged non-empty with nothing
+# staged -- and the "nothing staged, sweep nothing" guard below is the one
+# that keeps a transient empty staging tree from emptying the live one.)
+my %staged;
+my ($installed, $unchanged, $removed, $skipped) = (0, 0, 0, 0);
+
+# 1. keys: new or changed ones first
+ensure_dir("$LIVE/keys", 0700);
+for my $domain (entries("$STAGE/keys")) {
+    my $sdir = "$STAGE/keys/$domain";
+    next unless real_dir($sdir);
+    unless ($domain =~ $DOMAIN_RE) { warn "skipping a staged directory with an unexpected name\n"; $skipped++; next }
+    my @keys = grep { $_ =~ $KEY_RE } entries($sdir);    # .txt companions, temp files etc. are not mirrored
+    next unless @keys;
+    ensure_dir("$LIVE/keys/$domain", 0700);
+    for my $f (@keys) {
+        my $src = "$sdir/$f";
+        unless (regular_file($src)) { warn "skipping $domain/$f: not a regular file\n"; $skipped++; next }
+        my $size = (stat _)[7];
+        if ($size > $MAX_BYTES) { warn "skipping $domain/$f: $size bytes is not a key\n"; $skipped++; next }
+        my $content = slurp($src);
+        my $dst     = "$LIVE/keys/$domain/$f";
+        $staged{"$domain/$f"} = 1;
+        if (same($dst, $content, 0600)) { $unchanged++ }
+        else                           { put($dst, $content, 0600); $installed++ }
+    }
+}
+
+# 2. tables: each must name only keys that are installed NOW
+for my $t (qw(KeyTable SigningTable)) {
+    my $src     = "$STAGE/$t";
+    my $content = regular_file($src) ? slurp($src) : '';    # no staged table = an empty table
+    if ($t eq 'KeyTable') {
+        for my $line (split /\n/, $content) {
+            next unless $line =~ /\S/;
+            my ($path) = $line =~ /:(\/\S+)\s*\z/;
+            my ($domain, $file) = defined $path ? $path =~ m{\A(?:\Q$LIVE\E|/etc/opendkim)/keys/([^/]+)/([^/]+)\z} : ();
+            die "KeyTable names a key that is not installed (" . ($path // $line) . ") -- refusing to install the tables\n"
+                unless defined $file && $staged{"$domain/$file"};
+        }
+    }
+    if (same("$LIVE/$t", $content, 0640)) { $unchanged++ }
+    else                                 { put("$LIVE/$t", $content, 0640); $installed++ }
+}
+
+# 3. keys no longer staged -- but never when nothing is staged at all (a
+#    transient empty staging tree must not empty the live one)
+if (%staged) {
+    for my $domain (entries("$LIVE/keys")) {
+        my $ldir = "$LIVE/keys/$domain";
+        next unless real_dir($ldir);
+        for my $f (entries($ldir)) {
+            my $p = "$ldir/$f";
+            next unless regular_file($p);
+            if ($f =~ $KEY_RE) {
+                next if $staged{"$domain/$f"};
+                unlink $p and $removed++;
+            }
+            elsif ($f =~ /\.txt\z/ || $f =~ /\.tmp\.\d+\z/) {
+                unlink $p;    # genkey's public-key text companions and leftovers are not part of the mirror
+            }
+        }
+        rmdir $ldir unless entries($ldir);    # fails harmlessly if not empty
+    }
+}
+
+printf "homelab-opendkim-install: %d file(s) installed, %d unchanged, %d stale key(s) removed%s; %s/keys is opendkim-only (dirs 0700, keys 0600, tables 0640)\n",
+    $installed, $unchanged, $removed, ($skipped ? ", $skipped skipped" : ''), $LIVE;
+exit 0;

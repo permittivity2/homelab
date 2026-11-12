@@ -1,3 +1,19 @@
+homelab-domain-admin (0.1.45) unstable; urgency=medium
+
+  * DKIM key hand-off through root (post-cutover #68): the data plane now
+    writes its own staging tree under /var/lib/homelab/opendkim (keys 0600,
+    KeyTable naming the live paths, SigningTable) and has root mirror it
+    into /etc/opendkim with the new /usr/sbin/homelab-opendkim-install
+    (sudo, no arguments; fixed paths; regular files with expected names
+    only; keys opendkim:opendkim 0600, tables 0640; keys before tables,
+    removals last; a KeyTable naming an uninstalled key is refused). A
+    failed hand-off is retried every materialize tick. With homelab-postfix
+    0.1.29 OpenDKIM's "safe keys" check is on again and its "key data is
+    not secure" line is gone. Non-signer hosts (no /etc/opendkim) skip the
+    data plane instead of failing every tick. Tests: t/opendkim-install.t.
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 23:30:00 -0600
+
 homelab-domain-admin (0.1.44) unstable; urgency=medium
 
   * Release v0.1.44

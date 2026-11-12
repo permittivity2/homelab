@@ -1,3 +1,26 @@
+homelab-postfix (0.1.30) unstable; urgency=high
+
+  * opendkim.conf: UserID opendkim. The template never set it, so OpenDKIM
+    ran as root; with RequireSafeKeys yes (0.1.29) it then refused the
+    opendkim-owned keys ("/etc/opendkim/keys is writeable and owned by uid
+    N which is not the executing uid (0)") and submissions through the node
+    were tempfailed by the 587 milter policy until this fix. Found on the
+    first signer during the #68 rollout; 0.1.29 was never installed on 40/41.
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 23:45:00 -0600
+
+homelab-postfix (0.1.29) unstable; urgency=medium
+
+  * OpenDKIM safe keys (post-cutover #68): RequireSafeKeys yes. The postinst
+    makes /etc/opendkim/keys opendkim:opendkim 0700 with every key 0600 and
+    the tables 0640, and takes `homelab` out of group opendkim -- the keys
+    now arrive from homelab-domain-admin >= 0.1.45's staging tree through
+    its root installer. With an older homelab-domain-admin still installed
+    the legacy shared-group layout (RequireSafeKeys no) is kept, with a
+    warning, so rotation keeps working until it is upgraded.
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 23:30:00 -0600
+
 homelab-postfix (0.1.28) unstable; urgency=medium
 
   * SMTPS on port 465 (post-cutover #70): a second managed master.cf stanza

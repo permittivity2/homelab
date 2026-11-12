@@ -38,9 +38,19 @@ disk — it never crosses the network in the clear (which is what the old
 The rotate/activate/retire endpoints are the CONTROL PLANE: they mutate only
 the DB state machine + PowerDNS TXT records, so any instance can serve them.
 `_materialize_dkim` is the DATA PLANE: a per-host timer (+ inline after a
-control-plane op) that reconciles each host's local `/etc/opendkim` (key
-files + KeyTable/SigningTable) to the DB and reloads opendkim — so a
-rebooted/new signer self-heals to current state. Provisioning a new signer
+control-plane op) that reconciles each host's local copy of the key files
++ KeyTable/SigningTable to the DB and reloads opendkim — so a rebooted/new
+signer self-heals to current state. Since 0.1.45 (post-cutover #68) that
+local copy is a **staging tree** under `/var/lib/homelab/opendkim`, written
+as the `homelab` service user (keys 0600), and root mirrors it into
+`/etc/opendkim` with `sudo /usr/sbin/homelab-opendkim-install` (no
+arguments; fixed paths; keys `opendkim:opendkim` 0600, tables 0640; keys
+before the tables that name them, removals last). OpenDKIM therefore reads
+keys only it can read, its "safe keys" check is on (`RequireSafeKeys yes`
+from homelab-postfix 0.1.29), and `homelab` needs no membership of group
+`opendkim`. The KeyTable this service writes names the live paths. A failed
+hand-off leaves `.install-pending` in the staging dir and is retried every
+tick; OpenDKIM keeps signing with what it last loaded meanwhile. Provisioning a new signer
 requires (all needed because rotate can round-robin to any host): the same
 KEK; `homelab-postfix` debconf `run_local_opendkim=true` +
 `dkim_milter_host=localhost`; nft INPUT 2511 + OUTPUT 8081→pdns; the pdns
@@ -432,21 +442,17 @@ the caller's own addresses only (see "Self-service address blocking").
   comments, now bitten a second time in test code instead of shipped
   code. `shlex.quote()` each piece, or join into one pre-quoted command
   string, when a remote CLI argument might contain whitespace.
-- **OpenDKIM's `RequireSafeKeys` check rejects every signing attempt
-  under this design, unconditionally, not as an edge case.** OpenDKIM
-  refuses to sign with a key if it considers the key file's group
-  membership insecure — and the `opendkim` daemon account's own primary
-  group already *is* `opendkim`, with `homelab` (this package's service
-  account, needing write access to generate/rotate keys) added as a
-  second, deliberate member of that same group. Two members is already
-  "multiple users" to this check, so it fires on every single signing
-  attempt, not just some hypothetical loosely-shared directory. Caught
-  by a real `homelab-cli dns dkim rotate` → real send, which came back
-  "key data is not secure: root is in group ... which has multiple
-  users". Fixed with `RequireSafeKeys no` in
-  `postfix/config/opendkim.conf.template` — see that file's own comment
-  and `postfix/README.md` for why this is the correct call here, not an
-  unconsidered weakening.
+- **OpenDKIM's `RequireSafeKeys` check and the shared-group key layout
+  (history, fixed in 0.1.45 / post-cutover #68).** Until 0.1.44 this
+  service wrote the key files straight into `/etc/opendkim/keys` as
+  `homelab`, readable by the daemon through group `opendkim` (`homelab`
+  a second member of it). OpenDKIM's "safe keys" check wants a key
+  readable by its owner only, so it could never pass; `RequireSafeKeys
+  no` kept signing working but OpenDKIM still logged "key data is not
+  secure: root is in group ... which has multiple users" on every
+  signature. Now the service writes its own staging tree and root
+  installs the keys as `opendkim:opendkim` 0600 (`homelab-opendkim-install`,
+  see "Signing HA"), the check is back on, and the line is gone.
 - **A new debian/rules template needs its own explicit `install -D`
   line, or postinst fails at runtime, not at build time.** Adding
   `opendkim.conf.template` to `postfix/config/` without also adding the
