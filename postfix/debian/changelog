@@ -1,3 +1,15 @@
+homelab-postfix (0.1.28) unstable; urgency=medium
+
+  * SMTPS on port 465 (post-cutover #70): a second managed master.cf stanza
+    (config/master.cf.smtps-stanza, marker "homelab-postfix managed smtps")
+    adds the smtps service with smtpd_tls_wrappermode=yes and the same SASL,
+    relay, recipient and sender-login rules as the 587 stanza; syslog_name
+    postfix/smtps. The per-service OpenDKIM-last milter override is applied
+    to both submission/inet and smtps/inet. The 587 marker check is anchored
+    so the two stanzas cannot be mistaken for each other.
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 22:25:00 -0600
+
 homelab-postfix (0.1.27) unstable; urgency=medium
 
   * Release v0.1.27

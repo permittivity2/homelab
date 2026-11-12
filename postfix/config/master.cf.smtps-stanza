@@ -1,0 +1,21 @@
+# BEGIN homelab-postfix managed smtps
+smtps      inet  n       -       n       -       -       smtpd
+  -o syslog_name=postfix/smtps
+  -o smtpd_tls_wrappermode=yes
+  -o smtpd_sasl_auth_enable=yes
+  -o smtpd_tls_auth_only=yes
+  -o smtpd_reject_unlisted_recipient=no
+  -o smtpd_relay_restrictions=permit_sasl_authenticated,reject
+  -o smtpd_recipient_restrictions=permit_sasl_authenticated,reject
+  -o smtpd_sender_restrictions=reject_authenticated_sender_login_mismatch,permit_sasl_authenticated
+  -o milter_macro_daemon_name=ORIGINATING
+#   Port 465 (the 'smtps' alias in /etc/services), implicit TLS: the TLS
+#   handshake comes first, so there is no STARTTLS step for a mail app set
+#   to "SSL/TLS" to get wrong (RFC 8314 prefers it). Otherwise the same
+#   service as the submission (587) stanza above: same SASL, relay,
+#   recipient and sender-login rules, same ORIGINATING macro for the
+#   block-link milter's reply rewrite. Its smtpd_milters and
+#   milter_default_action are kept by the postinsts with 'postconf -P'
+#   exactly like 587's. Behind haproxy the PROXY protocol header is read
+#   BEFORE the TLS handshake, as Dovecot does on 993. Post-cutover #70.
+# END homelab-postfix managed smtps

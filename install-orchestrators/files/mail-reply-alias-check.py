@@ -120,15 +120,23 @@ class ProxySMTP(smtplib.SMTP):
     """smtplib.SMTP that writes a haproxy PROXY protocol v1 line before the
     greeting. The mail pool's smtpd has smtpd_upstream_proxy_protocol=haproxy
     on every listener (haproxy on the edges fronts them), so a direct
-    connection must speak it too or Postfix never says 220."""
+    connection must speak it too or Postfix never says 220.
 
-    def __init__(self, host, port, proxy_line, timeout=30):
+    With tls_context (port 465, implicit TLS, post-cutover #70) the PROXY
+    line goes first in clear and the TLS handshake follows -- exactly what
+    haproxy does, and what Postfix expects: it reads the header before the
+    handshake in wrapper mode."""
+
+    def __init__(self, host, port, proxy_line, timeout=30, tls_context=None):
         self._proxy_line = proxy_line
+        self._tls_context = tls_context
         super().__init__(host, port, timeout=timeout)
 
     def _get_socket(self, host, port, timeout):
         sock = super()._get_socket(host, port, timeout)
         sock.sendall(self._proxy_line)
+        if self._tls_context is not None:
+            sock = self._tls_context.wrap_socket(sock, server_hostname="mail.mailmasker.org")
         return sock
 
 
@@ -184,13 +192,18 @@ def build_message(from_hdr, to_hdr, subject, msgid, body, in_reply_to=None, repl
 
 
 def submit(args, password, envelope_from, rcpts, msg):
-    proxy_line = f"PROXY TCP4 {args.src_ip} {args.node_ip} {random.randint(20000, 60000)} 587\r\n".encode()
-    with tunnel(args.node_ip, args.local_port, 587):
-        s = ProxySMTP("127.0.0.1", args.local_port, proxy_line)
+    # --port 587: STARTTLS after EHLO. --port 465: TLS first (wrapper mode,
+    # #70), no STARTTLS step. Either way the PROXY line precedes everything.
+    port = getattr(args, "port", 587)
+    proxy_line = f"PROXY TCP4 {args.src_ip} {args.node_ip} {random.randint(20000, 60000)} {port}\r\n".encode()
+    tls_first = noverify_context() if port == 465 else None
+    with tunnel(args.node_ip, args.local_port, port):
+        s = ProxySMTP("127.0.0.1", args.local_port, proxy_line, tls_context=tls_first)
         try:
             s.ehlo("reply67-check.homelab.invalid")
-            s.starttls(context=noverify_context())
-            s.ehlo("reply67-check.homelab.invalid")
+            if tls_first is None:
+                s.starttls(context=noverify_context())
+                s.ehlo("reply67-check.homelab.invalid")
             s.login(args.account, password)
             s.sendmail(envelope_from, rcpts, msg.as_bytes())
         finally:
@@ -504,6 +517,8 @@ def main():
     r.add_argument("--leader-ip", required=True, help="DB primary (management IP) to read the recorded row")
     r.add_argument("--src-ip", required=True, help="this workstation's IP, for the PROXY protocol line")
     r.add_argument("--local-port", type=int, default=19587)
+    r.add_argument("--port", type=int, choices=(587, 465), default=587,
+                   help="the node's listener: 587 (STARTTLS) or 465 (implicit TLS, #70)")
     r.add_argument("--alias", action="append", help="test alias (repeatable; default: the four claude67 fixtures)")
     r.add_argument("--keep", action="store_true", help="leave the test messages in the inbox")
 
@@ -511,6 +526,8 @@ def main():
     y.add_argument("--node-ip", required=True)
     y.add_argument("--src-ip", required=True)
     y.add_argument("--local-port", type=int, default=19587)
+    y.add_argument("--port", type=int, choices=(587, 465), default=587,
+                   help="the node's listener: 587 (STARTTLS) or 465 (implicit TLS, #70)")
     y.add_argument("--in-reply-to", required=True, help="Message-ID of the original, with angle brackets")
     y.add_argument("--to", required=True)
     y.add_argument("--subject", default="Re: reply67 external test")

@@ -570,7 +570,7 @@ case "$1" in
         # a fresh, fully-specified stanza rather than an in-place
         # uncomment, since the exact -o overrides needed here differ
         # from the vendor's commented defaults.
-        if ! grep -q '^# BEGIN homelab-postfix managed' "$MASTER_CF" 2>/dev/null; then
+        if ! grep -q '^# BEGIN homelab-postfix managed$' "$MASTER_CF" 2>/dev/null; then
             {
                 echo ""
                 cat "$SHARE_DIR/config/master.cf.submission-stanza"
@@ -578,23 +578,37 @@ case "$1" in
             echo "  activated the submission service (587) in $MASTER_CF"
         fi
 
-        # 587's own milter list is a per-service override kept with
-        # `postconf -P`, not a line in the stanza file (the stanza is
+        # SMTPS (port 465, implicit TLS) -- the same service with the TLS
+        # handshake first, for every mail app whose dropdown says "SSL/TLS"
+        # (post-cutover #70). Its own marker, appended once, like 587's.
+        if ! grep -q '^# BEGIN homelab-postfix managed smtps$' "$MASTER_CF" 2>/dev/null; then
+            {
+                echo ""
+                cat "$SHARE_DIR/config/master.cf.smtps-stanza"
+            } >> "$MASTER_CF"
+            echo "  activated the smtps service (465) in $MASTER_CF"
+        fi
+
+        # 587's and 465's own milter lists are per-service overrides kept
+        # with `postconf -P`, not lines in the stanza files (a stanza is
         # appended once and never edited, so it cannot carry anything that
         # has to follow main.cf). OpenDKIM must be LAST there: the block-link
         # milter rewrites a reply's From to the alias it was sent to (#67)
         # and the signature must cover that From with that domain's key.
         # Starts from the existing override, else from main.cf's list, so
         # every other milter keeps its place. Never written when DKIM is
-        # off -- an empty override would silence the whole chain on 587.
+        # off -- an empty override would silence the whole chain there.
         # NB: postconf -P refuses whitespace in a master.cf -o value
         # ("-Pe does not accept whitespace in parameter value"), so the
         # list is written comma-separated WITHOUT the spaces main.cf uses.
-        if [ "$ENABLE_DKIM" = "true" ] && postconf -Mf submission/inet >/dev/null 2>&1; then
-            CUR_SUB_MILTERS="$(postconf -Ph submission/inet/smtpd_milters 2>/dev/null || true)"
-            [ -n "$CUR_SUB_MILTERS" ] || CUR_SUB_MILTERS="$(postconf -h smtpd_milters 2>/dev/null || true)"
-            postconf -P "submission/inet/smtpd_milters=$(_dkim_milter_rebuild "$CUR_SUB_MILTERS" append | tr -d ' ')"
-            echo "  587 milter order: $(postconf -Ph submission/inet/smtpd_milters)"
+        if [ "$ENABLE_DKIM" = "true" ]; then
+            for svc in submission/inet smtps/inet; do
+                postconf -Mf "$svc" >/dev/null 2>&1 || continue
+                CUR_SUB_MILTERS="$(postconf -Ph "$svc/smtpd_milters" 2>/dev/null || true)"
+                [ -n "$CUR_SUB_MILTERS" ] || CUR_SUB_MILTERS="$(postconf -h smtpd_milters 2>/dev/null || true)"
+                postconf -P "$svc/smtpd_milters=$(_dkim_milter_rebuild "$CUR_SUB_MILTERS" append | tr -d ' ')"
+                echo "  ${svc%/inet} milter order: $(postconf -Ph "$svc/smtpd_milters")"
+            done
         fi
 
         if postfix check >/dev/null 2>&1; then
@@ -652,7 +666,8 @@ case "$1" in
         echo "recipient map:    $MAP_CF"
         echo "alias map:        $ALIAS_MAPS_CF"
         echo "sender login map: $SENDER_LOGIN_CF"
-        echo "submission (587): SASL via Dovecot ($DOVECOT_HOST:12345), TLS required, sender-login-mismatch enforced"
+        echo "submission (587): SASL via Dovecot ($DOVECOT_HOST:12345), TLS required (STARTTLS), sender-login-mismatch enforced"
+        echo "smtps (465):      the same service, implicit TLS (the handshake first) for mail apps set to SSL/TLS"
         echo "smtp (25):        virtual_mailbox_domains=$CURRENT_VMD, LMTP to $DOVECOT_HOST:24"
         if [ "$BEHIND_HAPROXY" = "true" ]; then
             echo "haproxy:          expected in front (behind_haproxy=true) -- SMTP/submission reject direct"

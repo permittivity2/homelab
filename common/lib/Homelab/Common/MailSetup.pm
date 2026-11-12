@@ -56,7 +56,18 @@ sub mail_settings (%opts) {
 # profile -- Android and desktop clients, where picking "SSL/TLS" versus
 # "STARTTLS" from a dropdown is the single most common way a setup
 # silently ends up unencrypted.
+#
+# The outgoing port has an alternative row (post-cutover #70): the pool
+# serves submission on 587 (STARTTLS) and 465 (implicit TLS) alike, and
+# the single most common sending failure was a client set to "SSL/TLS" on
+# 587 -- or "STARTTLS" on 465 -- so whichever port is configured as the
+# primary, the table names the other one with its own encryption word.
+# The Apple profile keeps the primary port only (iOS picks the mechanism
+# from the port, see AppleProfile.pm).
 sub manual_setup_rows ($s) {
+    my @alt = $s->{smtp_port} == 587 ? ([465, 'SSL/TLS', 'STARTTLS'])
+            : $s->{smtp_port} == 465 ? ([587, 'STARTTLS', 'SSL/TLS'])
+            : ();
     return [
         ['Email address', $s->{email},     ''],
         ['Username',      $s->{username},  'the full address, not just the part before the @'],
@@ -67,6 +78,8 @@ sub manual_setup_rows ($s) {
         ['Outgoing (SMTP) server', $s->{smtp_host}, ''],
         ['Outgoing port', $s->{smtp_port},
             $s->{smtp_port} == 465 ? 'SSL/TLS' : ($s->{smtp_port} == 587 ? 'STARTTLS' : '')],
+        (@alt ? (['Outgoing port, alternative', $alt[0][0],
+            "$alt[0][1] — both ports work; use this one if your app offers no $alt[0][2] option"]) : ()),
         ['Outgoing authentication', 'Yes — same username and password', ''],
     ];
 }

@@ -126,7 +126,8 @@ case "$1" in
         #       this milter LAST.
         #   non_smtpd_milters (pickup/sendmail, local mail):
         #       this milter FIRST, the signer last.
-        #   submission/inet (587) -- a per-service override via postconf -P:
+        #   submission/inet (587) and smtps/inet (465, #70) -- per-service
+        #   overrides via postconf -P:
         #       this milter FIRST so the #67 From/envelope rewrite happens
         #       before OpenDKIM signs (the signature then covers the
         #       rewritten From and uses the alias domain's key), OpenDKIM
@@ -172,20 +173,25 @@ case "$1" in
 
             # NB: postconf -P refuses whitespace in a master.cf -o value
             # ("-Pe does not accept whitespace in parameter value"), so the
-            # 587 list is comma-separated WITHOUT the spaces main.cf uses.
-            if postconf -Mf submission/inet >/dev/null 2>&1; then
-                CUR_SUB="$(postconf -Ph submission/inet/smtpd_milters 2>/dev/null || true)"
-                [ -n "$CUR_SUB" ] || CUR_SUB="$(postconf -h smtpd_milters 2>/dev/null || true)"
-                REST="$(_list_without "$CUR_SUB" "$SELF_GLOB")"
-                postconf -P "submission/inet/smtpd_milters=$(printf '%s' "$MILTER_CONNECT${REST:+,$REST}" | tr -d ' ')"
-                postconf -P 'submission/inet/milter_default_action=tempfail'
-            else
-                echo "  NOTE: no submission (587) service in master.cf yet -- its milter order is set when homelab-postfix adds it"
-            fi
+            # per-service lists are comma-separated WITHOUT the spaces
+            # main.cf uses. Both authenticated listeners get the same order
+            # and the same tempfail: 587 (STARTTLS) and 465 (implicit TLS, #70).
+            for svc in submission/inet smtps/inet; do
+                if postconf -Mf "$svc" >/dev/null 2>&1; then
+                    CUR_SUB="$(postconf -Ph "$svc/smtpd_milters" 2>/dev/null || true)"
+                    [ -n "$CUR_SUB" ] || CUR_SUB="$(postconf -h smtpd_milters 2>/dev/null || true)"
+                    REST="$(_list_without "$CUR_SUB" "$SELF_GLOB")"
+                    postconf -P "$svc/smtpd_milters=$(printf '%s' "$MILTER_CONNECT${REST:+,$REST}" | tr -d ' ')"
+                    postconf -P "$svc/milter_default_action=tempfail"
+                else
+                    echo "  NOTE: no ${svc%/inet} service in master.cf yet -- its milter order is set when homelab-postfix adds it"
+                fi
+            done
 
             postconf -e 'milter_default_action = accept' 'milter_protocol = 6'
             echo "  milter chains: 25 -> $(postconf -h smtpd_milters)"
             echo "                 587 -> $(postconf -Ph submission/inet/smtpd_milters 2>/dev/null || echo '(no submission service)')"
+            echo "                 465 -> $(postconf -Ph smtps/inet/smtpd_milters 2>/dev/null || echo '(no smtps service)')"
             echo "                 local -> $(postconf -h non_smtpd_milters)"
         else
             echo "  WARNING: could not parse milter.listen ('$MILTER_LISTEN') as inet:PORT@HOST --"

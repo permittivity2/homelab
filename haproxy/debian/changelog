@@ -1,3 +1,12 @@
+homelab-haproxy (0.1.13) unstable; urgency=medium
+
+  * backends.example.yml: the smtps frontend (465 -> the Postfix pool's
+    smtps service, send-proxy), post-cutover #70. A fresh install fronts
+    465 from the start; an existing site file is never edited by the
+    package -- install-orchestrators/smtps-orchestrate.sh adds the entry.
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 22:25:00 -0600
+
 homelab-haproxy (0.1.12) unstable; urgency=medium
 
   * Release v0.1.12

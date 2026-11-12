@@ -15,7 +15,7 @@
 #     came through) fails OPEN: any DB error or unexpected exception logs
 #     and lets the message through completely unmodified -- a milter on the
 #     hot SMTP delivery path must never become a new way to break mail.
-#   * The SUBMISSION rewrite (587, authenticated user replying from the
+#   * The SUBMISSION rewrite (587 or 465, authenticated user replying from the
 #     login address) fails CLOSED when the database cannot be consulted:
 #     the reply is deferred (451, the phone retries from its outbox) rather
 #     than silently sent from the user's real address -- the very thing the
@@ -367,13 +367,13 @@ sub _inject_footer {
     return;
 }
 
-# (c) An authenticated submission (587 sets milter_macro_daemon_name=
+# (c) An authenticated submission (587 and 465 set milter_macro_daemon_name=
 # ORIGINATING) that is a reply (In-Reply-To, else the last References id)
 # and whose From: is the login address itself: if the user has the setting
 # on and we remember which of their aliases the original was sent to, and
 # they are still allowed to send as it, swap the From: (and a Reply-To:/
 # Sender: that also names the login) and the envelope sender to the alias.
-# OpenDKIM runs after this milter on 587 and signs the rewritten From with
+# OpenDKIM runs after this milter on 587/465 and signs the rewritten From with
 # the alias domain's key. Mail already From an alias (a Roundcube identity,
 # `mail send --from`) is untouched: From ne login.
 sub _rewrite_reply {

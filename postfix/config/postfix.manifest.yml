@@ -8,4 +8,4 @@ kind: smtp
 check:
   systemd_unit: postfix
   tcp_port: 587
-description: "SMTP submission (587, SASL auth via Dovecot) + inbound relay (25) + OpenDKIM signing"
+description: "SMTP submission (587 STARTTLS + 465 implicit TLS, SASL auth via Dovecot) + inbound relay (25) + OpenDKIM signing"

@@ -1700,7 +1700,7 @@ sub _fleet_port_service {
         2513 => 'audit', 2514 => 'invite', 2515 => 'block-link',
         8080 => 'roundcube-nginx',
         993 => 'dovecot', 143 => 'dovecot', 24 => 'dovecot', 12345 => 'dovecot',
-        25 => 'postfix', 587 => 'postfix',
+        25 => 'postfix', 587 => 'postfix', 465 => 'postfix',
         53 => 'pdns', 6432 => 'pgbouncer', 5432 => 'postgresql',
     };
 }

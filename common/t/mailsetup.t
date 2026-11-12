@@ -82,6 +82,35 @@ subtest 'the table spells out the encryption, not just the port' => sub {
     is $n2{'Outgoing port'}, 'SSL/TLS',  '465 is implicit TLS';
 };
 
+subtest 'the other outgoing port is offered as an alternative (#70)' => sub {
+    # The pool serves 587 (STARTTLS) and 465 (implicit TLS) alike; a client
+    # set to the wrong mechanism for its port fails with an unhelpful error,
+    # so the table names the other port with its own encryption word.
+    my $rows = manual_setup_rows(mail_settings(email => 'a@mailmasker.org'));
+    my %row  = map { $_->[0] => $_->[1] } @$rows;
+    my %note = map { $_->[0] => $_->[2] } @$rows;
+    is $row{'Outgoing port'}, 587, 'primary stays 587';
+    is $row{'Outgoing port, alternative'}, 465, '465 is the alternative to 587';
+    # No em dash in these patterns: MailSetup.pm is utf8 source (Mojo::Base),
+    # this test file is not, so the literal would be bytes against characters.
+    like $note{'Outgoing port, alternative'}, qr/^SSL\/TLS\b/, 'labelled implicit TLS';
+    like $note{'Outgoing port, alternative'}, qr/both ports work/, 'says both work';
+    like $note{'Outgoing port, alternative'}, qr/no STARTTLS option/, 'says when to pick it';
+    my @order = map { $_->[0] } @$rows;
+    my ($p) = grep { $order[$_] eq 'Outgoing port' } 0 .. $#order;
+    is $order[$p + 1], 'Outgoing port, alternative', 'the alternative row follows the primary';
+
+    my $r465 = manual_setup_rows(mail_settings(email => 'a@x.org', config => { smtp_port => 465 }));
+    my %r2   = map { $_->[0] => $_->[1] } @$r465;
+    my %n2   = map { $_->[0] => $_->[2] } @$r465;
+    is $r2{'Outgoing port, alternative'}, 587, 'a site on 465 offers 587';
+    like $n2{'Outgoing port, alternative'}, qr/^STARTTLS\b/, 'labelled STARTTLS';
+    like $n2{'Outgoing port, alternative'}, qr/no SSL\/TLS option/, 'says when to pick it';
+
+    my $odd = manual_setup_rows(mail_settings(email => 'a@x.org', config => { smtp_port => 2525 }));
+    ok !(grep { $_->[0] eq 'Outgoing port, alternative' } @$odd), 'an unusual port gets no alternative row';
+};
+
 subtest 'no password is ever placed in the table' => sub {
     my $rows = manual_setup_rows(mail_settings(email => 'a@mailmasker.org'));
     my %row  = map { $_->[0] => $_->[1] } @$rows;

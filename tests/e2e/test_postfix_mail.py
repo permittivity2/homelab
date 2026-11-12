@@ -46,6 +46,7 @@ import pytest
 
 LOCAL_SMTP_PORT = 19025
 LOCAL_SUBMISSION_PORT = 19587
+LOCAL_SMTPS_PORT = 19465
 LOCAL_IMAPS_PORT = 19994
 
 
@@ -210,6 +211,26 @@ def test_authenticated_relay_is_permitted(ssh_host, mail_account):
             s.mail(email)
             code, msg = s.rcpt("someone-external@example.com")
             assert code == 250, f"an authenticated user was denied relay to an external address: {code} {msg}"
+        finally:
+            with contextlib.suppress(Exception):
+                s.quit()
+
+
+def test_smtps_implicit_tls_relay_is_permitted(ssh_host, mail_account):
+    """Post-cutover #70: port 465 is the same submission service with the
+    TLS handshake FIRST (the "SSL/TLS" choice in mail apps), so there is
+    no STARTTLS step and the same SASL login must be offered and must
+    relay. Stops at RCPT TO like test_authenticated_relay_is_permitted."""
+    email, password = mail_account
+    with _tunnel(ssh_host, LOCAL_SMTPS_PORT, 465) as port:
+        s = smtplib.SMTP_SSL("127.0.0.1", port, timeout=10, context=_tls_context())
+        try:
+            s.ehlo("e2e-test-client")
+            assert s.has_extn("auth"), "465 does not offer AUTH inside the TLS session"
+            s.login(email, password)
+            s.mail(email)
+            code, msg = s.rcpt("someone-external@example.com")
+            assert code == 250, f"an authenticated user was denied relay over 465: {code} {msg}"
         finally:
             with contextlib.suppress(Exception):
                 s.quit()

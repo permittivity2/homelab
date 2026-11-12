@@ -1,3 +1,12 @@
+homelab-common (0.1.36) unstable; urgency=medium
+
+  * MailSetup: the manual-settings table (myaccount device page, invite
+    setup page, welcome mail) gains "Outgoing port, alternative": 465
+    SSL/TLS when the primary is 587, 587 STARTTLS when it is 465
+    (post-cutover #70, SMTPS on 465). No change to the Apple profile.
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 22:25:00 -0600
+
 homelab-common (0.1.35) unstable; urgency=medium
 
   * Release v0.1.35

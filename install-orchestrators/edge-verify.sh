@@ -215,6 +215,13 @@ else
     printf '%s' "$sub" | grep -qi esmtp && ok "submission :587 answers from the internet" \
         || bad "submission :587 gave no banner -- sending is DOWN"
 
+    # SMTPS :465 (implicit TLS, post-cutover #70): like IMAPS the banner comes
+    # AFTER the TLS handshake, so stdin stays open; -servername picks the cert.
+    smtps=$(timeout 30 ssh -o ConnectTimeout=6 offsite \
+        "timeout 12 bash -c '(printf \"QUIT\r\n\"; sleep 3) | openssl s_client -quiet -connect mail.mailmasker.org:465 -servername mail.mailmasker.org 2>/dev/null | head -1'" 2>/dev/null)
+    printf '%s' "$smtps" | grep -qi esmtp && ok "SMTPS :465 answers from the internet (TLS first)" \
+        || bad "SMTPS :465 gave no banner -- mail apps set to SSL/TLS cannot send"
+
     # SSH must NOT answer from the internet, on either public address. Found
     # OPEN on 01 and 02 on 2026-11-02 -- `tcp dport { 22, 80, 443, 53 }` in a
     # base firewall file nothing here checked -- so whenever either of them

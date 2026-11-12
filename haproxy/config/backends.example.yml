@@ -68,6 +68,14 @@ backends:
     frontend_port: 587
     backend: 127.0.0.1:587
     maxconn: 500
+  # SMTPS (post-cutover #70): the same submission service with the TLS
+  # handshake first -- the "SSL/TLS" choice in mail apps (RFC 8314). Pure TCP
+  # pass-through like 587 and 993: Postfix holds the certificate and reads
+  # the PROXY header before the TLS handshake, so send_proxy stays on.
+  - name: smtps
+    frontend_port: 465
+    backend: 127.0.0.1:465
+    maxconn: 500
   - name: imap
     frontend_port: 143
     backend: 127.0.0.1:143

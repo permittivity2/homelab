@@ -202,17 +202,31 @@ carelessly shared key directory, so disabling that specific check is
 the correct call here rather than a real loosening of the actual
 threat model.
 
-## `master.cf`'s submission service
+## `master.cf`'s submission (587) and smtps (465) services
 
 Postfix ships `master.cf` with the submission (587) and submissions
 (465) services present but fully commented out, each with a slightly
 different set of example `-o` overrides in the comments. Rather than try
 to uncomment-and-edit those in place (fragile, and the overrides this
 deployment actually needs differ from the vendor's commented example),
-`postinst` appends a fresh, fully-specified, clearly marked block
-(`config/master.cf.submission-stanza`, delimited by `# BEGIN/END
-homelab-postfix managed`) once, idempotently. The vendor's own commented
-example is left untouched.
+`postinst` appends two fresh, fully-specified, clearly marked blocks
+once, idempotently, and leaves the vendor's commented examples untouched:
+
+- `config/master.cf.submission-stanza` (`# BEGIN/END homelab-postfix
+  managed`): port 587, STARTTLS required (`smtpd_tls_security_level=encrypt`).
+- `config/master.cf.smtps-stanza` (`# BEGIN/END homelab-postfix managed
+  smtps`, since 0.1.28 / post-cutover #70): port 465, implicit TLS
+  (`smtpd_tls_wrappermode=yes`), the "SSL/TLS" choice in every mail app.
+  Same SASL, relay, recipient and sender-login rules, same `ORIGINATING`
+  macro; `syslog_name=postfix/smtps` (bad-ips' Postfix rules match
+  `postfix/smtps/smtpd` already). Behind homelab-haproxy the PROXY
+  protocol header is read before the TLS handshake, as on Dovecot's 993.
+
+Both services' `smtpd_milters` (OpenDKIM last) and `milter_default_action`
+(tempfail, set by homelab-postfix-block-link) are per-service `postconf
+-P` overrides re-applied on every configure, never lines in the stanza
+files. Offering both ports removes a whole class of client misconfiguration:
+"SSL/TLS" on 587 and "STARTTLS" on 465 both fail with unhelpful errors.
 
 ## Testing
 

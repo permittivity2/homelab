@@ -37,7 +37,7 @@ rssh(){ ssh -o ConnectTimeout=10 -o BatchMode=yes "$1" "${@:2}" 2>/dev/null; }
 MAIL_NODES="39 40 41"
 DB_NODES="06 07 08"
 ACCOUNTMANAGE_NODES="27 28 29"
-WANT_DA=0.1.44; WANT_PF=0.1.27; WANT_BL=0.2.2; WANT_DEV=0.1.4; WANT_CLI=0.6.15; WANT_AM=0.1.46
+WANT_DA=0.1.44; WANT_PF=0.1.28; WANT_BL=0.2.3; WANT_DEV=0.1.4; WANT_CLI=0.6.15; WANT_AM=0.1.46
 
 TEST_ACCOUNT="${TEST_ACCOUNT:-testaccountforclaude@mailmasker.org}"
 # The test account's password stays in a file outside this repository; only
@@ -122,6 +122,15 @@ node_checks(){ # $1 = NN ; the milter-order / unit / override checks
   [ "$x" = "tempfail" ] && ok "$1 587: milter_default_action=tempfail (hold mail when the milter is down)" || bad "$1 submission milter_default_action = '$x'"
   x="$(rssh "$ip" 'postconf -Ph submission/inet/milter_macro_daemon_name')"
   [ "$x" = "ORIGINATING" ] && ok "$1 587: daemon_name ORIGINATING" || bad "$1 submission milter_macro_daemon_name = '$x'"
+  # 465 (smtps, implicit TLS, #70): the same order, tempfail and macro as 587.
+  x="$(rssh "$ip" 'postconf -Ph smtps/inet/smtpd_milters')"
+  [ "$x" = "inet:127.0.0.1:8892,inet:localhost:8891" ] && ok "$1 465: block-link first, OpenDKIM last" || bad "$1 smtps smtpd_milters = '$x'"
+  x="$(rssh "$ip" 'postconf -Ph smtps/inet/milter_default_action')"
+  [ "$x" = "tempfail" ] && ok "$1 465: milter_default_action=tempfail" || bad "$1 smtps milter_default_action = '$x'"
+  x="$(rssh "$ip" 'postconf -Ph smtps/inet/smtpd_tls_wrappermode')"
+  [ "$x" = "yes" ] && ok "$1 465: implicit TLS (wrapper mode)" || bad "$1 smtps smtpd_tls_wrappermode = '$x'"
+  x="$(rssh "$ip" 'postconf -Ph smtps/inet/milter_macro_daemon_name')"
+  [ "$x" = "ORIGINATING" ] && ok "$1 465: daemon_name ORIGINATING" || bad "$1 smtps milter_macro_daemon_name = '$x'"
   x="$(rssh "$ip" 'postconf -h milter_default_action')"
   [ "$x" = "accept" ] && ok "$1 25: milter_default_action=accept (inbound fails open)" || bad "$1 main milter_default_action = $x"
   rssh "$ip" 'sudo -n postfix check' && ok "$1 postfix check" || bad "$1 postfix check reports a problem"
@@ -130,14 +139,17 @@ node_checks(){ # $1 = NN ; the milter-order / unit / override checks
   echo "       $1 rewrites in the last 30 min: $x"
 }
 
-functional_check(){ # $1 = NN
-  step "functional check through prod-homelab$1's 587"
-  if python3 "$CHECK" --password-file "$PW_FILE" --account "$TEST_ACCOUNT" roundtrip \
-        --node-ip "$(h "$1")" --leader-ip "$LEADER_IP" --src-ip "$SRC_IP"; then
-    ok "$1 round trip passed"
-  else
-    bad "$1 round trip FAILED (see above)"
-  fi
+functional_check(){ # $1 = NN ; the same round trip over 587 (STARTTLS) and 465 (implicit TLS, #70)
+  local port
+  for port in 587 465; do
+    step "functional check through prod-homelab$1's $port"
+    if python3 "$CHECK" --password-file "$PW_FILE" --account "$TEST_ACCOUNT" roundtrip \
+          --node-ip "$(h "$1")" --leader-ip "$LEADER_IP" --src-ip "$SRC_IP" --port "$port" --local-port "$((19000 + port))"; then
+      ok "$1 round trip over $port passed"
+    else
+      bad "$1 round trip over $port FAILED (see above)"
+    fi
+  done
   rssh "$(h "$1")" 'sudo -n journalctl -u homelab-postfix-block-link --since "-10min" --no-pager' | grep 'reply-identity' | tail -8 | sed 's/^/       /'
 }
 

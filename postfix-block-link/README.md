@@ -108,9 +108,9 @@ the same fixed rules, so they converge whatever the run order:
 |---|---|---|
 | `smtpd_milters` (25) | OpenDKIM first, this milter **last** | inbound `Authentication-Results` verification must see the untouched original |
 | `non_smtpd_milters` (pickup/sendmail) | this milter **first**, OpenDKIM last | sign local mail after everything else is done with it |
-| `submission/inet` (587, a `postconf -P` per-service override) | this milter **first**, OpenDKIM last | the reply rewrite below changes `From:`; the signature must cover that From and use that domain's key |
+| `submission/inet` (587) and `smtps/inet` (465, implicit TLS, post-cutover #70), `postconf -P` per-service overrides | this milter **first**, OpenDKIM last | the reply rewrite below changes `From:`; the signature must cover that From and use that domain's key |
 
-The 587 override also sets `milter_default_action=tempfail` (see "Fail
+The 587 and 465 overrides also set `milter_default_action=tempfail` (see "Fail
 open — with one deliberate exception"). Check with `postconf -h
 smtpd_milters`, `postconf -h non_smtpd_milters` and `postconf -Ph
 submission/inet/smtpd_milters`.
@@ -135,7 +135,7 @@ the sending identity anyway, with nothing to configure per alias:
    pruned by homelab-domain-admin, migration 009). The real address
    winning records nothing. Recorded regardless of the user's setting, so
    switching it on later works for mail already received.
-2. **Submission (587, `{daemon_name}` = `ORIGINATING`), authenticated
+2. **Submission (587 or 465, `{daemon_name}` = `ORIGINATING`), authenticated
    user, switch on** (`domainadmin.mail_reply_identity`, set in myaccount):
    if the message is a reply (`In-Reply-To`, else the last `References`
    id), its `From:` is exactly the login address, and a row exists for
@@ -147,7 +147,7 @@ the sending identity anyway, with nothing to configure per alias:
    `homelab-cli mail send --from`) has `From ≠ login` and is never touched.
 
 **The authorization boundary moved here on purpose.** Postfix's
-`reject_authenticated_sender_login_mismatch` on 587 checks the client's
+`reject_authenticated_sender_login_mismatch` on 587/465 checks the client's
 MAIL FROM *before* this milter runs and never re-checks after `chgfrom`.
 So `allowed_to_send_as` re-applies the same rule as
 `pgsql-sender-login-maps.cf` for the authenticated login (its own
@@ -196,7 +196,7 @@ returns `SMFIS_CONTINUE` with the message unmodified. This milter sits
 on the hot SMTP delivery path for every host it's installed on; it must
 never become a new way to reject, defer, or delay real inbound mail.
 
-The exception is the #67 reply rewrite on 587: when an authenticated
+The exception is the #67 reply rewrite on 587 and 465: when an authenticated
 reply from the login address *could* be owed a rewrite and the database
 cannot be consulted (or the rewrite fails midway), the milter answers
 `451 4.7.1` and Postfix defers the message — the phone keeps it in its
@@ -204,10 +204,10 @@ outbox and retries. Letting it through would mean silently sending from
 the real address, the very thing the user switched the feature on to
 prevent. Gardner's decision (2026-11-10); `reply_identity.on_db_error:
 accept` in `config.yml` is the operator's escape hatch. For the same
-reason the postinst sets `milter_default_action=tempfail` on the 587
-service only (25 keeps `accept`): if this milter is unreachable,
+reason the postinst sets `milter_default_action=tempfail` on the 587 and
+465 services only (25 keeps `accept`): if this milter is unreachable,
 submissions wait until it is back (`Restart=on-failure`, seconds), rather
-than leak. Postfix's own sender-login lookup on 587 is a pgsql map, so a
+than leak. Postfix's own sender-login lookup on 587/465 is a pgsql map, so a
 database outage already deferred submissions before this change.
 
 ## Why no per-connection DB handle is created at file scope

@@ -1,3 +1,14 @@
+homelab-postfix-block-link (0.2.3) unstable; urgency=medium
+
+  * postinst: the per-service milter order (this milter first, OpenDKIM
+    last) and milter_default_action=tempfail are applied to smtps/inet
+    (465, implicit TLS, post-cutover #70) as well as submission/inet, so a
+    reply sent over 465 is rewritten to the alias exactly as over 587 and
+    is held, never leaked from the real address, when the milter is down.
+    No change to the milter itself.
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 22:25:00 -0600
+
 homelab-postfix-block-link (0.2.2) unstable; urgency=medium
 
   * Release v0.2.2

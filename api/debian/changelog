@@ -1,3 +1,10 @@
+homelab-api (0.1.71) unstable; urgency=medium
+
+  * Fleet topology: port 465 maps to postfix (post-cutover #70, SMTPS), so
+    the edges' new smtps haproxy frontend resolves to the mail pool.
+
+ -- Gardner <gardner@homelab>  Wed, 11 Nov 2026 22:25:00 -0600
+
 homelab-api (0.1.70) unstable; urgency=medium
 
   * Release v0.1.70
