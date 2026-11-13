@@ -1,3 +1,14 @@
+homelab-prometheus (0.10.2) unstable; urgency=medium
+
+  * dns-ipv6 rules (post-cutover #64, closed 2026-11-12): DnsIPv6FrontendIdle
+    stays; ResolverIPv6Idle dropped before it was ever deployed. ns03 stays
+    IPv4-only by decision (its clients reach it over IPv4 and get AAAA
+    answers through it), so that rule would have fired forever. The edges'
+    IPv6 listeners get about one query in nine without any registry glue,
+    so the frontend rule is meaningful from day one.
+
+ -- Gardner <gardner@homelab>  Thu, 12 Nov 2026 21:30:00 -0600
+
 homelab-prometheus (0.10.1) unstable; urgency=medium
 
   * Rules for DNS over IPv6 (post-cutover #64): DnsIPv6FrontendIdle (an

@@ -1,8 +1,11 @@
 # DNS over IPv6 (post-cutover #64). The IPv6 path has no probe of its own:
 # the monitoring host sits on a VLAN without IPv6, so it cannot ask the
 # nameservers over IPv6. What it CAN see is the symptom: dnsdist counts
-# queries per listener, and once the AAAA records and the registry glue are
-# out, the world's resolvers keep both listeners busy around the clock. An
+# queries per listener, and since the AAAA records went out (2026-11-12) the
+# world's resolvers keep both listeners busy around the clock: they learn
+# ns1/ns2's AAAA from the zone after their first IPv4 contact, no registry
+# IPv6 glue needed (there is none, by decision; Namecheap's API is IPv4-only).
+# About one query in nine arrived over IPv6 the first evening. An
 # edge whose IPv4 listener is busy while its IPv6 listener is silent has
 # lost its IPv6 one way or another: the SLAAC address is gone (RA stopped),
 # the house prefix changed and the published addresses are stale (run
@@ -31,22 +34,5 @@ groups:
             (Reflexive ACL must stay Off). dnsdist itself is fine: its IPv4
             listener is busy.
 
-      # ns03, once pfsense hands VLAN 60 clients the resolver's IPv6 (RDNSS):
-      # phones on the house Wi-Fi ask over IPv6 all day. Silence there while
-      # IPv4 questions keep coming means the RDNSS points at a stale address
-      # (prefix change) or the recursor lost its :: listener.
-      - alert: ResolverIPv6Idle
-        expr: >-
-          increase(pdns_recursor_ipv6_questions{job="pdns-recursor"}[6h]) == 0
-          and on (instance)
-          increase(pdns_recursor_questions{job="pdns-recursor"}[6h]) > 1000
-        for: 1h
-        labels:
-          severity: warning
-        annotations:
-          summary: "ns03 has answered no query over IPv6 in 6 hours"
-          description: >-
-            Either VLAN 60's router advertisement no longer carries ns03's
-            current IPv6 (pfsense > Services > Router Advertisement, DNS
-            servers) or the recursor is not listening on :: (ss -lnup on
-            ns03; dns-ipv6-orchestrate.sh --verify).
+# No rule for ns03: it stays IPv4-only by decision (2026-11-12). Its clients
+# reach it over IPv4 and get AAAA answers through it just the same.

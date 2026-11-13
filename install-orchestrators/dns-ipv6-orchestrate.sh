@@ -1,8 +1,17 @@
 #!/bin/bash
 # ============================================================================
-# Post-cutover #64 -- DNS over IPv6: the public nameservers answer on IPv6,
-# the zones publish AAAA (ns1/ns2 glue names + the web names), the registry
-# gets IPv6 glue, ns03 resolves over IPv6. RUN ON THE ADMIN WORKSTATION.
+# Post-cutover #64 -- DNS over IPv6: the public nameservers answer on IPv6 and
+# the zones publish AAAA (ns1/ns2 + the web names). RUN ON THE ADMIN WORKSTATION.
+#
+# NOT DONE, BY DECISION (Gardner, 2026-11-12, at close): registry IPv6 glue
+# and ns03 over IPv6. Namecheap's API takes IPv4 glue only ("Parameter IP is
+# TooLong"); a support ticket could add AAAA glue, but nothing needs it:
+# resolvers learn ns1/ns2's AAAA from the zone after their first IPv4 contact
+# (one query in nine arrived over IPv6 the first evening, and dig -6 +trace
+# from offsite reaches our SOA over IPv6 only). ns03's clients reach it over
+# IPv4 and get AAAA answers through it; IPv6 there would only serve an
+# IPv6-only device or an IPv6-only upstream nameserver, and neither exists.
+# --glue and --ns03 stay here, written and preflighted, for the day that changes.
 #
 #   ./dns-ipv6-orchestrate.sh --preflight             read-only: is everything in place to start
 #   ./dns-ipv6-orchestrate.sh --edges [NN...]         IPv6 on the edges (00 01 02), one at a time, each verified
@@ -19,11 +28,11 @@
 # 2600:1702:85f0:4340::/60); nothing here hard-codes it. Each node takes a
 # SLAAC address from its segment's router advertisement with a FIXED token:
 # the node's IPv4 spelled as four groups. So edge 00 (23.116.91.66) is
-# <prefix>:23:116:91:66, ns03 on VLAN 60 (10.60.0.140) is <prefix>:10:60:0:140.
+# <prefix>:23:116:91:66 (ns03 on VLAN 60, 10.60.0.140, would be <prefix>:10:60:0:140).
 # A prefix change moves only the first half of every address, by itself; what
-# has to be re-published afterwards (zone AAAA, the Lua maps, ns03's allow-from,
-# registry glue) is exactly what --prefix-changed does. The listeners never
-# name an address: dnsdist binds [::]:53, the recursor binds ::.
+# has to be re-published afterwards (zone AAAA, the Lua maps, bad-ips' never-block;
+# ns03's allow-from and the registry glue only if those were ever done) is what
+# --prefix-changed does. The listener never names an address: dnsdist binds [::]:53.
 #
 # WHAT STAYS IPv4. mail.* (haproxy binds *:port = IPv4 only; outbound mail
 # reputation) and the fleet's internal planes (no /64 there). PowerDNS on
@@ -684,7 +693,8 @@ verify(){
   glue_check
   web_check
   step "verify: ns03"
-  if rssh "$NS03" 'test -f /etc/systemd/network/eth5.network.d/20-homelab-ipv6.conf'; then ns03_check; else warn "ns03 not done yet (--ns03)"; fi
+  if rssh "$NS03" 'test -f /etc/systemd/network/eth5.network.d/20-homelab-ipv6.conf'; then ns03_check
+  else echo "       --   ns03 is IPv4-only by decision (2026-11-12): its clients reach it over IPv4 and get AAAA answers through it; --ns03 exists if that ever changes"; fi
   step "verify: IPv6 queries are arriving at dnsdist (Prometheus on $METRICS, last hour)"
   x=$(rssh "$METRICS" "curl -s 'http://127.0.0.1:9090/api/v1/query' --data-urlencode 'query=sum by (host) (increase(dnsdist_frontend_queries{frontend=~\"\\\\[.*\\\\]:53\"}[1h]))'" \
        | python3 -c 'import sys,json; d=json.load(sys.stdin); [print(r["metric"].get("host","?"), int(float(r["value"][1]))) for r in d["data"]["result"]]' 2>/dev/null)
@@ -707,14 +717,13 @@ prefix_changed(){
   zones_apply
   step "[prefix] the Lua AAAA maps"
   "$LUA" --apply || bad "dns-lua-orchestrate.sh --apply reported a problem"
-  step "[prefix] ns03 allow-from (and its own address follows the RA by itself)"
-  ns03_apply
+  step "[prefix] ns03 allow-from (only if ns03 was ever put on IPv6; its own address follows the RA by itself)"
+  if rssh "$NS03" 'test -f /etc/systemd/network/eth5.network.d/20-homelab-ipv6.conf'; then ns03_apply; else echo "       --   ns03 is IPv4-only by decision (2026-11-12): nothing to do"; fi
   step "[prefix] what cannot be done from here"
-  echo "  1. Registry glue: for every domain, namecheap domains.ns.update <domain> ns1.<domain> <old v6> <new v6> (and ns2),"
-  echo "     if the API took IPv6 at --glue; otherwise the ticket below. The old addresses are in git history of $IPV6_FILE."
-  echo "  2. bad-ips never-block: NEVER_BLOCK in github-repos/homelab/badips-site.conf carries the house /60; put the new one"
+  echo "  1. bad-ips never-block: NEVER_BLOCK in github-repos/homelab/badips-site.conf carries the house /60; put the new one"
   echo "     there and run ./badips-orchestrate.sh --fleet-conf (then ... --fleet-conf jumper)."
-  glue_ticket
+  echo "  2. Registry IPv6 glue: none by decision (2026-11-12), so nothing there is stale. Had Namecheap support ever added"
+  echo "     some, it would take the ticket again (the API is IPv4-only); --verify's glue step flags a stale AAAA glue."
 }
 
 # ------------------------------------------------------------------- run --

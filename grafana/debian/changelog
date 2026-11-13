@@ -1,3 +1,12 @@
+homelab-grafana (0.7.5) unstable; urgency=medium
+
+  * Release v0.7.5
+  * Resolver dashboard: the IPv6 panel from 0.7.4 removed. ns03 stays
+    IPv4-only by decision (post-cutover #64, closed 2026-11-12), so it would
+    have read zero forever. The DNS dashboard's per-listener panel stays.
+
+ -- Gardner <gardner@homelab>  Thu, 12 Nov 2026 21:30:00 -0600
+
 homelab-grafana (0.7.4) unstable; urgency=medium
 
   * Release v0.7.4
