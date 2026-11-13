@@ -451,21 +451,35 @@ glue_apply(){
 }
 
 glue_check(){
-  local v66 v68 d g f=0 n=0
+  # The IPv4 glue must be right (FAIL otherwise). IPv6 glue is optional:
+  # Namecheap's API takes IPv4 only, so it exists only if a support ticket
+  # added it. Without it resolvers still reach the IPv6 listeners -- they learn
+  # ns1/ns2's AAAA from the zone after the first IPv4 contact (on 2026-11-12,
+  # with no IPv6 glue anywhere, about one query in nine arrived over IPv6).
+  # Only an IPv6-only resolver needs the glue. A STALE AAAA glue (an address
+  # that is not the live one) is a FAIL: that is the prefix-change case.
+  local v66 v68 d g f=0 n=0 n6=0
   v66=$(v6_of "$NS1_V4"); v68=$(v6_of "$NS2_V4")
-  step "[glue] the registries' glue, asked from offsite (A and AAAA for ns1/ns2 of every domain)"
+  step "[glue] the registries' glue, asked from offsite (A for ns1/ns2 of every domain; AAAA where support added it)"
   for d in $(zones); do
     g=$(registry_glue "$d") || { warn "$d: no answer from its TLD server"; continue; }
     printf '%s\n' "$g" | grep -q "^ns1.$d A " || { echo "       --   $d: no in-bailiwick glue (not ours to publish)"; continue; }
     n=$((n+1))
-    if printf '%s\n' "$g" | grep -q "^ns1.$d AAAA $v66" && printf '%s\n' "$g" | grep -q "^ns2.$d AAAA $v68" \
-       && printf '%s\n' "$g" | grep -q "^ns1.$d A $NS1_V4" && printf '%s\n' "$g" | grep -q "^ns2.$d A $NS2_V4"; then
-      echo "       ok   $d: A + AAAA glue for ns1 and ns2"
+    if ! printf '%s\n' "$g" | grep -q "^ns1.$d A $NS1_V4" || ! printf '%s\n' "$g" | grep -q "^ns2.$d A $NS2_V4"; then
+      bad "$d IPv4 glue: $(printf '%s\n' "$g" | paste -sd';' -)"; f=1
+    elif printf '%s\n' "$g" | grep -q "^ns1.$d AAAA $v66" && printf '%s\n' "$g" | grep -q "^ns2.$d AAAA $v68"; then
+      echo "       ok   $d: A + AAAA glue for ns1 and ns2"; n6=$((n6+1))
+    elif printf '%s\n' "$g" | grep -q " AAAA "; then
+      bad "$d AAAA glue is stale: $(printf '%s\n' "$g" | grep ' AAAA ' | paste -sd';' -) (live: $v66 / $v68; --prefix-changed, then the ticket)"; f=1
     else
-      bad "$d glue: $(printf '%s\n' "$g" | paste -sd';' -)"; f=1
+      echo "       --   $d: IPv4 glue only (no IPv6 glue at the registry)"
     fi
   done
-  [ "$f" = 0 ] && [ "$n" -gt 0 ] && ok "$n domain(s) carry full dual-stack glue"
+  if [ "$f" = 0 ] && [ "$n" -gt 0 ]; then
+    if [ "$n6" = "$n" ]; then ok "$n domain(s) carry full dual-stack glue"
+    elif [ "$n6" = 0 ]; then ok "IPv4 glue right for all $n domain(s); none has IPv6 glue (optional: Namecheap support ticket; the IPv6 listeners get queries without it, see the dnsdist counters below)"
+    else warn "IPv4 glue right for all $n domain(s); $n6 of them have IPv6 glue"; fi
+  fi
   step "[glue] IPv6-only resolution chain from offsite: dig -6 +trace $PROBE_NAME SOA"
   offsite "dig -6 +trace +time=5 +tries=1 $PROBE_NAME SOA 2>&1" | grep -E "^(;; Received .* from .*#53\(|$PROBE_NAME\.\s+[0-9]+\s+IN\s+SOA)" | tail -3 | sed 's/^/       /'
   offsite "dig -6 +trace +time=5 +tries=1 $PROBE_NAME SOA 2>&1" | grep -qE "^$PROBE_NAME\.\s+[0-9]+\s+IN\s+SOA" && ok "the trace reaches our SOA over IPv6 only" || warn "the IPv6-only trace did not end at our SOA (glue not yet visible?)"
