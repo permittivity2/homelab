@@ -112,10 +112,12 @@ sub startup ($self) {
         signout_url => '/logout',
         ($config->{web_theme}{base_url} ? (theme_base => $config->{web_theme}{base_url}) : ()),
         user_email  => sub ($c) { $c->stash('email') // '' },
+        settings_url => '/settings',     # the dropdown's Settings line (#77; webtheme >= 0.1.3)
         menu_links  => [
             { href => $self->account_manage_url, label => 'Manage your account' },
             { href => 'https://mail.mailmasker.org/', label => 'Email' },
             { href => 'https://search.mailmasker.org/', label => 'Search' },
+            { href => 'https://calendar.mailmasker.org/', label => 'Calendar' },
         ],
     });
 
@@ -206,6 +208,9 @@ sub startup ($self) {
     $r->post('/folders/:id/share')        ->to('drive#create_share', target => 'folder');
     $r->post('/api/v1/folders/:id/share') ->to('drive#create_share', target => 'folder');
     $r->get('/shares')                    ->to('drive#list_shares');
+    # The account dropdown's Settings line (post-cutover #77): drive's own
+    # display choices, kept in the browser; account-wide ones are myaccount's.
+    $r->get('/settings')                  ->to('drive#settings');
     $r->get('/api/v1/shares')             ->to('drive#api_list_shares');
     $r->post('/shares/:id/revoke')        ->to('drive#revoke_share');
     $r->post('/api/v1/shares/:id/revoke') ->to('drive#revoke_share');
@@ -2304,6 +2309,17 @@ sub _shares_for ($c, $email) {
            ORDER BY s.created_at DESC}, $email)->hashes->to_array;
     $_->{url} = _share_url($c, $_->{token}) for @$mine, @$with_me;
     return { shared_by_me => $mine, shared_with_me => $with_me };
+}
+
+# GET /settings -- drive's display choices (#77). Drive stores nothing per
+# user on the server: the size unit and the slideshow speed live in the
+# browser (localStorage since 0.1.69; a per-tab sessionStorage before), so
+# this page is a signed-in page with its controls in the script.
+sub settings ($c) {
+    my $email = _current_email($c);
+    return $c->redirect_to('/login') unless $email;
+    return $c->render(template => 'settings', email => $email,
+        account_manage_url => $c->app->account_manage_url);
 }
 
 sub list_shares ($c) {

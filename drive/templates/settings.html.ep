@@ -1,0 +1,60 @@
+% layout 'default';
+% title 'Settings - Drive';
+%# Drive's own settings (post-cutover #77), reached from the account dropdown.
+%# Both choices live in this browser (localStorage) and apply to every tab;
+%# nothing here is sent to the server. Account-wide settings are myaccount's.
+<nav class="breadcrumb"><a href="/">Home</a><span class="sep">/</span><span>Settings</span></nav>
+<div class="layout"><main style="min-width:0;">
+  <div class="stack" style="max-width: 44rem">
+    <h1 style="font-size: var(--app-xl)">Settings</h1>
+
+    <section class="panel">
+      <div class="panel__head"><h2 class="panel__title">Display</h2></div>
+      <div class="panel__body stack">
+        <div>
+          <p class="form-label">File sizes</p>
+          <label class="check"><input type="radio" name="size-unit" value="human"> <span>Rounded (KB, MB, GB)</span></label><br>
+          <label class="check"><input type="radio" name="size-unit" value="bytes"> <span>Exact bytes</span></label>
+        </div>
+        <div>
+          <label class="form-label" for="slideshow-seconds">Slideshow: seconds per picture</label>
+          <select class="form-select" id="slideshow-seconds" style="width: auto">
+            <option value="2">2</option><option value="4">4</option><option value="10">10</option>
+          </select>
+        </div>
+        <p class="text-muted" style="font-size: var(--app-sm)">Remembered in this browser. Times on files follow the server's clock (America/Chicago).</p>
+        <p id="settings-saved" class="text-muted" style="font-size: var(--app-sm)" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head"><h2 class="panel__title">Your account</h2></div>
+      <div class="panel__body stack">
+        <p class="text-muted">Time zone, recovery address, password, the mail and calendar switches: in <a href="<%= $account_manage_url %>">My Account</a>.</p>
+      </div>
+    </section>
+
+    <div><a class="btn" href="/">Back to Drive</a></div>
+  </div>
+</main></div>
+<script>
+(function () {
+  var UNIT_KEY = 'homelab-drive-size-unit', SLIDE_KEY = 'homelab-drive-slideshow-seconds';
+  var saved = document.getElementById('settings-saved');
+  function say(msg) { saved.textContent = msg; setTimeout(function () { saved.textContent = ''; }, 2500); }
+  var unit = 'human';
+  try { unit = (localStorage.getItem(UNIT_KEY) || sessionStorage.getItem(UNIT_KEY)) === 'bytes' ? 'bytes' : 'human'; } catch (e) {}
+  document.querySelectorAll('input[name=size-unit]').forEach(function (r) {
+    r.checked = (r.value === unit);
+    r.addEventListener('change', function () {
+      try { localStorage.setItem(UNIT_KEY, this.value); sessionStorage.setItem(UNIT_KEY, this.value); } catch (e) {}
+      say('Saved.');
+    });
+  });
+  var sel = document.getElementById('slideshow-seconds');
+  var s = 4;
+  try { var v = +(localStorage.getItem(SLIDE_KEY) || 0); if ([2, 4, 10].indexOf(v) >= 0) s = v; } catch (e) {}
+  sel.value = String(s);
+  sel.addEventListener('change', function () { try { localStorage.setItem(SLIDE_KEY, this.value); } catch (e) {} say('Saved.'); });
+})();
+</script>

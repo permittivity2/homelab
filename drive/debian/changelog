@@ -1,3 +1,12 @@
+homelab-drive (0.1.69) unstable; urgency=medium
+
+  * /settings (post-cutover #77): the account dropdown's Settings line leads
+    to drive's display choices -- file sizes rounded or exact, seconds per
+    slideshow picture -- now remembered across tabs (localStorage) instead of
+    per tab. The dropdown lists Calendar (#74).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 18:40:00 -0600
+
 homelab-drive (0.1.68) unstable; urgency=medium
 
   * Share emails reach people again (post-cutover item 52): the check for

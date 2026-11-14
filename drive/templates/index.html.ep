@@ -947,13 +947,13 @@
   // Anything other than the literal stored string 'bytes' (including
   // unset, i.e. first visit this session) resolves to the default,
   // Human Readable.
-  var unit = sessionStorage.getItem(STORAGE_KEY) === 'bytes' ? 'bytes' : 'human';
+  var unit = (localStorage.getItem(STORAGE_KEY) || sessionStorage.getItem(STORAGE_KEY)) === 'bytes' ? 'bytes' : 'human';
   toggle.checked = (unit === 'human');
   applyUnit(unit);
 
   toggle.addEventListener('change', function () {
     var newUnit = toggle.checked ? 'human' : 'bytes';
-    sessionStorage.setItem(STORAGE_KEY, newUnit);
+    localStorage.setItem(STORAGE_KEY, newUnit); sessionStorage.setItem(STORAGE_KEY, newUnit);
     applyUnit(newUnit);
   });
 })();
@@ -980,7 +980,7 @@ var Lightbox = (function () {
   var _images  = [];   // [{id, name}], rebuilt fresh every time the lightbox opens
   var _index   = -1;
   var _timer   = null; // slideshow setInterval handle
-  var _seconds = 4;    // current interval; 0 = off
+  var _seconds = (function () { try { var v = +(localStorage.getItem('homelab-drive-slideshow-seconds') || 0); return [2, 4, 10].indexOf(v) >= 0 ? v : 4; } catch (e) { return 4; } })();    // current interval; 0 = off
 
   function _currentFolderImages() {
     return Array.prototype.slice.call(document.querySelectorAll('#files-table tbody tr'))

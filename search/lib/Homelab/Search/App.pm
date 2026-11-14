@@ -63,9 +63,11 @@ sub startup ($self) {
         # fell back to unstyled browser defaults. A config key that merely
         # restates a default only exists to drift away from it.
         user_email  => sub ($c) { $c->stash('email') // '' },
+        settings_url => '/settings',     # the dropdown's Settings line (#77; webtheme >= 0.1.3)
         menu_links  => [
             { href => 'https://mail.mailmasker.org/',      label => 'Email' },
             { href => 'https://drive.mailmasker.org/',      label => 'Drive' },
+            { href => 'https://calendar.mailmasker.org/',   label => 'Calendar' },
             { href => 'https://myaccount.mailmasker.org/',  label => 'My Account' },
         ],
     });
@@ -292,6 +294,7 @@ sub startup ($self) {
 
     my $r = $self->routes;
     $r->get('/')                ->to('search#index');
+    $r->get('/settings')        ->to('search#settings');     # the dropdown's Settings line (#77)
     $r->get('/login')           ->to('search#login_form');
     $r->get('/oauth/callback')  ->to('search#oauth_callback');
     $r->post('/logout')         ->to('search#logout');
@@ -612,6 +615,21 @@ sub index ($c) {
 # toggle is a UI nicety; the gate that matters is that answer() re-checks
 # consent itself, so calling /?ai=1 directly with a valid session and no
 # consent gets `not_consented` and nothing else.
+# GET /settings -- search's own settings (#77): the AI search switch with its
+# notice and when it was agreed to. Search stores nothing else per user.
+sub settings ($c) {
+    my ($email, $acct) = _scope($c);
+    return $c->redirect_to('/login') unless $email;
+    my $ai = _ai_state($c, $acct);
+    my $st = ($acct && $ai->{available})
+        ? eval { Homelab::Search::AI::Consent::state_for($c->app->query, $acct->{account_id}) } : undef;
+    return $c->render(template => 'settings', email => $email, ai_state => $ai,
+        has_account => ($acct ? 1 : 0), consent_at => ($st ? $st->{at} : undef),
+        notice_sha256 => Homelab::Search::AI::Consent::notice_sha256(),
+        saved => (($c->param('saved') // '') =~ /\A(on|off)\z/ ? $1 : ''),
+        stale => (($c->param('ai_notice') // '') eq 'stale' ? 1 : 0));
+}
+
 sub ai_consent ($c) {
     my ($email, $acct) = _scope($c);
     return $c->redirect_to('/login') unless $email;
@@ -620,6 +638,8 @@ sub ai_consent ($c) {
     # Turning something privacy-affecting OFF is never harder than turning
     # it on: no confirmation, no second step, same endpoint.
     my $granted = $c->param('granted') ? 1 : 0;
+    # Posted from /settings (#77): go back there, not to a search.
+    my $from_settings = ($c->param('return') // '') eq 'settings';
 
     # The hash recorded is of the notice THIS PAGE rendered. A client that
     # posts a stale hash agreed to wording we are no longer showing, so it
@@ -629,12 +649,13 @@ sub ai_consent ($c) {
         my $want = Homelab::Search::AI::Consent::notice_sha256();
         if (lc $seen ne $want) {
             $c->app->log->warn("ai: consent posted for stale notice by $email");
-            return $c->redirect_to('/?ai_notice=stale');
+            return $c->redirect_to($from_settings ? '/settings?ai_notice=stale' : '/?ai_notice=stale');
         }
     }
 
     Homelab::Search::AI::Consent::record(
         $c->app->query, $acct->{account_id}, $granted, $c->req->headers->user_agent);
+    return $c->redirect_to('/settings?saved=' . ($granted ? 'on' : 'off')) if $from_settings;
 
     my $q = $c->param('q') // '';
     return $c->redirect_to($granted && length $q

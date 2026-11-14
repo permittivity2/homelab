@@ -1,0 +1,59 @@
+% layout 'default';
+% title 'Settings - Search';
+%# Search's own settings (post-cutover #77), from the account dropdown. The
+%# one thing search keeps per account is the AI-search agreement (an
+%# append-only record of WHICH WORDS were agreed to, see AI/Consent.pm); this
+%# page shows it, lets you agree, and lets you turn it off without first
+%# running an AI search (until now "turn off" sat only under an AI answer).
+%# Everything else about a search (sources, shared items, how many results)
+%# is chosen on the search page itself, per search.
+<div class="stack" style="max-width: 44rem; margin: 0 auto">
+  <h1 style="font-size: var(--app-xl)">Settings</h1>
+
+  % if ($saved eq 'on') {
+  <p class="banner banner--ok"><span>AI search is on. The AI Search button on the search page now runs a search.</span></p>
+  % } elsif ($saved eq 'off') {
+  <p class="banner banner--ok"><span>AI search is off. Nothing more is sent to Anthropic from your searches.</span></p>
+  % }
+  % if ($stale) {
+  <p class="banner banner--warn"><span>The notice changed while you were reading it, so your agreement was not recorded. Read the current words below and try again.</span></p>
+  % }
+
+  <section class="panel">
+    <div class="panel__head"><h2 class="panel__title">AI search</h2></div>
+    <div class="panel__body stack">
+      % if (!$ai_state->{available}) {
+      <p class="text-muted">Not available on this search just now.</p>
+      % } elsif (!$has_account) {
+      <p class="text-muted">Your mailbox is not indexed yet; AI search becomes available once it is.</p>
+      % } else {
+      %   if ($ai_state->{consented}) {
+      <p><strong>On.</strong> You agreed to the notice below<%= $consent_at ? ' on ' . substr($consent_at, 0, 16) : '' %>.</p>
+      <form method="post" action="/ai/consent">
+        <input type="hidden" name="return" value="settings">
+        <input type="hidden" name="granted" value="0">
+        <button type="submit" class="btn">Turn AI search off</button>
+      </form>
+      %   } else {
+      <p><strong>Off.</strong> Read the notice, then turn it on if you agree.</p>
+      <form method="post" action="/ai/consent">
+        <input type="hidden" name="return" value="settings">
+        <input type="hidden" name="notice_sha256" value="<%= $notice_sha256 %>">
+        <input type="hidden" name="granted" value="1">
+        <button type="submit" class="btn btn-primary">I agree, turn AI search on</button>
+      </form>
+      %   }
+      <pre class="panel" style="white-space: pre-wrap; padding: var(--space-4); font-family: var(--font-primary); font-size: var(--app-sm); color: var(--text-secondary)"><%= $ai_state->{notice} %></pre>
+      % }
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel__head"><h2 class="panel__title">Your account</h2></div>
+    <div class="panel__body stack">
+      <p class="text-muted">Time zone, recovery address, password, the mail and calendar switches: in <a href="https://myaccount.mailmasker.org/">My Account</a>.</p>
+    </div>
+  </section>
+
+  <div><a class="btn" href="/">Back to Search</a></div>
+</div>
