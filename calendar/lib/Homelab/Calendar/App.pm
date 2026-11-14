@@ -9,6 +9,7 @@ use Homelab::Common::Health qw(mount_health_route);
 use Homelab::Common::Registry qw(register_recurring);
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::Calendar::Model;
+use Homelab::Calendar::AI;
 use Homelab::Calendar::Recurrence qw(validate_zone);
 
 has 'pg';
@@ -18,6 +19,7 @@ has 'sso';
 has 'public_base_url';
 has 'default_zone';
 has 'mailer';
+has 'ai';
 
 # calendar.<domain>: calendars, events that repeat, sharing, an ICS feed.
 # Same skeleton as homelab-block-link: sign-in through homelab-sso, the token
@@ -43,11 +45,21 @@ sub startup ($self) {
 
     my $theme = $config->{web_theme} // {};
     $self->plugin('Homelab::WebTheme' => {
-        app_name    => 'Calendar',
-        signout_url => '/logout',
-        user_email  => sub ($c) { $c->session_email },
+        app_name     => 'Calendar',
+        signout_url  => '/logout',
+        settings_url => '/settings',     # the dropdown's Settings line (#77; webtheme >= 0.1.3)
+        user_email   => sub ($c) { $c->session_email },
         ($theme->{base_url} ? (theme_base => $theme->{base_url}) : ()),
     });
+
+    # The AI proposal (#74 phase 4) goes through the fleet's AI service
+    # (homelab-ai, #76); this app never holds an Anthropic key. Unconfigured =
+    # the button is not offered and the plain parse is all there is.
+    my $aic = $config->{ai} // {};
+    $self->ai(Homelab::Calendar::AI->new(
+        service_url => ($aic->{service_url} // ''), service_token => ($aic->{service_token} // ''),
+        model => ($aic->{model} // 'claude-haiku-5-5'), max_tokens => ($aic->{max_tokens} // 1024), log => $self->log,
+    ));
 
     if (my $sso = $config->{sso}) {
         my @missing = grep { !$sso->{$_} } qw(base_url client_id client_secret redirect_uri);
@@ -110,6 +122,19 @@ sub startup ($self) {
         return $email;
     });
 
+    # The gateway-fronted routes (/internal/v1/calendar/*, reached through
+    # homelab-api's /api/v1/calendar/* by myaccount): a Bearer JWT, introspected.
+    # Same shape and name as homelab-invite's and block-link's helper.
+    $self->helper(authenticated_email_any => sub ($c) {
+        my ($jwt) = ($c->req->headers->authorization // '') =~ /^Bearer\s+(.+)$/;
+        unless ($jwt) { $c->render(json => { error => 'not logged in' }, status => 401); return undef }
+        my $result = introspect($jwt, api_base => $self->api_base);
+        unless ($result && $result->{email}) { $c->render(json => { error => 'not logged in' }, status => 401); return undef }
+        $c->stash(current_jti => $result->{jti});
+        $c->stash(current_roles => $result->{roles} // []);
+        return lc $result->{email};
+    });
+
     # Pages: send a visitor to sign in; JSON routes: 401. Both return the
     # address or an empty string after rendering.
     $self->helper(require_login => sub ($c) {
@@ -152,9 +177,20 @@ sub startup ($self) {
 
     # The app itself.
     $r->get('/')                  ->to('auth#index');
+    $r->get('/settings')          ->to('auth#settings');
+    $r->get('/m/:token' => $tok)  ->to('auth#from_mail');      # the link in an email (phase 3)
     $r->get('/login')             ->to('auth#login');
     $r->get('/oauth/callback')    ->to('auth#oauth_callback');
     $r->post('/logout')           ->to('auth#logout');
+
+    # Per-account switches: the session form for this app's own pages, and
+    # the Bearer form homelab-api's gateway fronts for myaccount.
+    $r->get('/api/account')       ->to('api#account');
+    $r->put('/api/account')       ->to('api#save_account');
+    $r->get('/api/mail-links/:token' => $tok)          ->to('api#mail_link');
+    $r->post('/api/mail-links/:token/propose' => $tok) ->to('api#propose');
+    $r->get('/internal/v1/calendar/account')  ->to('api#internal_account_show');
+    $r->put('/internal/v1/calendar/account')  ->to('api#internal_account_set');
 
     # JSON, same-origin, signed in.
     $r->get('/api/calendars')                 ->to('api#calendars');

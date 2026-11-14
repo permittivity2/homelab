@@ -30,9 +30,57 @@ sub index ($c) {
     );
 }
 
+# GET /settings -- time zone and display, the mail-link switch, the AI switch
+# with its notice. A page, not a pop-up (#77).
+sub settings ($c) {
+    my $me = $c->require_login or return;
+    my $model = $c->app->model;
+    require DateTime::TimeZone;
+    require Homelab::Calendar::Consent;
+    my $prefs = $model->prefs($me);
+    return $c->render(
+        template => 'settings',
+        prefs    => $prefs,
+        zone     => $c->viewer_zone($prefs),
+        zones    => [ grep { m{/} || $_ eq 'UTC' } DateTime::TimeZone->all_names ],
+        account  => $model->account_settings($me),
+        consent  => Homelab::Calendar::Consent::state_for($model->db, $me),
+        notice   => Homelab::Calendar::Consent::notice_body(),
+        notice_sha => Homelab::Calendar::Consent::notice_sha256(),
+        ai_available => $c->app->ai->configured,
+        account_zone => $c->stash('calendar.account_zone'),
+        csrf     => $c->csrf_token,
+    );
+}
+
+# GET /m/:token -- the "Add to calendar" link from an email: the calendar page
+# with the editor open and pre-filled from the message. Signed in as one of
+# the message's consenting recipients; nobody else learns the link is valid.
+sub from_mail ($c) {
+    my $me = $c->require_login or return;
+    my $model = $c->app->model;
+    my $link = $model->mail_link_for($c->stash('token'), $me);
+    unless ($link) {
+        return $c->render(template => 'notice', status => 404, heading => 'This link is not valid',
+            body => 'It may have expired (links from email last 30 days), or it belongs to another account.');
+    }
+    my $prefs = $model->prefs($me);
+    my $zone  = $c->viewer_zone($prefs);
+    $model->ensure_default_calendar($me, $zone);
+    return $c->render(
+        template => 'index',
+        prefs    => $prefs,
+        boot     => encode_json({
+            me => $me, prefs => $prefs, account_zone => $c->stash('calendar.account_zone'),
+            default_zone => $c->app->default_zone, public_base => $c->app->public_base_url, csrf => $c->csrf_token,
+            mail_link => Homelab::Calendar::App::Controller::Api::_mail_link_json($c, $link, $me, $zone),
+        }),
+    );
+}
+
 # Where a sign-in may return to: a path on this site, or the front page.
 sub _safe_next ($next) {
-    return (defined $next && $next =~ m{\A/(?:[A-Za-z0-9_\-/.]*)(?:\?[A-Za-z0-9_\-=&%.]*)?\z} && $next !~ m{\A//}) ? $next : '/';
+    return (defined $next && $next =~ m{\A/(?:[A-Za-z0-9_\-/.]*)(?:\?[A-Za-z0-9_\-=&%.]*)?\z} && $next !~ m{\A//} && $next !~ m{\A/api/}) ? $next : '/';
 }
 
 sub login ($c) {

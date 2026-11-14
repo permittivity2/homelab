@@ -1,6 +1,7 @@
 package Homelab::Calendar::Model;
 use Mojo::Base -base, -signatures;
 use DateTime;
+use Mojo::JSON ();
 use Homelab::Calendar::Recurrence qw(
     validate_zone parse_wall wall_string occurrences recurrence_bound build_rrule parse_rrule
     rrule_until_before rrule_strip_end occurrences_before shift_rrule
@@ -655,6 +656,49 @@ sub share_by_token ($self, $token) {
 
 sub note_share_access ($self, $id) {
     eval { $self->db->query('UPDATE calendar.shares SET accessed_at = NOW(), access_count = access_count + 1 WHERE id = ?', $id) };
+    return 1;
+}
+
+# --------------------------------------------------- account settings, mail links
+
+sub account_settings ($self, $email) {
+    my $row = $self->db->query('SELECT * FROM calendar.account_settings WHERE user_email = ?', _norm($email))->hash // {};
+    return {
+        mail_links_enabled => $row->{mail_links_enabled} ? 1 : 0, mail_links_enabled_at => $row->{mail_links_enabled_at},
+        ai_enabled => $row->{ai_enabled} ? 1 : 0, ai_consent_sha256 => $row->{ai_consent_sha256}, ai_consent_at => $row->{ai_consent_at},
+    };
+}
+
+sub set_mail_links ($self, $email, $on) {
+    $self->db->query(
+        q{INSERT INTO calendar.account_settings (user_email, mail_links_enabled, mail_links_enabled_at)
+          VALUES (?, ?, CASE WHEN ?::bool THEN NOW() ELSE NULL END)
+          ON CONFLICT (user_email) DO UPDATE SET mail_links_enabled = EXCLUDED.mail_links_enabled,
+              mail_links_enabled_at = CASE WHEN EXCLUDED.mail_links_enabled THEN NOW() ELSE NULL END, updated_at = NOW()},
+        _norm($email), ($on ? 1 : 0), ($on ? 1 : 0),
+    );
+    return 1;
+}
+
+# The row behind a link in an email, if it still exists and has not expired.
+# Expired rows are swept here, cheaply, so nothing else has to.
+sub mail_link ($self, $token) {
+    return undef unless defined $token && $token =~ /\A[0-9a-f]{64}\z/;
+    eval { $self->db->query('DELETE FROM calendar.mail_links WHERE expires_at < NOW() - INTERVAL \'1 day\'') };
+    my $row = $self->db->query('SELECT * FROM calendar.mail_links WHERE token = ? AND expires_at > NOW()', $token)->hash or return undef;
+    my $accts = eval { Mojo::JSON::decode_json($row->{accounts}) } // [];
+    $row->{accounts} = [ map { lc } grep { defined && !ref } @$accts ];
+    return $row;
+}
+
+sub mail_link_for ($self, $token, $email) {
+    my $row = $self->mail_link($token) or return undef;
+    my $me = _norm($email);
+    return (grep { $_ eq $me } @{ $row->{accounts} }) ? $row : undef;
+}
+
+sub mail_link_used ($self, $id, $event_id) {
+    $self->db->query('UPDATE calendar.mail_links SET used_at = NOW(), event_id = ? WHERE id = ?', $event_id, $id);
     return 1;
 }
 

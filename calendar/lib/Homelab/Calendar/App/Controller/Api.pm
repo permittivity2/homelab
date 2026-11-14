@@ -6,6 +6,8 @@ use Homelab::Common::AuditClient qw(enqueue);
 use Homelab::Calendar::Recurrence qw(validate_zone parse_wall wall_string parse_rrule);
 use Homelab::Calendar::Access qw(may_edit may_manage);
 use Homelab::Calendar::ICS qw(masters_ics);
+use Homelab::Calendar::Consent ();
+use Homelab::Calendar::MailExtract ();
 
 # The JSON the page talks to. Every route: signed in (require_login), and for
 # a write, the page's CSRF token (csrf_ok). Permission is asked here, once
@@ -313,7 +315,132 @@ sub create_event ($c) {
     my $zone = $c->viewer_zone($m->prefs($me));
     my $event = _try($c, sub { $m->create_event($cal, $me, _event_input($c, $b, $zone)) }) or return;
     $event->{permission} = $perm;
+    # Created from a link in an email: the link remembers which event it became.
+    if (my $link = (defined $b->{mail_link_token} ? $m->mail_link_for($b->{mail_link_token}, $me) : undef)) {
+        $m->mail_link_used($link->{id}, $event->{id});
+    }
     return $c->render(json => _event_json($c, $event, $cal, $zone), status => 201);
+}
+
+# --- the account's switches (phase 3: mail links; phase 4: the AI proposal) ---
+
+sub _account_json ($c, $me) {
+    my $m = _model($c);
+    my $s = $m->account_settings($me);
+    my $consent = Homelab::Calendar::Consent::state_for($m->db, $me);
+    return {
+        mail_links_enabled => ($s->{mail_links_enabled} ? \1 : \0), mail_links_enabled_at => $s->{mail_links_enabled_at},
+        ai => {
+            available => ($c->app->ai->configured ? \1 : \0),
+            enabled   => ($consent->{enabled} ? \1 : \0),
+            consented_to_current_notice => ($consent->{current} ? \1 : \0),
+            consent_at => $s->{ai_consent_at},
+            notice     => Homelab::Calendar::Consent::notice_body(),
+            notice_sha256 => Homelab::Calendar::Consent::notice_sha256(),
+        },
+        settings_url => $c->app->public_base_url . '/settings',
+    };
+}
+
+# Body: { mail_links_enabled?: bool, ai_enabled?: bool, ai_consent_sha256?: hex }
+# Turning the AI proposal on needs the hash of the notice the page showed
+# (the current wording); anything else is refused.
+sub _apply_account ($c, $me, $b) {
+    my $m = _model($c);
+    if (exists $b->{mail_links_enabled}) {
+        $m->set_mail_links($me, $b->{mail_links_enabled} ? 1 : 0);
+        _audit($c, action => 'calendar.mail_links_set', resource_type => 'calendar_account', resource_id => $me,
+            detail => { enabled => ($b->{mail_links_enabled} ? \1 : \0) });
+    }
+    if (exists $b->{ai_enabled}) {
+        if ($b->{ai_enabled}) {
+            return 'To turn on AI proposals, agree to the current notice (reload the page and try again).'
+                unless Homelab::Calendar::Consent::record($m->db, $me, $b->{ai_consent_sha256});
+            _audit($c, action => 'calendar.ai_consent', resource_type => 'calendar_account', resource_id => $me,
+                detail => { notice_sha256 => $b->{ai_consent_sha256} });
+        }
+        else {
+            Homelab::Calendar::Consent::withdraw($m->db, $me);
+            _audit($c, action => 'calendar.ai_withdrawn', resource_type => 'calendar_account', resource_id => $me, detail => {});
+        }
+    }
+    return undef;
+}
+
+sub account ($c) {
+    my $me = $c->require_login or return;
+    return $c->render(json => _account_json($c, $me));
+}
+
+sub save_account ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    if (my $err = _apply_account($c, $me, _body($c))) { return _fail($c, 400, $err) }
+    return $c->render(json => _account_json($c, $me));
+}
+
+# The same two, Bearer-authenticated, for myaccount through homelab-api's
+# /api/v1/calendar/account gateway route.
+sub internal_account_show ($c) {
+    my $me = $c->authenticated_email_any or return;
+    $c->stash('calendar.session_email' => $me);
+    $c->stash('calendar.session_jti' => $c->stash('current_jti'));
+    return $c->render(json => _account_json($c, $me));
+}
+
+sub internal_account_set ($c) {
+    my $me = $c->authenticated_email_any or return;
+    $c->stash('calendar.session_email' => $me);
+    $c->stash('calendar.session_jti' => $c->stash('current_jti'));
+    if (my $err = _apply_account($c, $me, _body($c))) { return _fail($c, 400, $err) }
+    return $c->render(json => _account_json($c, $me));
+}
+
+# --- a link from an email ------------------------------------------------
+
+# What the page needs to open the editor pre-filled: the message's subject,
+# sender and date, a short excerpt, the plain parse, and where the AI switch
+# stands. Also used by GET /m/:token.
+sub _mail_link_json ($c, $link, $me, $zone) {
+    my $m = _model($c);
+    my $guess = Homelab::Calendar::MailExtract::guess(
+        subject => $link->{subject}, text => $link->{text_excerpt}, date_header => $link->{date_header},
+        zone => $zone, now => DateTime->now(time_zone => $zone),
+    );
+    my $consent = Homelab::Calendar::Consent::state_for($m->db, $me);
+    return {
+        token => $link->{token}, subject => $link->{subject}, from => $link->{from_addr}, date_header => $link->{date_header},
+        excerpt => substr($link->{text_excerpt} // '', 0, 2000), received_at => $link->{created_at},
+        used_event_id => ($link->{event_id} ? $link->{event_id} + 0 : undef),
+        guess => $guess, zone => $zone,
+        ai => { available => ($c->app->ai->configured ? \1 : \0), enabled => ($consent->{enabled} ? \1 : \0),
+                notice => Homelab::Calendar::Consent::notice_body(), notice_sha256 => Homelab::Calendar::Consent::notice_sha256() },
+    };
+}
+
+sub mail_link ($c) {
+    my $me = $c->require_login or return;
+    my $link = _model($c)->mail_link_for($c->stash('token'), $me) or return _fail($c, 404, 'This link is not valid, has expired, or belongs to another account.');
+    return $c->render(json => _mail_link_json($c, $link, $me, $c->viewer_zone(_model($c)->prefs($me))));
+}
+
+# POST /api/mail-links/:token/propose -- the AI proposal, only after consent
+# to the current wording and only when the person pressed the button.
+sub propose ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $m = _model($c);
+    my $link = $m->mail_link_for($c->stash('token'), $me) or return _fail($c, 404, 'This link is not valid, has expired, or belongs to another account.');
+    return _fail($c, 503, 'AI proposals are not available on this calendar.') unless $c->app->ai->configured;
+    my $consent = Homelab::Calendar::Consent::state_for($m->db, $me);
+    return _fail($c, 403, 'Turn on AI proposals in Settings (and agree to the notice) first.') unless $consent->{enabled};
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my $r = $c->app->ai->propose(
+        subject => $link->{subject}, from => $link->{from_addr}, date_header => $link->{date_header}, text => $link->{text_excerpt},
+        zone => $zone, now => DateTime->now(time_zone => $zone), consent_sha => $consent->{sha}, account_key => $me,
+    );
+    return _fail($c, 502, $r->{error} // 'The AI proposal failed.') unless $r->{ok};
+    return $c->render(json => { proposal => $r->{proposal}, model => $r->{model} });
 }
 
 sub update_event ($c) {

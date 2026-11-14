@@ -1,3 +1,21 @@
+homelab-calendar (0.1.4) unstable; urgency=medium
+
+  * /settings (post-cutover #77): time zone and display, the "calendar links
+    in your email" switch, the AI-proposal switch with its notice; the
+    sidebar dialog is gone and the account dropdown's Settings line (webtheme
+    0.1.3) leads here.
+  * Links from email (#74 phase 3): calendar.mail_links + account_settings
+    (migration 002), GET /m/:token opens the editor pre-filled by a plain
+    parse of the message (subject, sender, Date header, date/time phrases),
+    and GET/PUT /internal/v1/calendar/account (Bearer) for myaccount's switch
+    through the api gateway. The block-link milter writes the rows.
+  * "Propose with AI" (phase 4): after agreeing to the notice (hashed,
+    recorded; a changed wording asks again), one email's text goes to the
+    fleet's AI service (homelab-ai, #76) and the proposal fills the form;
+    nothing is saved until Save. Config block ai: (service_url, service_token).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 15:30:00 -0600
+
 homelab-calendar (0.1.3) unstable; urgency=medium
 
   * The page opens in the view last used in that browser (kept in

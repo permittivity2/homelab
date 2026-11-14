@@ -154,9 +154,11 @@ sub _messages ($self, $c) {
         return $c->render(json => { error => 'the AI service could not reach its upstream: ' . ($err->{message} // 'connection error'), kind => 'transport' }, status => 502);
     }
     my $body = eval { $res->json } // {};
+    $body = {} unless ref $body eq 'HASH';
+    my $uerr = $body->{error};
     $self->_record($client, $req, consent => $consent, account => $account, status => $res->code, ms => $ms,
-        usage => (ref $body eq 'HASH' ? $body->{usage} : undef), model_used => (ref $body eq 'HASH' ? $body->{model} : undef),
-        error => ($res->code >= 400 && ref $body eq 'HASH' ? ($body->{error}{message} // $body->{error}{type}) : undef));
+        usage => $body->{usage}, model_used => $body->{model},
+        error => ($res->code >= 400 ? (ref $uerr eq 'HASH' ? ($uerr->{message} // $uerr->{type}) : (defined $uerr && !ref $uerr ? $uerr : "HTTP " . $res->code)) : undef));
     # Anthropic's answer, status and bytes as they came.
     $c->res->headers->content_type($res->headers->content_type // 'application/json');
     $c->res->headers->header('X-Homelab-AI-Latency-Ms' => $ms);

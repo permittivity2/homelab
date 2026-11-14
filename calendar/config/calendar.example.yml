@@ -56,6 +56,16 @@ calendar:
 #   smtp_port: 587
 #   smtp_password: YOUR_SMTP_PASSWORD_HERE
 
+# The fleet's AI service (homelab-ai, post-cutover #76), for "Propose with AI"
+# on events made from an email (#74 phase 4). Written by
+# install-orchestrators/ai-orchestrate.sh --wire-calendar. Unset = the button
+# is not offered; the plain parse of the email still pre-fills the event.
+# ai:
+#   service_url: http://ai.example.internal:2521
+#   service_token: THIS_APP_S_CLIENT_TOKEN_FROM_THE_AI_SERVICE
+#   model: claude-haiku-5-5
+#   max_tokens: 1024
+
 # Optional: the shared mailmasker look (homelab-webtheme). Leave base_url out:
 # the package default (.../theme/v1) is right and a bare host 404s theme.css.
 # web_theme:

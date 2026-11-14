@@ -84,6 +84,12 @@ is $app->sessions->cookie_name, 'homelab-calendar', 'its own cookie name';
 
 # --- the page needs a sign-in ---
 $t->get_ok('/')->status_is(302)->header_is(Location => '/login', 'signed out: straight to sign-in');
+$t->get_ok('/settings')->status_is(302)->header_is(Location => '/login?next=%2Fsettings', 'the settings page too, and it comes back here');
+$t->get_ok('/m/' . ('d' x 64))->status_is(302, 'a link from an email: sign in first (nothing is looked up)');
+$t->get_ok('/api/account')->status_is(401, 'the account switches: 401 signed out');
+$t->get_ok('/api/mail-links/' . ('d' x 64))->status_is(401, 'a mail link\'s JSON: 401 signed out');
+$t->get_ok('/internal/v1/calendar/account')->status_is(401)->json_is('/error', 'not logged in', 'the gateway form needs a Bearer token');
+$t->put_ok('/internal/v1/calendar/account' => { Authorization => 'Bearer not-live' } => json => {})->status_is(401, '... and one the api confirms');
 $t->get_ok('/api/calendars')->status_is(401)->json_like('/error', qr/sign-in/, 'the JSON routes answer 401 signed out');
 $t->get_ok('/api/events?start=2026-11-01T00:00:00&end=2026-12-13T00:00:00&timeZone=America/Chicago')->status_is(401, '... events too');
 $t->get_ok('/health')->status_is(503, '/health without a database says unhealthy');

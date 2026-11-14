@@ -116,13 +116,17 @@ wire(){
         ver_ge "$v" "$minv" || { bad "$n has $pkg $v; needs >= $minv before it can use the service"; continue; }
         on "$n" "sudo grep -q '^ai:' $cfg" || on "$n" "printf '\nai:\n  enabled: false\n' | sudo tee -a $cfg >/dev/null"
         # service_url + service_token under ai:, replacing earlier values; the
-        # key blanked when asked (search), since the service holds it now.
-        printf '%s\n' "$tok" | onin "$n" "T=\$(cat); sudo perl -0pi -e '
-            my \$t = q{'\"\$T\"'};
-            s/^(ai:\n(?:  .*\n)*?)  service_url: .*\n//m; s/^(ai:\n(?:  .*\n)*?)  service_token: .*\n//m;
-            s/^(ai:\n)/\$1  service_url: http:\/\/$SVC:$PORT\n  service_token: \"\$t\"\n/m;
-            '"$( [ -n "$blank" ] && printf '%s' 's/^(  api_key: )\"[^\"]*\"/$1\"\"/m;' )"'
-        ' $cfg" \
+        # key blanked when asked (search), since the service holds it now. The
+        # token and the flags reach perl through the environment, never
+        # through shell quoting (the first version of this broke on exactly that).
+        local blankflag=0; [ -n "$blank" ] && blankflag=1
+        printf '%s' "$tok" | onin "$n" "T=\$(cat); sudo env T=\"\$T\" BLANK=$blankflag SVC=http://$SVC:$PORT perl -0pi -e '
+            my \$t = \$ENV{T}; my \$u = \$ENV{SVC};
+            s/^(ai:\n)((?:  .*\n)*?)  service_url: .*\n/\$1\$2/m;
+            s/^(ai:\n)((?:  .*\n)*?)  service_token: .*\n/\$1\$2/m;
+            s/^(ai:\n)/\$1  service_url: \$u\n  service_token: \"\$t\"\n/m;
+            s/^(  api_key: )\"[^\"]*\"/\$1\"\"/m if \$ENV{BLANK};
+        ' $cfg && sudo chown root:homelab $cfg && sudo chmod 640 $cfg && sudo perl -MYAML::XS -e 'my \$c = YAML::XS::LoadFile(q{$cfg}); exit(length(\$c->{ai}{service_token} // q{}) ? 0 : 1)'" \
             && ok "$n $cfg: service_url + service_token written${blank:+, api_key blanked}" || { bad "$n could not edit $cfg"; continue; }
         on "$n" "sudo systemctl restart $unit" >/dev/null 2>&1
         sleep 2
