@@ -36,12 +36,16 @@ CONFIG=/etc/homelab/calendar/config.yml
 SSO_CONF=/etc/homelab/sso/config.yml
 SCRATCH="${TMPDIR:-/tmp}/calendar-orchestrate.$$"
 
-DRY=0; VERIFY_ONLY=0
+MAIL_NODES="10.20.2.183 10.20.2.184 10.20.2.185"     # prod-homelab39/40/41 (postfix + the block-link milter)
+MILTER_CONFIG=/etc/homelab/postfix-block-link/config.yml
+
+DRY=0; VERIFY_ONLY=0; MAIL_LINKS=0
 for a in "$@"; do
     case "$a" in
         --dry-run) DRY=1 ;;
         --verify)  VERIFY_ONLY=1 ;;
-        *) echo "unknown argument '$a' (usage: calendar-orchestrate.sh [--dry-run] [--verify])"; exit 1 ;;
+        --mail-links) MAIL_LINKS=1 ;;
+        *) echo "unknown argument '$a' (usage: calendar-orchestrate.sh [--dry-run] [--verify] [--mail-links])"; exit 1 ;;
     esac
 done
 
@@ -70,6 +74,42 @@ find_primary(){
     return 1
 }
 psql_primary(){ on "$PRIMARY" "sudo -u postgres psql -d homelab -Atc \"$1\"" 2>/dev/null; }
+
+# ---------------------------------------------------- --mail-links (phase 3)
+# The mail side of "Add to calendar" links: the milter role's grants on the
+# two calendar tables (applied HERE on the leader: a fleet host's postinst
+# cannot reach the DB), the calendar: block in the milter's config on the
+# three mail nodes, and a restart. Run before or right after upgrading
+# homelab-postfix-block-link to >= 0.2.4; idempotent.
+if [ "$MAIL_LINKS" = 1 ]; then
+    PRIMARY=$(find_primary) || die "could not find the Patroni leader among $DB_NODES"
+    step "grants for the milter role(s) on $PRIMARY"
+    ROLES=$(psql_primary "SELECT string_agg(rolname, ' ') FROM pg_roles WHERE rolname LIKE 'homelab_postfix_block_link%'")
+    [ -n "$ROLES" ] || die "no homelab_postfix_block_link* role on $PRIMARY"
+    for role in $ROLES; do
+        if psql_primary "SELECT has_table_privilege('$role','calendar.mail_links','INSERT') AND has_table_privilege('$role','calendar.account_settings','SELECT')" | grep -q t; then
+            ok "$role already has the calendar grants"
+        elif on "$PRIMARY" "sudo -u postgres psql -d homelab -v ON_ERROR_STOP=1 -q -c \"GRANT USAGE ON SCHEMA calendar TO \\\"$role\\\"; GRANT SELECT ON calendar.account_settings TO \\\"$role\\\"; GRANT INSERT ON calendar.mail_links TO \\\"$role\\\"; GRANT USAGE ON SEQUENCE calendar.mail_links_id_seq TO \\\"$role\\\";\"" >/dev/null 2>&1; then
+            ok "$role: SELECT account_settings, INSERT mail_links (+ sequence) granted"
+        else bad "$role: could not grant"; fi
+    done
+    step "the calendar: block in the milter's config on $MAIL_NODES"
+    for n in $MAIL_NODES; do
+        up "$n" || { bad "$n down"; continue; }
+        v=$(on "$n" "dpkg-query -W -f='\${Version}' homelab-postfix-block-link 2>/dev/null")
+        if on "$n" "sudo grep -q '^calendar:' $MILTER_CONFIG"; then ok "$n config already has the calendar: block (milter $v)"
+        else
+            on "$n" "sudo cp -a $MILTER_CONFIG $MILTER_CONFIG.bak-\$(date +%Y%m%d-%H%M%S) && printf '\n# Add-to-calendar links (post-cutover #74 phase 3); calendar-orchestrate.sh --mail-links\ncalendar:\n  public_base_url: https://$NAME\n  link_ttl_days: 30\n  excerpt_chars: 16000\n' | sudo tee -a $MILTER_CONFIG >/dev/null && sudo perl -MYAML::XS -e 'YAML::XS::LoadFile(q{$MILTER_CONFIG})'" \
+                && ok "$n calendar: block written (milter $v)" || { bad "$n could not write the block"; continue; }
+        fi
+        on "$n" "sudo systemctl restart homelab-postfix-block-link" >/dev/null 2>&1; sleep 2
+        s=$(on "$n" "systemctl is-active homelab-postfix-block-link" 2>/dev/null)
+        [ "$s" = active ] && ok "$n milter active after restart" || bad "$n milter is '$s' after restart -- mail is tempfailing, look now: ssh $n 'journalctl -u homelab-postfix-block-link -n 30 --no-pager'"
+    done
+    step "result"
+    [ "$RC" = 0 ] && echo "  ${G}mail side ready: consenting accounts get the link on the next inbound message.${O}" || echo "  ${R}not clean -- see FAIL lines above.${O}"
+    exit "$RC"
+fi
 
 # ----------------------------------------------------------------- verify only
 if [ "$VERIFY_ONLY" = 1 ]; then

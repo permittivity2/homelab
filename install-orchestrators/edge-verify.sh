@@ -167,6 +167,7 @@ else
     # for it. A probe list shorter than the site list can only ever confirm
     # the sites someone remembered.
     probe_http https://search.mailmasker.org/           "200 301 302"
+    probe_http https://calendar.mailmasker.org/        "200 301 302"
     probe_http https://developer.mailmasker.org/        "200"
     # IPv6 (post-cutover #64): this edge's own IPv6 address must answer
     # DNS (UDP and TCP) and HTTPS from the internet.
