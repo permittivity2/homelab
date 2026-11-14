@@ -1,0 +1,122 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/ai
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-ai
+
+case "$1" in
+    configure)
+        echo "homelab-ai post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services
+        cp "$SHARE_DIR/services/ai.yml" "/etc/homelab/services/ai.yml"
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-ai/db_host || true;         DB_HOST="${RET:-localhost}"
+            db_get homelab-ai/pgbouncer_host || true;  PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-ai/api_base || true;        API_BASE="${RET:-http://localhost:3000}"
+            db_get homelab-ai/listen_port || true;     LISTEN_PORT="${RET:-2521}"
+            db_get homelab-ai/advertise_host || true;  ADVERTISE_HOST="${RET:-127.0.0.1}"
+            db_get homelab-ai/api_key || true;         API_KEY="$RET"
+
+            echo "  bootstrapping Postgres roles for 'homelab_ai' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_ai --schema ai --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+            BOOTSTRAP_MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^BOOTSTRAP_MANUAL=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success -- see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-ai' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            # The key is written with perl, not sed: it may contain any character.
+            API_KEY="$API_KEY" perl -pe '
+                s#http://api\.svc\.homelab:3000#$ENV{API_BASE}#g;
+                s#YOUR_PGBOUNCER_HOST#$ENV{PGBOUNCER_HOST}#g;
+                s#YOUR_RUNTIME_PASSWORD_HERE#$ENV{RUNTIME_PASSWORD}#g;
+                s#homelab_ai_runtime#$ENV{RUNTIME_ROLE}#g;
+                s#YOUR_POSTGRES_HOST#$ENV{DB_HOST}#g;
+                s#YOUR_MIGRATE_PASSWORD_HERE#$ENV{MIGRATE_PASSWORD}#g;
+                s#homelab_ai_migrate#$ENV{MIGRATE_ROLE}#g;
+                s#^  api_key: ""#"  api_key: \"$ENV{API_KEY}\""#e;
+                s#"http://127\.0\.0\.1:2521"#"http://0.0.0.0:$ENV{LISTEN_PORT}"#g;
+                s#  port: 2521#  port: $ENV{LISTEN_PORT}#g;
+                s#  host: 127\.0\.0\.1#  host: $ENV{ADVERTISE_HOST}#g;
+            ' API_BASE="$API_BASE" PGBOUNCER_HOST="$PGBOUNCER_HOST" RUNTIME_PASSWORD="$RUNTIME_PASSWORD" RUNTIME_ROLE="$RUNTIME_ROLE" \
+              DB_HOST="$DB_HOST" MIGRATE_PASSWORD="$MIGRATE_PASSWORD" MIGRATE_ROLE="$MIGRATE_ROLE" LISTEN_PORT="$LISTEN_PORT" ADVERTISE_HOST="$ADVERTISE_HOST" \
+              "$SHARE_DIR/config/ai.example.yml" > "$CONFIG_FILE"
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+            [ -n "$API_KEY" ] || echo "  NOTE: no API key given -- set ai.api_key in $CONFIG_FILE before any request can succeed."
+
+            if [ "$BOOTSTRAP_MANUAL" = "1" ]; then
+                echo ""
+                echo "  ================================================================"
+                echo "  CONFIG WRITTEN -- but DB-side steps remain (runbook printed above):"
+                echo "    1) run the role SQL on the DB primary"
+                echo "    2) register '$RUNTIME_ROLE' in pgbouncer on each pooler"
+                echo "  Then finish this host (applies migrations + starts the service):"
+                echo "      sudo dpkg-reconfigure homelab-ai"
+                echo "  ================================================================"
+                echo ""
+                db_stop
+                exit 0
+            fi
+
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- register '$RUNTIME_ROLE' by hand."
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_AI_MIGRATIONS_DIR="$SHARE_DIR/migrations" HOMELAB_AI_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-ai-migrate
+
+        systemctl enable homelab-ai >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-ai; then
+            systemctl restart homelab-ai || echo "WARNING: homelab-ai restart failed -- check 'systemctl status homelab-ai'."
+        else
+            systemctl start homelab-ai || echo "WARNING: homelab-ai failed to start -- check 'systemctl status homelab-ai'."
+        fi
+        sleep 2
+        LISTEN_PORT="${LISTEN_PORT:-$(sed -n 's/^  listen: "http:\/\/[0-9.]*:\([0-9]*\)"/\1/p' "$CONFIG_FILE" | head -1)}"
+        curl -fsS "http://127.0.0.1:${LISTEN_PORT:-2521}/health" >/dev/null 2>&1 \
+            || echo "  WARNING: homelab-ai did not answer its own /health check -- see the journal."
+
+        db_stop
+        echo ""
+        echo "homelab-ai configured."
+        echo "config: $CONFIG_FILE  (clients: and ai.api_key are what make it useful)"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

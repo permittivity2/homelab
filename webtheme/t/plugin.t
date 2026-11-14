@@ -114,4 +114,26 @@ $tc->get_ok('/empty')->status_is(200)
   ->content_unlike(qr{class="menu-sep"}, 'no separator when there are no links')
   ->content_like(qr{Sign out},           'sign-out survives an empty link list');
 
+# --- the default dropdown lists Calendar after Search (#74) and has no Settings line unless asked (#77) ---
+$t->get_ok('/header?who=a@b.test')->status_is(200)
+  ->content_like(qr{Search<.*?href="https://calendar\.mailmasker\.org/">Calendar<}s, 'default dropdown lists Calendar after Search')
+  ->content_unlike(qr{>Settings<}, 'no Settings line when the app has no settings page');
+
+# --- an app with a settings page gets "Settings" first, under the address ---
+{
+    package Homelab::WebTheme::Test::Settings;
+    use Mojo::Base 'Mojolicious', -signatures;
+    sub startup ($self) {
+        $self->plugin('Homelab::WebTheme' => {
+            app_name => 'With settings', user_email => sub ($c) { 'who@test.example' }, settings_url => '/settings',
+        });
+        $self->routes->get('/header' => sub ($c) { $c->render(inline => '%= include "homelab/header"') });
+    }
+}
+my $ts = Test::Mojo->new('Homelab::WebTheme::Test::Settings');
+$ts->get_ok('/header')->status_is(200)
+  ->content_like(qr{class="menu-sub">Signed in</div>\s*</div>\s*<a class="menu-item" role="menuitem" href="/settings">Settings</a>\s*<div class="menu-sep"></div>}s,
+      'Settings sits directly under the address, then a separator')
+  ->content_like(qr{Settings</a>.*?Manage your account}s, '... before the cross-app links');
+
 done_testing;

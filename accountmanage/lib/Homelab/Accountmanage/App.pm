@@ -67,6 +67,7 @@ sub startup ($self) {
             { href => 'https://mail.mailmasker.org/',   label => 'Email' },
             { href => 'https://drive.mailmasker.org/',  label => 'Drive' },
             { href => 'https://search.mailmasker.org/', label => 'Search' },
+            { href => 'https://calendar.mailmasker.org/', label => 'Calendar' },
         ],
     });
 

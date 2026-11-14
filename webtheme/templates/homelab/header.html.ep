@@ -38,6 +38,12 @@
             <div class="menu-email"><%= $email %></div>
             <div class="menu-sub">Signed in</div>
           </div>
+          %# This app's own settings page, when it has one (#77): first, under
+          %# the address, before the links to the other apps.
+          % if (length homelab_settings_url()) {
+            <a class="menu-item" role="menuitem" href="<%= homelab_settings_url() %>">Settings</a>
+            <div class="menu-sep"></div>
+          % }
           % for my $m (@{ homelab_menu_links() }) {
             <a class="menu-item" role="menuitem" href="<%= $m->{href} %>"><%= $m->{label} %></a>
           % }

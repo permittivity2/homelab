@@ -1,0 +1,7 @@
+name: ai
+package: homelab-ai
+kind: http_service
+check:
+  systemd_unit: homelab-ai
+  tcp_port: 2521
+description: "Internal AI service: the one Anthropic client, usage and budgets (POST /internal/v1/ai/messages)"

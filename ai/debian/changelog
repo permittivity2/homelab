@@ -1,0 +1,12 @@
+homelab-ai (0.1.0) unstable; urgency=medium
+
+  * First release (post-cutover #76): the one Anthropic client in the fleet.
+    POST /internal/v1/ai/messages with a client token passes a Messages API
+    request through byte for byte with the key added and the API version
+    pinned; every call is recorded in ai.requests (client, consent, model,
+    tokens, cache reads, latency, status); a per-client daily request budget
+    answers 429 before money is spent; GET /internal/v1/ai/usage totals it.
+    One container to start (not critical: callers degrade to their non-AI
+    paths when it is down), built like every pool app so more can follow.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 13:30:00 -0600

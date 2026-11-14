@@ -1,0 +1,30 @@
+Source: homelab-ai
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-ai
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common (>= 0.1.32),
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         libio-socket-ssl-perl,
+         adduser,
+         curl,
+         sudo
+Recommends: homelab-api, homelab-agent
+Description: Internal AI service for the homelab-* ecosystem
+ The one place in the fleet that talks to Anthropic. Apps POST a Messages
+ API request to /internal/v1/ai/messages with their own client token; this
+ service adds the API key, pins the API version, enforces a per-client
+ daily budget, records every call (client, model, tokens, cache reads,
+ latency, status, the consent it was made under) in its own `ai` schema,
+ and hands Anthropic's answer back byte for byte (prompt caching is a
+ byte-prefix match, so the request is never re-encoded here). Internal
+ only: registered in homelab-api's service registry, never given a public
+ name. Consent stays with each calling app.

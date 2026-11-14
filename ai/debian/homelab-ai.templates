@@ -1,0 +1,31 @@
+Template: homelab-ai/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-ai/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+
+Template: homelab-ai/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable (for the service registry):
+
+Template: homelab-ai/listen_port
+Type: string
+Default: 2521
+Description: Port for homelab-ai to listen on:
+
+Template: homelab-ai/advertise_host
+Type: string
+Default: 127.0.0.1
+Description: This host's own address to advertise in the service registry:
+
+Template: homelab-ai/api_key
+Type: password
+Description: The Anthropic API key:
+ Kept only in /etc/homelab/ai/config.yml (0640 root:homelab). Leave blank
+ to install without one and add it to the config afterwards.

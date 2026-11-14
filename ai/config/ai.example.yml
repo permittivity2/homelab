@@ -1,0 +1,57 @@
+# Homelab AI service configuration (homelab-ai, post-cutover #76)
+#
+# The one place in the fleet that talks to Anthropic. Internal only: apps POST
+# a Messages API request to /internal/v1/ai/messages with their client token;
+# this service adds the API key, enforces the budget, records the usage and
+# hands the answer back untouched. See README.md.
+
+homelab_api:
+  base_url: http://api.svc.homelab:3000
+
+# RUNTIME connection -- CRUD only, no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_ai_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection -- direct to Postgres, bypassing pgbouncer.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_ai_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+ai:
+  # The Anthropic API key. Only this file holds it; 0640 root:homelab.
+  api_key: ""
+  # Where requests go. Only a test ever changes this.
+  # upstream_url: https://api.anthropic.com/v1/messages
+  # Per-client daily request budget (our own 429 before any money is spent).
+  requests_per_client_per_day: 2000
+  # Largest request body accepted (bytes).
+  max_body_bytes: 4194304
+  inactivity_timeout: 180
+  request_timeout: 180
+
+# Callers. Each app gets its own token (32+ characters) so the usage table
+# can tell them apart and one can be revoked alone. Written by
+# install-orchestrators/ai-orchestrate.sh, which also puts each token into
+# that app's own config.
+clients: []
+#  - name: search
+#    token: A_LONG_RANDOM_TOKEN_FOR_SEARCH
+#  - name: calendar
+#    token: A_LONG_RANDOM_TOKEN_FOR_CALENDAR
+
+# What this instance announces itself as in homelab-api's service registry.
+registry:
+  host: 127.0.0.1
+  port: 2521
+
+server:
+  listen: "http://127.0.0.1:2521"
+  workers: 2
+  pid_file: /run/homelab-ai/hypnotoad.pid

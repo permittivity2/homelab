@@ -1,7 +1,7 @@
 package Homelab::WebTheme;
 use Mojo::Base 'Mojolicious::Plugin', -signatures;
 
-our $VERSION = '0.1.1';
+our $VERSION = '0.1.3';
 
 # Shared web chrome for the homelab Mojolicious apps.
 #
@@ -68,6 +68,14 @@ sub register ($self, $app, $conf = {}) {
         $c->stash('nav_links') // $conf->{nav_links} // []
     });
 
+    # The app's own settings page, shown as "Settings" directly under the
+    # signed-in address in the account dropdown (post-cutover #77). Optional:
+    # an app with nothing to set passes nothing and shows no line. A page, not
+    # a pop-up, so it has a URL and the phone's back button works.
+    $app->helper(homelab_settings_url => sub ($c) {
+        $c->stash('settings_url') // $conf->{settings_url} // ''
+    });
+
     # The account dropdown's cross-app links. Configurable rather than
     # hardcoded in the partial because each app wants a slightly different
     # set -- myaccount has no reason to link to itself -- and because the
@@ -79,6 +87,7 @@ sub register ($self, $app, $conf = {}) {
             { href => 'https://mail.mailmasker.org/',      label => 'Email' },
             { href => 'https://drive.mailmasker.org/',     label => 'Drive' },
             { href => 'https://search.mailmasker.org/',    label => 'Search' },
+            { href => 'https://calendar.mailmasker.org/',  label => 'Calendar' },
         ]
     });
 

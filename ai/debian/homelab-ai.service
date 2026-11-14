@@ -1,0 +1,24 @@
+[Unit]
+Description=Homelab AI service (internal)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+RuntimeDirectory=homelab-ai
+RuntimeDirectoryMode=0750
+Environment="HOMELAB_AI_CONFIG=/etc/homelab/ai/config.yml"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-ai
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-ai
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-ai
+
+[Install]
+WantedBy=multi-user.target
