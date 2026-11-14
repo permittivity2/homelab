@@ -537,23 +537,83 @@ var Cal = (function () {
       if (p.description) ev.desc.value = p.description;
       updateRepeatUI(); syncMap();
     }
+    // "Find out more" (#78): the proposal says whether a web search could
+    // add facts; a line offers it; facts come back to pick from.
+    var researchHint = null;
+    function showResearchLine(hint) {
+      researchHint = hint && hint.worth_it ? hint : null;
+      var line = $('ev-research-line');
+      if (!researchHint || !mailLink.research.available) { line.classList.add('hide'); return; }
+      $('ev-research-about').textContent = researchHint.about || 'this';
+      $('ev-research-note').textContent = mailLink.research.enabled ? '' : 'Asks for your agreement the first time.';
+      line.classList.remove('hide');
+    }
+    function renderFacts(r) {
+      var box = $('ev-facts'); box.innerHTML = '';
+      var head = document.createElement('p'); head.className = 'muted-small'; head.textContent = (r.summary || '') + (r.searches ? ' (' + r.searches + ' search' + (r.searches === 1 ? '' : 'es') + ')' : '');
+      box.appendChild(head);
+      (r.facts || []).forEach(function (f) {
+        var row = document.createElement('div'); row.className = 'time-row';
+        var txt = document.createElement('span'); txt.className = 'muted-small'; txt.style.flex = '1 1 12rem';
+        txt.textContent = f.label + ': ' + f.value + (f.confidence && f.confidence !== 'high' ? ' (' + f.confidence + ')' : '');
+        row.appendChild(txt);
+        if (f.source) { var a = document.createElement('a'); a.className = 'btn btn-sm btn-ghost'; a.href = f.source; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Source'; row.appendChild(a); }
+        var use = document.createElement('button'); use.type = 'button'; use.className = 'btn btn-sm'; use.textContent = 'Use';
+        use.addEventListener('click', function () {
+          if (f.field === 'location') { ev.loc.value = f.value; syncMap(); }
+          else if (f.field === 'title') { ev.title.value = f.value; }
+          else { ev.desc.value = (ev.desc.value ? ev.desc.value.replace(/\s+$/, '') + '\n' : '') + f.label + ': ' + f.value + (f.source ? ' (' + f.source + ')' : ''); }
+          use.textContent = 'Used'; use.disabled = true;
+        });
+        row.appendChild(use);
+        box.appendChild(row);
+      });
+      if (!(r.facts || []).length) { var none = document.createElement('p'); none.className = 'muted-small'; none.textContent = 'Nothing found to add.'; box.appendChild(none); }
+      box.classList.remove('hide');
+    }
+    function researchNow() {
+      var btn = $('ev-research'); btn.classList.add('is-loading'); btn.disabled = true; $('ev-research-note').textContent = 'Searching the web (up to 20 s)...';
+      return api('POST', '/api/mail-links/' + mailLink.token + '/research', { about: researchHint.about, query: researchHint.query })
+        .then(function (r) { renderFacts(r); $('ev-research-note').textContent = 'Pick what to use.'; })
+        .catch(function (err) { $('ev-research-note').textContent = err.message; })
+        .then(function () { btn.classList.remove('is-loading'); btn.disabled = false; });
+    }
+    var consentMode = 'ai';
     function proposeNow() {
       var btn = $('ev-ai-propose'); btn.classList.add('is-loading'); btn.disabled = true; $('ev-ai-note').textContent = 'Asking...';
+      $('ev-facts').classList.add('hide');
       return api('POST', '/api/mail-links/' + mailLink.token + '/propose').then(function (r) {
         fillFromProposal(r.proposal);
         $('ev-ai-note').textContent = 'Proposed (' + (r.proposal.confidence || 'low') + ' confidence' + (r.proposal.note ? ': ' + r.proposal.note : '') + '). Check it, then Save.';
+        showResearchLine(r.proposal.research);
+        if (researchHint && mailLink.research.enabled && mailLink.research.auto) return researchNow();
       }).catch(function (err) { $('ev-ai-note').textContent = err.message; })
         .then(function () { btn.classList.remove('is-loading'); btn.disabled = false; });
+    }
+    function askConsent(mode) {
+      consentMode = mode;
+      $('consent-h').textContent = mode === 'research' ? 'Find out more' : 'Propose with AI';
+      $('consent-text').textContent = mode === 'research' ? mailLink.research.notice : mailLink.ai.notice;
+      $('consent-agree').textContent = mode === 'research' ? 'I agree, look it up' : 'I agree, propose';
+      showError('consent-error', '');
+      openModal('consent-modal');
     }
     $('ev-ai-propose').addEventListener('click', function () {
       if (!mailLink) return;
       if (mailLink.ai.enabled) { proposeNow(); return; }
-      $('consent-text').textContent = mailLink.ai.notice; showError('consent-error', '');
-      openModal('consent-modal');
+      askConsent('ai');
+    });
+    $('ev-research').addEventListener('click', function () {
+      if (!mailLink || !researchHint) return;
+      if (mailLink.research.enabled) { researchNow(); return; }
+      askConsent('research');
     });
     $('consent-agree').addEventListener('click', function () {
-      api('PUT', '/api/account', { ai_enabled: true, ai_consent_sha256: mailLink.ai.notice_sha256 })
-        .then(function () { mailLink.ai.enabled = true; closeModal('consent-modal'); return proposeNow(); })
+      var body = consentMode === 'research'
+        ? { research_enabled: true, research_consent_sha256: mailLink.research.notice_sha256 }
+        : { ai_enabled: true, ai_consent_sha256: mailLink.ai.notice_sha256 };
+      api('PUT', '/api/account', body)
+        .then(function () { closeModal('consent-modal'); if (consentMode === 'research') { mailLink.research.enabled = true; return researchNow(); } mailLink.ai.enabled = true; return proposeNow(); })
         .catch(function (err) { showError('consent-error', err.message); });
     });
     var origSubmitBody = null;
@@ -561,6 +621,7 @@ var Cal = (function () {
       var g = mailLink.guess || {};
       openEditor({ calendar_id: defaultCalendarId(), all_day: !!g.all_day, start: g.start, end: g.end, title: g.title, location: g.location, description: '' });
       $('ev-mail').classList.remove('hide');
+      $('ev-research-line').classList.add('hide'); $('ev-facts').classList.add('hide'); researchHint = null;
       $('ev-mail-what').textContent = 'From the email "' + (mailLink.subject || '(no subject)') + '" sent by ' + (mailLink.from || 'unknown') + (g.source ? ' (date read from: ' + g.source + ')' : '');
       $('ev-ai-propose').classList.toggle('hide', !mailLink.ai.available);
       $('ev-ai-note').textContent = mailLink.ai.available ? (mailLink.ai.enabled ? '' : 'Asks for your agreement the first time.') : '';

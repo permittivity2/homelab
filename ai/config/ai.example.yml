@@ -31,6 +31,8 @@ ai:
   # upstream_url: https://api.anthropic.com/v1/messages
   # Per-client daily request budget (our own 429 before any money is spent).
   requests_per_client_per_day: 2000
+  # Web searches (Anthropic's web_search tool, #78) per client per day.
+  searches_per_client_per_day: 200
   # Largest request body accepted (bytes).
   max_body_bytes: 4194304
   inactivity_timeout: 180

@@ -1,3 +1,14 @@
+homelab-calendar (0.1.7) unstable; urgency=medium
+
+  * "Find out more" (post-cutover #78): the AI proposal now says whether a
+    web search could add facts (a venue, a team, a public event); if so one
+    line offers to look it up. Behind its own notice (migration 003), one
+    call with Anthropic's web-search tool through the AI service returns
+    facts with sources to pick from; nothing is written until Use. A
+    "research every proposal" switch in Settings skips the tap.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 19:50:00 -0600
+
 homelab-calendar (0.1.6) unstable; urgency=medium
 
   * A "Map" link beside the location, in the editor and on the public event

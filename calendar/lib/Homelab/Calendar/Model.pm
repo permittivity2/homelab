@@ -666,7 +666,18 @@ sub account_settings ($self, $email) {
     return {
         mail_links_enabled => $row->{mail_links_enabled} ? 1 : 0, mail_links_enabled_at => $row->{mail_links_enabled_at},
         ai_enabled => $row->{ai_enabled} ? 1 : 0, ai_consent_sha256 => $row->{ai_consent_sha256}, ai_consent_at => $row->{ai_consent_at},
+        research_enabled => $row->{research_enabled} ? 1 : 0, research_consent_at => $row->{research_consent_at},
+        research_auto => $row->{research_auto} ? 1 : 0,
     };
+}
+
+sub set_research_auto ($self, $email, $on) {
+    $self->db->query(
+        q{INSERT INTO calendar.account_settings (user_email, research_auto) VALUES (?, ?)
+          ON CONFLICT (user_email) DO UPDATE SET research_auto = EXCLUDED.research_auto, updated_at = NOW()},
+        _norm($email), ($on ? 1 : 0),
+    );
+    return 1;
 }
 
 sub set_mail_links ($self, $email, $on) {

@@ -59,6 +59,8 @@ sub startup ($self) {
     $self->ai(Homelab::Calendar::AI->new(
         service_url => ($aic->{service_url} // ''), service_token => ($aic->{service_token} // ''),
         model => ($aic->{model} // 'claude-haiku-5-5'), max_tokens => ($aic->{max_tokens} // 1024), log => $self->log,
+        research_model => ($aic->{research_model} // 'claude-sonnet-5-5'),
+        research_max_uses => ($aic->{research_max_uses} // 5),
     ));
 
     if (my $sso = $config->{sso}) {
@@ -189,6 +191,7 @@ sub startup ($self) {
     $r->put('/api/account')       ->to('api#save_account');
     $r->get('/api/mail-links/:token' => $tok)          ->to('api#mail_link');
     $r->post('/api/mail-links/:token/propose' => $tok) ->to('api#propose');
+    $r->post('/api/mail-links/:token/research' => $tok)->to('api#research');     # "Find out more" (#78)
     $r->get('/internal/v1/calendar/account')  ->to('api#internal_account_show');
     $r->put('/internal/v1/calendar/account')  ->to('api#internal_account_set');
 

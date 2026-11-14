@@ -53,6 +53,8 @@ sub startup ($self) {
     $self->api_key($ai->{api_key} // '');
     $self->upstream($ai->{upstream_url} // ANTHROPIC_URL);
     $self->limits({ requests_per_client_per_day => $ai->{requests_per_client_per_day} // 2000,
+                    # Web searches (#78) are billed per search, apart from tokens: their own cap.
+                    searches_per_client_per_day => $ai->{searches_per_client_per_day} // 200,
                     max_body_bytes => $ai->{max_body_bytes} // 4 * 1024 * 1024 });
 
     # Callers: name + token, both required. The token is what a request
@@ -138,6 +140,18 @@ sub _messages ($self, $c) {
         $self->_record($client, $req, consent => $consent, account => $account, status => 429, error => 'daily budget', ms => 0);
         return $c->render(json => { error => "daily request budget reached for $client" }, status => 429);
     }
+    # A request carrying a web-search tool (#78) is also held to the search
+    # budget: each search costs on its own, whatever the token count.
+    my $wants_search = grep { ref $_ eq 'HASH' && ($_->{type} // '') =~ /^web_search/ } @{ ref $req->{tools} eq 'ARRAY' ? $req->{tools} : [] };
+    if ($wants_search) {
+        my $searches = eval {
+            $self->pg->db->query(q{SELECT coalesce(sum(web_searches), 0) FROM ai.requests WHERE client = ? AND created_at >= date_trunc('day', NOW())}, $client)->array->[0];
+        } // 0;
+        if ($searches >= $self->limits->{searches_per_client_per_day}) {
+            $self->_record($client, $req, consent => $consent, account => $account, status => 429, error => 'daily search budget', ms => 0);
+            return $c->render(json => { error => "daily web-search budget reached for $client" }, status => 429);
+        }
+    }
 
     my $t0 = [Time::HiRes::gettimeofday];
     my $tx = $self->ua->post($self->upstream, {
@@ -167,13 +181,14 @@ sub _messages ($self, $c) {
 
 sub _record ($self, $client, $req, %a) {
     my $u = $a{usage} // {};
+    my $searches = (ref $u->{server_tool_use} eq 'HASH' ? $u->{server_tool_use}{web_search_requests} : undef) // 0;
     eval {
         $self->pg->db->query(
             q{INSERT INTO ai.requests (client, consent, account, model, model_used, status, error, latency_ms,
-                  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, max_tokens)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)},
+                  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, max_tokens, web_searches)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)},
             $client, $a{consent}, $a{account}, $req->{model}, $a{model_used}, $a{status}, (defined $a{error} ? substr($a{error}, 0, 500) : undef), $a{ms},
-            $u->{input_tokens}, $u->{output_tokens}, $u->{cache_read_input_tokens}, $u->{cache_creation_input_tokens}, $req->{max_tokens},
+            $u->{input_tokens}, $u->{output_tokens}, $u->{cache_read_input_tokens}, $u->{cache_creation_input_tokens}, $req->{max_tokens}, $searches + 0,
         );
         1;
     } or $self->log->warn("ai: could not record usage: $@");
@@ -190,6 +205,7 @@ sub _usage ($self, $c) {
                  count(*) FILTER (WHERE status = 200) AS ok,
                  coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens,
                  coalesce(sum(cache_read_tokens), 0) AS cache_read_tokens, coalesce(sum(cache_write_tokens), 0) AS cache_write_tokens,
+                 coalesce(sum(web_searches), 0) AS web_searches,
                  coalesce(avg(latency_ms), 0)::int AS avg_latency_ms
             FROM ai.requests WHERE created_at >= NOW() - (?::int * INTERVAL '1 day')
            GROUP BY client, day ORDER BY day DESC, client}, $days,

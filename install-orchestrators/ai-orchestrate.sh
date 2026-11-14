@@ -86,7 +86,7 @@ verify(){
     PRIMARY=$(find_primary) || die "could not find the Patroni leader"
     REG=$(psql_primary "SELECT count(*) FROM api.service_registry WHERE feature_name='homelab-ai'"); [ "${REG:-0}" -ge 1 ] && ok "in the service registry" || bad "not in the service registry"
     T=$(psql_primary "SELECT count(*) FROM information_schema.tables WHERE table_schema='ai' AND table_name='requests'"); [ "$T" = 1 ] && ok "ai.requests exists" || bad "ai.requests missing"
-    psql_primary "SELECT client || ': ' || count(*) || ' requests, ' || count(*) FILTER (WHERE status=200) || ' ok, last ' || to_char(max(created_at),'MM-DD HH24:MI') FROM ai.requests GROUP BY client ORDER BY client" | sed 's/^/      /'
+    psql_primary "SELECT client || ': ' || count(*) || ' requests, ' || count(*) FILTER (WHERE status=200) || ' ok, ' || coalesce(sum(web_searches),0) || ' searches, last ' || to_char(max(created_at),'MM-DD HH24:MI') FROM ai.requests GROUP BY client ORDER BY client" | sed 's/^/      /'
     m=$(on "$NODE" "free -m | awk '/Mem:/{print \$3\"/\"\$2}'" 2>/dev/null); note "memory used/total MB: $m"
 
     step "callers"

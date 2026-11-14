@@ -3,7 +3,8 @@ use Mojo::Base -strict, -signatures;
 use Exporter 'import';
 use Digest::SHA qw(sha256_hex);
 
-our @EXPORT_OK = qw(notice_body notice_sha256 state_for record withdraw);
+our @EXPORT_OK = qw(notice_body notice_sha256 state_for record withdraw
+                    research_notice_body research_notice_sha256 research_state_for research_record research_withdraw);
 
 # Informed consent for the AI proposal, recorded rather than assumed -- the
 # same shape as search's AI/Consent.pm: the record says WHICH WORDS the person
@@ -62,6 +63,60 @@ sub withdraw ($db, $email) {
     $db->query(
         q{INSERT INTO calendar.account_settings (user_email, ai_enabled) VALUES (?, FALSE)
           ON CONFLICT (user_email) DO UPDATE SET ai_enabled = FALSE, updated_at = NOW()}, lc $email,
+    );
+    return 1;
+}
+
+# ----- "Find out more" (#78): a second notice, because it does more --------
+
+my $RESEARCH_BODY = <<'NOTICE';
+"Find out more" searches the web about the event in one email.
+
+When you press it, the subject and the first part of THE ONE EMAIL you opened
+the calendar link from, plus what the proposal suggested looking up (a place,
+a team, a date), are sent to Anthropic's API through Silver Linings' own AI
+service. The model then runs up to five web searches, built from that text,
+through Anthropic's search provider, reads the pages it finds, and answers
+with facts for you to pick (an address, who is playing, a schedule), each
+with its source.
+
+Your personal information is NOT removed first. Words from your email can
+appear in those searches.
+
+We do not tell Anthropic or the search provider whose email it is. Nothing
+from the pages is kept by us except the facts you choose to put in the event.
+
+You can turn this off at any time in the calendar's Settings. Turning it off
+stops all further searching; it does not recall what was already sent.
+NOTICE
+
+sub research_notice_body   { return $RESEARCH_BODY }
+sub research_notice_sha256 { return sha256_hex($RESEARCH_BODY) }
+
+# research_state_for($db, $email) -> { enabled, current, sha, auto }
+sub research_state_for ($db, $email) {
+    my $row = $db->query('SELECT research_enabled, research_consent_sha256, research_auto FROM calendar.account_settings WHERE user_email = ?', lc $email)->hash // {};
+    my $sha = $row->{research_consent_sha256};
+    my $current = (defined $sha && $sha eq research_notice_sha256()) ? 1 : 0;
+    return { enabled => ($row->{research_enabled} && $current) ? 1 : 0, current => $current, sha => $sha,
+             auto => ($row->{research_auto} ? 1 : 0) };
+}
+
+sub research_record ($db, $email, $sha) {
+    return 0 unless defined $sha && $sha eq research_notice_sha256();
+    $db->query(
+        q{INSERT INTO calendar.account_settings (user_email, research_enabled, research_consent_sha256, research_consent_at)
+          VALUES (?, TRUE, ?, NOW())
+          ON CONFLICT (user_email) DO UPDATE SET research_enabled = TRUE, research_consent_sha256 = EXCLUDED.research_consent_sha256,
+              research_consent_at = NOW(), updated_at = NOW()}, lc $email, $sha,
+    );
+    return 1;
+}
+
+sub research_withdraw ($db, $email) {
+    $db->query(
+        q{INSERT INTO calendar.account_settings (user_email, research_enabled, research_auto) VALUES (?, FALSE, FALSE)
+          ON CONFLICT (user_email) DO UPDATE SET research_enabled = FALSE, research_auto = FALSE, updated_at = NOW()}, lc $email,
     );
     return 1;
 }

@@ -65,6 +65,9 @@ calendar:
 #   service_token: THIS_APP_S_CLIENT_TOKEN_FROM_THE_AI_SERVICE
 #   model: claude-haiku-5-5
 #   max_tokens: 1024
+#   # "Find out more" (#78): the model that reads web pages, and searches per call.
+#   research_model: claude-sonnet-5-5
+#   research_max_uses: 5
 
 # Optional: the shared mailmasker look (homelab-webtheme). Leave base_url out:
 # the package default (.../theme/v1) is right and a bare host 404s theme.css.

@@ -46,6 +46,10 @@
         <button type="button" class="btn btn-sm" id="ev-ai-propose">Propose with AI</button>
         <span class="muted-small" id="ev-ai-note"></span>
       </div>
+      %# "Find out more" (#78): shown only when the proposal flagged something
+      %# worth a web search; the facts come back to pick from, with sources.
+      <p class="muted-small hide" id="ev-research-line"><button type="button" class="btn btn-sm btn-ghost" id="ev-research">Find out more about <span id="ev-research-about"></span>?</button> <span id="ev-research-note"></span></p>
+      <div id="ev-facts" class="hide stack" style="gap: var(--space-1)"></div>
     </div></div>
     <div class="form-row">
       <label class="sr-only" for="ev-title">Title</label>
@@ -213,7 +217,7 @@
   <div class="modal__foot"><button type="button" class="btn" data-modal-close>Done</button></div>
 </div>
 
-%# --- the AI notice, asked once before the first proposal --------------------
+%# --- the AI notices, asked once before the first proposal / research --------
 <div class="modal" id="consent-modal" role="dialog" aria-modal="true" aria-labelledby="consent-h">
   <div class="modal__head"><h2 id="consent-h" class="panel__title">Propose with AI</h2></div>
   <div class="modal__body stack">

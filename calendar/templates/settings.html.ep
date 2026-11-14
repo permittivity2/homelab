@@ -65,13 +65,33 @@
       </div>
     </section>
 
+    <section class="panel">
+      <div class="panel__head"><h2 class="panel__title">Find out more</h2></div>
+      <div class="panel__body stack">
+        % if (!$ai_available) {
+        <p class="text-muted">Not available on this calendar.</p>
+        % } else {
+        <p class="text-muted">When a proposal names something a web search could add facts about (a venue, a team, a public event), a line offers to look it up. The facts come back with their sources for you to pick; nothing is written into the event until you choose.</p>
+        <label class="check"><input type="checkbox" id="s-research"<%= $research->{enabled} ? ' checked' : '' %>> <span>Allow "Find out more" (web searches about the event)</span></label>
+        <label class="check"><input type="checkbox" id="s-research-auto"<%= $research->{auto} ? ' checked' : '' %><%= $research->{enabled} ? '' : ' disabled' %>> <span>Research every proposal without asking</span></label>
+        % if ($research->{sha} && !$research->{current}) {
+        <p class="banner banner--warn"><span>The notice below has changed since you agreed to it. Read it and turn the switch on again to continue.</span></p>
+        % }
+        <pre class="panel" style="white-space: pre-wrap; padding: var(--space-4); font-family: var(--font-primary); font-size: var(--app-sm); color: var(--text-secondary)"><%= $research_notice %></pre>
+        % if ($account->{research_consent_at} && $research->{current}) {
+        <p class="muted-small">You agreed to this notice on <%= substr($account->{research_consent_at}, 0, 16) %>.</p>
+        % }
+        % }
+      </div>
+    </section>
+
     <p class="form-error hide" id="s-error"></p>
     <div class="form-actions"><a class="btn" href="/">Back to the calendar</a></div>
   </div>
 </main>
 <script>
 (function () {
-  var csrf = '<%= $csrf %>', noticeSha = '<%= $notice_sha %>';
+  var csrf = '<%= $csrf %>', noticeSha = '<%= $notice_sha %>', researchSha = '<%= $research_notice_sha %>';
   function $(id) { return document.getElementById(id); }
   function say(msg, kind) { if (window.HomelabShell) window.HomelabShell.toast(msg, kind); var e = $('s-error'); e.textContent = kind === 'error' ? msg : ''; e.classList.toggle('hide', kind !== 'error'); }
   function put(url, body) {
@@ -85,6 +105,18 @@
   $('s-maillinks').addEventListener('change', function () {
     var box = this;
     put('/api/account', { mail_links_enabled: box.checked }).then(function () { say(box.checked ? 'Links will be added to new email from now on.' : 'Links are off.', 'ok'); })
+      .catch(function (e) { box.checked = !box.checked; say(e.message, 'error'); });
+  });
+  var rs = $('s-research'), ra = $('s-research-auto');
+  if (rs) rs.addEventListener('change', function () {
+    var box = this;
+    put('/api/account', box.checked ? { research_enabled: true, research_consent_sha256: researchSha } : { research_enabled: false })
+      .then(function () { say(box.checked ? '"Find out more" is on.' : '"Find out more" is off.', 'ok'); if (ra) { ra.disabled = !box.checked; if (!box.checked) ra.checked = false; } if (box.checked) setTimeout(function () { location.reload(); }, 600); })
+      .catch(function (e) { box.checked = !box.checked; say(e.message, 'error'); });
+  });
+  if (ra) ra.addEventListener('change', function () {
+    var box = this;
+    put('/api/account', { research_auto: box.checked }).then(function () { say(box.checked ? 'Every proposal will be researched.' : 'Research only when you ask.', 'ok'); })
       .catch(function (e) { box.checked = !box.checked; say(e.message, 'error'); });
   });
   var ai = $('s-ai');

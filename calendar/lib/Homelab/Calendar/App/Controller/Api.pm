@@ -328,6 +328,7 @@ sub _account_json ($c, $me) {
     my $m = _model($c);
     my $s = $m->account_settings($me);
     my $consent = Homelab::Calendar::Consent::state_for($m->db, $me);
+    my $rs = Homelab::Calendar::Consent::research_state_for($m->db, $me);
     return {
         mail_links_enabled => ($s->{mail_links_enabled} ? \1 : \0), mail_links_enabled_at => $s->{mail_links_enabled_at},
         ai => {
@@ -337,6 +338,17 @@ sub _account_json ($c, $me) {
             consent_at => $s->{ai_consent_at},
             notice     => Homelab::Calendar::Consent::notice_body(),
             notice_sha256 => Homelab::Calendar::Consent::notice_sha256(),
+        },
+        # "Find out more" (#78): the second notice, its state, and the
+        # research-every-proposal switch.
+        research => {
+            available => ($c->app->ai->configured ? \1 : \0),
+            enabled   => ($rs->{enabled} ? \1 : \0),
+            consented_to_current_notice => ($rs->{current} ? \1 : \0),
+            consent_at => $s->{research_consent_at},
+            auto       => ($rs->{auto} ? \1 : \0),
+            notice     => Homelab::Calendar::Consent::research_notice_body(),
+            notice_sha256 => Homelab::Calendar::Consent::research_notice_sha256(),
         },
         settings_url => $c->app->public_base_url . '/settings',
     };
@@ -363,6 +375,21 @@ sub _apply_account ($c, $me, $b) {
             Homelab::Calendar::Consent::withdraw($m->db, $me);
             _audit($c, action => 'calendar.ai_withdrawn', resource_type => 'calendar_account', resource_id => $me, detail => {});
         }
+    }
+    if (exists $b->{research_enabled}) {
+        if ($b->{research_enabled}) {
+            return 'To turn on "Find out more", agree to its notice (reload the page and try again).'
+                unless Homelab::Calendar::Consent::research_record($m->db, $me, $b->{research_consent_sha256});
+            _audit($c, action => 'calendar.research_consent', resource_type => 'calendar_account', resource_id => $me,
+                detail => { notice_sha256 => $b->{research_consent_sha256} });
+        }
+        else {
+            Homelab::Calendar::Consent::research_withdraw($m->db, $me);
+            _audit($c, action => 'calendar.research_withdrawn', resource_type => 'calendar_account', resource_id => $me, detail => {});
+        }
+    }
+    if (exists $b->{research_auto}) {
+        $m->set_research_auto($me, $b->{research_auto} ? 1 : 0);
     }
     return undef;
 }
@@ -408,6 +435,7 @@ sub _mail_link_json ($c, $link, $me, $zone) {
         zone => $zone, now => DateTime->now(time_zone => $zone),
     );
     my $consent = Homelab::Calendar::Consent::state_for($m->db, $me);
+    my $rs = Homelab::Calendar::Consent::research_state_for($m->db, $me);
     return {
         token => $link->{token}, subject => $link->{subject}, from => $link->{from_addr}, date_header => $link->{date_header},
         excerpt => substr($link->{text_excerpt} // '', 0, 2000), received_at => $link->{created_at},
@@ -415,7 +443,31 @@ sub _mail_link_json ($c, $link, $me, $zone) {
         guess => $guess, zone => $zone,
         ai => { available => ($c->app->ai->configured ? \1 : \0), enabled => ($consent->{enabled} ? \1 : \0),
                 notice => Homelab::Calendar::Consent::notice_body(), notice_sha256 => Homelab::Calendar::Consent::notice_sha256() },
+        research => { available => ($c->app->ai->configured ? \1 : \0), enabled => ($rs->{enabled} ? \1 : \0), auto => ($rs->{auto} ? \1 : \0),
+                      notice => Homelab::Calendar::Consent::research_notice_body(), notice_sha256 => Homelab::Calendar::Consent::research_notice_sha256() },
     };
+}
+
+# POST /api/mail-links/:token/research { about, query } -- "Find out more"
+# (#78): one web-search call through the AI service, after its own consent.
+sub research ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $m = _model($c);
+    my $link = $m->mail_link_for($c->stash('token'), $me) or return _fail($c, 404, 'This link is not valid, has expired, or belongs to another account.');
+    return _fail($c, 503, '"Find out more" is not available on this calendar.') unless $c->app->ai->configured;
+    my $rs = Homelab::Calendar::Consent::research_state_for($m->db, $me);
+    return _fail($c, 403, 'Agree to the "Find out more" notice first (Settings, or the line under the proposal).') unless $rs->{enabled};
+    my $b = _body($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my $r = $c->app->ai->research(
+        subject => $link->{subject}, from => $link->{from_addr}, text => $link->{text_excerpt},
+        about => (defined $b->{about} && !ref $b->{about} ? substr($b->{about}, 0, 120) : ''),
+        query => (defined $b->{query} && !ref $b->{query} ? substr($b->{query}, 0, 200) : ''),
+        zone => $zone, now => DateTime->now(time_zone => $zone), consent_sha => $rs->{sha}, account_key => $me,
+    );
+    return _fail($c, 502, $r->{error} // 'The research failed.') unless $r->{ok};
+    return $c->render(json => { summary => $r->{summary}, facts => $r->{facts}, searches => $r->{searches}, model => $r->{model} });
 }
 
 sub mail_link ($c) {

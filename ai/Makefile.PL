@@ -4,7 +4,7 @@ use ExtUtils::MakeMaker;
 
 WriteMakefile(
     NAME         => 'Homelab::AI',
-    VERSION      => '0.1.2',
+    VERSION      => '0.1.3',
     ABSTRACT     => 'Internal AI service for the homelab-* ecosystem: the one Anthropic client, usage and budgets',
     AUTHOR       => 'Jeff Gardner <mailmasker-api01@forge.name>',
     LICENSE      => 'agpl_3',
