@@ -1,3 +1,12 @@
+homelab-accountmanage (0.1.48) unstable; urgency=medium
+
+  * Mail settings: a "Calendar links" switch (post-cutover #74 phase 3) that
+    turns the "Add to calendar" link in inbound mail on or off through the
+    api gateway (/api/v1/calendar/account); the account dropdown lists
+    Calendar.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 16:40:00 -0600
+
 homelab-accountmanage (0.1.47) unstable; urgency=medium
 
   * Metrics tab (post-cutover #38): shows the alerts Prometheus is evaluating

@@ -146,10 +146,12 @@ sub startup ($self) {
     # Security actions (proxy to homelab-api with the user's token).
     $r->post('/security/password')->to('account#change_password');
     $r->post('/security/recovery-email')->to('account#set_recovery_email');
+    $r->post('/profile/timezone')->to('account#set_timezone');
     # Self-service Mail settings (any logged-in user; own account only).
     $r->get('/mail/self')       ->to('account#mail_self');
     $r->post('/mail/block-link')->to('account#mail_set_block_link');
     $r->post('/mail/reply-identity')->to('account#mail_set_reply_identity');
+    $r->post('/mail/calendar-links')->to('account#mail_set_calendar_links');
     $r->post('/mail/block')     ->to('account#mail_block');
     $r->post('/mail/unblock')   ->to('account#mail_unblock');
     # Invites (self-service) + account activity (self-scoped audit).
@@ -897,6 +899,23 @@ sub change_password ($c) {
     return $c->redirect_to('/#security');
 }
 
+# Set / clear the account's time zone (#74 phase 2): proxy to homelab-api's
+# POST /api/v1/account/timezone.
+sub set_timezone ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->redirect_to('/login') unless $email;
+    my $tz = $c->param('timezone') // '';
+    my $tx = $UA->post($c->app->api_base . '/api/v1/account/timezone'
+        => { Authorization => "Bearer $jwt" }
+        => json => { timezone => $tz });
+    if (($tx->res->code // 0) == 200) {
+        $c->flash(tz_ok => ($tz eq '' ? 'Time zone cleared.' : 'Time zone saved: ' . ($tz =~ s/_/ /gr) . '.'));
+    } else {
+        $c->flash(tz_error => (eval { $tx->res->json->{error} } // 'Could not save the time zone.'));
+    }
+    return $c->redirect_to('/#security');
+}
+
 # Set / change / clear the recovery email: proxy to homelab-api's
 # POST /api/v1/account/recovery-email.
 sub set_recovery_email ($c) {
@@ -1196,7 +1215,22 @@ sub mail_self ($c) {
         block_link     => (_api_get($c, $jwt, '/api/v1/block-link/account') // {}),
         blocked        => (_api_get($c, $jwt, '/api/v1/domains/recipient-access/mine') // []),
         reply_identity => (_api_get($c, $jwt, '/api/v1/domains/mail-reply-identity/mine') // {}),
+        # #74: the calendar's own switches, through the api gateway; {} when
+        # the calendar is unreachable, which the page shows as such.
+        calendar       => (_api_get($c, $jwt, '/api/v1/calendar/account') // {}),
     });
+}
+
+# POST /mail/calendar-links {enabled} -- post-cutover #74 phase 3: an "Add to
+# calendar" link in inbound mail. homelab-calendar owns the setting; the mail
+# pool's block-link milter adds the link.
+sub mail_set_calendar_links ($c) {
+    my ($email, $jwt) = _current_auth($c);
+    return $c->render(json => {}, status => 401) unless $email;
+    my $on = $c->param('enabled') ? \1 : \0;
+    my $tx = $UA->put($c->app->api_base . '/api/v1/calendar/account'
+        => { Authorization => "Bearer $jwt" } => json => { mail_links_enabled => $on });
+    return $c->render(json => (eval { $tx->res->json } // {}), status => ($tx->res->code // 502));
 }
 
 # POST /mail/reply-identity {enabled} -- post-cutover #67: replies go out from

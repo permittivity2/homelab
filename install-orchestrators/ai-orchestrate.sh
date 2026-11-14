@@ -91,12 +91,12 @@ verify(){
 
     step "callers"
     for n in $SEARCH_NODES; do
-        if on "$n" "sudo grep -qE '^  service_url: http://$SVC:$PORT' $SEARCH_CONFIG" 2>/dev/null; then
-            on "$n" "sudo grep -qE '^  api_key: \"\"' $SEARCH_CONFIG" && ok "$n search points at the service, key removed" || bad "$n search points at the service but STILL holds a key"
+        if on "$n" "sudo grep -qE '^ +service_url: http://$SVC:$PORT' $SEARCH_CONFIG" 2>/dev/null; then
+            on "$n" "sudo grep -qE '^ +api_key: \"\"' $SEARCH_CONFIG" && ok "$n search points at the service, key removed" || bad "$n search points at the service but STILL holds a key"
         else warn "$n search not wired yet (--wire-search after homelab-search >= $SEARCH_MIN_VERSION)"; fi
     done
     for n in $CAL_NODES; do
-        if on "$n" "sudo grep -qE '^  service_url: http://$SVC:$PORT' $CAL_CONFIG" 2>/dev/null; then ok "$n calendar points at the service"
+        if on "$n" "sudo grep -qE '^ +service_url: http://$SVC:$PORT' $CAL_CONFIG" 2>/dev/null; then ok "$n calendar points at the service"
         else warn "$n calendar not wired yet (--wire-calendar after homelab-calendar >= $CAL_MIN_VERSION)"; fi
     done
     step "result"
@@ -120,13 +120,17 @@ wire(){
         # token and the flags reach perl through the environment, never
         # through shell quoting (the first version of this broke on exactly that).
         local blankflag=0; [ -n "$blank" ] && blankflag=1
-        printf '%s' "$tok" | onin "$n" "T=\$(cat); sudo env T=\"\$T\" BLANK=$blankflag SVC=http://$SVC:$PORT perl -0pi -e '
+        # The block's own indentation is reused (search's configs indent with
+        # four spaces, the calendar's with two; a fixed two broke search's YAML
+        # on 2026-11-14), and the result must parse before it is kept.
+        printf '%s' "$tok" | onin "$n" "T=\$(cat); sudo cp -a $cfg $cfg.bak-wire && sudo env T=\"\$T\" BLANK=$blankflag SVC=http://$SVC:$PORT perl -0pi -e '
             my \$t = \$ENV{T}; my \$u = \$ENV{SVC};
-            s/^(ai:\n)((?:  .*\n)*?)  service_url: .*\n/\$1\$2/m;
-            s/^(ai:\n)((?:  .*\n)*?)  service_token: .*\n/\$1\$2/m;
-            s/^(ai:\n)/\$1  service_url: \$u\n  service_token: \"\$t\"\n/m;
-            s/^(  api_key: )\"[^\"]*\"/\$1\"\"/m if \$ENV{BLANK};
-        ' $cfg && sudo chown root:homelab $cfg && sudo chmod 640 $cfg && sudo perl -MYAML::XS -e 'my \$c = YAML::XS::LoadFile(q{$cfg}); exit(length(\$c->{ai}{service_token} // q{}) ? 0 : 1)'" \
+            my (\$i) = /^ai:\n( +)\S/m; \$i //= q{  };
+            s/^(ai:\n)((?:[ \t]+.*\n)*?)[ \t]+service_url: .*\n/\$1\$2/m;
+            s/^(ai:\n)((?:[ \t]+.*\n)*?)[ \t]+service_token: .*\n/\$1\$2/m;
+            s/^(ai:\n)/\$1\${i}service_url: \$u\n\${i}service_token: \"\$t\"\n/m;
+            s/^([ \t]+api_key: )\"[^\"]*\"/\$1\"\"/m if \$ENV{BLANK};
+        ' $cfg && sudo chown root:homelab $cfg && sudo chmod 640 $cfg && { sudo perl -MYAML::XS -e 'my \$c = YAML::XS::LoadFile(q{$cfg}); exit(length(\$c->{ai}{service_token} // q{}) ? 0 : 1)' || { sudo cp -a $cfg.bak-wire $cfg; exit 1; }; }" \
             && ok "$n $cfg: service_url + service_token written${blank:+, api_key blanked}" || { bad "$n could not edit $cfg"; continue; }
         on "$n" "sudo systemctl restart $unit" >/dev/null 2>&1
         sleep 2

@@ -448,6 +448,11 @@ sub accept ($c) {
 
     my $reg = { email => $account_email, password => $password, invite_token => $token, client_ip => $ip };
     $reg->{recovery_email} = $recovery if length $recovery;
+    # The browser's zone, when it looks like one; the api validates it for
+    # real and a bad one would fail the whole registration, so anything odd
+    # is simply left out here (#74 phase 2).
+    my $tz = $body->{timezone} // '';
+    $reg->{timezone} = $tz if !ref $tz && ($tz =~ m{\A[A-Z][A-Za-z_-]+(?:/[A-Za-z0-9_+-]+){1,2}\z} || $tz eq 'UTC');
 
     my $ua = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 15);
     my $tx = $ua->post($c->app->api_base . '/api/v1/auth/register', $headers, json => $reg);

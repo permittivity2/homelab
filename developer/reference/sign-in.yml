@@ -104,6 +104,7 @@ abilities:
         "email": "{me}",
         "exp": 1793850130,
         "roles": ["user"],
+        "timezone": "America/Chicago",
         "jti": "7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f7d3f"
       }
     notes:

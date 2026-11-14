@@ -1,0 +1,73 @@
+# Calendar: the per-account switches homelab-calendar keeps, reached through
+# the api so myaccount (and homelab-cli, one day) can show and set them. The
+# calendar itself is a web app at calendar.<domain>; its events, sharing and
+# ICS feeds are not part of the api.
+area: Calendar
+order: 45
+intro: >
+  Your calendar's own switches: the "Add to calendar" link in your email,
+  and the AI proposal. The calendar itself lives at calendar.mailmasker.org.
+abilities:
+  - id: calendar-account-show
+    title: See your calendar switches
+    method: GET
+    path: /api/v1/calendar/account
+    who: signed-in
+    summary: Whether your inbound email gets an "Add to calendar" link, and where the AI proposal stands.
+    description: >
+      With the mail link on, every message delivered to any of your addresses
+      gets a link at the bottom that opens calendar.<domain> with an event
+      pre-filled from the message. The AI proposal is a separate switch with
+      its own notice: the answer carries the notice's words and the hash you
+      must send back to turn it on.
+    response: |
+      {
+        "mail_links_enabled": true,
+        "mail_links_enabled_at": "2026-11-14 16:02:11+00",
+        "ai": {
+          "available": true,
+          "enabled": false,
+          "consented_to_current_notice": false,
+          "consent_at": null,
+          "notice": "\"Propose with AI\" sends one email to Anthropic, a third party. ...",
+          "notice_sha256": "3f1c...e9"
+        },
+        "settings_url": "https://calendar.mailmasker.org/settings"
+      }
+    notes:
+      - available is false when the calendar has no AI service configured; the plain parse still works.
+    cli: none
+
+  - id: calendar-account-set
+    title: Change your calendar switches
+    method: PUT
+    path: /api/v1/calendar/account
+    who: signed-in
+    summary: Turn the email link on or off; turn the AI proposal on (with the notice's hash) or off.
+    description: >
+      Send only the keys you want to change. Turning the AI proposal on is a
+      consent: you must send the sha256 of the notice you were shown
+      (notice_sha256 from the GET). If the wording has changed since, the
+      hash no longer matches and the answer is 400: read the new notice and
+      send its hash. Turning it off needs nothing else.
+    params:
+      - name: mail_links_enabled
+        in: body
+        required: false
+        about: true adds the link to new inbound email from now on; false stops it.
+        example: true
+      - name: ai_enabled
+        in: body
+        required: false
+        about: true turns the AI proposal on (with ai_consent_sha256); false turns it off.
+        example: true
+      - name: ai_consent_sha256
+        in: body
+        required: false
+        about: The hash of the notice you agreed to, from the GET's notice_sha256. Required with ai_enabled true.
+        example: 3f1c3f1c3f1c3f1c3f1c3f1c3f1c3f1c3f1c3f1c3f1c3f1c3f1c3f1c3f1c3f1c
+    response: |
+      { "mail_links_enabled": true, "ai": { "available": true, "enabled": true, "consented_to_current_notice": true, "consent_at": "2026-11-14 16:05:00+00", "notice": "...", "notice_sha256": "3f1c...e9" }, "settings_url": "https://calendar.mailmasker.org/settings" }
+    notes:
+      - A stale notice hash answers 400 with a sentence saying to reload and agree again.
+    cli: none

@@ -41,3 +41,15 @@ milter:
   # this fleet (inet:8891@0.0.0.0) -- loopback-only here since nothing
   # outside this host should ever speak the milter protocol to it.
   listen: "inet:8892@127.0.0.1"
+
+# "Add to calendar" links (post-cutover #74 phase 3). For a recipient whose
+# calendar switch is on, the milter stores the message's subject, sender,
+# Date header and a bounded text excerpt in calendar.mail_links and adds a
+# footer line + X-Homelab-Calendar header pointing at the calendar. Off
+# until public_base_url is set (install-orchestrators/calendar-orchestrate.sh
+# --mail-links writes it). The role needs the calendar grants the bootstrap
+# script issues (homelab-postfix-block-link-bootstrap-role --grants-only).
+# calendar:
+#   public_base_url: https://calendar.test.mailmasker.org
+#   link_ttl_days: 30
+#   excerpt_chars: 16000

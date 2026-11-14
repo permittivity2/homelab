@@ -1,3 +1,14 @@
+homelab-postfix-block-link (0.2.4) unstable; urgency=medium
+
+  * "Add to calendar" links (post-cutover #74 phase 3): for recipients whose
+    calendar switch is on (calendar.account_settings), one row per inbound
+    message in calendar.mail_links (subject, sender, Date header, a decoded
+    text excerpt; 30 days) and a footer line + X-Homelab-Calendar header
+    with the /m/<token> link. Off until calendar.public_base_url is set in the
+    config. The role gains SELECT on account_settings and INSERT on mail_links.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 16:40:00 -0600
+
 homelab-postfix-block-link (0.2.3) unstable; urgency=medium
 
   * postinst: the per-service milter order (this milter first, OpenDKIM

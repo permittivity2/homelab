@@ -1,3 +1,11 @@
+homelab-developer (0.1.5) unstable; urgency=medium
+
+  * Reference: the calendar's account switches (GET/PUT /api/v1/calendar/account,
+    post-cutover #74) and the account time zone (POST /api/v1/account/timezone,
+    timezone in introspect and the summary).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 17:20:00 -0600
+
 homelab-developer (0.1.4) unstable; urgency=medium
 
   * Release v0.1.4

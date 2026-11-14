@@ -22,6 +22,7 @@ abilities:
         "email": "{me}",
         "created_at": "2026-09-27 14:03:51.402117-05",
         "recovery_email": "personal@example.com",
+        "timezone": "America/Chicago",
         "active": true,
         "roles": ["user"]
       }
@@ -121,3 +122,27 @@ abilities:
       - Asking for someone else's entries without the audit.view permission answers 403.
       - With audit.view and neither user nor affecting, you see everyone's entries.
     cli: homelab-cli audit list --since 2026-11-01
+
+  - id: set-timezone
+    title: Set your time zone
+    method: POST
+    path: /api/v1/account/timezone
+    who: signed-in
+    summary: The time zone your calendar and other apps show times in, or clear it.
+    description: >
+      An IANA time zone name such as America/Chicago or Europe/Berlin. It is
+      set when your account is created from what your browser reported on the
+      invite page, and you can change it in My Account. Apps read it from the
+      token check (`timezone` in introspect). Cleared, apps fall back to their
+      own default.
+    params:
+      - name: timezone
+        in: body
+        required: false
+        about: The zone name. An empty string or null clears it.
+        example: America/Chicago
+    response: |
+      { "ok": true, "timezone": "America/Chicago" }
+    notes:
+      - A name that is not a time zone answers 400.
+    cli: none

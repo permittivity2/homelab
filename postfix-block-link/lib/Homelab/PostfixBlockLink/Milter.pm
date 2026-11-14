@@ -11,6 +11,7 @@ our @EXPORT_OK = qw(
     choose_reply_address rewrite_address_header
     reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
     single_account reply_footer_line footer_text_lines footer_html
+    calendar_links_enabled insert_mail_link calendar_footer_line text_excerpt
 );
 
 # Replicates Postfix's OWN virtual_alias_maps resolution for one envelope
@@ -347,6 +348,77 @@ sub allowed_to_send_as {
     return $row ? 1 : 0;
 }
 
+# ===== "Add to calendar" links (0.2.4, post-cutover #74 phase 3) ===========
+#
+# A recipient who turned the switch on (calendar.account_settings, set from
+# myaccount or the calendar's own Settings) gets a link at the bottom of
+# every inbound message that opens calendar.<domain> with an event pre-filled
+# from the message. One link per message covering every consenting recipient
+# (the same one-shared-body reasoning as pending_links); the calendar lets
+# only those accounts open it. What is stored for them: the subject, the
+# sender, the Date header and a bounded plain-text excerpt, for 30 days.
+
+sub calendar_links_enabled {
+    my ($db, $account_email) = @_;
+    my $row = $db->query(
+        'SELECT mail_links_enabled FROM calendar.account_settings WHERE user_email = ?', lc($account_email // ''),
+    )->hash;
+    return ($row && $row->{mail_links_enabled}) ? 1 : 0;
+}
+
+sub insert_mail_link {
+    my ($db, %o) = @_;
+    return $db->query(
+        q{INSERT INTO calendar.mail_links (token, accounts, message_id, subject, from_addr, date_header, text_excerpt, expires_at)
+          VALUES (?, ?::jsonb, ?, ?, ?, ?, ?, NOW() + (? || ' days')::INTERVAL)},
+        $o{token}, $o{accounts_json}, $o{message_id}, $o{subject}, $o{from_addr}, $o{date_header}, $o{text_excerpt}, $o{ttl_days} // 30,
+    );
+}
+
+sub calendar_footer_line {
+    my ($url) = @_;
+    return "Add this to your calendar: $url";
+}
+
+# A decoded, bounded plain-text excerpt of the message body: the first
+# text/plain leaf, else a text/html leaf with its tags stripped, each part
+# decoded from its own transfer encoding by Email::MIME. Never more than
+# $limit characters; whitespace runs collapsed. Returns '' when nothing
+# readable is found (a bare attachment, say).
+sub text_excerpt {
+    my ($content_type, $body, $limit) = @_;
+    $limit //= 16000;
+    return '' unless defined $body && length $body;
+    my $ct = $content_type // 'text/plain';
+    my ($plain, $html);
+    eval {
+        require Email::MIME;
+        my $msg = Email::MIME->new("Content-Type: $ct\n\n$body");
+        $msg->walk_parts(sub {
+            my ($part) = @_;
+            return if $part->subparts;
+            my $pct = lc($part->content_type // 'text/plain');
+            if ($pct =~ m{^\s*text/plain} && !defined $plain) { $plain = eval { $part->body_str } // $part->body }
+            elsif ($pct =~ m{^\s*text/html} && !defined $html) { $html = eval { $part->body_str } // $part->body }
+        });
+    };
+    my $text = defined $plain && $plain =~ /\S/ ? $plain : defined $html ? _strip_html($html) : '';
+    $text =~ s/\r//g;
+    $text =~ s/[ \t]+/ /g;
+    $text =~ s/\n{3,}/\n\n/g;
+    $text =~ s/^\s+|\s+\z//g;
+    return length $text > $limit ? substr($text, 0, $limit) : $text;
+}
+
+sub _strip_html {
+    my ($h) = @_;
+    $h =~ s{<(script|style)\b.*?</\1\s*>}{ }gis;
+    $h =~ s{<br\s*/?>|</(p|div|li|tr|h[1-6])\s*>}{\n}gi;
+    $h =~ s/<[^>]+>/ /g;
+    for ($h) { s/&nbsp;/ /g; s/&amp;/&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g; s/&#39;/'/g }
+    return $h;
+}
+
 # ===== the footer: block link + "Reply from the alias" line (0.2.2) ========
 #
 # A milter edits ONE body per transaction, shared by every recipient, so a
@@ -383,6 +455,7 @@ sub footer_text_lines {
     my (%o) = @_;
     my @lines;
     push @lines, reply_footer_line($o{reply_alias}) if defined $o{reply_alias};
+    push @lines, calendar_footer_line($o{calendar_url}) if defined $o{calendar_url};
     push @lines, "Don't want mail like this? Manage blocked addresses: $o{block_url}" if defined $o{block_url};
     return @lines;
 }
@@ -399,6 +472,7 @@ sub footer_html {
     my (%o) = @_;
     my @lines;
     push @lines, _html_escape(reply_footer_line($o{reply_alias})) if defined $o{reply_alias};
+    push @lines, qq{<a href="} . _html_escape($o{calendar_url}) . qq{">Add this to your calendar</a>} if defined $o{calendar_url};
     push @lines, qq{Don't want mail like this? <a href="} . _html_escape($o{block_url}) . qq{">Manage blocked addresses</a>}
         if defined $o{block_url};
     return undef unless @lines;

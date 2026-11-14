@@ -98,6 +98,8 @@ sub startup ($self) {
     # needs. Both back homelab-accountmanage's Security panel.
     $r->post('/api/v1/auth/password' => sub ($c) { $self->_change_password($c) });
     $r->post('/api/v1/account/recovery-email' => sub ($c) { $self->_set_recovery_email($c) });
+    # Post-cutover #74 phase 2: the account's time zone (myaccount's selector).
+    $r->post('/api/v1/account/timezone' => sub ($c) { $self->_set_timezone($c) });
 
     # --- Service registry (see Homelab::Common::Registry — this is what
     # every OTHER feature's register()/lookup() calls hit) ------------
@@ -317,6 +319,10 @@ sub startup ($self) {
     # homelab-block-link's own route table before assuming, not copied
     # blindly from the domains/jobs precedent.
     $r->any('/api/v1/block-link/*capture' => sub ($c) { $self->_gateway($c, 'homelab-block-link', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+    # homelab-calendar's per-account switches (post-cutover #74 phase 3): the
+    # "calendar links in my email" and AI-proposal settings myaccount shows.
+    # Same shape as block-link's: /api/v1/calendar/* -> /internal/v1/calendar/*.
+    $r->any('/api/v1/calendar/*capture' => sub ($c) { $self->_gateway($c, 'homelab-calendar', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
 
     return;
 }
@@ -483,6 +489,12 @@ sub _register ($self, $c) {
     $recovery_email = undef if defined $recovery_email && $recovery_email eq '';
     return $c->render(json => { error => 'recovery_email is not a valid email address' }, status => 400)
         if defined $recovery_email && $recovery_email !~ /^[^@\s]+\@[^@\s]+\.[^@\s]+$/;
+    # Post-cutover #74 phase 2: the zone the invite page's browser reported
+    # (or a caller's choice). Optional; NULL means "not known".
+    my $timezone = $body->{timezone};
+    $timezone = undef if defined $timezone && !ref $timezone && $timezone eq '';
+    return $c->render(json => { error => 'timezone is not an IANA time zone name' }, status => 400)
+        if defined $timezone && !_valid_timezone($timezone);
 
     return $c->render(json => { error => 'email and password are required' }, status => 400)
         unless $email && $password;
@@ -544,8 +556,8 @@ sub _register ($self, $c) {
 
     my $hash = hash_password($password);
     my $user = $self->pg->db->query(
-        'INSERT INTO api.users (email, password_hash, recovery_email) VALUES (?, ?, ?) RETURNING id',
-        $email, $hash, $recovery_email,
+        'INSERT INTO api.users (email, password_hash, recovery_email, timezone) VALUES (?, ?, ?, ?) RETURNING id',
+        $email, $hash, $recovery_email, $timezone,
     )->hash;
 
     my $user_role_id = $self->pg->db->query(q{SELECT id FROM api.roles WHERE name = 'user'})->hash->{id};
@@ -1008,13 +1020,17 @@ sub _introspect ($self, $c) {
             # every existing caller (Dovecot's oauth2 passdb, mailbridge) simply
             # ignores this new key, same additive-response precedent as every
             # other field added here historically.
+            # u.timezone rides along (#74 phase 2): every account has at least
+            # the user role, so the first row carries it.
             return $self->pg->db->query_p(
-                q{SELECT r.name FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
+                q{SELECT r.name, u.timezone FROM api.user_roles ur JOIN api.roles r ON r.id = ur.role_id
                   JOIN api.users u ON u.id = ur.user_id WHERE u.email = ?}, $payload->{email},
             );
         })->then(sub ($results) {
-            my $roles = $results->hashes->map(sub { $_->{name} })->to_array;
-            my $response = { email => $payload->{email}, exp => $payload->{exp}, roles => $roles, jti => $payload->{jti} };
+            my $rows  = $results->hashes;
+            my $roles = $rows->map(sub { $_->{name} })->to_array;
+            my $tz    = @$rows ? $rows->[0]{timezone} : undef;
+            my $response = { email => $payload->{email}, exp => $payload->{exp}, roles => $roles, jti => $payload->{jti}, timezone => $tz };
 
             # Optional ?capability=<name> -- how a DIFFERENT service (which has
             # no direct grant on api.role_permissions/api.permissions, and never
@@ -1070,7 +1086,7 @@ sub _account_summary ($self, $c) {
                 return Mojo::Promise->reject($ALREADY_RENDERED);
             }
             return $self->pg->db->query_p(
-                'SELECT email, created_at, recovery_email, active FROM api.users WHERE email = ?', $email);
+                'SELECT email, created_at, recovery_email, active, timezone FROM api.users WHERE email = ?', $email);
         })->then(sub ($results) {
             my $user = $results->hash;
             unless ($user) {
@@ -1088,6 +1104,7 @@ sub _account_summary ($self, $c) {
                 email          => $u->{email},
                 created_at     => $u->{created_at},
                 recovery_email => $u->{recovery_email},
+                timezone       => $u->{timezone},
                 active         => ($u->{active} ? \1 : \0),
                 roles          => $roles,
             });
@@ -1158,6 +1175,27 @@ sub _change_password ($self, $c) {
     $self->pg->db->query('UPDATE api.users SET password_hash = ? WHERE id = ?', hash_password($new), $user->{id});
     $self->_end_sessions($user->{id}, keep_jti => $payload->{jti} // '');
     return $c->render(json => { ok => \1 });
+}
+
+# An IANA zone name DateTime::TimeZone knows ('floating' is not a zone a
+# person lives in). Shared by _register and _set_timezone.
+sub _valid_timezone ($tz) {
+    return 0 unless defined $tz && !ref $tz && length $tz && $tz ne 'floating' && length $tz <= 64;
+    require DateTime::TimeZone;
+    return DateTime::TimeZone->is_valid_name($tz) ? 1 : 0;
+}
+
+# POST /api/v1/account/timezone { timezone }
+# Set / clear (empty string or null clears) the caller's time zone.
+sub _set_timezone ($self, $c) {
+    my $payload = $self->_require_bearer($c) or return;
+    my $body = $c->req->json // {};
+    my $tz = $body->{timezone};
+    $tz = undef if defined $tz && !ref $tz && $tz eq '';
+    return $c->render(json => { error => 'timezone is not an IANA time zone name' }, status => 400)
+        if defined $tz && !_valid_timezone($tz);
+    $self->pg->db->query('UPDATE api.users SET timezone = ? WHERE email = ?', $tz, $payload->{email});
+    return $c->render(json => { ok => \1, timezone => $tz });
 }
 
 # POST /api/v1/account/recovery-email { recovery_email }

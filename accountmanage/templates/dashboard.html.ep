@@ -47,6 +47,7 @@
           <dt>Email</dt><dd><%= $email %></dd>
           <dt>Account created</dt><dd><%= $summary->{created_at} // '—' %></dd>
           <dt>Recovery email</dt><dd><%= $summary->{recovery_email} // '(none set)' %></dd>
+          <dt>Time zone</dt><dd><%= ($summary->{timezone} // '') =~ s/_/ /gr || '(not set: apps use America/Chicago)' %></dd>
           <dt>Status</dt><dd><%= $summary->{active} ? 'Active' : 'Suspended' %></dd>
           <dt>Access</dt>
           <dd>
@@ -109,6 +110,30 @@
         <p class="muted" style="font-size:0.82rem;margin:0.9rem 0 0;">Changing your password signs out your other sessions.</p>
       </div>
 
+      <div class="card">
+        <h2>Time zone <span class="hint">what the calendar and other apps show times in</span></h2>
+% if (my $ok = flash 'tz_ok') {
+        <div class="flash ok"><%= $ok %></div>
+% }
+% if (my $err = flash 'tz_error') {
+        <div class="flash err"><%= $err %></div>
+% }
+% require DateTime::TimeZone;
+% my $cur = $summary->{timezone} // '';
+        <form method="post" action="/profile/timezone">
+          <div class="field">
+            <label>Time zone</label>
+            <select name="timezone">
+              <option value=""<%= $cur eq '' ? ' selected' : '' %>>(not set)</option>
+% for my $z (grep { m{/} || $_ eq 'UTC' } DateTime::TimeZone->all_names) {
+              <option value="<%= $z %>"<%= $z eq $cur ? ' selected' : '' %>><%= $z =~ s/_/ /gr %></option>
+% }
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </form>
+        <p class="muted" style="font-size:0.82rem;margin:0.9rem 0 0;">Set from your browser when the account was created. Apps that have no zone of yours use America/Chicago.</p>
+      </div>
       <div class="card">
         <h2>Recovery email <span class="hint">used for password reset by email</span></h2>
 % if (my $ok = flash 're_ok') {
@@ -178,6 +203,10 @@
       <div class="card">
         <h2>Reply from the alias <span class="hint">a reply keeps the address the mail was sent to, from any mail app</span></h2>
         <div id="ms-replyalias"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Calendar links <span class="hint">an "Add to calendar" link added to your inbound mail</span></h2>
+        <div id="ms-calendar"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
         <h2>Blocked addresses <span id="ms-blocked-count" class="hint"></span> <span class="hint">reject all mail to one of your own addresses</span></h2>

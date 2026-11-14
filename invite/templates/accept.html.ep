@@ -158,8 +158,12 @@ document.getElementById('go').onclick = async function () {
     goBtn.textContent = 'Creating your account\u2026';
     var res;
     try {
+        // The browser's time zone becomes the account's (post-cutover #74
+        // phase 2): exact, free, and what the calendar shows times in.
+        var tz = '';
+        try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { tz = ''; }
         res = await postJSON('/invite/' + TOKEN + '/accept', {
-            username: username, password: pw, password_confirm: pw2, recovery_email: recovery
+            username: username, password: pw, password_confirm: pw2, recovery_email: recovery, timezone: tz
         });
     } finally {
         goBtn.disabled = false;

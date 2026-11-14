@@ -1,3 +1,11 @@
+homelab-invite (0.1.18) unstable; urgency=medium
+
+  * The acceptance page sends the browser's time zone and it becomes the
+    account's (post-cutover #74 phase 2); anything that does not look like a
+    zone name is left out rather than failing the registration.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 17:20:00 -0600
+
 homelab-invite (0.1.17) unstable; urgency=medium
 
   * An invite past its expiry is marked expired (post-cutover item 53),

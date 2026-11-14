@@ -1,3 +1,14 @@
+homelab-api (0.1.72) unstable; urgency=medium
+
+  * The account time zone (post-cutover #74 phase 2): api.users.timezone
+    (migration 023), accepted by POST /auth/register (the invite page sends
+    the browser's zone), returned by introspect and /account/summary, set
+    by POST /account/timezone; an IANA name DateTime::TimeZone knows.
+  * Gateway route /api/v1/calendar/* -> homelab-calendar /internal/v1/*
+    (phase 3: the switches myaccount shows).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 17:00:00 -0600
+
 homelab-api (0.1.71) unstable; urgency=medium
 
   * Fleet topology: port 465 maps to postfix (post-cutover #70, SMTPS), so

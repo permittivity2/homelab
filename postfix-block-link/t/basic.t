@@ -14,6 +14,7 @@ use Homelab::PostfixBlockLink::Milter qw(
     choose_reply_address rewrite_address_header
     reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
     single_account reply_footer_line footer_text_lines footer_html
+    calendar_footer_line text_excerpt
 );
 
 # --- Pure functions -- no DB, no Sendmail::PMilter, run everywhere ------
@@ -153,6 +154,28 @@ like($fh, qr{goes out from shop01\@forge\.name\.<br>Don't want mail like this\? 
 like(footer_html(reply_alias => 'a<b>@forge.name'), qr{a&lt;b&gt;\@forge\.name}, 'html footer escapes the alias');
 unlike(footer_html(reply_alias => 'shop01@forge.name'), qr/Manage blocked/, 'html footer with the reply line alone has no link');
 is(footer_html(), undef, 'html footer with nothing to say is undef');
+
+# --- "Add to calendar" (0.2.4, #74 phase 3) --------------------------------
+is(calendar_footer_line('https://c.example/m/tok'), 'Add this to your calendar: https://c.example/m/tok', 'the calendar line');
+is_deeply([ footer_text_lines(reply_alias => 'shop01@forge.name', calendar_url => 'https://c.example/m/tok', block_url => 'https://b.example/l/tok') ],
+    [ reply_footer_line('shop01@forge.name'), 'Add this to your calendar: https://c.example/m/tok',
+      "Don't want mail like this? Manage blocked addresses: https://b.example/l/tok" ],
+    'text footer: reply line, then the calendar line, then the block link');
+like(footer_html(calendar_url => 'https://c.example/m/t<k'), qr{<a href="https://c\.example/m/t&lt;k">Add this to your calendar</a>}, 'html footer: the calendar link, escaped');
+is_deeply([ footer_text_lines(calendar_url => 'https://c.example/m/tok') ], ['Add this to your calendar: https://c.example/m/tok'], 'the calendar line alone');
+
+my $plain = "Hello,\r\n\r\nLunch   on 11/20 at noon?\r\n\r\n\r\n\r\n-- \r\nBob";
+is(text_excerpt('text/plain', $plain), "Hello,\n\nLunch on 11/20 at noon?\n\n-- \nBob", 'plain text: CRs dropped, spaces and blank runs collapsed');
+is(text_excerpt(undef, $plain), "Hello,\n\nLunch on 11/20 at noon?\n\n-- \nBob", 'no Content-Type is text/plain');
+my $mp = join("\r\n",
+    '--b1', 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: quoted-printable', '',
+    'Caf=C3=A9 meeting 3pm', '--b1', 'Content-Type: text/html; charset=utf-8', '', '<p>Caf&eacute; <b>meeting</b> 3pm</p>', '--b1--', '');
+is(text_excerpt('multipart/alternative; boundary="b1"', $mp), "Caf\x{e9} meeting 3pm", 'multipart: the text/plain part, decoded from quoted-printable');
+my $html_only = join("\r\n", '--b2', 'Content-Type: text/html; charset=utf-8', '', '<html><body><style>p{}</style><p>Dinner<br>Friday &amp; 7pm</p><script>x()</script></body></html>', '--b2--', '');
+is(text_excerpt('multipart/mixed; boundary="b2"', $html_only), "Dinner\nFriday & 7pm", 'html only: tags stripped, breaks kept, script and style dropped, entities decoded');
+is(length(text_excerpt('text/plain', 'x' x 50000, 100)), 100, 'the excerpt is capped');
+is(text_excerpt('text/plain', ''), '', 'an empty body is an empty excerpt');
+is(text_excerpt('application/pdf', "%PDF-1.4 binary"), '', 'no text part: nothing');
 
 # --- DB-backed functions -- real Postgres only, same "no mocks" -----------
 # convention as every other homelab-* test suite. Point

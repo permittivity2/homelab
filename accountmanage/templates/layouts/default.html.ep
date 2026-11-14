@@ -660,6 +660,24 @@
           post('/mail/reply-identity', { enabled: this.checked ? '1' : '' }).then(function (r) { st.textContent = r.ok ? 'Saved.' : ('Failed: ' + ((r.body && r.body.error) || '')); });
         });
 
+        // #74 phase 3: an "Add to calendar" link in inbound mail. The setting
+        // lives in homelab-calendar; the mail pool's milter adds the link.
+        var cal = d.calendar || {};
+        var calEl = document.getElementById('ms-calendar');
+        if (calEl) {
+          var calUrl = cal.settings_url || 'https://calendar.mailmasker.org/settings';
+          calEl.innerHTML = cal.error === undefined && cal.mail_links_enabled !== undefined
+            ? '<label style="display:flex;align-items:center;gap:0.5rem;"><input type="checkbox" id="ms-cal-toggle"' + (cal.mail_links_enabled ? ' checked' : '') + '> Add an "Add to calendar" link to my inbound mail</label>'
+              + '<p class="muted" style="font-size:0.8rem;margin:0.5rem 0 0;">Every message delivered to any of your addresses gets a link at the bottom that opens your calendar with an event pre-filled from the message. For that, the mail server keeps the message\'s subject, sender, date and the first part of its text for 30 days, for your account only. The optional AI proposal has its own switch and notice in the <a href="' + hlEsc(calUrl) + '">calendar\'s settings</a>.</p>'
+              + '<div id="ms-cal-status" class="usage-note"></div>'
+            : '<p class="muted">The calendar is not reachable just now. Its settings are at <a href="' + hlEsc(calUrl) + '">' + hlEsc(calUrl) + '</a>.</p>';
+          var calToggle = document.getElementById('ms-cal-toggle');
+          if (calToggle) calToggle.addEventListener('change', function () {
+            var st = document.getElementById('ms-cal-status'); st.textContent = 'Saving…';
+            post('/mail/calendar-links', { enabled: this.checked ? '1' : '' }).then(function (r) { st.textContent = r.ok ? 'Saved.' : ('Failed: ' + ((r.body && r.body.error) || '')); });
+          });
+        }
+
         // Normalised once here so the filter/sort/render path below never has
         // to care that the API may hand back either plain strings or full
         // rows. `created_at` is a real column on domainadmin.recipient_access

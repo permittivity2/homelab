@@ -39,6 +39,7 @@ use Homelab::PostfixBlockLink::Milter qw(
     choose_reply_address rewrite_address_header
     reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
     single_account footer_text_lines footer_html
+    calendar_links_enabled insert_mail_link text_excerpt
 );
 use Mojo::JSON qw(encode_json);
 use Email::MIME;
@@ -50,6 +51,9 @@ my $listen = $config->{milter}{listen} // die "config: milter.listen is required
 # config.yml (it is written once, at first install) -- these defaults ARE
 # the shipped behaviour, the example yml only documents them.
 my $ri_cfg      = $config->{reply_identity} // {};
+# "Add to calendar" links (#74 phase 3): off until calendar.public_base_url
+# is set (calendar-orchestrate.sh --mail-links writes it).
+my $cal_cfg     = $config->{calendar} // {};
 my $ON_DB_ERROR = $ri_cfg->{on_db_error} // 'tempfail';
 my $HDR_LIMIT   = $ri_cfg->{header_address_limit} // 50;
 
@@ -155,6 +159,15 @@ $cbs{envrcpt} = sub {
                 address => $clean, account_email => $account,
                 enabled => $setting->{enabled}, mode => $setting->{mode},
             } if $setting->{enabled};
+            # "Add to calendar" links (#74): the account's own switch, read
+            # here so the body callback knows to buffer. Fails open.
+            if ($cal_cfg->{public_base_url}) {
+                my $on = eval { calendar_links_enabled(_pg()->db, $account) };
+                log_line("calendar-link check for $account failed (failing open, no link): $@") if $@;
+                my $lc = lc $account;
+                push @{ $priv->{calendar_accounts} }, $lc
+                    if $on && !grep { $_ eq $lc } @{ $priv->{calendar_accounts} // [] };
+            }
         }
     };
     log_line("envrcpt resolution failed for $clean (failing open, continuing unmodified): $@") if $@;
@@ -167,7 +180,8 @@ $cbs{envrcpt} = sub {
 # repeat (RFC 5322 allows one each, real mail does not care) -- joined so
 # every address counts; the rest keep their first occurrence.
 my %JOIN_HEADERS  = map { $_ => 1 } qw(to cc);
-my %FIRST_HEADERS = map { $_ => 1 } qw(from reply-to sender in-reply-to references);
+# subject and date: what an "Add to calendar" link pre-fills from (#74).
+my %FIRST_HEADERS = map { $_ => 1 } qw(from reply-to sender in-reply-to references subject date);
 
 $cbs{header} = sub {
     my ($ctx, $name, $value) = @_;
@@ -216,7 +230,7 @@ $cbs{body} = sub {
     # on 587 (attachments included) and every inbound message for a
     # non-enabled account out of memory.
     $priv->{body_chunks}++;
-    if (@{ $priv->{candidates} // [] } || defined $priv->{reply_line_account}) {
+    if (@{ $priv->{candidates} // [] } || defined $priv->{reply_line_account} || @{ $priv->{calendar_accounts} // [] }) {
         $priv->{body} = '' unless defined $priv->{body};
         $priv->{body} .= $chunk;
     }
@@ -297,10 +311,26 @@ sub _record_received_via {
 sub _inject_footer {
     my ($ctx, $priv, $reply_alias) = @_;
     my @enabled = grep { $_->{enabled} } @{ $priv->{candidates} // [] };
-    return unless @enabled || defined $reply_alias;
+    my @cal_accounts = @{ $priv->{calendar_accounts} // [] };
+    return unless @enabled || defined $reply_alias || @cal_accounts;
 
     eval {
-        my $block_url;
+        my ($block_url, $calendar_url);
+        # "Add to calendar" (#74): one row for the consenting recipients, one
+        # link in the footer and in a header. The excerpt is decoded from the
+        # buffered body; a message whose body was not buffered gets no row.
+        if (@cal_accounts && $cal_cfg->{public_base_url} && defined $priv->{body}) {
+            my $ctoken = generate_token();
+            insert_mail_link(
+                _pg()->db, token => $ctoken, accounts_json => encode_json(\@cal_accounts),
+                message_id => $priv->{message_id}, subject => $priv->{headers}{subject}, from_addr => $priv->{headers}{from},
+                date_header => $priv->{headers}{date},
+                text_excerpt => text_excerpt($priv->{content_type}, $priv->{body}, $cal_cfg->{excerpt_chars} // 16000),
+                ttl_days => $cal_cfg->{link_ttl_days} // 30,
+            );
+            $calendar_url = "$cal_cfg->{public_base_url}/m/$ctoken";
+            $ctx->addheader('X-Homelab-Calendar', "<$calendar_url>");
+        }
         if (@enabled) {
             my $token = generate_token();
             my $candidates_json = encode_json([
@@ -323,7 +353,7 @@ sub _inject_footer {
             my $want_body = grep { $_->{mode} eq 'body' || $_->{mode} eq 'both' } @enabled;
             $block_url = "$bl_cfg->{public_base_url}/l/$token" if $want_body;
         }
-        return unless defined $block_url || defined $reply_alias;   # header-only block link, no line
+        return unless defined $block_url || defined $reply_alias || defined $calendar_url;   # header-only block link, no line
         return if is_signed_mime($priv->{content_type});
 
         # The body is buffered only when envrcpt/eoh saw a reason to; a
@@ -334,8 +364,8 @@ sub _inject_footer {
             return;
         }
 
-        my @lines = footer_text_lines(reply_alias => $reply_alias, block_url => $block_url);
-        my $html  = footer_html(reply_alias => $reply_alias, block_url => $block_url);
+        my @lines = footer_text_lines(reply_alias => $reply_alias, block_url => $block_url, calendar_url => $calendar_url);
+        my $html  = footer_html(reply_alias => $reply_alias, block_url => $block_url, calendar_url => $calendar_url);
         my $ct = $priv->{content_type};
         # No Content-Type header at all defaults to text/plain per RFC
         # 2045 -- the simplest, safest case to append to, not one to

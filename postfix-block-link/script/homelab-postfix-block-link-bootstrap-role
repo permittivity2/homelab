@@ -181,6 +181,16 @@ GRANT USAGE ON block_link.pending_links_id_seq TO "$ROLE";
 GRANT SELECT ON domainadmin.mail_reply_identity TO "$ROLE";
 GRANT SELECT, INSERT ON domainadmin.mail_received_via TO "$ROLE";
 GRANT USAGE ON SEQUENCE domainadmin.mail_received_via_id_seq TO "$ROLE";
+
+-- Post-cutover #74 phase 3, "Add to calendar" links (tables owned by
+-- homelab-calendar, migration 002). The milter READS the per-account switch
+-- and WRITES one row per inbound message for the consenting recipients:
+-- subject, sender, Date header, a bounded text excerpt. Never UPDATE/DELETE:
+-- expiry is the calendar's.
+GRANT USAGE ON SCHEMA calendar TO "$ROLE";
+GRANT SELECT ON calendar.account_settings TO "$ROLE";
+GRANT INSERT ON calendar.mail_links TO "$ROLE";
+GRANT USAGE ON SEQUENCE calendar.mail_links_id_seq TO "$ROLE";
 SQL
 }
 
@@ -224,6 +234,7 @@ sub fetch_scram_secret {
 my @REQUIRED_TABLES = qw(
     api.users domainadmin.domains domainadmin.mail_aliases block_link.pending_links
     domainadmin.mail_reply_identity domainadmin.mail_received_via
+    calendar.account_settings calendar.mail_links
 );
 
 sub check_all_exist {
