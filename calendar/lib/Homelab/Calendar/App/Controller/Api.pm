@@ -285,8 +285,12 @@ sub _event_json ($c, $event, $cal, $zone, $rid = undef) {
         color => $event->{color}, permission => $event->{permission}, is_recurring => ($event->{rrule} ? \1 : \0),
         created_by_email => $event->{created_by_email},
         calendar => { id => $cal->{id} + 0, name => $cal->{name}, color => $cal->{color}, owner_email => $cal->{owner_email} },
-        # #79: minutes before each occurrence an email goes out, or null.
+        # #79: the soonest email reminder (what older clients know) and, since
+        # 0.2.0, every reminder (up to three, email or webhook) and a deep link.
         reminder_minutes => do { my $r = $m->reminder_for($event->{id}); $r ? $r->{minutes_before} + 0 : undef },
+        reminders => [ map { { minutes_before => $_->{minutes_before} + 0, channel => $_->{channel} } } @{ $m->reminders_for($event->{id}) } ],
+        url => $c->app->public_base_url . '/?date=' . ($event->{all_day} ? $start->ymd : $start->clone->set_time_zone($zone)->ymd)
+             . '&event=' . $event->{id} . ($rid ? '&rid=' . _rid_str($rid) : ''),
     );
     if ($rid && $event->{rrule}) {
         my ($inst) = grep { $_->{recurrence_id} && $_->{recurrence_id}->epoch == $rid->epoch }
@@ -346,7 +350,7 @@ sub _create_from_body ($c, $me, $b) {
     my $share_with = _share_with($c, $b, $me, $perm); return if $share_with && $share_with eq "\0";
     my $event = _try($c, sub { $m->create_event($cal, $me, _event_input($c, $b, $zone)) }) or return;
     $event->{permission} = $perm;
-    if (exists $b->{reminder_minutes}) { _try($c, sub { $m->set_reminder($event->{id}, $b->{reminder_minutes}); 1 }) or return }
+    _apply_reminders($c, $m, $event->{id}, $b) or return;
     # Created from a link in an email: the link remembers which event it
     # became, for this account (#81: a link may become several).
     if (my $link = (defined $b->{mail_link_token} ? $m->mail_link_for($b->{mail_link_token}, $me) : undef)) {
@@ -625,7 +629,7 @@ sub update_event ($c) {
     my $row = _try($c, sub { $m->update_event($event, _event_input($c, $b, $zone), scope => $scope, recurrence_id => $rid) }) or return;
     $row->{permission} = $event->{permission};
     # The reminder belongs to the event (or, after a split, to the new series).
-    if (exists $b->{reminder_minutes}) { _try($c, sub { $m->set_reminder($row->{id}, $b->{reminder_minutes}); 1 }) or return }
+    _apply_reminders($c, $m, $row->{id}, $b) or return;
     # "Update it from this email" (#81): the link remembers this event for
     # this account too (the new series after a split).
     if (my $link = (defined $b->{mail_link_token} ? $m->mail_link_for($b->{mail_link_token}, $me) : undef)) {
@@ -675,7 +679,7 @@ sub save_suggestion ($c) {
         all_day => ($p->{all_day} ? 1 : 0), start => $p->{start}, end => $p->{end}, timezone => $pzone,
         location => $p->{location}, description => $p->{description},
     }) }) or return;
-    $m->set_reminder($event->{id}, 10);
+    $m->set_reminder($event->{id}, $m->prefs($me)->{default_reminder_minutes});
     $m->mail_link_used($link->{id}, $event->{id}, $me);
     $event->{permission} = 'owner';
     return $c->render(json => _event_json($c, $event, $cal, $zone), status => 201);
@@ -686,7 +690,7 @@ sub dismiss_suggestion ($c) {
     $c->csrf_ok or return;
     my $m = _model($c);
     my $link = $m->mail_link_for($c->stash('token'), $me) or return _fail($c, 404, 'This suggestion is gone.');
-    $m->dismiss_suggestion($link->{id});
+    $m->dismiss_suggestion($link->{id}, $me);
     return $c->render(json => { ok => \1 });
 }
 
@@ -716,7 +720,8 @@ sub delete_event ($c) {
     return _fail($c, 400, 'Say which occurrence (recurrence_id) when removing this one or the following ones.')
         if $scope ne 'all' && $event->{rrule} && !$rid;
     _model($c)->delete_event($event, scope => $scope, recurrence_id => $rid);
-    return $c->render(json => { ok => \1 });
+    # A whole event is soft-deleted and can come back from the trash (0.2.0).
+    return $c->render(json => { ok => \1, id => $event->{id} + 0, scope => $scope, restorable => ($scope eq 'all' || !$event->{rrule} ? \1 : \0) });
 }
 
 # --- shares ----------------------------------------------------------------
@@ -881,26 +886,44 @@ sub _ics_download ($c, $ics, $name) {
 sub _as_session ($c, $me) {
     $c->stash('calendar.session_email' => $me);
     $c->stash('calendar.session_jti' => $c->stash('current_jti'));
+    $c->stash('calendar.bearer' => 1);     # csrf_ok passes: no page, no token
     return $me;
 }
 
-# from/to: a date (2026-11-20), a wall clock (2026-11-20T14:30), today or
-# tomorrow, read in the account's zone. Neither: today. from alone: a year on.
-# to alone: from today. A date (or today/tomorrow) as `to` means that whole
-# day. Three years at most. Returns ($ws, $we) or (undef, 'a sentence').
+# One end of a range: a date (2026-11-20), a wall clock (2026-11-20T14:30),
+# today, tomorrow, yesterday, a weekday name (the next one, today included),
+# or +Nd / +Nw / +Nm counted from $base (the other end when given, else
+# today); read in the account's zone. A DateTime, or undef.
+my %DOW = (sunday => 7, monday => 1, tuesday => 2, wednesday => 3, thursday => 4, friday => 5, saturday => 6,
+           sun => 7, mon => 1, tue => 2, wed => 3, thu => 4, fri => 5, sat => 6);
+sub _read_when ($s, $today, $zone, $base = undef) {
+    return undef unless defined $s && length $s;
+    my $w = lc $s;
+    return $today->clone if $w eq 'today';
+    return $today->clone->add(days => 1) if $w eq 'tomorrow';
+    return $today->clone->subtract(days => 1) if $w eq 'yesterday';
+    if (my $d = $DOW{$w}) { my $t = $today->clone; $t->add(days => 1) until $t->day_of_week == $d; return $t }
+    if ($w =~ /\A\+(\d+)([dwm])\z/) {
+        my ($n, $u) = ($1, $2);
+        my $b = ($base // $today)->clone;
+        return $u eq 'd' ? $b->add(days => $n) : $u eq 'w' ? $b->add(weeks => $n) : $b->add(months => $n);
+    }
+    return parse_wall($s, $zone);
+}
+# Whether a `to` of this form names a whole day (so the range runs through it).
+sub _names_a_day ($s) { return defined $s && ($s =~ /\A\d{4}-\d{2}-\d{2}\z/ || $s =~ /\A(?:today|tomorrow|yesterday)\z/i || exists $DOW{ lc $s }) ? 1 : 0 }
+
+# from/to as above. Neither: today. from alone: a year on. to alone: from
+# today. A day-shaped `to` means that whole day. Three years at most.
+# Returns ($ws, $we) or (undef, 'a sentence').
 sub _range ($c, $zone) {
     my $today = DateTime->now(time_zone => $zone)->truncate(to => 'day');
-    my $read = sub ($s) {
-        return undef unless defined $s && length $s;
-        return $today->clone if lc $s eq 'today';
-        return $today->clone->add(days => 1) if lc $s eq 'tomorrow';
-        return parse_wall($s, $zone);
-    };
     my ($f, $t) = ($c->param('from'), $c->param('to'));
-    my ($ws, $we) = ($read->($f), $read->($t));
-    return (undef, 'The from date must look like 2026-11-20 or 2026-11-20T14:30 (or today, tomorrow).') if defined $f && length $f && !$ws;
-    return (undef, 'The to date must look like 2026-11-20 or 2026-11-20T14:30 (or today, tomorrow).') if defined $t && length $t && !$we;
-    my $whole_day = defined $t && $t =~ /\A(?:\d{4}-\d{2}-\d{2}|today|tomorrow)\z/i;
+    my $ws = _read_when($f, $today, $zone);
+    my $we = _read_when($t, $today, $zone, $ws);
+    return (undef, 'The from date must look like 2026-11-20 or 2026-11-20T14:30 (or today, tomorrow, a weekday, +7d).') if defined $f && length $f && !$ws;
+    return (undef, 'The to date must look like 2026-11-20 or 2026-11-20T14:30 (or today, tomorrow, a weekday, +7d).') if defined $t && length $t && !$we;
+    my $whole_day = _names_a_day($t);
     if    (!$ws && !$we) { $ws = $today->clone; $we = $today->clone->add(days => 1) }
     elsif ($ws && !$we)  { $we = $ws->clone->add(years => 1) }
     elsif (!$ws && $we)  { $ws = $today->clone }
@@ -973,7 +996,7 @@ sub internal_events_list ($c) {
     $last = $total - 1 if $last > $total - 1;
     my @slice = $first <= $last ? @$all[ $first .. $last ] : ();
     return $c->render(json => {
-        timezone => $zone, from => wall_string($ws), to => wall_string($we),
+        timezone => $zone, time_format => $m->prefs($me)->{time_format}, from => wall_string($ws), to => wall_string($we),
         page => $page + 0, pages => $pages, limit => $limit + 0, total => $total,
         events => [ map { _cli_event($_, $zone) } @slice ],
     });
@@ -1027,33 +1050,39 @@ sub internal_import ($c) {
     return _fail($c, 413, 'The file is too large (2 MB at most).') if length $text > 2_000_000;
     my $parsed = parse_ics($text, zone => $zone);
     return _fail($c, 400, $parsed->{error}) if $parsed->{error};
-    my (@made, @skipped, $created, $updated);
-    ($created, $updated) = (0, 0);
+    my $dry = $c->param('dry_run') ? 1 : 0;      # 0.2.0: say what would happen, write nothing
+    my (@made, @skipped, %by_uid);
+    my ($created, $updated) = (0, 0);
     push @skipped, @{ $parsed->{skipped} };
     for my $in (@{ $parsed->{events} }) {
         my %input = map { $_ => $in->{$_} } qw(title description location all_day start end timezone repeat);
-        my ($row, $jcal);
+        my ($row, $jcal, $action);
         my $existing = defined $in->{uid} ? $m->event_by_uid($in->{uid}) : undef;
         if ($existing) {
             my $ecal  = $m->calendar($existing->{calendar_id});
             my $eperm = $ecal ? $m->permission_for_event($me, $existing, $ecal) : undef;
             if ($eperm && may_edit($eperm)) {
+                if ($dry) { push @made, _import_preview($in, 'update', $existing->{id}); $updated++; next }
                 $row = eval { $m->update_event($existing, \%input) };
                 unless ($row) { push @skipped, { uid => $in->{uid}, reason => (($@ // 'could not be updated') =~ s/\n\z//r) }; next }
-                $updated++;
+                # The file's cancelled dates replace the ones recorded before (0.2.0).
+                $m->clear_cancelled_exceptions($row->{id}) if $row->{rrule};
+                $updated++; $action = 'updated';
                 $row->{permission} = $eperm;
                 $jcal = $ecal;
             }
             else { delete $in->{uid} }     # someone else's event: one of our own instead
         }
         unless ($row) {
+            if ($dry) { push @made, _import_preview($in, 'create'); $created++; next }
             $input{uid} = $in->{uid} if defined $in->{uid};
             $row = eval { $m->create_event($cal, $me, \%input) };
             unless ($row) { push @skipped, { uid => $in->{uid}, reason => (($@ // 'could not be created') =~ s/\n\z//r) }; next }
-            $created++;
+            $created++; $action = 'created';
             $row->{permission} = $perm;
             $jcal = $cal;
         }
+        $by_uid{ $in->{uid} } = $row if defined $in->{uid};
         if ($row->{rrule} && @{ $in->{exdates} // [] }) {
             for my $x (@{ $in->{exdates} }) {
                 my $rid = parse_wall($x, $row->{timezone}) or next;
@@ -1061,13 +1090,173 @@ sub internal_import ($c) {
             }
         }
         $m->set_reminder($row->{id}, $in->{reminder_minutes}) if defined $in->{reminder_minutes};
-        push @made, _event_json($c, $row, $jcal, $zone);
+        my $j = _event_json($c, $row, $jcal, $zone);
+        $j->{action} = $action;
+        push @made, $j;
+    }
+    # One changed occurrence of a series (a RECURRENCE-ID component, 0.2.0):
+    # an exception on the series it belongs to, when that series is here.
+    for my $o (@{ $parsed->{overrides} // [] }) {
+        my $series = defined $o->{uid} ? ($by_uid{ $o->{uid} } // $m->event_by_uid($o->{uid})) : undef;
+        unless ($series && $series->{rrule}) { push @skipped, { uid => $o->{uid}, reason => 'a changed occurrence of a repeating event that is not here' }; next }
+        my $ecal  = $m->calendar($series->{calendar_id});
+        my $eperm = $ecal ? $m->permission_for_event($me, $series, $ecal) : undef;
+        unless ($eperm && may_edit($eperm)) { push @skipped, { uid => $o->{uid}, reason => 'a changed occurrence of a series you cannot change' }; next }
+        my $rid = parse_wall($o->{recurrence_id}, $series->{timezone});
+        unless ($rid) { push @skipped, { uid => $o->{uid}, reason => 'the changed occurrence names a date that could not be read' }; next }
+        if ($dry) { push @made, _import_preview($o, 'move occurrence', $series->{id}); $updated++; next }
+        my $ok = eval { $m->_write_exception($series, $rid, { map { $_ => $o->{$_} } qw(title description location all_day start end timezone) }, 0); 1 };
+        if ($ok) { $updated++ } else { push @skipped, { uid => $o->{uid}, reason => 'changed occurrence: ' . (($@ // '?') =~ s/\n\z//r) } }
     }
     return $c->render(json => {
-        created => $created, updated => $updated, skipped => \@skipped, events => \@made,
+        dry_run => ($dry ? \1 : \0), created => $created, updated => $updated, skipped => \@skipped, events => \@made,
         calendar => _calendar_json({ %$cal, permission => $perm, visible => 1 }),
     });
 }
+
+# What a dry run reports for one component of the file.
+sub _import_preview ($in, $action, $id = undef) {
+    return {
+        action => $action, (defined $id ? (id => $id + 0) : ()), uid => $in->{uid}, title => $in->{title},
+        all_day => ($in->{all_day} ? \1 : \0), start => $in->{start}, end => $in->{end}, timezone => $in->{timezone}, repeat => $in->{repeat},
+        (exists $in->{recurrence_id} ? (recurrence_id => $in->{recurrence_id}) : ()),
+    };
+}
+
+# The editor sends `reminders` (0.2.0: up to three, each minutes_before and
+# channel); older clients and the CLI send one `reminder_minutes`.
+sub _apply_reminders ($c, $m, $event_id, $b) {
+    return 1 unless exists $b->{reminders} || exists $b->{reminder_minutes};
+    return _try($c, sub { exists $b->{reminders} ? $m->set_reminders($event_id, $b->{reminders}) : $m->set_reminder($event_id, $b->{reminder_minutes}); 1 });
+}
+
+# --- 0.2.0 (#83): the trash, search, a typed draft, a duplicate check, the
+# sidebar's order, Prometheus -------------------------------------------------
+
+# GET /api/trash -- the account's deleted events of the last 30 days.
+sub trash ($c) {
+    my $me = $c->require_login or return;
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    return $c->render(json => { events => [ map { {
+        id => $_->{id} + 0, title => $_->{title}, all_day => ($_->{all_day} ? \1 : \0), location => $_->{location},
+        start => wall_string($m->event_start($_)->clone->set_time_zone($zone), $_->{all_day}),
+        end   => wall_string($m->event_end($_)->clone->set_time_zone($zone), $_->{all_day}),
+        is_recurring => ($_->{rrule} ? \1 : \0), calendar => { id => $_->{calendar_id} + 0, name => $_->{calendar_name} },
+        deleted_at => wall_string(Homelab::Calendar::Model::_dt($_->{deleted_at}, $zone)),
+    } } @{ $m->trashed_events($me) } ] });
+}
+
+# POST /api/events/:id/restore -- back from the trash.
+sub restore_event ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $m = _model($c);
+    my $event = $m->deleted_event($c->stash('id')) or return _fail($c, 404, 'Nothing to restore: no deleted event with that id.');
+    my $cal = $m->calendar($event->{calendar_id}) or return _fail($c, 404, 'Its calendar is gone.');
+    my $perm = $m->permission_for_event($me, $event, $cal);
+    return _fail($c, 403, 'Only someone who may change the calendar can restore an event.') unless $perm && may_edit($perm);
+    my $row = $m->restore_event($event->{id});
+    $row->{permission} = $perm;
+    return $c->render(json => _event_json($c, $row, $cal, $c->viewer_zone($m->prefs($me))));
+}
+
+# GET /api/search?q= -- events whose title, place or notes contain the text.
+sub search ($c) {
+    my $me = $c->require_login or return;
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my $q = ($c->param('q') // '') =~ s/\A\s+|\s+\z//gr;
+    return _fail($c, 400, 'Type at least two characters.') if length $q < 2;
+    my @out;
+    for my $e (@{ $m->search_events($me, $q) }) {
+        my $s = $m->event_start($e)->clone->set_time_zone($zone);
+        push @out, {
+            id => $e->{id} + 0, title => $e->{title}, location => $e->{location}, all_day => ($e->{all_day} ? \1 : \0),
+            start => wall_string($s, $e->{all_day}), end => wall_string($m->event_end($e)->clone->set_time_zone($zone), $e->{all_day}),
+            is_recurring => ($e->{rrule} ? \1 : \0), calendar => { id => $e->{calendar_id} + 0, name => $e->{calendar_name} },
+            url => $c->app->public_base_url . '/?date=' . $s->ymd . '&event=' . $e->{id},
+        };
+    }
+    return $c->render(json => { q => $q, events => \@out });
+}
+
+# POST /api/quick-add { text } -- a draft from one typed line ("Dentist
+# Thursday 2pm at Delta Dental"), by the plain parser that pre-fills events
+# from email. Nothing is saved; the editor opens on it.
+sub quick_add ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $b = _body($c);
+    my $text = (defined $b->{text} && !ref $b->{text}) ? substr($b->{text} =~ s/\s+/ /gr =~ s/\A\s+|\s+\z//gr, 0, 500) : '';
+    return _fail($c, 400, 'Type something like "Dentist Thursday 2pm at Delta Dental".') unless length $text;
+    my $zone = $c->viewer_zone(_model($c)->prefs($me));
+    my $g = Homelab::Calendar::MailExtract::guess(subject => $text, text => '', zone => $zone, now => DateTime->now(time_zone => $zone));
+    # "... at Some Place" at the end names the place when the parser found none.
+    if (!(defined $g->{location} && length $g->{location}) && $text =~ /\A(.+?)\s+(?:at|@)\s+([A-Z][^,]*(?:,.*)?)\z/) {
+        $g->{location} = $2;
+        $g->{title} = $1 if defined $g->{title} && index($g->{title}, $2) >= 0;
+    }
+    $g->{title} = $text unless defined $g->{title} && length $g->{title};
+    return $c->render(json => { draft => $g, zone => $zone });
+}
+
+# GET /api/events/similar?title&start -- a likely duplicate before Save.
+sub similar ($c) {
+    my $me = $c->require_login or return;
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my $start = parse_wall($c->param('start'), $zone) or return $c->render(json => { events => [] });
+    my @out = map { {
+        id => $_->{id} + 0, title => $_->{title}, all_day => ($_->{all_day} ? \1 : \0), calendar_id => $_->{calendar_id} + 0,
+        start => wall_string($m->event_start($_)->clone->set_time_zone($zone), $_->{all_day}),
+    } } @{ $m->similar_events($me, $c->param('title'), $start) };
+    return $c->render(json => { events => \@out });
+}
+
+# PUT /api/calendars/:id/position { direction: up|down }
+sub move_calendar ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $m = _model($c);
+    my $cal = $m->calendar($c->stash('id')) or return _fail($c, 404, 'No such calendar.');
+    return _fail($c, 403, 'Only the owner can reorder a calendar.') unless lc($cal->{owner_email} // '') eq lc $me;
+    $m->move_calendar($me, $cal->{id}, ((_body($c)->{direction} // '') eq 'up' ? 'up' : 'down'));
+    return $c->render(json => { ok => \1 });
+}
+
+# GET /metrics -- Prometheus text for the fleet's scraper. The service port is
+# reachable from the fleet planes only, as every exporter's is.
+sub metrics ($c) {
+    my $m = eval { _model($c)->metrics } // {};
+    my @lines = ('# HELP homelab_calendar_up 1 when the database answered.', '# TYPE homelab_calendar_up gauge', 'homelab_calendar_up ' . (%$m ? 1 : 0));
+    for my $k (sort keys %$m) {
+        my ($name, $labels) = $k =~ /\A([a-z_0-9]+)(\{.*\})?\z/ or next;
+        push @lines, "homelab_calendar_$name" . ($labels // '') . ' ' . ($m->{$k} // 0);
+    }
+    $c->res->headers->content_type('text/plain; version=0.0.4; charset=utf-8');
+    return $c->render(text => join("\n", @lines) . "\n");
+}
+
+# --- the CLI's other verbs (0.2.0): the session handlers above, behind a
+# Bearer check; _as_session makes csrf_ok pass. ---
+sub internal_event_show          ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return event($c) }
+sub internal_event_update        ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return update_event($c) }
+sub internal_event_delete        ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return delete_event($c) }
+sub internal_event_restore       ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return restore_event($c) }
+sub internal_event_shares        ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return event_shares($c) }
+sub internal_event_share_create  ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return create_event_share($c) }
+sub internal_trash               ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return trash($c) }
+sub internal_search              ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return search($c) }
+sub internal_calendar_create     ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return create_calendar($c) }
+sub internal_calendar_shares     ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return calendar_shares($c) }
+sub internal_calendar_share_create ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return create_calendar_share($c) }
+sub internal_share_revoke        ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return revoke_share($c) }
+sub internal_suggestions         ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return suggestions($c) }
+sub internal_suggestion_save     ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return save_suggestion($c) }
+sub internal_suggestion_dismiss  ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return dismiss_suggestion($c) }
+sub internal_prefs               ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return prefs($c) }
+sub internal_prefs_save          ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return save_prefs($c) }
 
 # --- preferences -----------------------------------------------------------
 

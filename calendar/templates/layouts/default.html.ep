@@ -58,6 +58,26 @@
   .cal-item .check { flex: 1 1 auto; min-width: 0; }
   .cal-item .cal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cal-item .check input { accent-color: var(--cal-color, var(--info)); }
+
+  /* 0.2.0: the peek popover on an event, the undo toast, quick add, the
+     highlighted event a deep link opens on, and print. */
+  .peek { position: absolute; z-index: 50; min-width: 16rem; max-width: 24rem; background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); padding: var(--space-3); }
+  .peek h3 { margin: 0 0 var(--space-1); font-size: var(--app-md); }
+  .peek p { margin: 0; color: var(--text-secondary); font-size: var(--app-sm); }
+  .peek .form-actions { margin-top: var(--space-2); gap: var(--space-2); flex-wrap: wrap; }
+  .undo-toast { position: fixed; left: 50%; bottom: 1.5rem; transform: translateX(-50%); z-index: 60; background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); display: flex; gap: var(--space-3); align-items: center; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+  .quick-add { padding: 0 var(--space-3); }
+  .quick-add input { width: 100%; }
+  .fc .fc-event.is-linked { box-shadow: 0 0 0 3px var(--silver-bright); }
+  .search-results li { display: flex; gap: var(--space-2); align-items: center; }
+  @media print {
+    .sidenav, .toolbar, .modal, .undo-toast, .peek, header, nav, .fc .fc-toolbar .fc-button-group, .fc .fc-today-button, .fc .fc-prev-button, .fc .fc-next-button { display: none !important; }
+    .app__main { padding: 0; }
+    body { background: #fff; color: #000; }
+    .fc { font-size: 10pt; color: #000; }
+    .fc .fc-event { color: #000 !important; background: #fff !important; border: 1px solid #000 !important; }
+    .fc-theme-standard td, .fc-theme-standard th { border-color: #999; }
+  }
   .cal-item .cal-more { flex: none; opacity: 0; width: 1.75rem; height: 1.75rem; }
   .cal-item:hover .cal-more, .cal-item:focus-within .cal-more { opacity: 1; }
   @media (pointer: coarse) { .cal-item .cal-more { opacity: 1; } }

@@ -155,29 +155,50 @@ now never needs to know drive's own address either.
 ## Calendar (`calendar`)
 
 ```bash
-homelab-cli calendar list [--from <when>] [--to <when>] [--calendar <id>] [--limit <n>] [--page <n>]
-homelab-cli calendar add "<title>" --start <when> [--end <when>] [--all-day] [--location ...] [--description ...] \
-                         [--reminder <minutes>|none] [--repeat <RRULE>] [--share-with <email>] [--calendar <id>]
+homelab-cli calendar list [--from <when>] [--to <when> | --days N | --week | --month] [--calendar <id>] [--timezone <zone>] [--limit <n>] [--page <n>]
+homelab-cli calendar show <id> [--occurrence <rid>]
+homelab-cli calendar add "<title>" --start <when> [--end <when> | --duration 90m] [--all-day] [--location ...] [--description ...] \
+                         [--reminder <minutes>|none] [--weekly --on MO,WE --count 4 | --repeat <RRULE>] [--share-with <email>] [--calendar <id>]
+homelab-cli calendar edit <id> [--title ...] [--start ...] [--end ...] [--reminder ...] [--no-repeat] [--this|--following --occurrence <rid>] ...
+homelab-cli calendar delete <id> [--this|--following --occurrence <rid>]
+homelab-cli calendar restore <id>            homelab-cli calendar trash
+homelab-cli calendar search <words>
 homelab-cli calendar export [--from <when> --to <when>] [--calendar <id>] [-o <file>]
-homelab-cli calendar import <file.ics> [--calendar <id>]
-homelab-cli calendar calendars
+homelab-cli calendar import <file.ics> [--calendar <id>] [--dry-run]
+homelab-cli calendar calendars [create <name> [--color #rrggbb] [--timezone <zone>]]
+homelab-cli calendar shares <id> | --calendar <id>
+homelab-cli calendar share <id> --with <email> [--edit]      homelab-cli calendar share --calendar <id> --link [--busy]
+homelab-cli calendar unshare <share-id>
+homelab-cli calendar suggestions [save <token> | dismiss <token>]
+homelab-cli calendar settings [--date-format dmy] [--default-reminder 15] [--all-day-hour 7] [--default-length 45] [--remind-shared off] [--webhook <url>|none] ...
+homelab-cli calendar account [--mail-links on|off]
 ```
 
-`list` shows today unless told otherwise. `<when>` is a date
-(`2026-11-20`), a time (`2026-11-20T14:30`), `today` or `tomorrow`, read
-on the server in your calendar's own time zone; `--from` alone lists a
-year from it, `--to` alone from today, and a date as `--to` means through
-that whole day. Fifty events a page (`--limit` up to 200); the last line
-says how many pages there are and which `--page` comes next. `add` goes
-to your default calendar, lasts an hour (a day with `--all-day`) and sets
-an email reminder 10 minutes before; `--reminder none` for none. `export`
-with a range writes every occurrence in it as its own VEVENT with UTC
-times, so any program imports it; without a range it writes the whole
-calendar with its repeat rules kept, like the web page's export. `import`
-reads an .ics file (TZID, UTC and floating times, all-day dates, DURATION,
-RRULE, EXDATE and alarms are understood); an event whose UID is already in
-one of your calendars is updated rather than duplicated, and whatever was
-skipped is listed with the reason.
+`list` shows today unless told otherwise, grouped by day with the
+account's 12/24-hour preference. `<when>` is a date (`2026-11-20`), a time
+(`2026-11-20T14:30`), `today`, `tomorrow`, `yesterday`, a weekday name, or
+`+7d`/`+2w`/`+1m`, read on the server in your calendar's own time zone (or
+`--timezone`); `--from` alone lists a year from it, `--to` alone from
+today, a date as `--to` means through that whole day, and `--days 7`,
+`--week`, `--month` count from the start. Fifty events a page (`--limit`
+up to 200); the last line says how many pages there are and which `--page`
+comes next. `add` goes to your default calendar, lasts an hour (a day with
+`--all-day`) unless `--end` or `--duration` say otherwise, and sets an
+email reminder 10 minutes before; `--reminder none` for none. `delete`
+puts a whole event in the trash for 30 days (`restore` brings it back);
+`--this`/`--following` with `--occurrence` act on one occurrence of a
+repeating event (the occurrence value `list` shows). `export` with a range
+writes every occurrence in it as its own VEVENT with UTC times, so any
+program imports it; without a range it writes the whole calendar with its
+repeat rules kept, like the web page's export. `import` reads an .ics file
+(TZID, UTC and floating times, all-day dates, DURATION, RRULE, EXDATE and
+alarms are understood); an event whose UID is already in one of your
+calendars is updated rather than duplicated, a moved occurrence is laid
+over its series, and `--dry-run` says what would happen without writing.
+`share --link` on a calendar prints a feed address a phone's calendar app
+can subscribe to. `settings` without flags shows them; the AI switches
+need the notice on the web page, so `account` only turns the email link
+on or off.
 
 Talks to homelab-calendar through `homelab-api`'s `/api/v1/calendar/*`
 gateway (see `../calendar/README.md`'s Routes section).

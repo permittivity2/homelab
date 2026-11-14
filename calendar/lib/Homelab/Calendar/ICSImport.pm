@@ -43,17 +43,16 @@ sub parse_ics ($text, %o) {
         $why =~ s/\s+/ /g;
         return { events => [], skipped => [], error => "The file could not be read as iCalendar ($why)." };
     }
-    my (@events, @skipped);
+    my (@events, @skipped, @overrides);
     my $n = 0;
     for my $e (@{ $cal->entries // [] }) {
         next unless ($e->ical_entry_type // '') eq 'VEVENT';
         if (++$n > $max) { push @skipped, { uid => undef, reason => "more than $max events in the file; the rest were not read" }; last }
         my $uid = _prop($e, 'uid');
         $uid = undef unless length $uid;
-        if (length _prop($e, 'recurrence-id')) {
-            push @skipped, { uid => $uid, reason => 'one changed occurrence of a repeating event; the series itself was imported' };
-            next;
-        }
+        # One changed occurrence of a series (RECURRENCE-ID): kept apart, for
+        # the caller to lay over the series as an exception (0.2.0).
+        my $rid_prop = $e->property('recurrence-id') ? $e->property('recurrence-id')->[0] : undef;
         my $ds = $e->property('dtstart') ? $e->property('dtstart')->[0] : undef;
         unless ($ds) { push @skipped, { uid => $uid, reason => 'no start (DTSTART)' }; next }
         my ($start, $all_day, $ezone) = _when($ds, $zone);
@@ -77,6 +76,12 @@ sub parse_ics ($text, %o) {
             start => wall_string($start, $all_day), end => ($end ? wall_string($end, $all_day) : undef),
             repeat => undef, exdates => [], reminder_minutes => undef,
         );
+        if ($rid_prop) {
+            my ($rdt) = _when($rid_prop, $ezone, $all_day);
+            unless ($rdt) { push @skipped, { uid => $uid, reason => 'a changed occurrence whose RECURRENCE-ID could not be read' }; next }
+            push @overrides, { %ev, recurrence_id => wall_string($rdt, $all_day) };
+            next;
+        }
         my $rrule = _prop($e, 'rrule');
         if (length $rrule) {
             unless (eval { parse_rrule($rrule, $ezone) }) {
@@ -104,7 +109,7 @@ sub parse_ics ($text, %o) {
         }
         push @events, \%ev;
     }
-    return { events => \@events, skipped => \@skipped };
+    return { events => \@events, skipped => \@skipped, overrides => \@overrides };
 }
 
 # A property's text, unescaped ('' when absent).

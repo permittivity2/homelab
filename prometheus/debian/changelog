@@ -1,3 +1,11 @@
+homelab-prometheus (0.10.3) unstable; urgency=medium
+
+  * A calendar scrape job (homelab-calendar /metrics on :2519, three nodes,
+    from the pull) and calendar rules (post-cutover #83): reminders failing,
+    reminders overdue, the calendar unreachable.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 14 Nov 2026 16:19:58 -0600
+
 homelab-prometheus (0.10.2) unstable; urgency=medium
 
   * dns-ipv6 rules (post-cutover #64, closed 2026-11-12): DnsIPv6FrontendIdle

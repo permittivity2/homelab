@@ -425,6 +425,12 @@ sub _write_exception ($self, $event, $rid, $input, $cancelled) {
 
 # The master's values with one occurrence's own start/end: the base an
 # exception is validated against.
+# An import replaces a series' cancelled dates with its file's EXDATEs (0.2.0).
+sub clear_cancelled_exceptions ($self, $event_id) {
+    $self->db->query('DELETE FROM calendar.event_exceptions WHERE event_id = ? AND cancelled', $event_id);
+    return 1;
+}
+
 sub _occurrence_as_event ($self, $event, $rid) {
     my $start = $rid->clone->set_time_zone($event->{timezone});
     my $dur   = $self->event_end($event)->epoch - $self->event_start($event)->epoch;
@@ -485,9 +491,11 @@ sub _split_series ($self, $event, $rid, $input) {
     else {
         $db->query('UPDATE calendar.event_exceptions SET event_id = ? WHERE event_id = ? AND recurrence_id >= ?', $new->{id}, $event->{id}, $ridpg);
     }
-    # The new series keeps the reminder; what was queued from the split on
-    # belongs to occurrences that no longer exist on the old one (#79).
-    $db->query('INSERT INTO calendar.reminders (event_id, minutes_before, channel) SELECT ?, minutes_before, channel FROM calendar.reminders WHERE event_id = ? ON CONFLICT (event_id) DO NOTHING', $new->{id}, $event->{id});
+    # The new series keeps the reminders; what was queued from the split on
+    # belongs to occurrences that no longer exist on the old one (#79). The
+    # conflict target is 0.2.0's unique index (several reminders per event);
+    # t/model.t caught the old (event_id) target failing after migration 006.
+    $db->query('INSERT INTO calendar.reminders (event_id, minutes_before, channel) SELECT ?, minutes_before, channel FROM calendar.reminders WHERE event_id = ? ON CONFLICT (event_id, minutes_before, channel) DO NOTHING', $new->{id}, $event->{id});
     $db->query('DELETE FROM calendar.reminder_queue WHERE event_id = ? AND recurrence_id >= ?', $event->{id}, $ridpg);
     $tx->commit;
     return $new;
@@ -761,27 +769,53 @@ sub set_reminder_addresses ($self, $email, $list) {
     return \@clean;
 }
 
+# The event's reminders, soonest first: since 0.2.0 several per event, each
+# minutes before the start, by email or to the recipient's webhook.
+sub reminders_for ($self, $event_id) {
+    return $self->db->query('SELECT * FROM calendar.reminders WHERE event_id = ? ORDER BY minutes_before, channel', $event_id)->hashes->to_array;
+}
+# The one older clients know: the soonest email reminder, or undef.
 sub reminder_for ($self, $event_id) {
-    return $self->db->query('SELECT * FROM calendar.reminders WHERE event_id = ?', $event_id)->hash;
+    return (grep { $_->{channel} eq 'email' } @{ $self->reminders_for($event_id) })[0];
+}
+sub reminder_by_id ($self, $id) {
+    return $self->db->query('SELECT * FROM calendar.reminders WHERE id = ?', $id)->hash;
 }
 
-# One reminder per event: minutes before each occurrence, or undef for none.
-# A change drops what was queued and not yet sent; the runner requeues.
-sub set_reminder ($self, $event_id, $minutes) {
+# Replaces the event's reminders with the list given ([ { minutes_before,
+# channel } ], at most 3). A reminder that stays keeps its row and what it
+# queued; a removed one takes its queued rows with it (cascade); the runner
+# queues the new ones. Dies with a sentence for the person.
+sub set_reminders ($self, $event_id, $list) {
+    my (%want, @clean);
+    for my $r (@{ ref $list eq 'ARRAY' ? $list : [] }) {
+        my ($min, $ch) = ref $r eq 'HASH' ? ($r->{minutes_before}, $r->{channel} // 'email') : ($r, 'email');
+        next unless defined $min && length $min;
+        die "A reminder must be a number of minutes (0 to 20160).\n" unless $min =~ /\A\d+\z/ && $min <= 20160;
+        die "A reminder goes by email or to your webhook.\n" unless ($ch // '') =~ /\A(?:email|webhook)\z/;
+        push @clean, [ $min + 0, $ch ] unless $want{ ($min + 0) . "/$ch" }++;
+    }
+    die "At most 3 reminders per event.\n" if @clean > 3;
     my $db = $self->db;
     my $tx = $db->begin;
-    if (defined $minutes && length $minutes) {
-        die "The reminder must be a number of minutes (0 to 20160).\n" unless $minutes =~ /\A\d+\z/ && $minutes <= 20160;
-        $db->query(
-            q{INSERT INTO calendar.reminders (event_id, minutes_before) VALUES (?, ?)
-              ON CONFLICT (event_id) DO UPDATE SET minutes_before = EXCLUDED.minutes_before}, $event_id, $minutes + 0,
-        );
+    my @have = @{ $db->query('SELECT * FROM calendar.reminders WHERE event_id = ?', $event_id)->hashes->to_array };
+    my %had;
+    for my $h (@have) {
+        my $key = "$h->{minutes_before}/$h->{channel}";
+        if ($want{$key}) { $had{$key} = 1; next }
+        $db->query('DELETE FROM calendar.reminders WHERE id = ?', $h->{id});
     }
-    else {
-        $db->query('DELETE FROM calendar.reminders WHERE event_id = ?', $event_id);
+    for my $c (@clean) {
+        next if $had{"$c->[0]/$c->[1]"};
+        $db->query('INSERT INTO calendar.reminders (event_id, minutes_before, channel) VALUES (?, ?, ?)', $event_id, $c->[0], $c->[1]);
     }
-    $self->_clear_reminder_queue($db, $event_id, 'pending');
     $tx->commit;
+    return $self->reminders_for($event_id);
+}
+
+# The single-reminder form older clients send: one email reminder, or none.
+sub set_reminder ($self, $event_id, $minutes) {
+    $self->set_reminders($event_id, (defined $minutes && length $minutes) ? [ { minutes_before => $minutes, channel => 'email' } ] : []);
     return 1;
 }
 
@@ -807,7 +841,7 @@ sub reminder_candidates ($self, $ws, $we) {
     my $wspg = $ws->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00');
     my $wepg = $we->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00');
     return $self->db->query(
-        q{SELECT e.*, r.id AS reminder_id, r.minutes_before, c.owner_email AS calendar_owner
+        q{SELECT e.*, r.id AS reminder_id, r.minutes_before, r.channel, c.owner_email AS calendar_owner
             FROM calendar.reminders r
             JOIN calendar.events e ON e.id = r.event_id
             JOIN calendar.calendars c ON c.id = e.calendar_id
@@ -954,10 +988,11 @@ sub suggestions_for ($self, $email) {
     my $me = _norm($email);
     my $rows = $self->db->query(
         q{SELECT * FROM calendar.mail_links m
-           WHERE proposal IS NOT NULL AND dismissed_at IS NULL AND expires_at > NOW()
+           WHERE proposal IS NOT NULL AND expires_at > NOW()
              AND ? IN (SELECT lower(a) FROM jsonb_array_elements_text(accounts) AS a)
              AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_events x WHERE x.link_id = m.id AND x.user_email = ?)
-           ORDER BY proposed_at DESC LIMIT 50}, $me, $me,
+             AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_dismissals d WHERE d.link_id = m.id AND d.user_email = ?)
+           ORDER BY proposed_at DESC LIMIT 50}, $me, $me, $me,
     )->hashes->to_array;
     return [ map { _decode_link_json($_) } @$rows ];
 }
@@ -966,15 +1001,99 @@ sub suggestions_count ($self, $email) {
     my $me = _norm($email);
     return $self->db->query(
         q{SELECT count(*) FROM calendar.mail_links m
-           WHERE proposal IS NOT NULL AND dismissed_at IS NULL AND expires_at > NOW()
+           WHERE proposal IS NOT NULL AND expires_at > NOW()
              AND ? IN (SELECT lower(a) FROM jsonb_array_elements_text(accounts) AS a)
-             AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_events x WHERE x.link_id = m.id AND x.user_email = ?)}, $me, $me,
+             AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_events x WHERE x.link_id = m.id AND x.user_email = ?)
+             AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_dismissals d WHERE d.link_id = m.id AND d.user_email = ?)}, $me, $me, $me,
     )->array->[0] + 0;
 }
 
-sub dismiss_suggestion ($self, $id) {
-    $self->db->query('UPDATE calendar.mail_links SET dismissed_at = NOW() WHERE id = ?', $id);
+# Dismissed by THIS account (0.2.0): the other recipients of the message keep it.
+sub dismiss_suggestion ($self, $id, $email) {
+    $self->db->query('INSERT INTO calendar.mail_link_dismissals (link_id, user_email) VALUES (?, ?) ON CONFLICT DO NOTHING', $id, _norm($email));
     return 1;
+}
+
+# --- the trash (0.2.0): the soft-deleted events of the account's own
+# calendars, newest first, for 30 days. Restoring clears deleted_at; shares
+# revoked at the delete stay revoked.
+sub trashed_events ($self, $email) {
+    return $self->db->query(
+        q{SELECT e.*, c.name AS calendar_name FROM calendar.events e JOIN calendar.calendars c ON c.id = e.calendar_id
+           WHERE lower(c.owner_email) = ? AND c.deleted_at IS NULL AND e.deleted_at IS NOT NULL AND e.deleted_at > NOW() - INTERVAL '30 days'
+           ORDER BY e.deleted_at DESC LIMIT 200}, _norm($email),
+    )->hashes->to_array;
+}
+sub deleted_event ($self, $id) {
+    return undef unless defined $id && $id =~ /\A\d+\z/;
+    return $self->db->query('SELECT * FROM calendar.events WHERE id = ? AND deleted_at IS NOT NULL', $id)->hash;
+}
+sub restore_event ($self, $id) {
+    return $self->db->query('UPDATE calendar.events SET deleted_at = NULL, updated_at = NOW() WHERE id = ? RETURNING *', $id)->hash;
+}
+
+# --- search (0.2.0): events of the account's calendars whose title, place or
+# notes contain the text, the ones nearest to now first.
+sub search_events ($self, $email, $q, $limit = 50) {
+    my $cals = $self->calendars_for($email);
+    my @all = (@{ $cals->{own} }, @{ $cals->{shared} });
+    return [] unless @all && defined $q && $q =~ /\S/;
+    my $like = '%' . ($q =~ s/\A\s+|\s+\z//gr =~ s/([%_\\])/\\$1/gr) . '%';
+    my %name = map { $_->{id} => $_->{name} } @all;
+    my $rows = $self->db->query(
+        q{SELECT * FROM calendar.events WHERE calendar_id = ANY(?) AND deleted_at IS NULL
+           AND (title ILIKE ? OR location ILIKE ? OR description ILIKE ?)
+         ORDER BY abs(extract(epoch FROM (starts_at - NOW()))) LIMIT ?}, [ map { $_->{id} } @all ], $like, $like, $like, $limit,
+    )->hashes->to_array;
+    $_->{calendar_name} = $name{ $_->{calendar_id} } for @$rows;
+    return $rows;
+}
+
+# --- a likely duplicate (0.2.0): the same title starting the same day in a
+# calendar the account sees.
+sub similar_events ($self, $email, $title, $start) {
+    my $cals = $self->calendars_for($email);
+    my @ids = map { $_->{id} } @{ $cals->{own} }, @{ $cals->{shared} };
+    return [] unless @ids && defined $title && $title =~ /\S/ && $start;
+    my $day = $start->clone->truncate(to => 'day');
+    my ($a, $b) = map { $_->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00') } ($day->clone->subtract(hours => 12), $day->clone->add(hours => 36));
+    return $self->db->query(
+        q{SELECT * FROM calendar.events WHERE calendar_id = ANY(?) AND deleted_at IS NULL AND lower(btrim(title)) = lower(btrim(?))
+           AND starts_at >= ? AND starts_at < ? ORDER BY starts_at LIMIT 5}, \@ids, $title, $a, $b,
+    )->hashes->to_array;
+}
+
+# --- the sidebar's order (0.2.0): one of the account's own calendars moves
+# up or down among the others (the default one stays first on screen).
+sub move_calendar ($self, $email, $cal_id, $direction) {
+    my $rows = $self->db->query('SELECT id FROM calendar.calendars WHERE lower(owner_email) = ? AND deleted_at IS NULL ORDER BY is_default DESC, position, lower(name), id', _norm($email))->hashes->to_array;
+    my @ids = map { $_->{id} } @$rows;
+    my ($i) = grep { $ids[$_] == $cal_id } 0 .. $#ids;
+    return 0 unless defined $i;
+    my $j = $direction eq 'up' ? $i - 1 : $i + 1;
+    return 0 if $j < 0 || $j > $#ids;
+    @ids[$i, $j] = @ids[$j, $i];
+    my $db = $self->db;
+    my $tx = $db->begin;
+    $db->query('UPDATE calendar.calendars SET position = ? WHERE id = ?', $_ + 1, $ids[$_]) for 0 .. $#ids;
+    $tx->commit;
+    return 1;
+}
+
+# --- numbers for /metrics (0.2.0): the queue by state, what went out and what
+# failed in the last hour, what is overdue, the mail links by job state.
+sub metrics ($self) {
+    my $db = $self->db;
+    my %m;
+    $m{"reminder_queue{state=\"$_->{state}\"}"} = $_->{n} for @{ $db->query('SELECT state, count(*) AS n FROM calendar.reminder_queue GROUP BY state')->hashes->to_array };
+    $m{reminders_sent_1h}   = $db->query(q{SELECT count(*) FROM calendar.reminder_queue WHERE state = 'sent' AND sent_at > NOW() - INTERVAL '1 hour'})->array->[0];
+    $m{reminders_failed_1h} = $db->query(q{SELECT count(*) FROM calendar.reminder_queue WHERE state = 'failed' AND claimed_at > NOW() - INTERVAL '1 hour'})->array->[0];
+    $m{reminders_overdue}   = $db->query(q{SELECT count(*) FROM calendar.reminder_queue WHERE state = 'pending' AND due_at < NOW() - INTERVAL '10 minutes'})->array->[0];
+    $m{"mail_links{job_state=\"" . ($_->{job_state} // 'untouched') . "\"}"} = $_->{n}
+        for @{ $db->query('SELECT job_state, count(*) AS n FROM calendar.mail_links WHERE expires_at > NOW() GROUP BY job_state')->hashes->to_array };
+    $m{events}    = $db->query('SELECT count(*) FROM calendar.events WHERE deleted_at IS NULL')->array->[0];
+    $m{reminders} = $db->query('SELECT count(*) FROM calendar.reminders')->array->[0];
+    return \%m;
 }
 
 sub set_research_auto ($self, $email, $on) {
@@ -1047,12 +1166,16 @@ sub mail_link_made_by ($self, $link_id, $email) {
 
 # -------------------------------------------------------------------- prefs
 
-my %PREF_DEFAULTS = (timezone => undef, week_start => 0, time_format => '12h', default_view => 'month', show_shared_events => 1);
+my %PREF_DEFAULTS = (timezone => undef, week_start => 0, time_format => '12h', default_view => 'month', show_shared_events => 1,
+    # 0.2.0 (#83): the defaults that were hard-coded, and two reminder switches.
+    default_reminder_minutes => 10, all_day_reminder_hour => 9, default_duration_minutes => 60, date_format => 'mdy',
+    remind_shared => 1, webhook_url => undef);
 
 sub prefs ($self, $email) {
     my $row = $self->db->query('SELECT * FROM calendar.user_prefs WHERE user_email = ?', _norm($email))->hash // {};
     my %p = (%PREF_DEFAULTS, map { $_ => $row->{$_} } grep { defined $row->{$_} } keys %PREF_DEFAULTS);
-    $p{show_shared_events} = $p{show_shared_events} ? 1 : 0;
+    $p{$_} = $p{$_} ? 1 : 0 for qw(show_shared_events remind_shared);
+    $p{$_} += 0 for qw(week_start default_reminder_minutes all_day_reminder_hour default_duration_minutes);
     return \%p;
 }
 
@@ -1075,6 +1198,31 @@ sub save_prefs ($self, $email, $f) {
         $v{default_view} = $f->{default_view};
     }
     if (exists $f->{show_shared_events}) { $v{show_shared_events} = $f->{show_shared_events} ? 1 : 0 }
+    if (exists $f->{remind_shared})      { $v{remind_shared} = $f->{remind_shared} ? 1 : 0 }
+    if (exists $f->{default_reminder_minutes}) {
+        my $x = $f->{default_reminder_minutes};
+        die "The default reminder must be a number of minutes (0 to 20160).\n" unless defined $x && $x =~ /\A\d+\z/ && $x <= 20160;
+        $v{default_reminder_minutes} = $x + 0;
+    }
+    if (exists $f->{all_day_reminder_hour}) {
+        my $x = $f->{all_day_reminder_hour};
+        die "The all-day reminder hour must be 0 to 23.\n" unless defined $x && $x =~ /\A\d{1,2}\z/ && $x <= 23;
+        $v{all_day_reminder_hour} = $x + 0;
+    }
+    if (exists $f->{default_duration_minutes}) {
+        my $x = $f->{default_duration_minutes};
+        die "The default length must be 5 to 1440 minutes.\n" unless defined $x && $x =~ /\A\d+\z/ && $x >= 5 && $x <= 1440;
+        $v{default_duration_minutes} = $x + 0;
+    }
+    if (exists $f->{date_format}) {
+        die "date_format must be mdy, dmy or ymd.\n" unless ($f->{date_format} // '') =~ /\A(?:mdy|dmy|ymd)\z/;
+        $v{date_format} = $f->{date_format};
+    }
+    if (exists $f->{webhook_url}) {
+        my $u = defined $f->{webhook_url} && !ref $f->{webhook_url} ? ($f->{webhook_url} =~ s/\A\s+|\s+\z//gr) : '';
+        die "The webhook must be an http(s) URL of at most 500 characters.\n" if length $u && ($u !~ m{\Ahttps?://\S+\z} || length $u > 500);
+        $v{webhook_url} = length $u ? $u : undef;
+    }
     return $self->prefs($email) unless %v;
     my @cols = sort keys %v;
     $self->db->query(

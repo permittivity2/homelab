@@ -145,6 +145,25 @@ $t->post_ok('/api/suggestions/short/save')->status_is(404, 'a token of the wrong
 $t->put_ok('/internal/v1/calendar/admin/accounts/someone@example.test/entitlements' => json => { research_at_arrival_allowed => 1 })
   ->status_is(401, 'the entitlement route wants a Bearer token (an address with dots routes: relaxed placeholder)');
 
+# --- the range words homelab-cli may send (#82, more in 0.2.0) ---
+{
+    require DateTime;
+    my $today = DateTime->new(year => 2026, month => 11, day => 14, time_zone => 'America/Chicago');   # a Saturday
+    my $w = sub ($s, $base = undef) { Homelab::Calendar::App::Controller::Api::_read_when($s, $today, 'America/Chicago', $base) };
+    is $w->('today')->ymd, '2026-11-14', 'today';
+    is $w->('Tomorrow')->ymd, '2026-11-15', 'tomorrow, any case';
+    is $w->('yesterday')->ymd, '2026-11-13', 'yesterday';
+    is $w->('saturday')->ymd, '2026-11-14', 'a weekday name: today when today is that day';
+    is $w->('mon')->ymd, '2026-11-16', '... else the next one';
+    is $w->('+7d')->ymd, '2026-11-21', '+7d from today';
+    is $w->('+2w', $today->clone->add(days => 1))->ymd, '2026-11-29', '+2w counted from the other end when given';
+    is $w->('+1m')->ymd, '2026-12-14', '+1m';
+    is $w->('2026-12-01T09:30')->strftime('%H:%M'), '09:30', 'a wall clock';
+    is $w->('nonsense'), undef, 'anything else is undef';
+    ok Homelab::Calendar::App::Controller::Api::_names_a_day('friday'), 'a weekday names a whole day';
+    ok !Homelab::Calendar::App::Controller::Api::_names_a_day('+7d'), '... a relative count does not';
+}
+
 # --- homelab-cli's routes through the gateway (#82): every one wants a Bearer token ---
 $t->get_ok('/internal/v1/calendar/calendars')->status_is(401, 'the calendars list wants a Bearer token');
 $t->get_ok('/internal/v1/calendar/events?from=today')->status_is(401, '... so does the events list');
@@ -153,6 +172,16 @@ $t->get_ok('/internal/v1/calendar/events.ics?from=today')->status_is(401, '... a
 $t->get_ok('/internal/v1/calendar/export.ics')->status_is(401, '... and the export');
 $t->post_ok('/internal/v1/calendar/import' => { 'Content-Type' => 'text/calendar' } => "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n")
   ->status_is(401, '... and the import');
+# 0.2.0: the CLI's other verbs, the page's new routes, Prometheus.
+$t->get_ok('/internal/v1/calendar/events/7')->status_is(401, 'one event wants a Bearer token');
+$t->get_ok('/internal/v1/calendar/trash')->status_is(401, '... so does the trash');
+$t->get_ok('/internal/v1/calendar/search?q=den')->status_is(401, '... and search');
+$t->get_ok('/api/trash')->status_is(401, 'the page\'s trash needs a sign-in');
+$t->get_ok('/api/search?q=den')->status_is(401, '... and its search');
+$t->get_ok('/api/events/similar?title=x&start=2026-11-20T09:00:00')->status_is(401, '... and the duplicate check routes beside /api/events/:id');
+$t->get_ok('/metrics')->status_is(200, '/metrics answers without a sign-in')
+  ->content_type_like(qr{text/plain}, '... as Prometheus text')
+  ->content_like(qr/^homelab_calendar_up 0$/m, '... saying the database did not answer here');
 
 # --- public links: the shape of the routes (the lookup itself needs the database) ---
 $t->get_ok('/c/not-a-token')->status_is(404, 'a token of the wrong shape is a 404 without touching anything');

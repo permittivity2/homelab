@@ -78,6 +78,14 @@ is(Cal.fmtMade({ title: 'Fair', all_day: true, start: '2026-11-20', end: '2026-1
    'Fair, Fri, Nov 20 - Sat, Nov 21, 2026', 'an all-day event (the end is exclusive)');
 is(Cal.fmtMade({ title: '', all_day: false, start: '2026-11-23T14:30:00', end: '2026-11-23T15:30:00', is_recurring: true }, true),
    '(no title), Mon, Nov 23, 2026 14:30 - 15:30 (repeats)', 'no title, 24 h clock, a repeating event');
+// --- the date order preference (0.2.0) ---
+Cal.setDateFormat('dmy');
+is(Cal.fmtDate('2026-11-14T09:00:00'), 'Sat, 14 Nov 2026', 'day month year');
+is(Cal.fmtRange('2026-11-20', '2026-11-22', true, false), 'Fri, 20 Nov - Sat, 21 Nov 2026', 'a span drops the first year in dmy too');
+Cal.setDateFormat('ymd');
+is(Cal.fmtDate('2026-11-14T09:00:00'), 'Sat, 2026-11-14', 'year month day');
+Cal.setDateFormat('nonsense');
+is(Cal.fmtDate('2026-11-14T09:00:00'), 'Sat, Nov 14, 2026', 'anything else is month day year');
 is(Cal.WEEKDAYS, ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'], 'weekday codes in RFC 5545 order from Sunday');
 ok(Cal.ZONES.indexOf('America/Chicago') === 0, 'Chicago leads the zone list');
 

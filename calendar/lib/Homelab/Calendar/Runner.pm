@@ -102,26 +102,34 @@ sub queue_upcoming ($self) {
     my $m = $self->model;
     my $now = DateTime->now(time_zone => 'UTC');
     my $we  = $now->clone->add(hours => $self->horizon_hours);
+    my %prefs;    # each account's preferences, read once per tick
+    my $pref = sub ($acct) { return $prefs{$acct} //= $m->prefs($acct) };
     for my $e (@{ $m->reminder_candidates($now, $we) }) {
-        my @accounts = (lc $e->{calendar_owner}, @{ $m->shared_with_accounts($e) });
+        # The owner always; someone the event is shared with unless they
+        # turned reminders for shared events off (0.2.0).
+        my @accounts = (lc $e->{calendar_owner}, grep { $pref->($_)->{remind_shared} } @{ $m->shared_with_accounts($e) });
         my %seen; @accounts = grep { !$seen{$_}++ } @accounts;
         for my $inst (@{ $m->instances(events => [$e], window_start => $now, window_end => $we) }) {
-            my $due = due_at($inst, $e->{minutes_before});
             next if $inst->{start} <= $now && !$inst->{all_day};     # already begun: too late to remind
-            next if $inst->{all_day} && $due < $now->clone->subtract(hours => 1);
-            $due = $now->clone if $due < $now;                          # created late: send at once
             my $rid = $inst->{recurrence_id} // $inst->{start};
-            $m->queue_reminder(reminder_id => $e->{reminder_id}, event_id => $e->{id}, recurrence_id => $rid, recipient => $_, due_at => $due) for @accounts;
+            for my $acct (@accounts) {
+                # An all-day event reminds at the hour this account chose (9 AM unless changed).
+                my $due = due_at($inst, $e->{minutes_before}, $pref->($acct)->{all_day_reminder_hour});
+                next if $inst->{all_day} && $due < $now->clone->subtract(hours => 1);
+                $due = $now->clone if $due < $now;                      # created late: send at once
+                $m->queue_reminder(reminder_id => $e->{reminder_id}, event_id => $e->{id}, recurrence_id => $rid, recipient => $acct, due_at => $due);
+            }
         }
     }
     return;
 }
 
 # When a reminder goes out: minutes before the start; for an all-day event,
-# minutes before 9 in the morning of its first day (a "10 minutes before"
-# at midnight would wake nobody usefully).
-sub due_at ($inst, $minutes) {
-    my $base = $inst->{all_day} ? $inst->{start}->clone->set(hour => 9, minute => 0, second => 0) : $inst->{start}->clone;
+# minutes before $hour o'clock (9 unless the account chose otherwise) of its
+# first day: a "10 minutes before" at midnight would wake nobody usefully.
+sub due_at ($inst, $minutes, $hour = 9) {
+    $hour = 9 unless defined $hour && $hour =~ /\A\d{1,2}\z/ && $hour <= 23;
+    my $base = $inst->{all_day} ? $inst->{start}->clone->set(hour => $hour, minute => 0, second => 0) : $inst->{start}->clone;
     return $base->subtract(minutes => $minutes // 0);
 }
 
@@ -136,11 +144,30 @@ sub send_reminder ($self, $row) {
     die "occurrence no longer exists\n" unless $inst;
     my $prefs = $m->prefs($row->{recipient});
     my $zone  = (defined $prefs->{timezone} && validate_zone($prefs->{timezone})) ? $prefs->{timezone} : $event->{timezone};
+    my $rem   = $m->reminder_by_id($row->{reminder_id}) // {};
+    my $s_loc = $inst->{start}->clone->set_time_zone($zone);
+    # A deep link: the page opens on the day with this event highlighted (0.2.0).
+    my $url = $self->public_base_url . '/?date=' . $s_loc->ymd . '&event=' . $event->{id}
+            . ($inst->{recurrence_id} ? '&rid=' . $inst->{recurrence_id}->clone->set_time_zone('UTC')->strftime('%Y-%m-%dT%H:%M:%SZ') : '');
     my $msg = reminder_message(
-        inst => $inst, zone => $zone, minutes => $row->{minutes_before} // ($m->reminder_for($event->{id}) // {})->{minutes_before},
-        owner => $cal->{owner_email}, recipient => $row->{recipient}, base_url => $self->public_base_url,
+        inst => $inst, zone => $zone, minutes => $rem->{minutes_before},
+        owner => $cal->{owner_email}, recipient => $row->{recipient}, base_url => $self->public_base_url, event_url => $url,
         now => DateTime->now(time_zone => $zone),
     );
+    # The webhook channel (0.2.0): one JSON POST to the recipient's own URL;
+    # without one set, the reminder goes by email after all.
+    if (($rem->{channel} // 'email') eq 'webhook' && ($prefs->{webhook_url} // '') =~ /\S/) {
+        $self->post_webhook($prefs->{webhook_url}, {
+            type => 'reminder', recipient => $row->{recipient}, event_id => $event->{id} + 0, url => $url,
+            title => $inst->{title}, location => $inst->{location}, description => $inst->{description},
+            all_day => ($inst->{all_day} ? \1 : \0), timezone => $zone,
+            start => Homelab::Calendar::Recurrence::wall_string($s_loc, $inst->{all_day}),
+            end   => Homelab::Calendar::Recurrence::wall_string($inst->{end}->clone->set_time_zone($zone), $inst->{all_day}),
+            minutes_before => (defined $rem->{minutes_before} ? $rem->{minutes_before} + 0 : undef),
+            subject => $msg->{subject}, text => $msg->{body},
+        });
+        return 1;
+    }
     require Homelab::Common::Mailer;
     my $mail = $self->mailer;
     for my $to (@{ $m->reminder_recipients($row->{recipient}) }) {
@@ -188,12 +215,21 @@ sub reminder_message (%a) {
         push @lines, "Map: https://www.google.com/maps/search/?api=1&query=$q";
     }
     push @lines, '', substr($inst->{description} =~ s/\r//gr, 0, 1000) if defined $inst->{description} && $inst->{description} =~ /\S/;
-    push @lines, '', "Open your calendar: $a{base_url}/";
+    push @lines, '', 'Open this event: ' . ($a{event_url} // "$a{base_url}/");
     my $mine = lc($a{owner} // '') eq lc($a{recipient} // '');
     push @lines, '', $mine ? "You set a reminder on this event" . ($lead ? " ($lead)." : '.')
                            : "$a{owner} shared this event with you; its reminder" . ($lead ? " ($lead)" : '') . " reaches you too.";
     push @lines, "Where reminders go, and turning them off: $a{base_url}/settings";
     return { subject => $subject, body => join("\n", @lines) . "\n" };
+}
+
+# One JSON POST, ten seconds, a 2xx or die (the queue retries three times).
+sub post_webhook ($self, $url, $payload) {
+    require Mojo::UserAgent;
+    my $ua = Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 10, max_redirects => 0);
+    my $res = $ua->post($url, { 'User-Agent' => 'homelab-calendar' }, json => $payload)->result;
+    die 'webhook answered ' . $res->code . "\n" unless $res->is_success;
+    return 1;
 }
 
 sub _clock ($dt) { my $h = $dt->hour % 12 || 12; return sprintf('%d:%02d %s', $h, $dt->minute, $dt->hour < 12 ? 'AM' : 'PM') }

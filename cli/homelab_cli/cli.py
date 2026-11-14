@@ -1682,7 +1682,11 @@ def cmd_drive_append(args):
 # gateway (post-cutover #82). The server reads --from/--to in the account's
 # own calendar zone and answers wall clocks in it; this side only formats. ---
 
-def _calendar_when(ev):
+def _clock(d, h24=False):
+    return f"{d.hour:02d}:{d:%M}" if h24 else f"{d.hour % 12 or 12}:{d:%M} {'AM' if d.hour < 12 else 'PM'}"
+
+
+def _calendar_when(ev, h24=False):
     """The WHEN column: 'Fri Nov 20  2:30 PM - 3:30 PM', 'Fri Nov 20  11:00 PM
     - Sat Nov 21 1:00 AM', 'Fri Nov 20  all day', 'Fri Nov 20 - Sun Nov 22
     all day' (an all-day end is exclusive). Unreadable dates come back as
@@ -1691,7 +1695,7 @@ def _calendar_when(ev):
         return f"{d:%a %b} {d.day}"
 
     def clock(d):
-        return f"{d.hour % 12 or 12}:{d:%M} {'AM' if d.hour < 12 else 'PM'}"
+        return _clock(d, h24)
 
     try:
         if ev.get("all_day"):
@@ -1725,6 +1729,110 @@ def _calendar_last_day(to):
         return to
 
 
+def _calendar_span(ev, h24=False):
+    """The time part alone, for a list grouped by day: '2:30 PM - 3:30 PM',
+    '11:00 PM - Sat Nov 21 1:00 AM', 'all day', 'all day - Sun Nov 22'."""
+    def day(d):
+        return f"{d:%a %b} {d.day}"
+    try:
+        if ev.get("all_day"):
+            s = datetime.strptime(str(ev["start"])[:10], "%Y-%m-%d")
+            e = datetime.strptime(str(ev["end"])[:10], "%Y-%m-%d") - timedelta(days=1)
+            return "all day" if e <= s else f"all day - {day(e)}"
+        s = datetime.strptime(str(ev["start"])[:19], "%Y-%m-%dT%H:%M:%S")
+        e = datetime.strptime(str(ev["end"])[:19], "%Y-%m-%dT%H:%M:%S")
+        return f"{_clock(s, h24)} - {_clock(e, h24)}" if s.date() == e.date() else f"{_clock(s, h24)} - {day(e)} {_clock(e, h24)}"
+    except (KeyError, ValueError, TypeError):
+        return f"{ev.get('start')} - {ev.get('end')}"
+
+
+def _calendar_marks(ev):
+    marks = []
+    if ev.get("is_recurring"):
+        marks.append("repeats")
+    if ev.get("shared_event"):
+        marks.append("shared")
+    if ev.get("permission") == "read":
+        marks.append("read-only")
+    return ", ".join(marks)
+
+
+def _print_grouped(events, h24=False):
+    """Events as one table grouped by day: the day once, then the time, the
+    title, the place, the calendar, marks (repeats, shared, read-only), the id."""
+    rows, last = [], None
+    for ev in events:
+        day = _calendar_day(ev.get("start"))
+        rows.append([day if day != last else "", _calendar_span(ev, h24), ev.get("title") or "(no title)", ev.get("location") or "",
+                     (ev.get("calendar") or {}).get("name") or "", _calendar_marks(ev), ev.get("id")])
+        last = day
+    _print_table(["DAY", "WHEN", "TITLE", "WHERE", "CALENDAR", "NOTE", "ID"], rows)
+
+
+def _duration_minutes(s):
+    """'90m', '1h30m', '2h', '45' (minutes), '2d' -> minutes; None when unreadable."""
+    m = re.fullmatch(r"\s*(?:(\d+)d)?\s*(?:(\d+)h)?\s*(?:(\d+)m?)?\s*", s or "")
+    if not m or not any(m.groups()):
+        return None
+    d, h, mi = (int(x) if x else 0 for x in m.groups())
+    return d * 1440 + h * 60 + mi
+
+
+def _add_minutes(start, minutes, all_day=False):
+    """A start ('2026-11-20T14:30' or, all-day, '2026-11-20') plus minutes, in the same form; None when the start is unreadable."""
+    try:
+        if all_day:
+            return (datetime.strptime(str(start)[:10], "%Y-%m-%d") + timedelta(minutes=minutes)).strftime("%Y-%m-%d")
+        return (datetime.strptime(str(start)[:16], "%Y-%m-%dT%H:%M") + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M")
+    except (ValueError, TypeError):
+        return None
+
+
+def _build_rrule(freq, every=None, count=None, until=None, on=None, all_day=False):
+    """--daily/--weekly/--monthly/--yearly with --every, --count, --until and
+    --on into an RRULE, the server's own repeat form; None without a frequency."""
+    if not freq:
+        return None
+    parts = [f"FREQ={freq.upper()}"]
+    if every and int(every) > 1:
+        parts.append(f"INTERVAL={int(every)}")
+    if on:
+        parts.append("BYDAY=" + ",".join(d.strip().upper()[:2] for d in str(on).split(",") if d.strip()))
+    if count:
+        parts.append(f"COUNT={int(count)}")
+    elif until:
+        ymd = str(until)[:10].replace("-", "")
+        parts.append("UNTIL=" + (ymd if all_day else ymd + "T235959Z"))
+    return ";".join(parts)
+
+
+def _reminder_summary(ev):
+    rems = ev.get("reminders")
+    if rems is None:
+        return "none" if ev.get("reminder_minutes") is None else f"{ev['reminder_minutes']} min before by email"
+    if not rems:
+        return "none"
+    return "; ".join(("at the time" if r.get("minutes_before") == 0 else f"{r.get('minutes_before')} min before") + f" by {r.get('channel', 'email')}" for r in rems)
+
+
+def _print_event(ev, h24=False):
+    occ = ev.get("occurrence")
+    cal = (ev.get("calendar") or {}).get("name")
+    print(f"{ev.get('title')}  (id {ev.get('id')}" + (f", occurrence {occ.get('recurrence_id')}" if occ else "") + ")")
+    print(f"  When:      {_calendar_when(occ or ev, h24)}" + (f"  ({ev.get('timezone')})" if ev.get("timezone") else ""))
+    if ev.get("location"):
+        print(f"  Where:     {ev['location']}")
+    if cal:
+        print(f"  Calendar:  {cal}" + (f"  (you may {ev.get('permission')})" if ev.get("permission") and ev.get("permission") != "owner" else ""))
+    if ev.get("rrule"):
+        print(f"  Repeats:   {ev['rrule']}")
+    print(f"  Reminders: {_reminder_summary(ev)}")
+    if ev.get("url"):
+        print(f"  Link:      {ev['url']}")
+    if ev.get("description"):
+        print("  Notes:     " + str(ev["description"]).replace("\n", "\n             "))
+
+
 def cmd_calendar_calendars(args):
     session = _require_session(args)
     if not session:
@@ -1752,10 +1860,19 @@ def cmd_calendar_list(args):
     session = _require_session(args)
     if not session:
         return 1
+    # --days N / --week / --month: an end counted from the start (or today)
+    # by the server, in the account's zone.
+    to = args.to
+    if getattr(args, "days", None):
+        to = f"+{int(args.days)}d"
+    elif getattr(args, "week", False):
+        to = "+7d"
+    elif getattr(args, "month", False):
+        to = "+1m"
     try:
         result = _client(args).calendar_events(
             session["token"],
-            **{"from": args.from_, "to": args.to, "calendar_id": args.calendar, "limit": args.limit, "page": args.page},
+            **{"from": args.from_, "to": to, "calendar_id": args.calendar, "limit": args.limit, "page": args.page, "timezone": getattr(args, "timezone", None)},
         )
     except ApiError as e:
         _emit_error(args, f"Could not list events: {e.message}")
@@ -1767,12 +1884,7 @@ def cmd_calendar_list(args):
     if not events:
         print(f"(no events {span})")
         return 0
-    rows = [
-        [_calendar_when(ev), ev.get("title") or "(no title)", ev.get("location") or "",
-         (ev.get("calendar") or {}).get("name") or "", ev.get("id")]
-        for ev in events
-    ]
-    _print_table(["WHEN", "TITLE", "WHERE", "CALENDAR", "ID"], rows)
+    _print_grouped(events, result.get("time_format") == "24h")
     total, page, pages = result.get("total", len(events)), result.get("page", 1), result.get("pages", 1)
     more = f" (--page {page + 1} for the next)" if page < pages else ""
     print(f"{total} event{'' if total == 1 else 's'} {span}; page {page} of {pages}{more}")
@@ -1786,10 +1898,24 @@ def cmd_calendar_add(args):
     body = {"title": args.title, "start": args.start, "all_day": bool(args.all_day)}
     if args.end:
         body["end"] = args.end
+    elif getattr(args, "duration", None):
+        minutes = _duration_minutes(args.duration)
+        if minutes is None or minutes <= 0:
+            _emit_error(args, "--duration looks like 90m, 1h30m, 2h or 2d")
+            return 1
+        end = _add_minutes(args.start, minutes, bool(args.all_day))
+        if end is None:
+            _emit_error(args, "--start must look like 2026-11-20T14:30 (a date with --all-day) to use --duration")
+            return 1
+        body["end"] = end
     for key, value in (("location", args.location), ("description", args.description), ("timezone", args.timezone),
-                       ("calendar_id", args.calendar), ("repeat", args.repeat), ("share_with", args.share_with)):
+                       ("calendar_id", args.calendar), ("share_with", args.share_with)):
         if value:
             body[key] = value
+    rrule = args.repeat or _build_rrule(getattr(args, "freq", None), getattr(args, "every", None), getattr(args, "count", None),
+                                        getattr(args, "until", None), getattr(args, "on", None), bool(args.all_day))
+    if rrule:
+        body["repeat"] = rrule
     reminder = (args.reminder or "").strip().lower()
     if reminder == "none":
         body["reminder_minutes"] = None
@@ -1815,7 +1941,7 @@ def cmd_calendar_export(args):
     if not session:
         return 1
     try:
-        ics = _client(args).calendar_ics(session["token"], **{"from": args.from_, "to": args.to, "calendar_id": args.calendar})
+        ics = _client(args).calendar_ics(session["token"], **{"from": args.from_, "to": args.to, "calendar_id": args.calendar, "timezone": getattr(args, "timezone", None)})
     except ApiError as e:
         _emit_error(args, f"Could not export: {e.message}")
         return 1
@@ -1842,7 +1968,7 @@ def cmd_calendar_import(args):
         _emit_error(args, f"Could not read {args.path}: {e.strerror or e}")
         return 1
     try:
-        result = _client(args).calendar_import(session["token"], data, calendar_id=args.calendar)
+        result = _client(args).calendar_import(session["token"], data, calendar_id=args.calendar, dry_run=bool(getattr(args, "dry_run", False)))
     except ApiError as e:
         _emit_error(args, f"Import failed: {e.message}")
         return 1
@@ -1851,12 +1977,385 @@ def cmd_calendar_import(args):
     created, updated, skipped = result.get("created", 0), result.get("updated", 0), result.get("skipped") or []
     n = created + updated
     cal = (result.get("calendar") or {}).get("name")
-    print(f"Imported {n} event{'' if n == 1 else 's'} ({created} new, {updated} updated)"
-          + (f" into {cal}" if cal else "") + (f"; skipped {len(skipped)}" if skipped else ""))
+    if result.get("dry_run"):
+        print(f"Dry run: would create {created} and update {updated}" + (f" in {cal}" if cal else "") + (f"; would skip {len(skipped)}" if skipped else "") + ". Nothing was written.")
+    else:
+        print(f"Imported {n} event{'' if n == 1 else 's'} ({created} new, {updated} updated)"
+              + (f" into {cal}" if cal else "") + (f"; skipped {len(skipped)}" if skipped else ""))
     for s in skipped:
         print(f"  skipped {s.get('uid') or '(no UID)'}: {s.get('reason')}")
     for ev in result.get("events") or []:
-        print(f"  {ev.get('id')}  {_calendar_when(ev)}  {ev.get('title')}")
+        print(f"  {(ev.get('action') or '').ljust(15)} {str(ev.get('id') or '').ljust(5)} {_calendar_when(ev)}  {ev.get('title')}")
+    return 0
+
+
+def cmd_calendar_show(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        ev = _client(args).calendar_event(session["token"], args.event_id, recurrence_id=args.occurrence)
+    except ApiError as e:
+        _emit_error(args, f"Could not read event {args.event_id}: {e.message}")
+        return 1
+    if _emit(args, ev):
+        return 0
+    _print_event(ev)
+    return 0
+
+
+def cmd_calendar_edit(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    body = {}
+    for key, value in (("title", args.title), ("start", args.start), ("end", args.end), ("location", args.location),
+                       ("description", args.description), ("timezone", args.timezone), ("calendar_id", args.calendar)):
+        if value is not None:
+            body[key] = value
+    if args.all_day:
+        body["all_day"] = True
+    elif args.timed:
+        body["all_day"] = False
+    if args.reminder is not None:
+        rem = args.reminder.strip().lower()
+        if rem == "none":
+            body["reminder_minutes"] = None
+        elif rem.isdigit() and 0 <= int(rem) <= 20160:
+            body["reminder_minutes"] = int(rem)
+        else:
+            _emit_error(args, "--reminder takes a number of minutes (0 to 20160) or 'none'")
+            return 1
+    if args.no_repeat:
+        body["repeat"] = None
+    else:
+        rrule = args.repeat or _build_rrule(getattr(args, "freq", None), args.every, args.count, args.until, args.on, bool(args.all_day))
+        if rrule:
+            body["repeat"] = rrule
+    if not body:
+        _emit_error(args, "Nothing to change: give at least one of --title, --start, --end, --location, --description, --reminder, --repeat ...")
+        return 1
+    if args.this or args.following:
+        body["scope"] = "this" if args.this else "following"
+        if not args.occurrence:
+            _emit_error(args, "--this and --following need --occurrence RID (see 'calendar list' or 'calendar show')")
+            return 1
+        body["recurrence_id"] = args.occurrence
+    try:
+        ev = _client(args).calendar_update_event(session["token"], args.event_id, body)
+    except ApiError as e:
+        _emit_error(args, f"Could not change event {args.event_id}: {e.message}")
+        return 1
+    if _emit(args, ev):
+        return 0
+    print("Saved.")
+    _print_event(ev)
+    return 0
+
+
+def cmd_calendar_delete(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    scope = "this" if args.this else "following" if args.following else "all"
+    if scope != "all" and not args.occurrence:
+        _emit_error(args, "--this and --following need --occurrence RID (see 'calendar list' or 'calendar show')")
+        return 1
+    try:
+        result = _client(args).calendar_delete_event(session["token"], args.event_id, scope=scope, recurrence_id=args.occurrence)
+    except ApiError as e:
+        _emit_error(args, f"Could not delete event {args.event_id}: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    what = {"this": "that occurrence of event", "following": "that and the following occurrences of event"}.get(scope, "event")
+    print(f"Deleted {what} {args.event_id}." + (f" For 30 days: homelab-cli calendar restore {args.event_id}" if result.get("restorable") else ""))
+    return 0
+
+
+def cmd_calendar_restore(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        ev = _client(args).calendar_restore_event(session["token"], args.event_id)
+    except ApiError as e:
+        _emit_error(args, f"Could not restore event {args.event_id}: {e.message}")
+        return 1
+    if _emit(args, ev):
+        return 0
+    print(f"Restored event {ev.get('id')}: {ev.get('title')}, {_calendar_when(ev)}")
+    return 0
+
+
+def cmd_calendar_trash(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).calendar_trash(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not list the trash: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    events = result.get("events") or []
+    if not events:
+        print("(nothing in the trash)")
+        return 0
+    rows = [[_calendar_day(ev.get("deleted_at")), _calendar_when(ev), ev.get("title") or "(no title)", (ev.get("calendar") or {}).get("name") or "", ev.get("id")] for ev in events]
+    _print_table(["DELETED", "WHEN", "TITLE", "CALENDAR", "ID"], rows)
+    print("Restore one with: homelab-cli calendar restore ID")
+    return 0
+
+
+def cmd_calendar_search(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    q = " ".join(args.text).strip()
+    try:
+        result = _client(args).calendar_search(session["token"], q)
+    except ApiError as e:
+        _emit_error(args, f"Search failed: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    events = result.get("events") or []
+    if not events:
+        print(f"(nothing matches \"{q}\")")
+        return 0
+    _print_grouped(events)
+    return 0
+
+
+def cmd_calendar_calendars_create(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    body = {"name": args.name}
+    for key, value in (("color", args.color), ("timezone", args.timezone), ("description", args.description)):
+        if value:
+            body[key] = value
+    try:
+        cal = _client(args).calendar_create_calendar(session["token"], body)
+    except ApiError as e:
+        _emit_error(args, f"Could not make the calendar: {e.message}")
+        return 1
+    if _emit(args, cal):
+        return 0
+    print(f"Made calendar {cal.get('id')}: {cal.get('name')} ({cal.get('timezone')})")
+    return 0
+
+
+def _share_target(args):
+    """Which thing a share command is about: (event_id, calendar_id), or an error message."""
+    event_id, calendar_id = getattr(args, "event_id", None), getattr(args, "calendar", None)
+    if bool(event_id) == bool(calendar_id):
+        return None, None, "Name an event id, or a calendar with --calendar ID (one of the two)"
+    return event_id, calendar_id, None
+
+
+def _print_shares(shares):
+    if not shares:
+        print("(not shared with anyone)")
+        return
+    rows = []
+    for s in shares:
+        who = s.get("shared_with_email") or ("anyone with the link" + (" (busy times only)" if s.get("detail") == "busy" else ""))
+        rows.append([s.get("id"), who, "see and edit" if s.get("permission") == "edit" else "see",
+                     str(s.get("expires_at") or "")[:10] or "never", s.get("ics_url") or s.get("url") or ""])
+    _print_table(["ID", "WITH", "MAY", "EXPIRES", "LINK"], rows)
+
+
+def cmd_calendar_shares(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    event_id, calendar_id, err = _share_target(args)
+    if err:
+        _emit_error(args, err)
+        return 1
+    try:
+        shares = _client(args).calendar_shares(session["token"], event_id=event_id, calendar_id=calendar_id)
+    except ApiError as e:
+        _emit_error(args, f"Could not list shares: {e.message}")
+        return 1
+    if _emit(args, shares):
+        return 0
+    _print_shares(shares)
+    return 0
+
+
+def cmd_calendar_share(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    event_id, calendar_id, err = _share_target(args)
+    if err:
+        _emit_error(args, err)
+        return 1
+    if not args.with_email and not args.link:
+        _emit_error(args, "Say who: --with EMAIL, or --link for an address anyone can open")
+        return 1
+    body = {"email": args.with_email or None, "permission": "edit" if args.edit else "read",
+            "detail": "busy" if args.busy else "full", "expires_days": args.expires}
+    try:
+        share = _client(args).calendar_share(session["token"], body, event_id=event_id, calendar_id=calendar_id)
+    except ApiError as e:
+        _emit_error(args, f"Could not share: {e.message}")
+        return 1
+    if _emit(args, share):
+        return 0
+    if share.get("shared_with_email"):
+        print(f"Shared with {share['shared_with_email']} (may {'see and edit' if share.get('permission') == 'edit' else 'see'}). Share id {share.get('id')}.")
+    else:
+        print(f"Link (share id {share.get('id')}): {share.get('url')}")
+        if share.get("ics_url"):
+            print(f"Feed for a phone's calendar app: {share['ics_url']}")
+    return 0
+
+
+def cmd_calendar_unshare(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).calendar_revoke_share(session["token"], args.share_id)
+    except ApiError as e:
+        _emit_error(args, f"Could not remove share {args.share_id}: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print(f"Share {args.share_id} removed.")
+    return 0
+
+
+def cmd_calendar_suggestions(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).calendar_suggestions(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not list suggestions: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    items = result.get("suggestions") or []
+    if not items:
+        print("(no suggestions waiting)")
+        return 0
+    rows = []
+    for s in items:
+        p = s.get("proposal") or {}
+        rows.append([p.get("title") or s.get("subject") or "(no title)", _calendar_when(p) if p.get("start") else "no time found",
+                     p.get("location") or "", s.get("from") or "", s.get("token")])
+    _print_table(["PROPOSED", "WHEN", "WHERE", "FROM", "TOKEN"], rows)
+    print("Save one with: homelab-cli calendar suggestions save TOKEN   (or dismiss)")
+    return 0
+
+
+def cmd_calendar_suggestion_save(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        ev = _client(args).calendar_suggestion_save(session["token"], args.token)
+    except ApiError as e:
+        _emit_error(args, f"Could not save the suggestion: {e.message}")
+        return 1
+    if _emit(args, ev):
+        return 0
+    print(f"Added event {ev.get('id')}: {ev.get('title')}, {_calendar_when(ev)}")
+    return 0
+
+
+def cmd_calendar_suggestion_dismiss(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).calendar_suggestion_dismiss(session["token"], args.token)
+    except ApiError as e:
+        _emit_error(args, f"Could not dismiss the suggestion: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    print("Dismissed.")
+    return 0
+
+
+_SETTINGS_FLAGS = (("timezone", "timezone"), ("week_start", "week_start"), ("time_format", "time_format"), ("default_view", "default_view"),
+                   ("date_format", "date_format"), ("default_reminder", "default_reminder_minutes"), ("all_day_hour", "all_day_reminder_hour"),
+                   ("default_length", "default_duration_minutes"), ("remind_shared", "remind_shared"), ("webhook", "webhook_url"))
+
+
+def cmd_calendar_settings(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    body = {}
+    for flag, key in _SETTINGS_FLAGS:
+        value = getattr(args, flag, None)
+        if value is None:
+            continue
+        if key == "remind_shared":
+            body[key] = value.lower() in ("on", "yes", "true", "1")
+        elif key == "webhook_url":
+            body[key] = "" if value.lower() == "none" else value
+        elif key == "week_start":
+            body[key] = {"sun": 0, "sunday": 0, "mon": 1, "monday": 1, "sat": 6, "saturday": 6}.get(value.lower(), value)
+        elif key in ("default_reminder_minutes", "all_day_reminder_hour", "default_duration_minutes"):
+            if not str(value).isdigit():
+                _emit_error(args, f"--{flag.replace('_', '-')} takes a number")
+                return 1
+            body[key] = int(value)
+        else:
+            body[key] = value
+    client = _client(args)
+    try:
+        prefs = client.calendar_set_prefs(session["token"], body) if body else client.calendar_prefs(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not {'change' if body else 'read'} the settings: {e.message}")
+        return 1
+    if _emit(args, prefs):
+        return 0
+    if body:
+        print("Saved.")
+    week = {0: "Sunday", 1: "Monday", 6: "Saturday"}.get(prefs.get("week_start"), prefs.get("week_start"))
+    rows = [["Time zone", prefs.get("timezone") or "(your account's)"], ["Week starts on", week], ["Time format", prefs.get("time_format")],
+            ["Opens in", prefs.get("default_view")], ["Dates written as", prefs.get("date_format")],
+            ["Default reminder", f"{prefs.get('default_reminder_minutes')} min before"], ["All-day events remind at", f"{prefs.get('all_day_reminder_hour')}:00"],
+            ["Default length", f"{prefs.get('default_duration_minutes')} min"], ["Shared events remind me", "yes" if prefs.get("remind_shared") else "no"],
+            ["Webhook", prefs.get("webhook_url") or "(none)"]]
+    _print_table(["SETTING", "VALUE"], rows)
+    return 0
+
+
+def cmd_calendar_account(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    body = {}
+    if args.mail_links is not None:
+        body["mail_links_enabled"] = args.mail_links.lower() in ("on", "yes", "true", "1")
+    client = _client(args)
+    try:
+        acct = client.calendar_set_account(session["token"], body) if body else client.calendar_account(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not {'change' if body else 'read'} the switches: {e.message}")
+        return 1
+    if _emit(args, acct):
+        return 0
+    ai, auto = acct.get("ai") or {}, acct.get("auto") or {}
+    rows = [["Calendar links in my email", "on" if acct.get("mail_links_enabled") else "off"],
+            ["AI proposals (Propose with AI)", "on" if ai.get("enabled") else "off" + ("" if ai.get("available") else " (not available)")],
+            ["Propose automatically as email arrives", "on" if auto.get("enabled") else "off"],
+            ["Research at arrival", ("on" if auto.get("research_at_arrival") else "off") if auto.get("research_at_arrival_allowed") else "not included in this account"],
+            ["Reminder addresses", ", ".join(acct.get("reminder_addresses") or []) or "(your account address)"]]
+    _print_table(["SWITCH", "STATE"], rows)
+    print("The AI switches take a notice you must read first: " + str(acct.get("settings_url") or "the calendar's Settings page"))
     return 0
 
 
@@ -2908,20 +3407,42 @@ def build_parser():
     calendar = sub.add_parser("calendar", help="Your calendar, via homelab-api's calendar gateway: list, add, ICS out and in")
     calendar_sub = calendar.add_subparsers(dest="calendar_command", required=True)
 
-    p = calendar_sub.add_parser("list", help="List the events in a range (today unless --from/--to say otherwise), a page at a time")
-    p.add_argument("--from", dest="from_", metavar="WHEN",
-                   help="Start of the range: a date (2026-11-20), a time (2026-11-20T14:30), today or tomorrow. Alone: a year from it")
-    p.add_argument("--to", metavar="WHEN",
-                   help="End of the range, same forms; a date alone means through that whole day. Alone: from today")
+    WHEN_HELP = "a date (2026-11-20), a time (2026-11-20T14:30), today, tomorrow, yesterday, a weekday name, or +7d / +2w / +1m"
+
+    def repeat_flags(q):
+        g = q.add_mutually_exclusive_group()
+        g.add_argument("--repeat", metavar="RRULE", help="A repeat rule as written, e.g. FREQ=WEEKLY;COUNT=4")
+        for freq in ("daily", "weekly", "monthly", "yearly"):
+            g.add_argument(f"--{freq}", dest="freq", action="store_const", const=freq, help=f"Repeats {freq}")
+        q.add_argument("--every", type=int, metavar="N", help="With --daily/--weekly/...: every N days/weeks/...")
+        q.add_argument("--on", metavar="DAYS", help="With --weekly: the weekdays, e.g. MO,WE,FR")
+        q.add_argument("--count", type=int, metavar="N", help="Stop after N occurrences")
+        q.add_argument("--until", metavar="DATE", help="Stop on this date")
+
+    p = calendar_sub.add_parser("list", help="List the events in a range (today unless told otherwise), grouped by day, a page at a time")
+    p.add_argument("--from", dest="from_", metavar="WHEN", help=f"Start of the range: {WHEN_HELP}. Alone: a year from it")
+    p.add_argument("--to", metavar="WHEN", help=f"End of the range: {WHEN_HELP} (+7d counts from the start); a date alone means through that whole day")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--days", type=int, metavar="N", help="N days from the start (or today)")
+    g.add_argument("--week", action="store_true", help="Seven days from the start (or today)")
+    g.add_argument("--month", action="store_true", help="A month from the start (or today)")
     p.add_argument("--calendar", metavar="ID", help="Only this calendar (see 'calendar calendars')")
+    p.add_argument("--timezone", metavar="ZONE", help="Show times in this IANA zone instead of your calendar's")
     p.add_argument("--limit", type=int, default=50, help="Events per page, 1 to 200 (default 50)")
     p.add_argument("--page", type=int, default=1, help="Which page, from 1")
     p.set_defaults(func=cmd_calendar_list)
 
+    p = calendar_sub.add_parser("show", help="One event in full: when, where, calendar, repeats, reminders, its link")
+    p.add_argument("event_id")
+    p.add_argument("--occurrence", metavar="RID", help="One occurrence of a repeating event (the occurrence value from 'list')")
+    p.set_defaults(func=cmd_calendar_show)
+
     p = calendar_sub.add_parser("add", help="Add an event (to your default calendar unless --calendar)")
     p.add_argument("title")
     p.add_argument("--start", required=True, metavar="WHEN", help="2026-11-20T14:30, or a date with --all-day")
-    p.add_argument("--end", metavar="WHEN", help="Same form; an hour after the start (a day, for all-day) when left out")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--end", metavar="WHEN", help="Same form; an hour after the start (a day, for all-day) when left out")
+    g.add_argument("--duration", metavar="LENGTH", help="Instead of --end: 90m, 1h30m, 2h, or 2d for all-day")
     p.add_argument("--all-day", action="store_true", help="An all-day event: --start/--end are dates (the end is exclusive)")
     p.add_argument("--location", help="Where")
     p.add_argument("--description", help="Notes")
@@ -2929,27 +3450,121 @@ def build_parser():
     p.add_argument("--calendar", metavar="ID", help="The calendar to add to")
     p.add_argument("--reminder", default="10", metavar="MINUTES",
                    help="Email reminder this many minutes before the start (default 10), or 'none'")
-    p.add_argument("--repeat", metavar="RRULE", help="A repeat rule, e.g. FREQ=WEEKLY;COUNT=4")
+    repeat_flags(p)
     p.add_argument("--share-with", metavar="EMAIL", help="Share the new event (read-only) with one address")
     p.set_defaults(func=cmd_calendar_add)
+
+    p = calendar_sub.add_parser("edit", help="Change an event: give only what changes")
+    p.add_argument("event_id")
+    p.add_argument("--title")
+    p.add_argument("--start", metavar="WHEN", help="2026-11-20T14:30, or a date for all-day")
+    p.add_argument("--end", metavar="WHEN")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--all-day", action="store_true", help="Make it all-day")
+    g.add_argument("--timed", action="store_true", help="Make it a timed event")
+    p.add_argument("--location")
+    p.add_argument("--description")
+    p.add_argument("--timezone", metavar="ZONE", help="The IANA zone the new times are in")
+    p.add_argument("--calendar", metavar="ID", help="Move it to this calendar")
+    p.add_argument("--reminder", metavar="MINUTES", help="Email reminder this many minutes before, or 'none' (replaces the event's reminders)")
+    repeat_flags(p)
+    p.add_argument("--no-repeat", action="store_true", help="Stop it repeating")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--this", action="store_true", help="For a repeating event: this occurrence only (needs --occurrence)")
+    g.add_argument("--following", action="store_true", help="For a repeating event: this and the following occurrences (needs --occurrence)")
+    p.add_argument("--occurrence", metavar="RID", help="Which occurrence, with --this or --following")
+    p.set_defaults(func=cmd_calendar_edit)
+
+    p = calendar_sub.add_parser("delete", help="Delete an event (restorable for 30 days), or occurrences of a repeating one")
+    p.add_argument("event_id")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--this", action="store_true", help="Only this occurrence (needs --occurrence)")
+    g.add_argument("--following", action="store_true", help="This and the following occurrences (needs --occurrence)")
+    p.add_argument("--occurrence", metavar="RID", help="Which occurrence, with --this or --following")
+    p.set_defaults(func=cmd_calendar_delete)
+
+    p = calendar_sub.add_parser("restore", help="Bring a deleted event back from the trash")
+    p.add_argument("event_id")
+    p.set_defaults(func=cmd_calendar_restore)
+
+    p = calendar_sub.add_parser("trash", help="Events deleted in the last 30 days")
+    p.set_defaults(func=cmd_calendar_trash)
+
+    p = calendar_sub.add_parser("search", help="Find events whose title, place or notes contain the words")
+    p.add_argument("text", nargs="+")
+    p.set_defaults(func=cmd_calendar_search)
 
     p = calendar_sub.add_parser(
         "export",
         help="The events as an .ics file: a range (--from/--to, one VEVENT per occurrence), or the whole calendar with its rules")
-    p.add_argument("--from", dest="from_", metavar="WHEN",
-                   help="Start of the range (as in 'list'); with --from or --to the file holds the occurrences in the range")
+    p.add_argument("--from", dest="from_", metavar="WHEN", help=f"Start of the range ({WHEN_HELP}); with --from or --to the file holds the occurrences in the range")
     p.add_argument("--to", metavar="WHEN", help="End of the range (as in 'list')")
     p.add_argument("--calendar", metavar="ID", help="Only this calendar (for a whole-calendar export: which one; the default otherwise)")
+    p.add_argument("--timezone", metavar="ZONE", help="Read --from/--to in this zone instead of your calendar's")
     p.add_argument("--output", "-o", metavar="FILE", help="Write here instead of standard output")
     p.set_defaults(func=cmd_calendar_export)
 
     p = calendar_sub.add_parser("import", help="Add the events of an .ics file (a UID already in your calendar updates that event)")
     p.add_argument("path", help="The .ics file")
     p.add_argument("--calendar", metavar="ID", help="The calendar to import into (your default when left out)")
+    p.add_argument("--dry-run", action="store_true", help="Say what would be created, updated and skipped; write nothing")
     p.set_defaults(func=cmd_calendar_import)
 
-    p = calendar_sub.add_parser("calendars", help="List your calendars and the ones shared with you, with their ids")
+    p = calendar_sub.add_parser("calendars", help="List your calendars and the ones shared with you (or 'calendars create NAME')")
     p.set_defaults(func=cmd_calendar_calendars)
+    cals_sub = p.add_subparsers(dest="calendars_command")
+    pc = cals_sub.add_parser("create", help="Make a new calendar of your own")
+    pc.add_argument("name")
+    pc.add_argument("--color", metavar="#RRGGBB", help="Its colour, like #1a2b3c")
+    pc.add_argument("--timezone", metavar="ZONE", help="The IANA zone for new events in it")
+    pc.add_argument("--description")
+    pc.set_defaults(func=cmd_calendar_calendars_create)
+
+    p = calendar_sub.add_parser("shares", help="Who an event (or, with --calendar, a calendar) is shared with")
+    p.add_argument("event_id", nargs="?", help="The event's id (or use --calendar)")
+    p.add_argument("--calendar", metavar="ID", help="A whole calendar instead of an event")
+    p.set_defaults(func=cmd_calendar_shares)
+
+    p = calendar_sub.add_parser("share", help="Share an event (or, with --calendar, a calendar) with an account, or make a link anyone can open")
+    p.add_argument("event_id", nargs="?", help="The event's id (or use --calendar)")
+    p.add_argument("--calendar", metavar="ID", help="A whole calendar instead of an event")
+    p.add_argument("--with", dest="with_email", metavar="EMAIL", help="The account to share with")
+    p.add_argument("--edit", action="store_true", help="They may edit too (accounts only)")
+    p.add_argument("--link", action="store_true", help="A link anyone can open instead of an account (a calendar's link is also a feed for phones)")
+    p.add_argument("--busy", action="store_true", help="With --link: show only when you are busy")
+    p.add_argument("--expires", type=int, metavar="DAYS", help="End the share after this many days")
+    p.set_defaults(func=cmd_calendar_share)
+
+    p = calendar_sub.add_parser("unshare", help="Remove a share by its id (see 'shares')")
+    p.add_argument("share_id")
+    p.set_defaults(func=cmd_calendar_unshare)
+
+    p = calendar_sub.add_parser("suggestions", help="Events proposed from your email as it arrived (or 'suggestions save|dismiss TOKEN')")
+    p.set_defaults(func=cmd_calendar_suggestions)
+    sugg_sub = p.add_subparsers(dest="suggestions_command")
+    ps = sugg_sub.add_parser("save", help="Make the event as proposed")
+    ps.add_argument("token")
+    ps.set_defaults(func=cmd_calendar_suggestion_save)
+    ps = sugg_sub.add_parser("dismiss", help="Take it off your list")
+    ps.add_argument("token")
+    ps.set_defaults(func=cmd_calendar_suggestion_dismiss)
+
+    p = calendar_sub.add_parser("settings", help="Your calendar settings; with flags, change them")
+    p.add_argument("--timezone", metavar="ZONE")
+    p.add_argument("--week-start", dest="week_start", metavar="DAY", help="sun, mon or sat")
+    p.add_argument("--time-format", dest="time_format", choices=["12h", "24h"])
+    p.add_argument("--default-view", dest="default_view", choices=["month", "week", "day", "agenda"])
+    p.add_argument("--date-format", dest="date_format", choices=["mdy", "dmy", "ymd"], help="How dates are written on the page")
+    p.add_argument("--default-reminder", dest="default_reminder", metavar="MINUTES", help="For new events")
+    p.add_argument("--all-day-hour", dest="all_day_hour", metavar="HOUR", help="When all-day events remind (0-23)")
+    p.add_argument("--default-length", dest="default_length", metavar="MINUTES", help="How long a new timed event lasts without an end")
+    p.add_argument("--remind-shared", dest="remind_shared", metavar="on|off", help="Whether events others share with you remind you")
+    p.add_argument("--webhook", metavar="URL", help="Where a Webhook reminder posts JSON, or 'none'")
+    p.set_defaults(func=cmd_calendar_settings)
+
+    p = calendar_sub.add_parser("account", help="Your calendar's switches (email links, the AI proposal); --mail-links on|off changes the first")
+    p.add_argument("--mail-links", dest="mail_links", metavar="on|off", help="Add an 'Add to calendar' link to every email you receive")
+    p.set_defaults(func=cmd_calendar_account)
 
     jobs = sub.add_parser("jobs", help="Background job status, via homelab-api's jobs gateway -> homelab-worker")
     jobs_sub = jobs.add_subparsers(dest="jobs_command", required=True)

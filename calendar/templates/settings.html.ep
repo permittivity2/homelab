@@ -36,6 +36,41 @@
             </select></div>
         </div>
         <div class="form-actions"><button type="button" class="btn btn-primary" id="s-save-display">Save</button></div>
+        <p class="muted-small">Keyboard on the calendar page: n new event, t today, arrows move, d/w/m/a views, / search, Esc close.</p>
+      </div>
+    </section>
+
+    %# 0.2.0: the defaults that used to be fixed.
+    <section class="panel">
+      <div class="panel__head"><h2 class="panel__title">Defaults for new events</h2></div>
+      <div class="panel__body stack">
+        <div class="form-grid">
+          <div><label class="form-label" for="s-def-reminder">Reminder</label>
+            <select class="form-select" id="s-def-reminder">
+              % for my $o ([0, 'At the time'], [5, '5 minutes before'], [10, '10 minutes before'], [15, '15 minutes before'], [30, '30 minutes before'], [60, '1 hour before'], [120, '2 hours before'], [1440, '1 day before']) {
+              <option value="<%= $o->[0] %>"<%= $prefs->{default_reminder_minutes} == $o->[0] ? ' selected' : '' %>><%= $o->[1] %></option>
+              % }
+            </select></div>
+          <div><label class="form-label" for="s-def-hour">All-day events remind at</label>
+            <select class="form-select" id="s-def-hour">
+              % for my $h (0 .. 23) {
+              <option value="<%= $h %>"<%= $prefs->{all_day_reminder_hour} == $h ? ' selected' : '' %>><%= ($h % 12 || 12) . ($h < 12 ? ' AM' : ' PM') %></option>
+              % }
+            </select></div>
+          <div><label class="form-label" for="s-def-duration">Length</label>
+            <select class="form-select" id="s-def-duration">
+              % for my $o ([15, '15 minutes'], [30, '30 minutes'], [45, '45 minutes'], [60, '1 hour'], [90, '1.5 hours'], [120, '2 hours'], [180, '3 hours'], [240, '4 hours']) {
+              <option value="<%= $o->[0] %>"<%= $prefs->{default_duration_minutes} == $o->[0] ? ' selected' : '' %>><%= $o->[1] %></option>
+              % }
+            </select></div>
+          <div><label class="form-label" for="s-def-date">Dates written as</label>
+            <select class="form-select" id="s-def-date">
+              % for my $o ([mdy => 'Fri, Nov 14, 2026'], [dmy => 'Fri, 14 Nov 2026'], [ymd => 'Fri, 2026-11-14']) {
+              <option value="<%= $o->[0] %>"<%= $prefs->{date_format} eq $o->[0] ? ' selected' : '' %>><%= $o->[1] %></option>
+              % }
+            </select></div>
+        </div>
+        <div class="form-actions"><button type="button" class="btn btn-primary" id="s-save-defaults">Save</button></div>
       </div>
     </section>
 
@@ -117,8 +152,12 @@
     <section class="panel">
       <div class="panel__head"><h2 class="panel__title">Reminders</h2></div>
       <div class="panel__body stack">
-        <p class="text-muted">Reminders are sent by email, minutes before an event (set on each event; new events start at 10 minutes). They go to your account address unless you list other addresses here, one per line (up to 5). Events shared with you remind you too.</p>
+        <p class="text-muted">Reminders are sent by email, minutes before an event (set on each event, up to three; new events start with the default above). They go to your account address unless you list other addresses here, one per line (up to 5).</p>
         <textarea class="form-textarea" id="s-reminder-addresses" rows="3" placeholder="<%= $me %>"><%= join "\n", @$reminder_addresses %></textarea>
+        <label class="check"><input type="checkbox" id="s-remind-shared"<%= $prefs->{remind_shared} ? ' checked' : '' %>> <span>Remind me about events other people share with me</span></label>
+        <div class="form-row"><label class="form-label" for="s-webhook">Webhook (optional)</label>
+          <input class="form-input" id="s-webhook" type="url" placeholder="https://ntfy.example.com/my-topic" maxlength="500" value="<%= $prefs->{webhook_url} // '' %>">
+          <p class="form-hint">A reminder set to "Webhook" posts JSON here (title, start, end, place, a link) instead of mailing. Without a URL it is mailed after all.</p></div>
         <div class="form-actions"><button type="button" class="btn btn-primary" id="s-save-reminders">Save</button></div>
       </div>
     </section>
@@ -177,12 +216,18 @@
     put('/api/account', { research_at_arrival: box.checked }).then(function () { say(box.checked ? 'Research runs as email arrives.' : 'Research only when you ask.', 'ok'); })
       .catch(function (e) { box.checked = !box.checked; say(e.message, 'error'); });
   });
-  // #79: where reminders go.
+  // #79: where reminders go; 0.2.0: the shared-events switch and the webhook.
   $('s-save-reminders').addEventListener('click', function () {
     var list = $('s-reminder-addresses').value.split(/[\n,;]+/).map(function (s) { return s.trim(); }).filter(Boolean);
     put('/api/account', { reminder_addresses: list })
-      .then(function (a) { $('s-reminder-addresses').value = (a.reminder_addresses || []).join('\n'); say(list.length ? 'Reminders go to ' + list.length + ' address' + (list.length === 1 ? '' : 'es') + '.' : 'Reminders go to your account address.', 'ok'); })
+      .then(function (a) { $('s-reminder-addresses').value = (a.reminder_addresses || []).join('\n'); return put('/api/prefs', { remind_shared: $('s-remind-shared').checked, webhook_url: $('s-webhook').value.trim() }); })
+      .then(function () { say(list.length ? 'Saved. Reminders go to ' + list.length + ' address' + (list.length === 1 ? '' : 'es') + '.' : 'Saved. Reminders go to your account address.', 'ok'); })
       .catch(function (e) { say(e.message, 'error'); });
+  });
+  // 0.2.0: the defaults for new events.
+  $('s-save-defaults').addEventListener('click', function () {
+    put('/api/prefs', { default_reminder_minutes: +$('s-def-reminder').value, all_day_reminder_hour: +$('s-def-hour').value, default_duration_minutes: +$('s-def-duration').value, date_format: $('s-def-date').value })
+      .then(function () { say('Saved.', 'ok'); }).catch(function (e) { say(e.message, 'error'); });
   });
 })();
 </script>

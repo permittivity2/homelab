@@ -98,6 +98,14 @@ scrape_configs:
   # api-key, gated by webserver-allow-from). Not a fleet feature, so the pull
   # never writes targets/pdns-recursor.json: ns03 comes from STATIC_TARGETS
   # (post-cutover #66, 2026-11-09). Alert rules in rules/resolver.yml.
+  # homelab-calendar (post-cutover #83): the reminder queue, what went out and
+  # what failed, the mail links by job state. Three nodes, from the pull.
+  - job_name: calendar
+    metrics_path: /metrics
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/calendar.json', '/etc/prometheus/homelab/targets-static/calendar.json']
+        refresh_interval: 30s
+
   - job_name: pdns-recursor
     file_sd_configs:
       - files: ['/etc/prometheus/homelab/targets/pdns-recursor.json', '/etc/prometheus/homelab/targets-static/pdns-recursor.json']

@@ -1,3 +1,41 @@
+homelab-calendar (0.2.2) unstable; urgency=medium
+
+  * A "this and following" change of a repeating event failed since 0.2.0: the
+    split copied the reminders with a conflict target on the unique constraint
+    migration 006 had dropped. Found by the new database-backed test
+    (t/model.t, CI's calendar-db-tests job).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 14 Nov 2026 16:33:05 -0600
+
+homelab-calendar (0.2.1) unstable; urgency=medium
+
+  * The range words homelab-cli 0.7.0 sends: yesterday, a weekday name (the
+    next one, today included), +7d / +2w / +1m counted from the other end;
+    the events list says the account's time format (post-cutover #83).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 14 Nov 2026 16:29:13 -0600
+
+homelab-calendar (0.2.0) unstable; urgency=medium
+
+  * The review of 2026-11-14 (post-cutover #83), the page: a deep link per
+    event (/?date=&event=) used by reminders, share notices and the CLI; a peek
+    popover on a click (Edit, Delete, Copy link); quick add by typing one line;
+    a search box; a Deleted events list with Restore and an Undo toast after a
+    delete; a duplicate check before Save; up to three reminders per event by
+    email or to a webhook; the event's own time zone under "More"; keyboard
+    shortcuts; a print stylesheet; the week opens near now; calendars can be
+    reordered; "Subscribe on your phone" makes a private feed address.
+  * Settings: default reminder, all-day reminder hour, default length, date
+    order (migration 006); "remind me about shared events" and a webhook URL.
+  * Reminders of shared events honour the recipient's switch and all-day hour;
+    a suggestion dismissed by one recipient stays for the others; /metrics for
+    Prometheus; the import takes dry_run=1, lays RECURRENCE-ID components over
+    their series and replaces a series' cancelled dates with the file's.
+  * For homelab-cli: Bearer routes for one event (show, change, delete,
+    restore), the trash, search, a new calendar, shares, suggestions, prefs.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 14 Nov 2026 16:07:38 -0600
+
 homelab-calendar (0.1.11) unstable; urgency=medium
 
   * homelab-cli reaches the calendar (post-cutover #82): Bearer routes through

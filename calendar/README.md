@@ -82,6 +82,22 @@ account saved stays out of its Suggestions list even if the event is deleted
 later; events are soft-deleted, so a deleted one drops out of `events_made`
 and the link behaves like a first click again.
 
+0.2.0 (#83): every event JSON carries `url`, a deep link `/?date=YYYY-MM-DD&event=ID[&rid=]`
+that opens the page on that day with the event highlighted and its editor open
+(reminder emails and share notices use it); `reminders` is a list of up to three
+`{minutes_before, channel}` (email or webhook; `reminder_minutes` still works
+as the single-reminder form); `GET /api/trash` and `POST /api/events/:id/restore`
+(events are soft-deleted; 30 days); `GET /api/search?q=`; `POST /api/quick-add
+{text}` (a draft by the plain parser, nothing saved); `GET /api/events/similar?title&start`
+(the duplicate check before Save); `PUT /api/calendars/:id/position {direction}`;
+`GET /metrics` (Prometheus text, no sign-in, fleet planes only). Preferences gained
+`default_reminder_minutes`, `all_day_reminder_hour`, `default_duration_minutes`,
+`date_format` (mdy|dmy|ymd), `remind_shared` and `webhook_url`. The same verbs sit
+under `/internal/v1/calendar/` for homelab-cli (one event: GET, PATCH, `/delete`,
+`/restore`, `/shares`; `trash`, `search`, `calendars` POST, `calendars/:id/shares`,
+`shares/:id/revoke`, `suggestions`, `prefs`), each the session handler behind a
+Bearer check (a Bearer caller passes the CSRF check). The import takes `dry_run=1`.
+
 ## The background runner (#79, #80)
 
 `Homelab::Calendar::Runner` runs from a 30 s timer in every hypnotoad worker;

@@ -1,3 +1,15 @@
+homelab-cli (0.7.0) unstable; urgency=medium
+
+  * calendar (post-cutover #83): show, edit, delete (to the trash) and
+    restore, trash, search, calendars create, shares/share/unshare,
+    suggestions (save, dismiss), settings and account; list grouped by day
+    with the account's 12/24-hour preference, --days/--week/--month, weekday
+    names and +7d, --timezone; add/edit take --duration and --daily/--weekly/
+    --monthly/--yearly with --every/--on/--count/--until; import --dry-run.
+    The package version is written into the module at build (the User-Agent).
+
+ -- Gardner <gardner@homelab>  Sat, 14 Nov 2026 16:22:23 -0600
+
 homelab-cli (0.6.16) unstable; urgency=medium
 
   * calendar (post-cutover #82): list (today by default; --from/--to as a

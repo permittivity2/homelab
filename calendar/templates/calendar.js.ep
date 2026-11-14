@@ -58,14 +58,24 @@ var Cal = (function () {
     return h + ':' + M + (H < 12 ? ' AM' : ' PM');
   }
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  function fmtDate(s) { var d = parseWall(s); if (!d) return ''; return DAY_SHORT[d.getUTCDay()] + ', ' + MONTHS[d.getUTCMonth()] + ' ' + d.getUTCDate() + ', ' + d.getUTCFullYear(); }
+  // The date order is a preference (0.2.0): mdy 'Fri, Nov 14, 2026', dmy
+  // 'Fri, 14 Nov 2026', ymd 'Fri, 2026-11-14'.
+  var DATE_FORMAT = 'mdy';
+  function setDateFormat(f) { DATE_FORMAT = (f === 'dmy' || f === 'ymd') ? f : 'mdy'; }
+  function fmtDate(s) {
+    var d = parseWall(s); if (!d) return '';
+    var dow = DAY_SHORT[d.getUTCDay()], mon = MONTHS[d.getUTCMonth()], day = d.getUTCDate(), y = d.getUTCFullYear();
+    if (DATE_FORMAT === 'dmy') return dow + ', ' + day + ' ' + mon + ' ' + y;
+    if (DATE_FORMAT === 'ymd') return dow + ', ' + y + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(day);
+    return dow + ', ' + mon + ' ' + day + ', ' + y;
+  }
   // One line for an event's time: 'Fri, Nov 14, 2026 9:00 AM - 10:00 AM', or
   // for all-day 'Fri, Nov 14, 2026' / 'Fri, Nov 20 - Sat, Nov 21, 2026'.
   function fmtRange(start, end, allDay, h24) {
     if (allDay) {
       var last = addDays(end, -1);
       if (!last || last.slice(0, 10) <= start.slice(0, 10)) return fmtDate(start);
-      return fmtDate(start).replace(/, \d{4}$/, '') + ' - ' + fmtDate(last);
+      return fmtDate(start).replace(/,? \d{4}$/, '') + ' - ' + fmtDate(last);
     }
     var same = start.slice(0, 10) === end.slice(0, 10);
     return fmtDate(start) + ' ' + fmtTime(start, h24) + ' - ' + (same ? '' : fmtDate(end) + ' ') + fmtTime(end, h24);
@@ -174,9 +184,16 @@ var Cal = (function () {
   // =============================================================== the page
   function boot(cfg) {
     csrf = cfg.csrf;
+    setDateFormat(cfg.prefs.date_format);
     var h24 = (cfg.prefs.time_format === '24h');
     var zone = cfg.account_zone || cfg.prefs.timezone || browserZone() || cfg.default_zone;
-    var state = { calendars: [], byId: {}, prefs: cfg.prefs, zone: zone, calendar: null, editing: null, shareTarget: null };
+    var state = { calendars: [], byId: {}, prefs: cfg.prefs, zone: zone, calendar: null, editing: null, shareTarget: null, skipDup: false };
+    // A deep link (0.2.0): /?date=2026-11-20&event=22[&rid=...] opens on that
+    // day with the event highlighted and its editor open.
+    var params = new URLSearchParams(window.location.search || '');
+    var link = { date: params.get('date'), event: params.get('event'), rid: params.get('rid') };
+    if (link.date && !/^\d{4}-\d{2}-\d{2}$/.test(link.date)) link.date = null;
+    if (link.event && !/^\d+$/.test(link.event)) link.event = null;
 
     // The zone was never saved: keep the browser's as this account's, so the
     // phone and the laptop agree from the first visit.
@@ -188,6 +205,8 @@ var Cal = (function () {
     var fc = new FullCalendar.Calendar($('calendar'), {
       timeZone: zone,
       initialView: initialViewFor(storedView(), narrow(), cfg.prefs.default_view),
+      initialDate: link.date || undefined,
+      scrollTime: pad(Math.max(0, new Date().getHours() - 1)) + ':00:00',   // the week opens near now, not at 6 AM
       datesSet: function (arg) { rememberView(arg.view.type); },
       headerToolbar: { start: 'prev,next today', center: 'title', end: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek' },
       buttonText: { today: 'Today', month: 'Month', week: 'Week', day: 'Day', list: 'Agenda' },
@@ -207,11 +226,12 @@ var Cal = (function () {
         openEditor({ calendar_id: defaultCalendarId(), all_day: info.allDay, start: wall(info.start), end: wall(info.end) });
         fc.unselect();
       },
-      eventClick: function (info) { info.jsEvent.preventDefault(); openExisting(info.event); },
+      eventClick: function (info) { info.jsEvent.preventDefault(); peek(info); },
       eventDrop: function (info) { moved(info); },
       eventResize: function (info) { moved(info); },
       eventDidMount: function (arg) {
         var p = arg.event.extendedProps;
+        if (link.event && String(p.event_id) === String(link.event)) arg.el.classList.add('is-linked');
         var bits = [];
         if (p.location) bits.push(p.location);
         if (p.is_recurring) bits.push('repeats');
@@ -277,9 +297,38 @@ var Cal = (function () {
       sd: $('ev-start-date'), st: $('ev-start-time'), ed: $('ev-end-date'), et: $('ev-end-time'),
       repeat: $('ev-repeat'), interval: $('ev-interval'), byday: $('ev-byday'), monthlyBy: $('ev-monthly-by'),
       ends: $('ev-ends'), count: $('ev-count'), until: $('ev-until'), loc: $('ev-location'), desc: $('ev-desc'), colors: $('ev-colors'),
-      reminder: $('ev-reminder'), shareWith: $('ev-share-with')
+      reminders: $('ev-reminders'), zoneSel: $('ev-zone'), shareWith: $('ev-share-with')
     };
-    var DEFAULT_REMINDER = '10';   // minutes before, on a new event (Gardner, 2026-11-14)
+    // Reminders (#79; several since 0.2.0): up to three rows, each minutes
+    // before the start and a channel. A new event starts with the account's
+    // default (10 minutes by email unless changed in Settings).
+    var REMINDER_CHOICES = [[0, 'At the time'], [5, '5 minutes before'], [10, '10 minutes before'], [15, '15 minutes before'], [30, '30 minutes before'],
+      [60, '1 hour before'], [120, '2 hours before'], [1440, '1 day before'], [2880, '2 days before'], [10080, '1 week before']];
+    function reminderRow(r) {
+      var m = +r.minutes_before, known = REMINDER_CHOICES.some(function (c) { return c[0] === m; });
+      var opts = (known ? REMINDER_CHOICES : REMINDER_CHOICES.concat([[m, m + ' minutes before']])).map(function (c) { return '<option value="' + c[0] + '"' + (c[0] === m ? ' selected' : '') + '>' + c[1] + '</option>'; }).join('');
+      return '<div class="time-row" data-rem><select class="form-select" data-rem-min aria-label="When">' + opts + '</select>'
+        + '<select class="form-select" data-rem-ch aria-label="How" style="flex: 0 1 8rem"><option value="email"' + (r.channel !== 'webhook' ? ' selected' : '') + '>Email</option><option value="webhook"' + (r.channel === 'webhook' ? ' selected' : '') + '>Webhook</option></select>'
+        + '<button type="button" class="btn btn-sm btn-ghost" data-rem-remove aria-label="Remove this reminder">&times;</button></div>';
+    }
+    function setReminders(list) { ev.reminders.innerHTML = (list || []).slice(0, 3).map(reminderRow).join(''); syncReminderHint(); }
+    function remindersValue() {
+      return Array.prototype.map.call(ev.reminders.querySelectorAll('[data-rem]'), function (row) {
+        return { minutes_before: +row.querySelector('[data-rem-min]').value, channel: row.querySelector('[data-rem-ch]').value };
+      });
+    }
+    function defaultReminderMinutes() { var m = state.prefs.default_reminder_minutes; return (m == null || m === '') ? 10 : +m; }
+    function syncReminderHint() {
+      var n = ev.reminders.querySelectorAll('[data-rem]').length, h = +state.prefs.all_day_reminder_hour; if (isNaN(h)) h = 9;
+      $('ev-reminder-add').classList.toggle('hide', n >= 3);
+      $('ev-reminder-hint').textContent = n ? 'All-day events remind at ' + (h % 12 || 12) + (h < 12 ? ' AM' : ' PM') + '. A webhook reminder needs the URL in Settings.' : 'No reminder.';
+    }
+    $('ev-reminder-add').addEventListener('click', function () {
+      if (ev.reminders.querySelectorAll('[data-rem]').length >= 3) return;
+      ev.reminders.insertAdjacentHTML('beforeend', reminderRow({ minutes_before: defaultReminderMinutes(), channel: 'email' })); syncReminderHint();
+    });
+    ev.reminders.addEventListener('click', function (e) { var b = e.target.closest('[data-rem-remove]'); if (b) { b.closest('[data-rem]').remove(); syncReminderHint(); } });
+    function defaultDuration() { return +state.prefs.default_duration_minutes || 60; }
     ev.byday.innerHTML = WEEKDAYS.map(function (d, i) { return '<button type="button" class="chip" data-day="' + d + '" aria-pressed="false">' + DAY_SHORT[i] + '</button>'; }).join('');
     ev.byday.addEventListener('click', function (e) {
       var b = e.target.closest('[data-day]'); if (!b) return;
@@ -327,7 +376,10 @@ var Cal = (function () {
       lastStart = ns;
     }
     ev.sd.addEventListener('change', shiftEnd); ev.st.addEventListener('change', shiftEnd);
-    $('ev-zone-hint').textContent = 'Times in ' + zone.replace(/_/g, ' ') + '.';
+    // The zone the form's wall clocks are read in (0.2.0): the viewer's unless
+    // changed under "More" (a trip, a call across zones).
+    function syncZoneHint() { $('ev-zone-hint').textContent = 'Times in ' + (ev.zoneSel.value || zone).replace(/_/g, ' ') + '.'; }
+    ev.zoneSel.addEventListener('change', syncZoneHint);
     // The Map link follows the location field.
     function syncMap() { var u = mapsUrl(ev.loc.value); var a = $('ev-map'); a.href = u || '#'; a.classList.toggle('hide', !u); }
     ev.loc.addEventListener('input', syncMap);
@@ -367,9 +419,12 @@ var Cal = (function () {
       ev.repeat.disabled = !!ro || !!(existing && data.rrule && !rep);   // a rule the editor cannot show stays as it is
       ev.loc.value = (occ && occ.location) || data.location || ''; ev.desc.value = (occ && occ.description) || data.description || '';
       colorDots(ev.colors, (occ && occ.color) || data.color || '', true);
-      // The reminder is the event's own (#79); a new event starts with the default.
-      ev.reminder.value = existing ? (data.reminder_minutes == null ? '' : String(data.reminder_minutes)) : DEFAULT_REMINDER;
-      if (ev.reminder.value !== (existing ? (data.reminder_minutes == null ? '' : String(data.reminder_minutes)) : DEFAULT_REMINDER)) ev.reminder.value = '';
+      // The reminders are the event's own (#79, several since 0.2.0); a new
+      // event starts with the account's default.
+      setReminders(existing ? (data.reminders || []) : [{ minutes_before: defaultReminderMinutes(), channel: 'email' }]);
+      // The form's times are in the viewer's zone (an existing event's were
+      // converted to it); the select under "More" lets another be chosen.
+      fillZones(ev.zoneSel, zone); syncZoneHint();
       $('ev-share-wrap').classList.toggle('hide', !!existing); ev.shareWith.value = '';
       updateRepeatUI(); syncMap();
       openModal('ev-modal');
@@ -380,10 +435,17 @@ var Cal = (function () {
       var url = '/api/events/' + p.event_id + '?timeZone=' + encodeURIComponent(zone) + (p.recurrence_id ? '&recurrence_id=' + encodeURIComponent(p.recurrence_id) : '');
       api('GET', url).then(function (d) { openEditor(d, true); }).catch(function (err) { toast(err.message, 'error'); });
     }
-    $('btn-new-event').addEventListener('click', function () {
+    // By id (a deep link, a search hit): jump to its day, open the editor.
+    function fetchAndOpen(id, rid) {
+      return api('GET', '/api/events/' + id + '?timeZone=' + encodeURIComponent(zone) + (rid ? '&recurrence_id=' + encodeURIComponent(rid) : ''))
+        .then(function (d) { fc.gotoDate(((d.occurrence && d.occurrence.start) || d.start).slice(0, 10)); openEditor(d, true); })
+        .catch(function (err) { toast(err.message, 'error'); });
+    }
+    function newEventNow() {
       var now = new Date(), start = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0, 0));
-      openEditor({ calendar_id: defaultCalendarId(), all_day: false, start: wall(start), end: addMinutes(wall(start), 60) });
-    });
+      openEditor({ calendar_id: defaultCalendarId(), all_day: false, start: wall(start), end: addMinutes(wall(start), defaultDuration()) });
+    }
+    $('btn-new-event').addEventListener('click', newEventNow);
 
     // Which occurrences: asks when the event repeats, else resolves at once.
     function askScope(title, text, allowThis) {
@@ -406,8 +468,9 @@ var Cal = (function () {
         start: startWall(), end: endWall(), timezone: zone,
         location: ev.loc.value, description: ev.desc.value, color: ev.colors.dataset.color || null,
         repeat: ev.repeat.disabled ? undefined : repeatForm(),
-        reminder_minutes: ev.reminder.value === '' ? null : +ev.reminder.value
+        reminders: remindersValue()
       };
+      if (ev.zoneSel.value) body.timezone = ev.zoneSel.value;
       if (!body.start) { showError('ev-error', 'Give the event a start.'); return; }
       if (body.repeat === undefined) delete body.repeat;
       var editing = state.editing;
@@ -434,10 +497,30 @@ var Cal = (function () {
         var ruleChanged = JSON.stringify(repeatForm()) !== JSON.stringify(editing.data.repeat);
         p = askScope('Change repeating event', ruleChanged ? 'The repeat rule changed, so this applies to the whole series or to this and following events.' : 'This event repeats. What should change?', !ruleChanged)
           .then(function (scope) { if (!scope) throw { cancelled: true }; return save(scope); });
+      } else if (!editing && !state.skipDup) {
+        // A likely duplicate (0.2.0): the same title on the same day already there.
+        p = dupCheck(body.title, body.start).then(function (go) { if (!go) throw { cancelled: true }; return save(null); });
       } else p = save(null);
+      state.skipDup = false;
       p.then(function () { closeModal('ev-modal'); fc.refetchEvents(); toast(editing ? 'Saved.' : 'Event added.', 'ok'); })
        .catch(function (err) { if (err && err.cancelled) return; showError('ev-error', err.message); });
     });
+    function dupCheck(title, start) {
+      return api('GET', '/api/events/similar?title=' + encodeURIComponent(title || '') + '&start=' + encodeURIComponent(start || '')).then(function (r) {
+        var list = (r && r.events) || [];
+        if (!list.length) return true;
+        return new Promise(function (resolve) {
+          var e = list[0];
+          $('dup-text').textContent = 'You already have "' + e.title + '" on ' + (e.all_day ? fmtDate(e.start + 'T00:00:00') : fmtDate(e.start) + ' at ' + fmtTime(e.start, h24))
+            + (list.length > 1 ? ', and ' + (list.length - 1) + ' more like it' : '') + '.';
+          function done(v) { closeModal('dup-modal'); $('dup-save').onclick = $('dup-open').onclick = $('dup-cancel').onclick = null; resolve(v); }
+          $('dup-save').onclick = function () { done(true); };
+          $('dup-cancel').onclick = function () { done(false); };
+          $('dup-open').onclick = function () { done(false); closeModal('ev-modal'); fetchAndOpen(e.id, null); };
+          openModal('dup-modal');
+        });
+      }).catch(function () { return true; });   // a failed check never blocks a save
+    }
 
     $('ev-delete').addEventListener('click', function () {
       var editing = state.editing; if (!editing) return;
@@ -447,9 +530,23 @@ var Cal = (function () {
       p.then(function (scope) {
         if (!scope) return;
         return api('POST', '/api/events/' + editing.id + '/delete', { scope: scope, recurrence_id: editing.rid })
-          .then(function () { closeModal('ev-modal'); fc.refetchEvents(); toast('Deleted.', 'ok'); });
+          .then(function (r) {
+            closeModal('ev-modal'); fc.refetchEvents();
+            // A whole event comes back from the trash with one tap (0.2.0).
+            if (r && r.restorable) showUndo('Deleted "' + editing.data.title + '".', function () {
+              return api('POST', '/api/events/' + editing.id + '/restore').then(function () { fc.refetchEvents(); toast('Restored.', 'ok'); });
+            });
+            else toast('Deleted.', 'ok');
+          });
       }).catch(function (err) { showError('ev-error', err.message); });
     });
+    var undoTimer = null;
+    function showUndo(text, fn) {
+      var box = $('undo-toast'); $('undo-text').textContent = text; box.classList.remove('hide');
+      clearTimeout(undoTimer);
+      $('undo-btn').onclick = function () { box.classList.add('hide'); $('undo-btn').onclick = null; Promise.resolve(fn()).catch(function (err) { toast(err.message, 'error'); }); };
+      undoTimer = setTimeout(function () { box.classList.add('hide'); $('undo-btn').onclick = null; }, 8000);
+    }
 
     // A drag or a resize on the grid.
     function moved(info) {
@@ -476,6 +573,7 @@ var Cal = (function () {
       fillZones($('cal-zone'), cal ? cal.timezone : zone);
       $('cal-delete').classList.toggle('hide', !cal);
       $('cal-export').classList.toggle('hide', !cal);
+      ['cal-up', 'cal-down', 'cal-subscribe'].forEach(function (id) { $(id).classList.toggle('hide', !cal || cal.permission !== 'owner'); });
       if (cal) $('cal-export').href = '/api/calendars/' + cal.id + '/export.ics';
       showError('cal-error', '');
       openModal('cal-modal');
@@ -501,8 +599,25 @@ var Cal = (function () {
     var shareBtn = document.createElement('button'); shareBtn.type = 'button'; shareBtn.className = 'btn'; shareBtn.textContent = 'Share';
     $('cal-export').parentNode.insertBefore(shareBtn, $('cal-export'));
     shareBtn.addEventListener('click', function () { if (state.calendar) openShare({ kind: 'calendar', id: state.calendar.id, name: state.calendar.name }); });
-    calForm.addEventListener('reset', function () {});
-    document.getElementById('cal-modal').addEventListener('transitionend', function () {});
+    // The sidebar's order (0.2.0), and a one-tap phone subscription: a private
+    // read-only link share whose .ics address a phone's calendar app takes.
+    ['up', 'down'].forEach(function (dir) {
+      $('cal-' + dir).addEventListener('click', function () {
+        if (!state.calendar) return;
+        api('PUT', '/api/calendars/' + state.calendar.id + '/position', { direction: dir }).then(loadCalendars).then(function () { toast('Moved.', 'ok'); })
+          .catch(function (err) { showError('cal-error', err.message); });
+      });
+    });
+    $('cal-subscribe').addEventListener('click', function () {
+      var cal = state.calendar; if (!cal) return;
+      api('POST', '/api/calendars/' + cal.id + '/shares', { email: null, permission: 'read', detail: 'full', expires_days: null }).then(function (s) {
+        var url = s.ics_url || (s.url ? s.url + '.ics' : '');
+        var webcal = url.replace(/^https?:/, 'webcal:');
+        (navigator.clipboard ? navigator.clipboard.writeText(webcal) : Promise.reject())
+          .then(function () { toast('Subscription address copied. In your phone\'s calendar app choose "Add subscription" and paste it.', 'ok'); },
+                function () { prompt('In your phone\'s calendar app choose "Add subscription" and give it this address:', webcal); });
+      }).catch(function (err) { showError('cal-error', err.message); });
+    });
 
     // --- sharing ---
     function openShare(target) {
@@ -754,7 +869,125 @@ var Cal = (function () {
       return _api(method, url, body);
     };
 
-    loadCalendars().then(function () { if (mailLink) openFromMail(); }).catch(function (err) { toast(err.message, 'error'); });
+    // --- the peek (0.2.0): a click shows the event in a small popover with
+    // Edit, Delete and a copyable link; a phone goes straight to the editor.
+    var peekBox = $('peek'), peekEvent = null;
+    function hidePeek() { peekBox.classList.add('hide'); peekEvent = null; }
+    function peek(info) {
+      var e = info.event, p = e.extendedProps;
+      if (narrow()) { openExisting(e); return; }
+      peekEvent = e;
+      var s = e.allDay ? wallDate(e.start) : wall(e.start);
+      var endDate = e.end || new Date(e.start.getTime() + (e.allDay ? 86400000 : 3600000));
+      var when = fmtRange(e.allDay ? s + 'T00:00:00' : s, e.allDay ? wallDate(endDate) + 'T00:00:00' : wall(endDate), e.allDay, h24);
+      var cal = state.byId[p.calendar_id];
+      var deep = window.location.origin + '/?date=' + s.slice(0, 10) + '&event=' + p.event_id + (p.recurrence_id ? '&rid=' + encodeURIComponent(p.recurrence_id) : '');
+      peekBox.innerHTML = '<h3>' + esc(e.title) + '</h3><p>' + esc(when) + (p.is_recurring ? ' (repeats)' : '') + '</p>'
+        + (p.location ? '<p>' + esc(p.location) + '</p>' : '') + (cal ? '<p class="muted-small">' + esc(cal.name) + (p.permission === 'read' ? ', read-only' : '') + '</p>' : '')
+        + '<div class="form-actions"><button type="button" class="btn btn-sm btn-primary" data-peek="edit">' + (p.permission === 'read' ? 'Open' : 'Edit') + '</button>'
+        + (p.permission !== 'read' ? '<button type="button" class="btn btn-sm btn-danger" data-peek="delete">Delete</button>' : '')
+        + '<button type="button" class="btn btn-sm" data-peek="copy" data-link="' + esc(deep) + '">Copy link</button>'
+        + '<button type="button" class="btn btn-sm btn-ghost" data-peek="close">Close</button></div>';
+      peekBox.classList.remove('hide');
+      var r = info.el.getBoundingClientRect(), bw = peekBox.offsetWidth || 320, bh = peekBox.offsetHeight || 160;
+      var left = Math.min(Math.max(8, r.left + window.scrollX), window.scrollX + window.innerWidth - bw - 8);
+      var top = r.bottom + window.scrollY + 6;
+      if (r.bottom + bh + 12 > window.innerHeight) top = Math.max(8, r.top + window.scrollY - bh - 6);
+      peekBox.style.left = left + 'px'; peekBox.style.top = top + 'px';
+    }
+    peekBox.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-peek]'); if (!b || !peekEvent) return;
+      var act = b.getAttribute('data-peek'), ev0 = peekEvent;
+      if (act === 'close') { hidePeek(); return; }
+      if (act === 'copy') {
+        var l = b.getAttribute('data-link');
+        (navigator.clipboard ? navigator.clipboard.writeText(l) : Promise.reject()).then(function () { toast('Link copied.', 'ok'); }, function () { prompt('Copy this link:', l); });
+        return;
+      }
+      hidePeek();
+      if (act === 'edit') { openExisting(ev0); return; }
+      if (act === 'delete') { openExisting(ev0); setTimeout(function () { $('ev-delete').click(); }, 200); }
+    });
+    document.addEventListener('click', function (e) { if (!peekBox.classList.contains('hide') && !peekBox.contains(e.target) && !e.target.closest('.fc-event')) hidePeek(); });
+
+    // --- keyboard (0.2.0): n new, t today, arrows (or j k) move, d w m a views, / search ---
+    document.addEventListener('keydown', function (e) {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      var tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) { if (e.key === 'Escape') e.target.blur(); return; }
+      if (document.querySelector('.modal.open, .modal[open]')) return;
+      var k = e.key;
+      if (k === 'Escape') { hidePeek(); return; }
+      if (k === 'n') newEventNow(); else if (k === 't') fc.today(); else if (k === 'ArrowLeft' || k === 'j') fc.prev(); else if (k === 'ArrowRight' || k === 'k') fc.next();
+      else if (k === 'd') fc.changeView('timeGridDay'); else if (k === 'w') fc.changeView('timeGridWeek'); else if (k === 'm') fc.changeView('dayGridMonth'); else if (k === 'a') fc.changeView('listWeek');
+      else if (k === '/') $('q').focus(); else if (k === '?') toast('Keys: n new event, t today, arrows move, d/w/m/a views, / search, Esc close.', 'ok'); else return;
+      e.preventDefault();
+    });
+
+    // --- quick add (0.2.0): one typed line becomes a draft in the editor ---
+    $('quick-add').addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      var box = this, text = box.value.trim(); if (!text) return;
+      api('POST', '/api/quick-add', { text: text }).then(function (r) {
+        var g = (r && r.draft) || {};
+        var now = new Date(), fallback = wall(new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0, 0)));
+        var start = g.start || fallback;
+        openEditor({ calendar_id: defaultCalendarId(), all_day: !!g.all_day, start: start,
+                     end: g.end || (g.all_day ? addDays(start, 1) : addMinutes(start, defaultDuration())), title: g.title || text, location: g.location || '' });
+        if (!g.start) toast('No date found in that; set the time.', 'ok');
+        box.value = '';
+      }).catch(function (err) { toast(err.message, 'error'); });
+    });
+
+    // --- search (0.2.0) ---
+    function runSearch(q) {
+      return api('GET', '/api/search?q=' + encodeURIComponent(q)).then(function (r) {
+        var list = (r && r.events) || [];
+        $('search-h').textContent = 'Search: ' + q;
+        $('search-none').classList.toggle('hide', list.length > 0);
+        $('search-list').innerHTML = list.map(function (e) {
+          var when = e.all_day ? fmtRange(e.start + 'T00:00:00', e.end + 'T00:00:00', true, h24) : fmtRange(e.start, e.end, false, h24);
+          return '<li><span class="share-who">' + esc(e.title) + ' <span class="muted-small">' + esc(when) + (e.is_recurring ? ', repeats' : '') + (e.location ? ', ' + esc(e.location) : '') + ' (' + esc(e.calendar.name) + ')</span></span>'
+            + '<button type="button" class="btn btn-sm btn-primary" data-open-event="' + e.id + '">Open</button></li>';
+        }).join('');
+        openModal('search-modal');
+      }).catch(function (err) { toast(err.message, 'error'); });
+    }
+    $('q').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var q = this.value.trim(); if (q.length >= 2) runSearch(q); } });
+    $('search-list').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-open-event]'); if (!b) return;
+      closeModal('search-modal'); fetchAndOpen(b.getAttribute('data-open-event'), null);
+    });
+
+    // --- the trash (0.2.0): deleted events of the last 30 days, with Restore ---
+    function loadTrash() {
+      return api('GET', '/api/trash').then(function (r) {
+        var list = (r && r.events) || [];
+        $('trash-none').classList.toggle('hide', list.length > 0);
+        $('trash-list').innerHTML = list.map(function (e) {
+          var when = e.all_day ? fmtRange(e.start + 'T00:00:00', e.end + 'T00:00:00', true, h24) : fmtRange(e.start, e.end, false, h24);
+          return '<li><span class="share-who">' + esc(e.title) + ' <span class="muted-small">' + esc(when) + (e.is_recurring ? ', repeats' : '') + ' (' + esc(e.calendar.name) + '), deleted ' + esc(fmtDate(e.deleted_at)) + '</span></span>'
+            + '<button type="button" class="btn btn-sm btn-primary" data-restore="' + e.id + '">Restore</button></li>';
+        }).join('');
+      });
+    }
+    $('btn-trash').addEventListener('click', function () { showError('trash-error', ''); loadTrash().then(function () { openModal('trash-modal'); }).catch(function (err) { toast(err.message, 'error'); }); });
+    $('trash-list').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-restore]'); if (!b) return; b.disabled = true;
+      api('POST', '/api/events/' + b.getAttribute('data-restore') + '/restore').then(function () { toast('Restored.', 'ok'); fc.refetchEvents(); return loadTrash(); })
+        .catch(function (err) { b.disabled = false; showError('trash-error', err.message); });
+    });
+
+    // Proposals arriving while the page is open (0.2.0): the count refreshes
+    // when the tab comes back and every five minutes.
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') loadSuggestions(); });
+    setInterval(loadSuggestions, 300000);
+
+    loadCalendars().then(function () {
+      if (mailLink) { openFromMail(); return; }
+      if (link.event) fetchAndOpen(link.event, link.rid);
+    }).catch(function (err) { toast(err.message, 'error'); });
     loadSuggestions();
   }
 
@@ -792,7 +1025,7 @@ var Cal = (function () {
     wall: wall, wallDate: wallDate, parseWall: parseWall, addMinutes: addMinutes, addDays: addDays, minutesBetween: minutesBetween,
     splitWall: splitWall, joinWall: joinWall, weekdayOf: weekdayOf, fmtTime: fmtTime, fmtDate: fmtDate, fmtRange: fmtRange,
     repeatSummary: repeatSummary, ordinal: ordinal, viewName: viewName, initialViewFor: initialViewFor, mapsUrl: mapsUrl,
-    validEmail: validEmail, fmtMade: fmtMade,
+    validEmail: validEmail, fmtMade: fmtMade, setDateFormat: setDateFormat,
     boot: boot, bootPublic: bootPublic
   };
 })();

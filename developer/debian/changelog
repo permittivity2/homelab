@@ -1,3 +1,11 @@
+homelab-developer (0.1.8) unstable; urgency=medium
+
+  * Reference: the calendar routes homelab-cli 0.7.0 uses (post-cutover #83):
+    one event (show, change, delete, restore), the trash, search, a new
+    calendar, shares, suggestions, settings; reminders and dry_run notes.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 14 Nov 2026 16:22:23 -0600
+
 homelab-developer (0.1.7) unstable; urgency=medium
 
   * Reference: the calendar routes homelab-cli uses (post-cutover #82): the

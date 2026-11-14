@@ -181,6 +181,9 @@ sub startup ($self) {
     # session cookie is the credential, so the request has to prove it came
     # from this site's own page and not from another site.
     $self->helper(csrf_ok => sub ($c) {
+        # A Bearer caller (homelab-cli through the gateway, #82) has no page
+        # and no CSRF token; its token was introspected already.
+        return 1 if $c->stash('calendar.bearer');
         my $csrf = $c->req->headers->header('X-CSRF-Token') // '';
         return 1 if length $csrf && secure_compare($csrf, $c->csrf_token);
         $c->render(json => { error => 'This page is out of date. Reload it and try again.' }, status => 403);
@@ -235,6 +238,27 @@ sub startup ($self) {
     $r->get('/internal/v1/calendar/events.ics' => [format => 0]) ->to('api#internal_events_ics');
     $r->get('/internal/v1/calendar/export.ics' => [format => 0]) ->to('api#internal_export_ics');
     $r->post('/internal/v1/calendar/import')                     ->to('api#internal_import');
+    # 0.2.0 (#83): what the CLI's other verbs need, each the session route's
+    # own handler behind a Bearer check.
+    $r->get('/internal/v1/calendar/events/:id' => [id => qr/\d+/])           ->to('api#internal_event_show');
+    $r->patch('/internal/v1/calendar/events/:id' => [id => qr/\d+/])         ->to('api#internal_event_update');
+    $r->post('/internal/v1/calendar/events/:id/delete' => [id => qr/\d+/])   ->to('api#internal_event_delete');
+    $r->post('/internal/v1/calendar/events/:id/restore' => [id => qr/\d+/])  ->to('api#internal_event_restore');
+    $r->get('/internal/v1/calendar/events/:id/shares' => [id => qr/\d+/])    ->to('api#internal_event_shares');
+    $r->post('/internal/v1/calendar/events/:id/shares' => [id => qr/\d+/])   ->to('api#internal_event_share_create');
+    $r->get('/internal/v1/calendar/trash')                                   ->to('api#internal_trash');
+    $r->get('/internal/v1/calendar/search')                                  ->to('api#internal_search');
+    $r->post('/internal/v1/calendar/calendars')                              ->to('api#internal_calendar_create');
+    $r->get('/internal/v1/calendar/calendars/:id/shares' => [id => qr/\d+/]) ->to('api#internal_calendar_shares');
+    $r->post('/internal/v1/calendar/calendars/:id/shares' => [id => qr/\d+/])->to('api#internal_calendar_share_create');
+    $r->post('/internal/v1/calendar/shares/:id/revoke' => [id => qr/\d+/])   ->to('api#internal_share_revoke');
+    $r->get('/internal/v1/calendar/suggestions')                             ->to('api#internal_suggestions');
+    $r->post('/internal/v1/calendar/suggestions/:token/save' => $tok)        ->to('api#internal_suggestion_save');
+    $r->post('/internal/v1/calendar/suggestions/:token/dismiss' => $tok)     ->to('api#internal_suggestion_dismiss');
+    $r->get('/internal/v1/calendar/prefs')                                   ->to('api#internal_prefs');
+    $r->put('/internal/v1/calendar/prefs')                                   ->to('api#internal_prefs_save');
+    # Prometheus (0.2.0): the fleet's scraper reads this on the service port.
+    $r->get('/metrics')                                                      ->to('api#metrics');
 
     # JSON, same-origin, signed in.
     $r->get('/api/calendars')                 ->to('api#calendars');
@@ -247,6 +271,15 @@ sub startup ($self) {
     $r->get('/api/calendars/:id/export' => [id => qr/\d+/, format => ['ics']]) ->to('api#export');
     $r->get('/api/events')                    ->to('api#events');
     $r->post('/api/events')                   ->to('api#create_event');
+    # 0.2.0 (#83): the trash, search, a typed draft, a duplicate check, the
+    # sidebar's order. (/api/events/similar is safe beside /api/events/:id:
+    # the id placeholder takes digits only.)
+    $r->get('/api/events/similar')            ->to('api#similar');
+    $r->get('/api/trash')                     ->to('api#trash');
+    $r->post('/api/events/:id/restore' => [id => qr/\d+/])    ->to('api#restore_event');
+    $r->get('/api/search')                    ->to('api#search');
+    $r->post('/api/quick-add')                ->to('api#quick_add');
+    $r->put('/api/calendars/:id/position' => [id => qr/\d+/]) ->to('api#move_calendar');
     $r->get('/api/events/:id' => [id => qr/\d+/])             ->to('api#event');
     $r->patch('/api/events/:id' => [id => qr/\d+/])           ->to('api#update_event');
     $r->post('/api/events/:id/delete' => [id => qr/\d+/])     ->to('api#delete_event');

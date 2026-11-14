@@ -1,0 +1,58 @@
+# homelab-calendar (post-cutover #83). The calendar exposes /metrics on its
+# service port (:2519): the reminder queue by state, reminders sent and failed
+# in the last hour, reminders overdue, the mail links by job state. Scraped
+# from all three nodes; every node answers the same numbers (one database),
+# so the rules take the maximum across them. Routed by Alertmanager like every
+# other rule: critical pages at once, warning batches and repeats daily.
+groups:
+  - name: homelab-calendar
+    rules:
+      # Reminders are failing to go out. The runner retries three times two
+      # minutes apart; a failed row means the mailer or a webhook refused
+      # all three. One in an hour is a bad address; several is the mailer.
+      - alert: CalendarRemindersFailing
+        expr: max(homelab_calendar_reminders_failed_1h) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "calendar: {{ $value }} reminders failed in the last hour"
+          description: >-
+            See the runner's lines: journalctl -u homelab-calendar on prod-homelab50/51/52
+            ("calendar runner: reminder ... failed"), and the mailer: block in
+            /etc/homelab/calendar/config.yml (calendar-orchestrate.sh --mailer).
+
+      # Reminders due more than ten minutes ago still pending: the runner is
+      # not claiming them (every process down, or the mailer missing so the
+      # queue waits).
+      - alert: CalendarRemindersOverdue
+        expr: max(homelab_calendar_reminders_overdue) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "calendar: {{ $value }} reminders are overdue"
+          description: >-
+            Pending rows past their time. calendar-orchestrate.sh --verify shows the
+            mailer and the runner's state; without mailer: the queue waits by design.
+
+      # None of the three calendar nodes answers /metrics (the scrape is up
+      # per node; this fires when all three are down for ten minutes).
+      - alert: CalendarDown
+        expr: count(up{job="calendar"} == 1) == 0 and count(up{job="calendar"}) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "calendar: no node answers /metrics"
+          description: "prod-homelab50/51/52: systemctl status homelab-calendar; calendar-orchestrate.sh --verify."
+
+      # The database behind the calendar did not answer the scrape's query.
+      - alert: CalendarDatabaseUnreachable
+        expr: max(homelab_calendar_up) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "calendar: the database did not answer"
+          description: "The calendar is up but its queries fail: pgbouncer VIP 10.50.2.131, the calendar role's password, the Patroni leader."

@@ -653,13 +653,74 @@ class Client:
             raise ApiError(resp.status_code, _error_message(resp))
         return resp.text
 
-    def calendar_import(self, token, ics_bytes, calendar_id=None):
+    def calendar_import(self, token, ics_bytes, calendar_id=None, dry_run=False):
         params = {"calendar_id": calendar_id} if calendar_id else {}
+        if dry_run:
+            params["dry_run"] = "1"
         return self._request(
             "POST", "/api/v1/calendar/import",
             headers=self._auth(token, **{"Content-Type": "text/calendar; charset=utf-8"}),
             params=params, data=ics_bytes, timeout=120,
         )
+
+    # One event, the trash, search, calendars, shares, suggestions, settings
+    # (calendar 0.2.0, post-cutover #83).
+    def calendar_event(self, token, event_id, recurrence_id=None):
+        params = {"recurrence_id": recurrence_id} if recurrence_id else {}
+        return self._request("GET", f"/api/v1/calendar/events/{event_id}", headers=self._auth(token), params=params)
+
+    def calendar_update_event(self, token, event_id, body):
+        return self._request("PATCH", f"/api/v1/calendar/events/{event_id}", headers=self._auth(token), json=body)
+
+    def calendar_delete_event(self, token, event_id, scope="all", recurrence_id=None):
+        body = {"scope": scope}
+        if recurrence_id:
+            body["recurrence_id"] = recurrence_id
+        return self._request("POST", f"/api/v1/calendar/events/{event_id}/delete", headers=self._auth(token), json=body)
+
+    def calendar_restore_event(self, token, event_id):
+        return self._request("POST", f"/api/v1/calendar/events/{event_id}/restore", headers=self._auth(token))
+
+    def calendar_trash(self, token):
+        return self._request("GET", "/api/v1/calendar/trash", headers=self._auth(token))
+
+    def calendar_search(self, token, q):
+        return self._request("GET", "/api/v1/calendar/search", headers=self._auth(token), params={"q": q})
+
+    def calendar_create_calendar(self, token, body):
+        return self._request("POST", "/api/v1/calendar/calendars", headers=self._auth(token), json=body)
+
+    def calendar_shares(self, token, event_id=None, calendar_id=None):
+        path = f"/api/v1/calendar/calendars/{calendar_id}/shares" if calendar_id else f"/api/v1/calendar/events/{event_id}/shares"
+        return self._request("GET", path, headers=self._auth(token))
+
+    def calendar_share(self, token, body, event_id=None, calendar_id=None):
+        path = f"/api/v1/calendar/calendars/{calendar_id}/shares" if calendar_id else f"/api/v1/calendar/events/{event_id}/shares"
+        return self._request("POST", path, headers=self._auth(token), json=body)
+
+    def calendar_revoke_share(self, token, share_id):
+        return self._request("POST", f"/api/v1/calendar/shares/{share_id}/revoke", headers=self._auth(token))
+
+    def calendar_suggestions(self, token):
+        return self._request("GET", "/api/v1/calendar/suggestions", headers=self._auth(token))
+
+    def calendar_suggestion_save(self, token, suggestion_token):
+        return self._request("POST", f"/api/v1/calendar/suggestions/{suggestion_token}/save", headers=self._auth(token))
+
+    def calendar_suggestion_dismiss(self, token, suggestion_token):
+        return self._request("POST", f"/api/v1/calendar/suggestions/{suggestion_token}/dismiss", headers=self._auth(token))
+
+    def calendar_prefs(self, token):
+        return self._request("GET", "/api/v1/calendar/prefs", headers=self._auth(token))
+
+    def calendar_set_prefs(self, token, body):
+        return self._request("PUT", "/api/v1/calendar/prefs", headers=self._auth(token), json=body)
+
+    def calendar_account(self, token):
+        return self._request("GET", "/api/v1/calendar/account", headers=self._auth(token))
+
+    def calendar_set_account(self, token, body):
+        return self._request("PUT", "/api/v1/calendar/account", headers=self._auth(token), json=body)
 
     # --- Mail, via homelab-api's /api/v1/mail/* gateway ->
     # homelab-mailbridge (see ../../mailbridge/README.md). No more

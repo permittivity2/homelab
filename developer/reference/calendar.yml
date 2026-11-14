@@ -39,7 +39,7 @@ abilities:
       }
     notes:
       - available is false when the calendar has no AI service configured; the plain parse still works.
-    cli: none
+    cli: homelab-cli calendar account
 
   - id: calendar-account-set
     title: Change your calendar switches
@@ -74,7 +74,8 @@ abilities:
     notes:
       - A stale notice hash answers 400 with a sentence saying to reload and agree again.
       - Since calendar 0.1.8 the same call also takes auto_propose (with auto_propose_consent_sha256, a third notice, from the GET's auto.notice_sha256), research_at_arrival (only for an account whose auto.research_at_arrival_allowed is true), and reminder_addresses (a list of up to 5 addresses reminders go to; empty = your account address). The GET answers with an auto object and the reminder_addresses list beside ai and research.
-    cli: none
+      - homelab-cli changes only the email link (the AI switches take a notice you read on the web page).
+    cli: homelab-cli calendar account --mail-links on
 
   - id: calendar-admin-entitlements
     title: Grant or remove a calendar entitlement (administrators)
@@ -261,6 +262,7 @@ abilities:
     notes:
       - A missing title or start, an end before the start, or a zone that is not known answers 400 with a sentence.
       - A calendar you can see but not change answers 403.
+      - Since calendar 0.2.0 the body may carry reminders, a list of up to three {minutes_before, channel} with channel email or webhook, instead of reminder_minutes; the answer carries both, and url, a link that opens the calendar page on the event.
     cli: homelab-cli calendar add Dentist --start 2026-11-20T14:30 --end 2026-11-20T15:30 --location "Delta Dental" --reminder 10
 
   - id: calendar-events-ics
@@ -368,6 +370,8 @@ abilities:
         "calendar": { "id": 1, "name": "Personal", "is_default": true, "permission": "owner" } }
     notes:
       - 2 MB and 1000 events at most; a body that is not iCalendar answers 400 with a sentence.
+      - With ?dry_run=1 nothing is written; the answer lists what would be created, updated or skipped (calendar 0.2.0).
+      - A component with a RECURRENCE-ID (one changed occurrence) is laid over its series as an exception when the series is here; on an update, the file's EXDATEs replace the cancelled dates recorded before.
     cli: homelab-cli calendar import holidays.ics
     curl: |
       curl -s -X POST https://api.mailmasker.org/api/v1/calendar/import \
@@ -382,3 +386,490 @@ abilities:
         { Authorization => "Bearer $ENV{TOKEN}", 'Content-Type' => 'text/calendar' },
         path('holidays.ics')->slurp)->result;
       print $res->body, "\n";
+
+  # --- one event, the trash, search, calendars, shares, suggestions, settings
+  # (calendar 0.2.0, post-cutover #83): what homelab-cli's other verbs use -----
+  - id: calendar-event-show
+    title: See one event
+    method: GET
+    path: /api/v1/calendar/events/:id
+    who: signed-in
+    summary: One event by id, with its reminders and a link that opens the page on it.
+    description: >
+      The event as the editor sees it: wall clocks in your zone, the repeat
+      rule if any, the calendar it is in, what you may do with it, its
+      reminders and url, a link to the calendar page opened on that day with
+      the event highlighted. For one occurrence of a repeating event add
+      recurrence_id (its original start, UTC, as List your events gives it)
+      and the answer also carries that occurrence.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+      - name: recurrence_id
+        in: query
+        required: false
+        about: One occurrence of a repeating event, as occurrence in List your events.
+    response: |
+      { "id": 7, "calendar_id": 1, "uid": "3f9c...@example.com", "title": "Dentist", "description": null, "location": "Delta Dental",
+        "all_day": false, "event_timezone": "America/Chicago", "timezone": "America/Chicago",
+        "start": "2026-11-20T14:30:00", "end": "2026-11-20T15:30:00", "rrule": null, "repeat": null, "color": null,
+        "permission": "owner", "is_recurring": false, "created_by_email": "{me}",
+        "calendar": { "id": 1, "name": "Personal", "color": "#1a73e8", "owner_email": "{me}" },
+        "reminder_minutes": 10, "reminders": [ { "minutes_before": 10, "channel": "email" } ],
+        "url": "https://calendar.mailmasker.org/?date=2026-11-20&event=7" }
+    notes:
+      - An event you cannot see answers 404.
+    cli: homelab-cli calendar show 7
+
+  - id: calendar-event-edit
+    title: Change an event
+    method: PATCH
+    path: /api/v1/calendar/events/:id
+    who: signed-in
+    summary: Change any of an event's fields; for a repeating one, say which occurrences.
+    description: >
+      Send only the fields that change, in the same shape as Add an event.
+      For a repeating event add scope: all (the default), this (one
+      occurrence, which then needs recurrence_id) or following (this and the
+      later ones, which splits the series). Reminders are replaced by the list
+      you send.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+      - name: title
+        in: body
+        required: false
+        about: A new title.
+        example: Dentist (moved)
+      - name: start
+        in: body
+        required: false
+        about: A new start, a wall clock in timezone (or your zone).
+        example: 2026-11-20T15:00:00
+      - name: end
+        in: body
+        required: false
+        about: A new end.
+        example: 2026-11-20T16:00:00
+      - name: scope
+        in: body
+        required: false
+        about: all, this or following, for a repeating event.
+      - name: recurrence_id
+        in: body
+        required: false
+        about: Which occurrence, with scope this or following.
+    response: |
+      { "id": 7, "title": "Dentist (moved)", "start": "2026-11-20T15:00:00", "end": "2026-11-20T16:00:00", "all_day": false,
+        "timezone": "America/Chicago", "permission": "owner", "is_recurring": false,
+        "calendar": { "id": 1, "name": "Personal", "color": "#1a73e8", "owner_email": "{me}" },
+        "reminders": [ { "minutes_before": 10, "channel": "email" } ], "url": "https://calendar.mailmasker.org/?date=2026-11-20&event=7" }
+    notes:
+      - An event you may see but not change answers 403; scope this or following without recurrence_id answers 400.
+    cli: homelab-cli calendar edit 7 --title "Dentist (moved)" --start 2026-11-20T15:00
+
+  - id: calendar-event-delete
+    title: Delete an event
+    method: POST
+    path: /api/v1/calendar/events/:id/delete
+    who: signed-in
+    summary: Delete an event, or one or more occurrences of a repeating one; a whole event can be restored for 30 days.
+    description: >
+      A whole event goes to the trash (see Restore an event). For a repeating
+      event, scope this cancels one occurrence and following ends the series
+      before it; both need recurrence_id.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+      - name: scope
+        in: body
+        required: false
+        about: all (the default), this or following.
+        example: all
+      - name: recurrence_id
+        in: body
+        required: false
+        about: Which occurrence, with scope this or following.
+    response: |
+      { "ok": true, "id": 7, "scope": "all", "restorable": true }
+    cli: homelab-cli calendar delete 7
+
+  - id: calendar-event-restore
+    title: Restore an event
+    method: POST
+    path: /api/v1/calendar/events/:id/restore
+    who: signed-in
+    summary: Bring a deleted event back from the trash.
+    description: >
+      Deleted events keep for 30 days (see Your deleted events). Restoring
+      puts one back as it was, with its reminders; shares removed by the
+      delete stay removed.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The deleted event's id.
+        example: 7
+    response: |
+      { "id": 7, "title": "Dentist", "start": "2026-11-20T14:30:00", "end": "2026-11-20T15:30:00", "all_day": false, "permission": "owner",
+        "calendar": { "id": 1, "name": "Personal", "color": "#1a73e8", "owner_email": "{me}" }, "reminders": [ { "minutes_before": 10, "channel": "email" } ] }
+    notes:
+      - 404 when there is no deleted event with that id; 403 when you may not change its calendar.
+    cli: homelab-cli calendar restore 7
+
+  - id: calendar-trash-list
+    title: Your deleted events
+    method: GET
+    path: /api/v1/calendar/trash
+    who: signed-in
+    summary: Events deleted from your own calendars in the last 30 days, newest first.
+    description: >
+      What Restore an event can bring back. Only events in calendars you own.
+    response: |
+      { "events": [ { "id": 7, "title": "Dentist", "all_day": false, "location": "Delta Dental", "start": "2026-11-20T14:30:00", "end": "2026-11-20T15:30:00",
+                      "is_recurring": false, "calendar": { "id": 1, "name": "Personal" }, "deleted_at": "2026-11-14T16:02:11" } ] }
+    cli: homelab-cli calendar trash
+
+  - id: calendar-search
+    title: Search your events
+    method: GET
+    path: /api/v1/calendar/search
+    who: signed-in
+    summary: Events whose title, place or notes contain the text, nearest to now first.
+    description: >
+      Looks through every calendar you can see. Each hit carries a url that
+      opens the calendar page on it. Fifty at most.
+    params:
+      - name: q
+        in: query
+        required: true
+        about: The text to look for, two characters at least.
+        example: dentist
+    response: |
+      { "q": "dentist", "events": [ { "id": 7, "title": "Dentist", "location": "Delta Dental", "all_day": false, "start": "2026-11-20T14:30:00", "end": "2026-11-20T15:30:00",
+                                      "is_recurring": false, "calendar": { "id": 1, "name": "Personal" }, "url": "https://calendar.mailmasker.org/?date=2026-11-20&event=7" } ] }
+    notes:
+      - Fewer than two characters answers 400.
+    cli: homelab-cli calendar search dentist
+
+  - id: calendar-calendars-create
+    title: Make a calendar
+    method: POST
+    path: /api/v1/calendar/calendars
+    who: signed-in
+    status: 201
+    summary: A new calendar of your own, with a colour and a zone for its events.
+    description: >
+      The name shows in the sidebar; the colour marks its events; the zone is
+      what new events in it default to (your own zone when left out).
+    params:
+      - name: name
+        in: body
+        required: true
+        about: Up to 100 characters.
+        example: Family
+      - name: color
+        in: body
+        required: false
+        about: Like #1a2b3c.
+      - name: timezone
+        in: body
+        required: false
+        about: The IANA zone for new events in it.
+      - name: description
+        in: body
+        required: false
+        about: A line about it.
+    response: |
+      { "id": 9, "name": "Family", "color": "#6f94b8", "description": null, "timezone": "America/Chicago", "is_default": false, "permission": "owner", "visible": true, "owner_email": "{me}" }
+    notes:
+      - A missing name, a name over 100 characters or a colour that is not #rrggbb answers 400.
+    cli: homelab-cli calendar calendars create Family
+
+  - id: calendar-event-shares-list
+    title: Who an event is shared with
+    method: GET
+    path: /api/v1/calendar/events/:id/shares
+    who: signed-in
+    summary: The accounts and links an event is shared with.
+    description: >
+      Each share says who (an address, or anyone with the link), what they may
+      do, when it expires, and its link; a link share also has an .ics address.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+    response: |
+      [ { "id": 12, "shared_with_email": "someone@example.com", "permission": "read", "detail": "full", "expires_at": null, "created_at": "2026-11-14 16:02:11.123456-06",
+          "url": "https://calendar.mailmasker.org/e/aaaa...aaaa", "ics_url": "https://calendar.mailmasker.org/e/aaaa...aaaa.ics", "access_count": 0 } ]
+    cli: homelab-cli calendar shares 7
+
+  - id: calendar-event-share
+    title: Share an event
+    method: POST
+    path: /api/v1/calendar/events/:id/shares
+    who: signed-in
+    status: 201
+    summary: Share one event with an account, or make a link anyone can open.
+    description: >
+      With an email, that account sees the event (and may edit it with
+      permission edit) in its own calendar list, and is told by email. Without
+      one, the answer is a link anyone can open; detail busy shows only that
+      you are busy. Only the calendar's owner may share.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+      - name: email
+        in: body
+        required: false
+        about: The account to share with; leave it out for a link.
+        example: someone@example.com
+      - name: permission
+        in: body
+        required: false
+        about: read (the default) or edit (accounts only).
+        example: read
+      - name: detail
+        in: body
+        required: false
+        about: For a link, full (the default) or busy.
+      - name: expires_days
+        in: body
+        required: false
+        about: Days until the share ends; none when left out.
+    response: |
+      { "id": 12, "shared_with_email": "someone@example.com", "permission": "read", "detail": "full", "expires_at": null, "created_at": "2026-11-14 16:02:11.123456-06",
+        "url": "https://calendar.mailmasker.org/e/aaaa...aaaa", "ics_url": "https://calendar.mailmasker.org/e/aaaa...aaaa.ics", "access_count": 0 }
+    notes:
+      - Sharing with yourself, or from a calendar you do not own, answers 400.
+    cli: homelab-cli calendar share 7 --with someone@example.com
+
+  - id: calendar-calendar-shares-list
+    title: Who a calendar is shared with
+    method: GET
+    path: /api/v1/calendar/calendars/:id/shares
+    who: signed-in
+    summary: The accounts and links a whole calendar is shared with.
+    description: >
+      As for an event, for every event in the calendar at once. A link share's
+      .ics address is what a phone's calendar app subscribes to.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The calendar's id.
+        example: 1
+    response: |
+      [ { "id": 13, "shared_with_email": null, "permission": "read", "detail": "full", "expires_at": null, "created_at": "2026-11-14 16:02:11.123456-06",
+          "url": "https://calendar.mailmasker.org/c/aaaa...aaaa", "ics_url": "https://calendar.mailmasker.org/c/aaaa...aaaa.ics", "access_count": 3 } ]
+    cli: homelab-cli calendar shares --calendar 1
+
+  - id: calendar-calendar-share
+    title: Share a calendar
+    method: POST
+    path: /api/v1/calendar/calendars/:id/shares
+    who: signed-in
+    status: 201
+    summary: Share a whole calendar with an account, or make a link (and feed) anyone can open.
+    description: >
+      The same body as Share an event, for the whole calendar. Without an
+      email the answer's ics_url is a private feed address for a phone's
+      calendar app.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The calendar's id.
+        example: 1
+      - name: email
+        in: body
+        required: false
+        about: The account to share with; leave it out for a link and feed.
+        example: someone@example.com
+      - name: permission
+        in: body
+        required: false
+        about: read (the default) or edit (accounts only).
+      - name: detail
+        in: body
+        required: false
+        about: For a link, full (the default) or busy.
+      - name: expires_days
+        in: body
+        required: false
+        about: Days until the share ends; none when left out.
+    response: |
+      { "id": 13, "shared_with_email": "someone@example.com", "permission": "read", "detail": "full", "expires_at": null, "created_at": "2026-11-14 16:02:11.123456-06",
+        "url": "https://calendar.mailmasker.org/c/aaaa...aaaa", "ics_url": "https://calendar.mailmasker.org/c/aaaa...aaaa.ics", "access_count": 0 }
+    cli: homelab-cli calendar share --calendar 1 --with someone@example.com
+
+  - id: calendar-share-revoke
+    title: Remove a share
+    method: POST
+    path: /api/v1/calendar/shares/:id/revoke
+    who: signed-in
+    summary: End a share of a calendar or an event; its link stops answering.
+    description: >
+      The share's id comes from the share lists. Only the owner may remove it.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The share's id.
+        example: 12
+    response: |
+      { "ok": true }
+    cli: homelab-cli calendar unshare 12
+
+  - id: calendar-suggestions-list
+    title: Your suggestions
+    method: GET
+    path: /api/v1/calendar/suggestions
+    who: signed-in
+    summary: Events proposed from your email as it arrived, waiting to be saved.
+    description: >
+      With "Propose automatically" on (see your calendar's switches), each
+      email that looks like it carries an event is proposed as it arrives.
+      Each suggestion names the email, the proposal and a token for Save or
+      Dismiss. Saved or dismissed ones leave the list.
+    response: |
+      { "suggestions": [ { "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "subject": "Dentist appointment moved", "from": "office@example.com",
+                           "received_at": "2026-11-14 12:38:14.123456-06", "proposed_at": "2026-11-14 12:38:31.123456-06", "zone": "America/Chicago",
+                           "proposal": { "title": "Dentist appointment", "all_day": false, "start": "2026-11-23T14:30:00", "end": "2026-11-23T15:30:00", "location": "Delta Dental", "description": null, "confidence": "high", "note": null },
+                           "facts": 0, "open_url": "https://calendar.mailmasker.org/m/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } ] }
+    cli: homelab-cli calendar suggestions
+
+  - id: calendar-suggestion-save
+    title: Save a suggestion
+    method: POST
+    path: /api/v1/calendar/suggestions/:token/save
+    who: signed-in
+    status: 201
+    summary: Make the event as proposed, in your default calendar, with your default reminder.
+    description: >
+      The proposal becomes an event as it stands; open the calendar page to
+      change anything. The suggestion then leaves your list.
+    params:
+      - name: token
+        in: path
+        required: true
+        about: The suggestion's token from Your suggestions.
+        example: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    response: |
+      { "id": 8, "title": "Dentist appointment", "start": "2026-11-23T14:30:00", "end": "2026-11-23T15:30:00", "all_day": false, "permission": "owner",
+        "calendar": { "id": 1, "name": "Personal", "color": "#1a73e8", "owner_email": "{me}" }, "reminders": [ { "minutes_before": 10, "channel": "email" } ] }
+    notes:
+      - 409 when you already made an event from that email; 404 when the suggestion is gone.
+    cli: homelab-cli calendar suggestions save aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+  - id: calendar-suggestion-dismiss
+    title: Dismiss a suggestion
+    method: POST
+    path: /api/v1/calendar/suggestions/:token/dismiss
+    who: signed-in
+    summary: Take a suggestion off your list without making an event.
+    description: >
+      Only your list: another recipient of the same email keeps theirs. The
+      email's own link still works.
+    params:
+      - name: token
+        in: path
+        required: true
+        about: The suggestion's token.
+        example: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    response: |
+      { "ok": true }
+    cli: homelab-cli calendar suggestions dismiss aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+  - id: calendar-prefs-show
+    title: See your calendar settings
+    method: GET
+    path: /api/v1/calendar/prefs
+    who: signed-in
+    summary: Time zone, week start, time and date format, the view it opens in, the defaults for new events, the reminder switches.
+    description: >
+      Everything the calendar's Settings page shows that is yours alone
+      (the email-link and AI switches are under See your calendar switches).
+    response: |
+      { "timezone": "America/Chicago", "week_start": 0, "time_format": "12h", "default_view": "month", "show_shared_events": true,
+        "default_reminder_minutes": 10, "all_day_reminder_hour": 9, "default_duration_minutes": 60, "date_format": "mdy",
+        "remind_shared": true, "webhook_url": null }
+    cli: homelab-cli calendar settings
+
+  - id: calendar-prefs-set
+    title: Change your calendar settings
+    method: PUT
+    path: /api/v1/calendar/prefs
+    who: signed-in
+    summary: Send the settings you want to change; the answer is all of them.
+    description: >
+      week_start is 0 (Sunday), 1 (Monday) or 6 (Saturday); time_format 12h or
+      24h; default_view month, week, day or agenda; date_format mdy, dmy or
+      ymd; all_day_reminder_hour 0 to 23; default_duration_minutes 5 to 1440;
+      default_reminder_minutes 0 to 20160; remind_shared true or false (whether
+      events others share with you remind you too); webhook_url an http(s)
+      address a reminder set to Webhook posts JSON to, or empty for none.
+    params:
+      - name: timezone
+        in: body
+        required: false
+        about: Your IANA zone.
+      - name: date_format
+        in: body
+        required: false
+        about: mdy, dmy or ymd.
+        example: dmy
+      - name: default_reminder_minutes
+        in: body
+        required: false
+        about: Minutes before the start for a new event's reminder.
+        example: 15
+      - name: all_day_reminder_hour
+        in: body
+        required: false
+        about: The hour (0 to 23) an all-day event reminds at.
+      - name: default_duration_minutes
+        in: body
+        required: false
+        about: How long a new timed event lasts when no end is given.
+      - name: remind_shared
+        in: body
+        required: false
+        about: Whether events shared with you remind you.
+      - name: webhook_url
+        in: body
+        required: false
+        about: Where a Webhook reminder posts; empty for none.
+      - name: week_start
+        in: body
+        required: false
+        about: 0, 1 or 6.
+      - name: time_format
+        in: body
+        required: false
+        about: 12h or 24h.
+      - name: default_view
+        in: body
+        required: false
+        about: month, week, day or agenda.
+    response: |
+      { "timezone": "America/Chicago", "week_start": 0, "time_format": "12h", "default_view": "month", "show_shared_events": true,
+        "default_reminder_minutes": 15, "all_day_reminder_hour": 9, "default_duration_minutes": 60, "date_format": "dmy",
+        "remind_shared": true, "webhook_url": null }
+    notes:
+      - A value outside its range answers 400 with a sentence.
+    cli: homelab-cli calendar settings --date-format dmy --default-reminder 15

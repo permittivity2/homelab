@@ -34,6 +34,8 @@ my $d = DateTime->new(year => 2026, month => 11, day => 20, time_zone => 'Americ
 my $allday = { all_day => 1, start => $d, end => $d->clone->add(days => 1), title => 'Conference', location => undef, description => undef };
 is Homelab::Calendar::Runner::due_at($allday, 10)->strftime('%Y-%m-%d %H:%M'), '2026-11-20 08:50', 'an all-day event is reminded relative to 9 AM, not midnight';
 is Homelab::Calendar::Runner::due_at($allday, 1440)->strftime('%Y-%m-%d %H:%M'), '2026-11-19 09:00', '... a day before = 9 AM the day before';
+is Homelab::Calendar::Runner::due_at($allday, 10, 7)->strftime('%H:%M'), '06:50', 'the account may choose the all-day hour (0.2.0)';
+is Homelab::Calendar::Runner::due_at($allday, 0, 'nonsense')->strftime('%H:%M'), '09:00', '... a bad hour falls back to 9';
 
 # --- the message -------------------------------------------------------------
 my $m = reminder_message(inst => $timed, zone => 'America/Chicago', minutes => 10, owner => 'me@example.test', recipient => 'me@example.test',

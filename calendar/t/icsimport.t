@@ -43,10 +43,15 @@ is($by{floating}{title}, 'Untitled event', 'an empty SUMMARY gets a title');
 is($by{floating}{end}, undef, 'no end: the model adds its default');
 is($by{floating}{reminder_minutes}, undef, 'no alarm, no reminder');
 my %skip = map { ($_->{uid} // 'none') => $_->{reason} } @{ $r->{skipped} };
-like($skip{'dentist@example.com'}, qr/changed occurrence/, 'a RECURRENCE-ID component is skipped, with the reason');
 like($skip{nostart}, qr/no start/, 'no DTSTART: skipped');
 like($skip{badrule}, qr/repeat rule/, 'a rule the calendar cannot show: skipped');
-is(scalar @{ $r->{skipped} }, 3, 'three skipped in all');
+is(scalar @{ $r->{skipped} }, 2, 'two skipped in all');
+# A RECURRENCE-ID component (0.2.0): kept apart as an override for its series.
+is(scalar @{ $r->{overrides} }, 1, 'one changed occurrence');
+is($r->{overrides}[0]{uid}, 'dentist@example.com', '... of the dentist series');
+is($r->{overrides}[0]{recurrence_id}, '2026-12-04T14:30:00', '... naming the occurrence it replaces, as a wall clock');
+is($r->{overrides}[0]{start}, '2026-12-04T16:00:00', '... with its own start');
+is($r->{overrides}[0]{title}, 'Dentist (moved)', '... and title');
 
 my $bad = parse_ics('hello there', zone => 'UTC');
 like($bad->{error}, qr/not an iCalendar/, 'not a calendar at all');

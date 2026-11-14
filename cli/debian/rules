@@ -47,3 +47,8 @@ execute_after_dh_auto_install:
 	  cp -a "$$d"/. debian/homelab-cli/usr/lib/python3/dist-packages/; \
 	  rm -rf "$$(dirname "$$d")"; \
 	done
+	# The package's own version into the shipped module (the source keeps a
+	# placeholder), so the User-Agent -- what `sessions list` shows -- says
+	# which homelab-cli it really was (post-cutover #83).
+	sed -i 's/^__version__ = .*/__version__ = "$(shell dpkg-parsechangelog -S Version)"/' \
+		debian/homelab-cli/usr/lib/python3/dist-packages/homelab_cli/__init__.py

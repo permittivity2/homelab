@@ -10,6 +10,9 @@
     <div class="form-actions" style="padding: 0 var(--space-3)">
       <button type="button" class="btn btn-primary" id="btn-new-event" style="width: 100%">New event</button>
     </div>
+    %# 0.2.0: one typed line becomes a draft (Enter), and a search box (/ focuses it).
+    <div class="quick-add"><label class="sr-only" for="quick-add">Quick add</label><input class="form-input" id="quick-add" placeholder="Quick add: Dentist Thu 2pm at Delta Dental" autocomplete="off" title="Type an event in words and press Enter"></div>
+    <div class="quick-add"><label class="sr-only" for="q">Search events</label><input class="form-input" type="search" id="q" placeholder="Search events" autocomplete="off" title="Press / to search; Enter to run it"></div>
     %# Suggestions (#80): proposals made as email arrived, waiting to be saved.
     <div class="form-actions hide" id="sugg-wrap" style="padding: 0 var(--space-3)">
       <button type="button" class="btn" id="btn-suggestions" style="width: 100%">Suggestions (<span id="sugg-count">0</span>)</button>
@@ -24,6 +27,7 @@
     </div>
     <div class="sidenav__group">Settings</div>
     <div style="padding: 0 var(--space-3)"><a class="btn btn-ghost btn-sm" href="/settings">Time zone, links, AI</a></div>
+    <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-trash">Deleted events</button></div>
     <p class="muted-small" id="zone-note" style="padding: var(--space-2) var(--space-3) 0"></p>
   </nav>
   <main class="app__main">
@@ -134,23 +138,16 @@
         <label class="form-label" for="ev-desc">Description</label>
         <textarea class="form-textarea" id="ev-desc" name="description" rows="3" maxlength="20000"></textarea>
       </div>
-      %# Reminder (#79): one per event, by email, minutes before each occurrence.
-      <div>
-        <label class="form-label" for="ev-reminder">Reminder</label>
-        <select class="form-select" id="ev-reminder">
-          <option value="">None</option>
-          <option value="0">At the time</option>
-          <option value="5">5 minutes before</option>
-          <option value="10">10 minutes before</option>
-          <option value="15">15 minutes before</option>
-          <option value="30">30 minutes before</option>
-          <option value="60">1 hour before</option>
-          <option value="120">2 hours before</option>
-          <option value="1440">1 day before</option>
-          <option value="2880">2 days before</option>
-          <option value="10080">1 week before</option>
-        </select>
-        <p class="form-hint" id="ev-reminder-hint">By email. All-day events remind at 9 AM.</p>
+      %# Reminders (#79; up to three since 0.2.0): minutes before each
+      %# occurrence, by email or to the account's webhook. Rows are drawn by
+      %# the script.
+      <div class="span2">
+        <label class="form-label">Reminders</label>
+        <div id="ev-reminders" class="stack" style="gap: var(--space-1)"></div>
+        <div class="form-actions" style="gap: var(--space-2); margin-top: var(--space-1)">
+          <button type="button" class="btn btn-sm btn-ghost" id="ev-reminder-add">+ Add reminder</button>
+          <span class="form-hint" id="ev-reminder-hint"></span>
+        </div>
       </div>
       %# Share with (#79): on a NEW event only; existing ones have the Share button.
       <div id="ev-share-wrap">
@@ -161,6 +158,14 @@
       <div class="span2">
         <label class="form-label">Colour</label>
         <div class="color-dots" id="ev-colors"><button type="button" class="btn btn-sm btn-ghost" data-color="">Calendar's colour</button></div>
+      </div>
+      %# 0.2.0: the zone the times above are read in (a trip, a call across zones).
+      <div class="span2">
+        <details>
+          <summary class="muted-small">More: time zone</summary>
+          <label class="form-label" for="ev-zone" style="margin-top: var(--space-2)">The times above are in</label>
+          <select class="form-select" id="ev-zone"></select>
+        </details>
       </div>
     </div>
     <p class="form-error hide" id="ev-error"></p>
@@ -205,6 +210,9 @@
   </div>
   <div class="modal__foot">
     <button type="button" class="btn btn-danger hide" id="cal-delete">Delete calendar</button>
+    <button type="button" class="btn hide" id="cal-up" title="Move up in the list" aria-label="Move up">&uarr;</button>
+    <button type="button" class="btn hide" id="cal-down" title="Move down in the list" aria-label="Move down">&darr;</button>
+    <button type="button" class="btn hide" id="cal-subscribe" title="A private address your phone's calendar app can subscribe to">Subscribe on your phone</button>
     <a class="btn hide" id="cal-export" href="#">Export .ics</a>
     <span class="spacer"></span>
     <button type="button" class="btn" data-modal-close>Cancel</button>
@@ -269,6 +277,42 @@
     <p class="form-error hide" id="reuse-error"></p>
   </div>
   <div class="modal__foot"><button type="button" class="btn" data-modal-close>Cancel</button><span class="spacer"></span><button type="button" class="btn" id="reuse-add">Add another event</button></div>
+</div>
+
+%# --- 0.2.0: the peek popover, the undo toast, the trash, search results and
+%# the duplicate check ---------------------------------------------------------
+<div id="peek" class="peek hide" role="dialog" aria-label="Event"></div>
+<div id="undo-toast" class="undo-toast hide" role="status"><span id="undo-text"></span><button type="button" class="btn btn-sm btn-primary" id="undo-btn">Undo</button></div>
+
+<div class="modal" id="trash-modal" role="dialog" aria-modal="true" aria-labelledby="trash-h">
+  <div class="modal__head"><h2 id="trash-h" class="panel__title">Deleted events</h2></div>
+  <div class="modal__body stack">
+    <p class="muted-small">Events you deleted in the last 30 days. Restore puts one back where it was; its shares stay removed.</p>
+    <ul class="share-list" id="trash-list"></ul>
+    <p class="text-muted hide" id="trash-none">Nothing in the trash.</p>
+    <p class="form-error hide" id="trash-error"></p>
+  </div>
+  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-modal-close>Done</button></div>
+</div>
+
+<div class="modal" id="search-modal" role="dialog" aria-modal="true" aria-labelledby="search-h">
+  <div class="modal__head"><h2 id="search-h" class="panel__title">Search</h2></div>
+  <div class="modal__body stack">
+    <ul class="share-list search-results" id="search-list"></ul>
+    <p class="text-muted hide" id="search-none">Nothing matches.</p>
+  </div>
+  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-modal-close>Done</button></div>
+</div>
+
+<div class="modal" id="dup-modal" role="dialog" aria-modal="true" aria-labelledby="dup-h">
+  <div class="modal__head"><h2 id="dup-h" class="panel__title">Already on your calendar?</h2></div>
+  <div class="modal__body stack"><p id="dup-text" class="text-muted"></p></div>
+  <div class="modal__foot">
+    <button type="button" class="btn" id="dup-cancel">Cancel</button>
+    <button type="button" class="btn" id="dup-open">Open the existing one</button>
+    <span class="spacer"></span>
+    <button type="button" class="btn btn-primary" id="dup-save">Save anyway</button>
+  </div>
 </div>
 
 %# --- the AI notices, asked once before the first proposal / research --------

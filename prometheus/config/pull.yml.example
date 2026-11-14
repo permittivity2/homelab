@@ -38,3 +38,7 @@ jobs:
   nginx:
     feature: nginx-exporter
     port: 9113
+  # homelab-calendar (post-cutover #83): its own /metrics on the service port.
+  calendar:
+    feature: homelab-calendar
+    port: 2519
