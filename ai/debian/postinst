@@ -47,7 +47,13 @@ case "$1" in
             fi
 
             # The key is written with perl, not sed: it may contain any character.
-            API_KEY="$API_KEY" perl -pe '
+            # Every value goes in through the environment (0.1.0 passed them as
+            # trailing arguments, which perl -p read as file names: every
+            # substitution came out empty and the service never listened).
+            API_KEY="$API_KEY" API_BASE="$API_BASE" PGBOUNCER_HOST="$PGBOUNCER_HOST" RUNTIME_PASSWORD="$RUNTIME_PASSWORD" \
+            RUNTIME_ROLE="$RUNTIME_ROLE" DB_HOST="$DB_HOST" MIGRATE_PASSWORD="$MIGRATE_PASSWORD" MIGRATE_ROLE="$MIGRATE_ROLE" \
+            LISTEN_PORT="$LISTEN_PORT" ADVERTISE_HOST="$ADVERTISE_HOST" \
+            perl -pe '
                 s#http://api\.svc\.homelab:3000#$ENV{API_BASE}#g;
                 s#YOUR_PGBOUNCER_HOST#$ENV{PGBOUNCER_HOST}#g;
                 s#YOUR_RUNTIME_PASSWORD_HERE#$ENV{RUNTIME_PASSWORD}#g;
@@ -59,9 +65,11 @@ case "$1" in
                 s#"http://127\.0\.0\.1:2521"#"http://0.0.0.0:$ENV{LISTEN_PORT}"#g;
                 s#  port: 2521#  port: $ENV{LISTEN_PORT}#g;
                 s#  host: 127\.0\.0\.1#  host: $ENV{ADVERTISE_HOST}#g;
-            ' API_BASE="$API_BASE" PGBOUNCER_HOST="$PGBOUNCER_HOST" RUNTIME_PASSWORD="$RUNTIME_PASSWORD" RUNTIME_ROLE="$RUNTIME_ROLE" \
-              DB_HOST="$DB_HOST" MIGRATE_PASSWORD="$MIGRATE_PASSWORD" MIGRATE_ROLE="$MIGRATE_ROLE" LISTEN_PORT="$LISTEN_PORT" ADVERTISE_HOST="$ADVERTISE_HOST" \
-              "$SHARE_DIR/config/ai.example.yml" > "$CONFIG_FILE"
+            ' "$SHARE_DIR/config/ai.example.yml" > "$CONFIG_FILE"
+            # Refuse to leave a half-filled config behind.
+            if grep -qE '^  (host|port): *$|listen: "http://0\.0\.0\.0:"' "$CONFIG_FILE"; then
+                echo "ERROR: $CONFIG_FILE came out with empty values; not keeping it." ; rm -f "$CONFIG_FILE"; db_stop; exit 1
+            fi
             chown root:homelab "$CONFIG_FILE"
             chmod 640 "$CONFIG_FILE"
             echo "  wrote $CONFIG_FILE"

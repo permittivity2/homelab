@@ -16,6 +16,31 @@ use Homelab::Search::AI::Tools   qw(definitions run_tool MAX_ROWS MAX_EXCERPT_BY
 # ------------------------------------------------------------ the request
 my $cl = Homelab::Search::AI::Client->new(api_key => 'test-key');
 
+# --- where a request goes: Anthropic with a key, or the fleet's AI service ---
+{
+    ok $cl->ready, 'a key alone makes the client ready';
+    ok !$cl->via_service, '... and it goes direct';
+    my ($url, $h) = $cl->target;
+    is $url, 'https://api.anthropic.com/v1/messages', 'direct: the Anthropic URL';
+    is $h->{'x-api-key'}, 'test-key', '... with the key';
+    ok !exists $h->{Authorization}, '... and no bearer';
+
+    my $svc = Homelab::Search::AI::Client->new(service_url => 'http://ai.example:2521/', service_token => 'tok-' . ('a' x 40),
+        consent_sha => ('f' x 64));
+    ok $svc->ready, 'the service alone makes the client ready (no key needed)';
+    ok $svc->via_service, '... via the service';
+    ($url, $h) = $svc->target(account => 42);
+    is $url, 'http://ai.example:2521/internal/v1/ai/messages', 'service: its messages route (trailing slash dropped)';
+    is $h->{Authorization}, 'Bearer tok-' . ('a' x 40), '... with this app\'s client token';
+    ok !exists $h->{'x-api-key'}, '... and never a key';
+    is $h->{'X-Homelab-Consent'}, 'search:' . ('f' x 16), '... naming the consent wording it holds';
+    is $h->{'X-Homelab-Account'}, Digest::SHA::sha256_hex('42'), '... and an opaque account hash, never the id';
+    ok !Homelab::Search::AI::Client->new(service_url => 'http://ai.example:2521')->ready, 'a service URL without a token is not ready';
+    ok !Homelab::Search::AI::Client->new->ready, 'nothing configured: not ready';
+    my $r = Homelab::Search::AI::Client->new->call({ model => 'x', messages => [] });
+    is $r->{kind}, 'config', 'a call with nothing configured fails as a config error, without a request';
+}
+
 my $p = $cl->build(
     system   => $cl->system_blocks('stable prefix'),
     messages => [ { role => 'user', content => 'hello' } ],

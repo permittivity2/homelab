@@ -451,7 +451,7 @@ sub answer ($self, $account_id, $q, %opt) {
     };
 
     return $fail->('disabled')
-        unless $cfg->{enabled} && $self->client && length($self->client->api_key // '');
+        unless $cfg->{enabled} && $self->client && $self->client->ready;
     return $fail->('not_consented') unless state_for($self->query, $account_id)->{consented};
 
     my $lim = $scope->(sub ($db) { $self->_limits($db, $account_id) });

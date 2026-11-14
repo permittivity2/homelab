@@ -219,8 +219,9 @@ SCRAM=$(on "$PRIMARY" "sudo -u postgres psql -d homelab -tAc \"SELECT rolpasswor
 [ -n "$SCRAM" ] || die "could not read the runtime SCRAM secret from $PRIMARY"
 for p in $PGB_NODES; do
     up "$p" || { warn "$p is not up -- register by hand later"; continue; }
-    if on "$p" "sudo grep -q homelab_calendar_runtime /etc/pgbouncer/userlist.txt" 2>/dev/null; then ok "$p already has the role"
-    elif on "$p" "sudo homelab-bootstrap-pgbouncer-entry --role homelab_calendar_runtime --scram-secret '$SCRAM' --pgbouncer-host localhost" >/dev/null 2>&1; then ok "$p registered"
+    # Always add-or-replace (the tool is idempotent): a stale line after a
+    # password reset makes /health answer 503 through the pooler.
+    if on "$p" "sudo homelab-bootstrap-pgbouncer-entry --role homelab_calendar_runtime --scram-secret '$SCRAM' --pgbouncer-host localhost" >/dev/null 2>&1; then ok "$p has the current SCRAM for homelab_calendar_runtime"
     else bad "$p registration failed"; fi
     g=$(on "$p" "stat -c %U:%G /etc/pgbouncer/userlist.txt" 2>/dev/null)
     [ "$g" = root:postgres ] || bad "$p userlist.txt is $g, must stay root:postgres"

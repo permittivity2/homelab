@@ -2,6 +2,7 @@ package Homelab::Search::AI::Client;
 use Mojo::Base -base, -signatures;
 use Mojo::UserAgent;
 use JSON::PP ();
+use Digest::SHA ();
 
 # The Claude API, over plain HTTP with Mojo::UserAgent.
 #
@@ -28,6 +29,17 @@ has ua        => sub { Mojo::UserAgent->new->connect_timeout(10)
                                           ->inactivity_timeout(120)
                                           ->request_timeout(120) };
 has api_key   => undef;
+# THE FLEET'S AI SERVICE (homelab-ai, post-cutover #76). When service_url and
+# service_token are set, every request goes to it instead of to Anthropic:
+# it holds the key, pins the API version, records the usage and passes the
+# answer back untouched. The payload, the canonical encoding and the
+# response handling below are identical either way; only the address and
+# the headers differ (see target()). api_key is then unused and should be
+# removed from the config -- search holds no third-party credential any more.
+has service_url   => '';
+has service_token => '';
+has consent_name  => 'search';
+has consent_sha   => '';    # the notice wording's hash, named on every request
 has model     => 'claude-opus-5-5';
 has gate_model=> 'claude-haiku-5-5';
 has effort    => 'low';
@@ -54,19 +66,39 @@ sub _headers ($self) {
     };
 }
 
+sub via_service ($self) { return (length($self->service_url // '') && length($self->service_token // '')) ? 1 : 0 }
+
+# Can a request go anywhere at all: the fleet's AI service, or a key of our own.
+sub ready ($self) { return ($self->via_service || (defined $self->api_key && length $self->api_key)) ? 1 : 0 }
+
+# Where a request goes and with which headers. %meta may carry account => an
+# opaque per-account key (hashed before it leaves this host) for the
+# service's per-account totals.
+sub target ($self, %meta) {
+    return (API_URL, $self->_headers) unless $self->via_service;
+    my %h = (
+        'Authorization'     => 'Bearer ' . $self->service_token,
+        'content-type'      => 'application/json',
+        'X-Homelab-Consent' => $self->consent_name . ':' . substr($self->consent_sha // '', 0, 16),
+    );
+    $h{'X-Homelab-Account'} = Digest::SHA::sha256_hex("$meta{account}") if defined $meta{account} && length $meta{account};
+    return ($self->service_url =~ s{/\z}{}r . '/internal/v1/ai/messages', \%h);
+}
+
 # One request. Returns a hashref:
 #   { ok => 1, body => <decoded>, usage => {...} }
 #   { ok => 0, kind => 'http'|'transport'|'decode', status => N, error => '...' }
 #
 # Never dies: a search page must degrade to keyword results, not 500,
 # because a third party had a bad minute.
-sub call ($self, $payload) {
-    return { ok => 0, kind => 'config', error => 'no API key configured' }
-        unless defined $self->api_key && length $self->api_key;
+sub call ($self, $payload, %meta) {
+    return { ok => 0, kind => 'config', error => 'no API key and no AI service configured' }
+        unless $self->ready;
 
     my $body = $CANON->encode($payload);
+    my ($url, $headers) = $self->target(%meta);
     my $t0   = time;
-    my $tx   = eval { $self->ua->post(API_URL, $self->_headers, $body) };
+    my $tx   = eval { $self->ua->post($url, $headers, $body) };
     my $ms   = int((time - $t0) * 1000);
 
     if (!$tx || $@) {

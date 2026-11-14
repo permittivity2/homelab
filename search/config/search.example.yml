@@ -120,6 +120,14 @@ server:
 # same tier as the dovecot nodes.
 ai:
   enabled: false
+  # The fleet's AI service (homelab-ai, post-cutover #76): requests go there
+  # with this app's client token, and the service holds the Anthropic key.
+  # Written by install-orchestrators/ai-orchestrate.sh --wire-search. With
+  # these two set, api_key below is unused and should stay empty.
+  service_url: ""
+  service_token: ""
+  # A key of this app's own: only for a host with no AI service (left empty
+  # on the fleet since 2026-11-14, when the key moved to the service).
   api_key: ""
 
   # claude-opus-5-5 is the current Opus. Pinned, never a floating alias: a

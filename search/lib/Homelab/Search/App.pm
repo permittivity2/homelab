@@ -124,7 +124,11 @@ sub startup ($self) {
         log    => $self->log,
         config => $ai_cfg,
         client => Homelab::Search::AI::Client->new(
-            api_key    => $ai_cfg->{api_key},
+            api_key       => $ai_cfg->{api_key},
+            # The fleet's AI service (#76): set, the key above is unused.
+            service_url   => ($ai_cfg->{service_url}   // ''),
+            service_token => ($ai_cfg->{service_token} // ''),
+            consent_sha   => Homelab::Search::AI::Consent::notice_sha256(),
             model      => ($ai_cfg->{model}      // 'claude-opus-5-5'),
             gate_model => ($ai_cfg->{gate_model} // 'claude-haiku-5-5'),
             effort     => ($ai_cfg->{effort}     // 'low'),
@@ -515,7 +519,7 @@ sub _run ($c, $acct, $f) {
 # THIS person has agreed to the current wording.
 sub _ai_state ($c, $acct) {
     my $cfg = $c->app->config->{ai} // {};
-    my $on  = ($cfg->{enabled} && length($cfg->{api_key} // '')) ? 1 : 0;
+    my $on  = ($cfg->{enabled} && $c->app->ai && $c->app->ai->client->ready) ? 1 : 0;
     my %s = (available => $on, consented => 0, notice => Homelab::Search::AI::Consent::notice_body());
     return \%s unless $on && $acct;
 

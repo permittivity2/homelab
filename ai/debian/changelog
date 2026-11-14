@@ -1,3 +1,12 @@
+homelab-ai (0.1.1) unstable; urgency=medium
+
+  * postinst: the config values were handed to perl as trailing arguments
+    (read as file names), so every substitution came out empty and the
+    service never listened. They now go in through the environment, and a
+    config with empty values is refused rather than written.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 14:20:00 -0600
+
 homelab-ai (0.1.0) unstable; urgency=medium
 
   * First release (post-cutover #76): the one Anthropic client in the fleet.
