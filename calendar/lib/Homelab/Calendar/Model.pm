@@ -931,23 +931,29 @@ sub _decode_link_json ($row) {
     return $row;
 }
 
-# The Suggestions list: links with a proposal that became no event and were
-# not dismissed, newest first.
+# The Suggestions list: links with a proposal that THIS account has not made
+# an event from and has not dismissed, newest first. One link serves every
+# recipient of the message, so "made" is judged per account (#81,
+# mail_link_events); an event deleted since still counts as made.
 sub suggestions_for ($self, $email) {
+    my $me = _norm($email);
     my $rows = $self->db->query(
-        q{SELECT * FROM calendar.mail_links
-           WHERE proposal IS NOT NULL AND event_id IS NULL AND dismissed_at IS NULL AND expires_at > NOW()
+        q{SELECT * FROM calendar.mail_links m
+           WHERE proposal IS NOT NULL AND dismissed_at IS NULL AND expires_at > NOW()
              AND ? IN (SELECT lower(a) FROM jsonb_array_elements_text(accounts) AS a)
-           ORDER BY proposed_at DESC LIMIT 50}, _norm($email),
+             AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_events x WHERE x.link_id = m.id AND x.user_email = ?)
+           ORDER BY proposed_at DESC LIMIT 50}, $me, $me,
     )->hashes->to_array;
     return [ map { _decode_link_json($_) } @$rows ];
 }
 
 sub suggestions_count ($self, $email) {
+    my $me = _norm($email);
     return $self->db->query(
-        q{SELECT count(*) FROM calendar.mail_links
-           WHERE proposal IS NOT NULL AND event_id IS NULL AND dismissed_at IS NULL AND expires_at > NOW()
-             AND ? IN (SELECT lower(a) FROM jsonb_array_elements_text(accounts) AS a)}, _norm($email),
+        q{SELECT count(*) FROM calendar.mail_links m
+           WHERE proposal IS NOT NULL AND dismissed_at IS NULL AND expires_at > NOW()
+             AND ? IN (SELECT lower(a) FROM jsonb_array_elements_text(accounts) AS a)
+             AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_events x WHERE x.link_id = m.id AND x.user_email = ?)}, $me, $me,
     )->array->[0] + 0;
 }
 
@@ -993,9 +999,35 @@ sub mail_link_for ($self, $token, $email) {
     return (grep { $_ eq $me } @{ $row->{accounts} }) ? $row : undef;
 }
 
-sub mail_link_used ($self, $id, $event_id) {
-    $self->db->query('UPDATE calendar.mail_links SET used_at = NOW(), event_id = ? WHERE id = ?', $event_id, $id);
+# An account made (or updated) an event from a link. The link row keeps "the
+# latest event anyone made from it" (the runner's gate against proposing a
+# link that became an event); the per-account record (#81) is what the link
+# page and the Suggestions list judge "already added" by.
+sub mail_link_used ($self, $id, $event_id, $email) {
+    my $db = $self->db;
+    my $tx = $db->begin;
+    $db->query('UPDATE calendar.mail_links SET used_at = NOW(), event_id = ? WHERE id = ?', $event_id, $id);
+    $db->query('INSERT INTO calendar.mail_link_events (link_id, user_email, event_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+        $id, _norm($email), $event_id);
+    $tx->commit;
     return 1;
+}
+
+# The LIVE events this account made from a link, oldest first, each with
+# made_at: what the "already added" sheet lists. Events are soft-deleted, so
+# a deleted one simply drops out and the link behaves like a first click.
+sub mail_link_events_for ($self, $link_id, $email) {
+    return $self->db->query(
+        q{SELECT e.*, x.created_at AS made_at FROM calendar.mail_link_events x
+            JOIN calendar.events e ON e.id = x.event_id
+           WHERE x.link_id = ? AND x.user_email = ? AND e.deleted_at IS NULL
+           ORDER BY x.created_at}, $link_id, _norm($email),
+    )->hashes->to_array;
+}
+
+# Whether this account ever made an event from the link, deleted or not.
+sub mail_link_made_by ($self, $link_id, $email) {
+    return $self->db->query('SELECT 1 FROM calendar.mail_link_events WHERE link_id = ? AND user_email = ? LIMIT 1', $link_id, _norm($email))->array ? 1 : 0;
 }
 
 # -------------------------------------------------------------------- prefs

@@ -320,9 +320,10 @@ sub create_event ($c) {
     my $event = _try($c, sub { $m->create_event($cal, $me, _event_input($c, $b, $zone)) }) or return;
     $event->{permission} = $perm;
     if (exists $b->{reminder_minutes}) { _try($c, sub { $m->set_reminder($event->{id}, $b->{reminder_minutes}); 1 }) or return }
-    # Created from a link in an email: the link remembers which event it became.
+    # Created from a link in an email: the link remembers which event it
+    # became, for this account (#81: a link may become several).
     if (my $link = (defined $b->{mail_link_token} ? $m->mail_link_for($b->{mail_link_token}, $me) : undef)) {
-        $m->mail_link_used($link->{id}, $event->{id});
+        $m->mail_link_used($link->{id}, $event->{id}, $me);
     }
     if ($share_with) {
         my $share = $m->create_share(owner => $me, event_id => $event->{id}, shared_with_email => $share_with, permission => 'read');
@@ -502,7 +503,9 @@ sub _mail_link_json ($c, $link, $me, $zone) {
     return {
         token => $link->{token}, subject => $link->{subject}, from => $link->{from_addr}, date_header => $link->{date_header},
         excerpt => substr($link->{text_excerpt} // '', 0, 2000), received_at => $link->{created_at},
-        used_event_id => ($link->{event_id} ? $link->{event_id} + 0 : undef),
+        # #81: the live events this account already made from the link (the
+        # "already added" sheet); empty for a first click.
+        events_made => _events_made_json($c, $m, $link, $me, $zone),
         guess => $guess, zone => $zone,
         # #80: what the runner proposed (and found) when the email arrived, if anything.
         proposal => (ref $link->{proposal} eq 'HASH' ? $link->{proposal} : undef), proposed_at => $link->{proposed_at},
@@ -512,6 +515,26 @@ sub _mail_link_json ($c, $link, $me, $zone) {
         research => { available => ($c->app->ai->configured ? \1 : \0), enabled => ($rs->{enabled} ? \1 : \0), auto => ($rs->{auto} ? \1 : \0),
                       notice => Homelab::Calendar::Consent::research_notice_body(), notice_sha256 => Homelab::Calendar::Consent::research_notice_sha256() },
     };
+}
+
+# The live events this account made from a link, in the viewer's zone, only
+# those it can still see (an event in a calendar whose share was revoked
+# since drops out). made_at is a wall clock in the viewer's zone.
+sub _events_made_json ($c, $m, $link, $me, $zone) {
+    my @out;
+    for my $e (@{ $m->mail_link_events_for($link->{id}, $me) }) {
+        my $cal  = $m->calendar($e->{calendar_id}) or next;
+        my $perm = $m->permission_for_event($me, $e, $cal) or next;
+        my ($s, $en) = ($m->event_start($e), $m->event_end($e));
+        push @out, {
+            id => $e->{id} + 0, title => $e->{title}, all_day => ($e->{all_day} ? \1 : \0), permission => $perm,
+            start => $e->{all_day} ? $s->ymd  : wall_string($s->clone->set_time_zone($zone)),
+            end   => $e->{all_day} ? $en->ymd : wall_string($en->clone->set_time_zone($zone)),
+            location => $e->{location}, is_recurring => ($e->{rrule} ? \1 : \0),
+            made_at => wall_string(Homelab::Calendar::Model::_dt($e->{made_at}, $zone)),
+        };
+    }
+    return \@out;
 }
 
 # POST /api/mail-links/:token/research { about, query } -- "Find out more"
@@ -576,6 +599,11 @@ sub update_event ($c) {
     $row->{permission} = $event->{permission};
     # The reminder belongs to the event (or, after a split, to the new series).
     if (exists $b->{reminder_minutes}) { _try($c, sub { $m->set_reminder($row->{id}, $b->{reminder_minutes}); 1 }) or return }
+    # "Update it from this email" (#81): the link remembers this event for
+    # this account too (the new series after a split).
+    if (my $link = (defined $b->{mail_link_token} ? $m->mail_link_for($b->{mail_link_token}, $me) : undef)) {
+        $m->mail_link_used($link->{id}, $row->{id}, $me);
+    }
     return $c->render(json => _event_json($c, $row, $cal, $zone));
 }
 
@@ -607,7 +635,8 @@ sub save_suggestion ($c) {
     my $m = _model($c);
     my $link = $m->mail_link_for($c->stash('token'), $me) or return _fail($c, 404, 'This suggestion is gone.');
     return _fail($c, 404, 'This suggestion has no proposal.') unless ref $link->{proposal} eq 'HASH';
-    return _fail($c, 409, 'An event was already made from this email.') if $link->{event_id};
+    # Per account (#81): another recipient's event does not consume this one's suggestion.
+    return _fail($c, 409, 'An event was already made from this email.') if $m->mail_link_made_by($link->{id}, $me);
     my $zone = $c->viewer_zone($m->prefs($me));
     my $cal = $m->ensure_default_calendar($me, $zone);
     my $p = $link->{proposal};
@@ -620,7 +649,7 @@ sub save_suggestion ($c) {
         location => $p->{location}, description => $p->{description},
     }) }) or return;
     $m->set_reminder($event->{id}, 10);
-    $m->mail_link_used($link->{id}, $event->{id});
+    $m->mail_link_used($link->{id}, $event->{id}, $me);
     $event->{permission} = 'owner';
     return $c->render(json => _event_json($c, $event, $cal, $zone), status => 201);
 }

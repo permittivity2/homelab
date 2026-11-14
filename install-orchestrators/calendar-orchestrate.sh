@@ -187,7 +187,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
 
     step "schema and grants"
     TBL=$(psql_primary "SELECT count(*) FROM information_schema.tables WHERE table_schema='calendar'")
-    [ "${TBL:-0}" -ge 11 ] && ok "$TBL tables in the calendar schema" || bad "only ${TBL:-0} tables in the calendar schema (expected 11 incl. schema_migrations; 0.1.8 added reminders, reminder_addresses, reminder_queue)"
+    [ "${TBL:-0}" -ge 13 ] && ok "$TBL tables in the calendar schema" || bad "only ${TBL:-0} tables in the calendar schema (expected 13 incl. schema_migrations; 0.1.8 added reminders, reminder_addresses, reminder_queue; 0.1.10 mail_link_events)"
     psql_primary "SELECT has_table_privilege('homelab_calendar_runtime','audit.queue','INSERT')" | grep -q t \
         && ok "runtime role may write audit.queue" || bad "runtime role cannot write audit.queue (shares and deletions log a warning instead of an audit line)"
     psql_primary "SELECT has_table_privilege('homelab_calendar_runtime','calendar.reminder_queue','UPDATE')" | grep -q t \

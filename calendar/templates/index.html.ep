@@ -258,6 +258,19 @@
   <div class="modal__foot"><a class="btn btn-ghost btn-sm" href="/settings">Settings</a><span class="spacer"></span><button type="button" class="btn" data-modal-close>Done</button></div>
 </div>
 
+%# --- a link reused after its event exists (#81): Open / Update from this
+%# email / Add another, before the editor opens ---
+<div class="modal" id="reuse-modal" role="dialog" aria-modal="true" aria-labelledby="reuse-h">
+  <div class="modal__head"><h2 id="reuse-h" class="panel__title">Already in your calendar</h2></div>
+  <div class="modal__body stack">
+    <p class="text-muted" id="reuse-text"></p>
+    <ul class="share-list" id="reuse-list"></ul>
+    <p class="muted-small">"Update from this email" lays the email's details over the event for you to check before you save; the event keeps its reminder and its shares.</p>
+    <p class="form-error hide" id="reuse-error"></p>
+  </div>
+  <div class="modal__foot"><button type="button" class="btn" data-modal-close>Cancel</button><span class="spacer"></span><button type="button" class="btn" id="reuse-add">Add another event</button></div>
+</div>
+
 %# --- the AI notices, asked once before the first proposal / research --------
 <div class="modal" id="consent-modal" role="dialog" aria-modal="true" aria-labelledby="consent-h">
   <div class="modal__head"><h2 id="consent-h" class="panel__title">Propose with AI</h2></div>

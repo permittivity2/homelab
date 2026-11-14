@@ -1,3 +1,16 @@
+homelab-calendar (0.1.10) unstable; urgency=medium
+
+  * A link in an email reused after it already became an event (post-cutover
+    #81): the page now says so first and offers the event itself (Open), its
+    update from the email (the details laid over it; Save keeps the event with
+    its reminder and shares) or another event. "Already added" is judged per
+    recipient account (one link serves every recipient of a message; migration
+    005, calendar.mail_link_events), and a link may become several events.
+    Deleted events drop out: events are soft-deleted, so before this a deleted
+    event kept the link "already made" for good and hid its stored proposal.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 14 Nov 2026 14:47:33 -0600
+
 homelab-calendar (0.1.9) unstable; urgency=medium
 
   * Proposals at arrival (#80) apply only to email that arrives AFTER the

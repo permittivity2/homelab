@@ -71,6 +71,13 @@ ok(!Cal.validEmail('someone example.com'), 'no @: refused');
 ok(!Cal.validEmail('two@@example.com'), 'two @: refused');
 ok(!Cal.validEmail(''), 'empty: refused');
 ok(!Cal.validEmail(null), 'null: refused');
+// --- the "already added" sheet's line for an event made from a link (#81) ---
+is(Cal.fmtMade({ title: 'Dentist appointment', all_day: false, start: '2026-11-23T14:30:00', end: '2026-11-23T15:30:00' }, false),
+   'Dentist appointment, Mon, Nov 23, 2026 2:30 PM - 3:30 PM', 'a timed event');
+is(Cal.fmtMade({ title: 'Fair', all_day: true, start: '2026-11-20', end: '2026-11-22' }, false),
+   'Fair, Fri, Nov 20 - Sat, Nov 21, 2026', 'an all-day event (the end is exclusive)');
+is(Cal.fmtMade({ title: '', all_day: false, start: '2026-11-23T14:30:00', end: '2026-11-23T15:30:00', is_recurring: true }, true),
+   '(no title), Mon, Nov 23, 2026 14:30 - 15:30 (repeats)', 'no title, 24 h clock, a repeating event');
 is(Cal.WEEKDAYS, ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'], 'weekday codes in RFC 5545 order from Sunday');
 ok(Cal.ZONES.indexOf('America/Chicago') === 0, 'Chicago leads the zone list');
 

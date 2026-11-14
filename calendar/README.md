@@ -61,6 +61,18 @@ Events carry `reminder_minutes` (one reminder per event, by email, `null` for
 none; new events get 10 in the editor) and, on creation, an optional
 `share_with` address (#79).
 
+A link reused after it became an event (#81): `POST /api/events` and `PATCH
+/api/events/:id` take `mail_link_token`, and the link then remembers the event
+for that account (`calendar.mail_link_events`; one link serves every recipient
+of a message, and may become several events). `GET /api/mail-links/:token`
+lists them as `events_made` (live events only, wall clocks in the viewer's
+zone, `made_at`), and the page shows them first with Open, "Update from this
+email" (the email's details laid over the event; Save is a PATCH, so the event
+keeps its id, reminder and shares) and "Add another event". A suggestion an
+account saved stays out of its Suggestions list even if the event is deleted
+later; events are soft-deleted, so a deleted one drops out of `events_made`
+and the link behaves like a first click again.
+
 ## The background runner (#79, #80)
 
 `Homelab::Calendar::Runner` runs from a 30 s timer in every hypnotoad worker;

@@ -70,6 +70,12 @@ var Cal = (function () {
     var same = start.slice(0, 10) === end.slice(0, 10);
     return fmtDate(start) + ' ' + fmtTime(start, h24) + ' - ' + (same ? '' : fmtDate(end) + ' ') + fmtTime(end, h24);
   }
+  // One line for an event already made from an email link (#81), as the
+  // server lists it: 'Dentist appointment, Mon, Nov 23, 2026 2:30 PM - 3:30 PM'.
+  function fmtMade(ev, h24) {
+    var when = ev.all_day ? fmtRange(ev.start + 'T00:00:00', ev.end + 'T00:00:00', true, h24) : fmtRange(ev.start, ev.end, false, h24);
+    return (ev.title || '(no title)') + ', ' + when + (ev.is_recurring ? ' (repeats)' : '');
+  }
 
   // --- repeat rules ------------------------------------------------------------
   // The editor's fields <-> the server's repeat form (see
@@ -635,20 +641,21 @@ var Cal = (function () {
         .then(function () { closeModal('consent-modal'); if (consentMode === 'research') { mailLink.research.enabled = true; return researchNow(); } mailLink.ai.enabled = true; return proposeNow(); })
         .catch(function (err) { showError('consent-error', err.message); });
     });
-    var origSubmitBody = null;
-    function openFromMail() {
-      var g = mailLink.guess || {};
-      openEditor({ calendar_id: defaultCalendarId(), all_day: !!g.all_day, start: g.start, end: g.end, title: g.title, location: g.location, description: '' });
+    // The "from email" panel in the editor: which email, the AI button, and
+    // the stored proposal (#80) laid into the form. With `applying` the form
+    // already holds an existing event ("Update from this email", #81), so the
+    // plain guess is laid over it too when there is no proposal.
+    function showMailPanel(g, applying) {
       $('ev-mail').classList.remove('hide');
       $('ev-research-line').classList.add('hide'); $('ev-facts').classList.add('hide'); researchHint = null;
-      $('ev-mail-what').textContent = 'From the email "' + (mailLink.subject || '(no subject)') + '" sent by ' + (mailLink.from || 'unknown') + (g.source ? ' (date read from: ' + g.source + ')' : '');
+      $('ev-mail-what').textContent = (applying ? 'Updating from the email "' : 'From the email "') + (mailLink.subject || '(no subject)') + '" sent by ' + (mailLink.from || 'unknown') + (g.source ? ' (date read from: ' + g.source + ')' : '');
       $('ev-ai-propose').classList.toggle('hide', !mailLink.ai.available);
       $('ev-ai-propose').textContent = 'Propose with AI';
       $('ev-ai-note').textContent = mailLink.ai.available ? (mailLink.ai.enabled ? '' : 'Asks for your agreement the first time.') : '';
       $('ev-proposed-note').classList.add('hide');
-      // Proposed as the email arrived (#80): the editor opens on the proposal,
+      // Proposed as the email arrived (#80): the form takes the proposal,
       // with any facts the research step found; the button offers a redo.
-      if (mailLink.proposal && !mailLink.used_event_id) {
+      if (mailLink.proposal) {
         var p = mailLink.proposal;
         fillFromProposal(p);
         $('ev-proposed-note').textContent = 'Proposed when the email arrived (' + (p.confidence || 'low') + ' confidence' + (p.note ? ': ' + p.note : '') + '). Check it, then Save.';
@@ -656,8 +663,45 @@ var Cal = (function () {
         $('ev-ai-propose').textContent = 'Propose again';
         showResearchLine(p.research);
         if (mailLink.facts) renderFacts(mailLink.facts);
+      } else if (applying) {
+        fillFromProposal({ title: g.title, all_day: !!g.all_day, start: g.start, end: g.end, location: g.location });
       }
-      if (mailLink.used_event_id) $('ev-ai-note').textContent = 'An event was already made from this email.';
+    }
+    // A new event from the email: the plain guess pre-fills, the proposal (if any) replaces it.
+    function openNewFromMail() {
+      var g = mailLink.guess || {};
+      openEditor({ calendar_id: defaultCalendarId(), all_day: !!g.all_day, start: g.start, end: g.end, title: g.title, location: g.location, description: '' });
+      showMailPanel(g, false);
+    }
+    // The link was used before (#81): say so first, and offer the event made
+    // (Open), its update from this email, or another event.
+    function openReuseSheet(made) {
+      showError('reuse-error', '');
+      $('reuse-text').textContent = 'You added this email to your calendar on ' + fmtDate(made[0].made_at) + (made.length > 1 ? ', ' + made.length + ' times' : '') + '.';
+      $('reuse-list').innerHTML = made.map(function (ev) {
+        return '<li data-id="' + ev.id + '"><span class="share-who">' + esc(fmtMade(ev, h24)) + (ev.location ? '<br><span class="muted-small">' + esc(ev.location) + '</span>' : '') + '</span>'
+          + '<button type="button" class="btn btn-sm btn-primary" data-reuse-open="' + ev.id + '">Open</button>'
+          + (ev.permission === 'read' ? '' : '<button type="button" class="btn btn-sm" data-reuse-update="' + ev.id + '">Update from this email</button>') + '</li>';
+      }).join('');
+      openModal('reuse-modal');
+    }
+    $('reuse-list').addEventListener('click', function (e) {
+      var o = e.target.closest('[data-reuse-open]'), u = e.target.closest('[data-reuse-update]');
+      var id = o ? o.getAttribute('data-reuse-open') : u ? u.getAttribute('data-reuse-update') : null;
+      if (!id) return;
+      api('GET', '/api/events/' + id + '?timeZone=' + encodeURIComponent(zone)).then(function (d) {
+        closeModal('reuse-modal');
+        fc.gotoDate(d.start.slice(0, 10));
+        openEditor(d, true);
+        // "Update from this email": the email's details go over the event's;
+        // Save is a PATCH, so the event keeps its id, reminder and shares.
+        if (u) showMailPanel(mailLink.guess || {}, true);
+      }).catch(function (err) { showError('reuse-error', err.message); });
+    });
+    $('reuse-add').addEventListener('click', function () { closeModal('reuse-modal'); openNewFromMail(); });
+    function openFromMail() {
+      var made = mailLink.events_made || [];
+      if (made.length) openReuseSheet(made); else openNewFromMail();
     }
 
     // --- Suggestions (#80): the list, its count in the sidebar, Save / Open / Dismiss ---
@@ -699,10 +743,14 @@ var Cal = (function () {
     // The editor hides the "from email" panel again on every other open.
     var _openEditor = openEditor;
     openEditor = function (data, existing) { $('ev-mail').classList.add('hide'); return _openEditor(data, existing); };
-    // On save, tell the server which link this came from.
+    // On save, tell the server which link this came from: a new event, or
+    // the event being updated from the email (#81), while the panel shows.
     var _api = api;
     api = function (method, url, body) {
-      if (mailLink && method === 'POST' && url === '/api/events' && body && !$('ev-mail').classList.contains('hide')) body.mail_link_token = mailLink.token;
+      if (mailLink && body && !$('ev-mail').classList.contains('hide')) {
+        if (method === 'POST' && url === '/api/events') body.mail_link_token = mailLink.token;
+        if (method === 'PATCH' && state.editing && url === '/api/events/' + state.editing.id) body.mail_link_token = mailLink.token;
+      }
       return _api(method, url, body);
     };
 
@@ -744,7 +792,7 @@ var Cal = (function () {
     wall: wall, wallDate: wallDate, parseWall: parseWall, addMinutes: addMinutes, addDays: addDays, minutesBetween: minutesBetween,
     splitWall: splitWall, joinWall: joinWall, weekdayOf: weekdayOf, fmtTime: fmtTime, fmtDate: fmtDate, fmtRange: fmtRange,
     repeatSummary: repeatSummary, ordinal: ordinal, viewName: viewName, initialViewFor: initialViewFor, mapsUrl: mapsUrl,
-    validEmail: validEmail,
+    validEmail: validEmail, fmtMade: fmtMade,
     boot: boot, bootPublic: bootPublic
   };
 })();
