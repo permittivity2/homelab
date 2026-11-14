@@ -1,3 +1,11 @@
+homelab-calendar (0.1.5) unstable; urgency=medium
+
+  * The event editor's Save and Cancel buttons were pushed below the window
+    by a long form (the modal's scrolling region did not constrain the form
+    inside it); the form is now the flex column and the body scrolls.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 18:00:00 -0600
+
 homelab-calendar (0.1.4) unstable; urgency=medium
 
   * /settings (post-cutover #77): time zone and display, the "calendar links

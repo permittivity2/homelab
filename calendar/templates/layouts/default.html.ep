@@ -69,10 +69,21 @@
     .cal-side.hide { display: none; }
   }
 
-  /* The editor. */
+  /* The editor. The modal is a flex column so a long form scrolls INSIDE
+     .modal__body and the foot with Save stays on screen. The editor wraps
+     head/body/foot in a <form>, so the form must be the flex column too --
+     without this the form grew past the window and Save was below it
+     (found by Gardner on 2026-11-14, calendar 0.1.5). */
   .modal { width: min(640px, calc(100vw - var(--space-4))); max-height: calc(100vh - var(--space-8)); display: none; flex-direction: column; }
   .modal.open { display: flex; }
-  .modal__body { overflow: auto; }
+  .modal > form { display: flex; flex-direction: column; min-height: 0; max-height: calc(100vh - var(--space-8)); }
+  .modal__head, .modal__foot { flex: 0 0 auto; }
+  .modal__body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+  @media (max-width: 720px) {
+    .modal { max-height: calc(100vh - var(--space-4)); }
+    .modal > form { max-height: calc(100vh - var(--space-4)); }
+    .modal__body { padding: var(--space-4); }
+  }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
   .form-grid .span2 { grid-column: 1 / -1; }
   @media (max-width: 560px) { .form-grid { grid-template-columns: 1fr; } .form-grid .span2 { grid-column: auto; } }
