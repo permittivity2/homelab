@@ -1,0 +1,72 @@
+# Homelab Calendar configuration
+#
+# calendar.<domain>: calendars, events (single and repeating), sharing to
+# accounts or by link, ICS feeds. Sign-in through homelab-sso; the token is
+# held in this app's own session cookie and introspected against homelab-api
+# on every request (see README.md).
+
+homelab_api:
+  base_url: https://api.test.mailmasker.org
+
+# RUNTIME connection -- CRUD only, no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_calendar_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection -- direct to Postgres, bypassing pgbouncer. Only used by
+# homelab-calendar-migrate at install/upgrade time.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_calendar_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+calendar:
+  # The public URL of this app: share links and feed URLs are built from it,
+  # and new events' iCalendar UIDs end in its host name. Must match what
+  # homelab-webproxy's sites.yml fronts this service as.
+  public_base_url: https://calendar.test.mailmasker.org
+  # The zone used when neither the account nor the viewer's saved preference
+  # names one (phase 2 of the plan moves the account's zone into homelab-api).
+  default_timezone: America/Chicago
+
+# Sign-in through homelab-sso. Without these two blocks nobody can sign in,
+# so only share links work. Written by install-orchestrators/calendar-orchestrate.sh
+# with the client registered on the SSO nodes first; the session secret must
+# be the SAME on every pool node (requests are not sticky).
+# sso:
+#   base_url: https://login.test.mailmasker.org        # the BROWSER goes here
+#   internal_base_url: http://sso.example.internal:2502 # this app's own code exchange
+#   client_id: calendar
+#   client_secret: YOUR_SSO_CLIENT_SECRET_HERE
+#   redirect_uri: https://calendar.test.mailmasker.org/oauth/callback
+# session:
+#   secret: "THE SAME LONG RANDOM VALUE ON EVERY POOL NODE"
+
+# Optional: a note to the person a calendar or event is shared with. Same
+# shape as drive's. Must be a STARTTLS+AUTH submission endpoint (the edge's
+# submission VIP), never a postfix backend or loopback.
+# mailer:
+#   email: calendar@test.mailmasker.org
+#   smtp_host: smtp.test.mailmasker.org
+#   smtp_port: 587
+#   smtp_password: YOUR_SMTP_PASSWORD_HERE
+
+# Optional: the shared mailmasker look (homelab-webtheme). Leave base_url out:
+# the package default (.../theme/v1) is right and a bare host 404s theme.css.
+# web_theme:
+#   home_url: https://mailmasker.org/
+
+# What this instance announces itself as in homelab-api's service registry.
+registry:
+  host: 127.0.0.1
+  port: 2519
+
+server:
+  listen: "http://127.0.0.1:2519"
+  workers: 2
+  pid_file: /run/homelab-calendar/hypnotoad.pid

@@ -1,0 +1,7 @@
+name: calendar
+package: homelab-calendar
+kind: http_service
+check:
+  systemd_unit: homelab-calendar
+  tcp_port: 2519
+description: "Calendar web app: events, repeating events, sharing, ICS feeds at calendar.<domain>"

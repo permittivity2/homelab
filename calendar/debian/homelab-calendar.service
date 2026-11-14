@@ -1,0 +1,29 @@
+[Unit]
+Description=Homelab Calendar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+# The hypnotoad pid file lives here (config: server.pid_file), so a stale pid
+# on disk after a power cut cannot make hypnotoad signal a stranger.
+RuntimeDirectory=homelab-calendar
+RuntimeDirectoryMode=0750
+Environment="HOMELAB_CALENDAR_CONFIG=/etc/homelab/calendar/config.yml"
+# Reached through homelab-webproxy's calendar.<domain> vhost, a real proxy
+# hop: without this $c->tx->remote_address would be the proxy's address.
+Environment="MOJO_REVERSE_PROXY=1"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-calendar
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-calendar
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-calendar
+
+[Install]
+WantedBy=multi-user.target

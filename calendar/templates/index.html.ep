@@ -1,0 +1,226 @@
+% layout 'default';
+% title 'Calendar';
+%# The one page of the app. The sidebar and the grid are filled by
+%# calendar.js.ep from /api/calendars and /api/events; the dialogs below are
+%# the shared theme's modals (shell.js opens and closes them, traps focus).
+%# $boot carries what the script needs to start: who is signed in, the
+%# preferences, the zones, the CSRF token for every write.
+<div class="app__body">
+  <nav class="sidenav cal-side" id="cal-side" aria-label="Calendars">
+    <div class="form-actions" style="padding: 0 var(--space-3)">
+      <button type="button" class="btn btn-primary" id="btn-new-event" style="width: 100%">New event</button>
+    </div>
+    <div class="sidenav__group">My calendars</div>
+    <div id="own-list"></div>
+    <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-new-calendar">+ New calendar</button></div>
+    <div class="sidenav__group" id="shared-head" hidden>Shared with me</div>
+    <div id="shared-list"></div>
+    <div class="cal-item" id="shared-events-item" hidden>
+      <label class="check"><input type="checkbox" id="shared-events-toggle"> <span class="cal-name">Events shared with me</span></label>
+    </div>
+    <div class="sidenav__group">Settings</div>
+    <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-prefs">Time zone &amp; display</button></div>
+    <p class="muted-small" id="zone-note" style="padding: var(--space-2) var(--space-3) 0"></p>
+  </nav>
+  <main class="app__main">
+    <div class="toolbar" style="margin-bottom: var(--space-2)">
+      <button type="button" class="btn btn-sm" id="side-toggle" aria-controls="cal-side" aria-expanded="true">Calendars</button>
+    </div>
+    <div id="calendar"></div>
+  </main>
+</div>
+
+<div id="msg" role="status" aria-live="polite" class="sr-only"></div>
+
+%# --- the event editor -------------------------------------------------------
+<div class="modal" id="ev-modal" role="dialog" aria-modal="true" aria-labelledby="ev-title-h">
+  <form id="ev-form" autocomplete="off">
+  <div class="modal__head"><h2 id="ev-title-h" class="panel__title">New event</h2></div>
+  <div class="modal__body stack">
+    <p id="ev-readonly" class="banner banner--info hide"><span>You can see this event but not change it.</span></p>
+    <div class="form-row">
+      <label class="sr-only" for="ev-title">Title</label>
+      <input class="form-input" id="ev-title" name="title" placeholder="Add a title" maxlength="300" required style="font-size: var(--app-md)">
+    </div>
+    <div class="form-grid">
+      <div>
+        <label class="form-label" for="ev-calendar">Calendar</label>
+        <select class="form-select" id="ev-calendar" name="calendar_id"></select>
+      </div>
+      <div>
+        <label class="form-label">&nbsp;</label>
+        <label class="check"><input type="checkbox" id="ev-allday" name="all_day"> <span>All day</span></label>
+      </div>
+      <div class="span2">
+        <label class="form-label">Starts</label>
+        <div class="time-row">
+          <input class="form-input" type="date" id="ev-start-date" required>
+          <input class="form-input" type="time" id="ev-start-time" step="300">
+        </div>
+      </div>
+      <div class="span2">
+        <label class="form-label">Ends</label>
+        <div class="time-row">
+          <input class="form-input" type="date" id="ev-end-date" required>
+          <input class="form-input" type="time" id="ev-end-time" step="300">
+        </div>
+        <p class="form-hint" id="ev-zone-hint"></p>
+      </div>
+      <div>
+        <label class="form-label" for="ev-repeat">Repeats</label>
+        <select class="form-select" id="ev-repeat">
+          <option value="">Does not repeat</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+      </div>
+      <div id="ev-interval-wrap" class="hide">
+        <label class="form-label" for="ev-interval">Every</label>
+        <div class="time-row"><input class="form-input" type="number" id="ev-interval" min="1" max="999" value="1" style="flex: 0 1 5rem"><span id="ev-interval-unit" class="muted-small">weeks</span></div>
+      </div>
+      <div class="span2 hide" id="ev-byday-wrap">
+        <label class="form-label">On</label>
+        <div class="chips" id="ev-byday" role="group" aria-label="Weekdays"></div>
+      </div>
+      <div class="span2 hide" id="ev-monthly-wrap">
+        <label class="form-label" for="ev-monthly-by">Monthly on</label>
+        <select class="form-select" id="ev-monthly-by">
+          <option value="monthday">the same date</option>
+          <option value="weekday">the same weekday of the month</option>
+        </select>
+      </div>
+      <div class="span2 hide" id="ev-ends-wrap">
+        <label class="form-label" for="ev-ends">Ends</label>
+        <div class="time-row">
+          <select class="form-select" id="ev-ends" style="width: auto">
+            <option value="never">Never</option>
+            <option value="count">After</option>
+            <option value="until">On</option>
+          </select>
+          <input class="form-input hide" type="number" id="ev-count" min="1" max="9999" value="10" style="flex: 0 1 6rem" aria-label="Number of occurrences">
+          <span class="muted-small hide" id="ev-count-unit">occurrences</span>
+          <input class="form-input hide" type="date" id="ev-until" aria-label="Last day">
+        </div>
+        <p class="form-hint" id="ev-repeat-summary"></p>
+      </div>
+      <div class="span2">
+        <label class="form-label" for="ev-location">Location</label>
+        <input class="form-input" id="ev-location" name="location" maxlength="500">
+      </div>
+      <div class="span2">
+        <label class="form-label" for="ev-desc">Description</label>
+        <textarea class="form-textarea" id="ev-desc" name="description" rows="3" maxlength="20000"></textarea>
+      </div>
+      <div class="span2">
+        <label class="form-label">Colour</label>
+        <div class="color-dots" id="ev-colors"><button type="button" class="btn btn-sm btn-ghost" data-color="">Calendar's colour</button></div>
+      </div>
+    </div>
+    <p class="form-error hide" id="ev-error"></p>
+  </div>
+  <div class="modal__foot">
+    <button type="button" class="btn btn-danger" id="ev-delete">Delete</button>
+    <button type="button" class="btn" id="ev-share">Share</button>
+    <span class="spacer"></span>
+    <button type="button" class="btn" data-modal-close>Cancel</button>
+    <button type="submit" class="btn btn-primary" id="ev-save">Save</button>
+  </div>
+  </form>
+</div>
+
+%# --- which occurrences a change applies to --------------------------------
+<div class="modal" id="scope-modal" role="dialog" aria-modal="true" aria-labelledby="scope-h">
+  <div class="modal__head"><h2 id="scope-h" class="panel__title">Change repeating event</h2></div>
+  <div class="modal__body stack">
+    <p id="scope-text" class="text-muted">This event repeats. What should change?</p>
+    <div class="stack">
+      <label class="check"><input type="radio" name="scope" value="this" checked> <span>This event only</span></label>
+      <label class="check"><input type="radio" name="scope" value="following"> <span>This and following events</span></label>
+      <label class="check"><input type="radio" name="scope" value="all"> <span>All events</span></label>
+    </div>
+  </div>
+  <div class="modal__foot">
+    <button type="button" class="btn" id="scope-cancel">Cancel</button>
+    <button type="button" class="btn btn-primary" id="scope-ok">OK</button>
+  </div>
+</div>
+
+%# --- a calendar's settings -------------------------------------------------
+<div class="modal" id="cal-modal" role="dialog" aria-modal="true" aria-labelledby="cal-h">
+  <form id="cal-form" autocomplete="off">
+  <div class="modal__head"><h2 id="cal-h" class="panel__title">New calendar</h2></div>
+  <div class="modal__body stack">
+    <div class="form-row"><label class="form-label" for="cal-name">Name</label><input class="form-input" id="cal-name" maxlength="100" required></div>
+    <div class="form-row"><label class="form-label">Colour</label><div class="color-dots" id="cal-colors"></div></div>
+    <div class="form-row"><label class="form-label" for="cal-zone">Time zone for new events</label><select class="form-select" id="cal-zone"></select></div>
+    <div class="form-row"><label class="form-label" for="cal-desc">Description</label><input class="form-input" id="cal-desc" maxlength="500"></div>
+    <p class="form-error hide" id="cal-error"></p>
+  </div>
+  <div class="modal__foot">
+    <button type="button" class="btn btn-danger hide" id="cal-delete">Delete calendar</button>
+    <a class="btn hide" id="cal-export" href="#">Export .ics</a>
+    <span class="spacer"></span>
+    <button type="button" class="btn" data-modal-close>Cancel</button>
+    <button type="submit" class="btn btn-primary">Save</button>
+  </div>
+  </form>
+</div>
+
+%# --- sharing a calendar or an event ---------------------------------------
+<div class="modal" id="share-modal" role="dialog" aria-modal="true" aria-labelledby="share-h">
+  <div class="modal__head"><h2 id="share-h" class="panel__title">Share</h2></div>
+  <div class="modal__body stack">
+    <p class="muted-small" id="share-what"></p>
+    <ul class="share-list" id="share-list"></ul>
+    <p class="text-muted hide" id="share-none">Not shared with anyone yet.</p>
+    <form id="share-form" class="stack" autocomplete="off">
+      <div class="form-grid">
+        <div class="span2">
+          <label class="form-label" for="share-email">Share with (email), or leave empty for a link anyone can open</label>
+          <input class="form-input" id="share-email" type="email" placeholder="someone@example.com">
+        </div>
+        <div>
+          <label class="form-label" for="share-perm">They may</label>
+          <select class="form-select" id="share-perm"><option value="read">See</option><option value="edit">See and edit</option></select>
+        </div>
+        <div id="share-detail-wrap">
+          <label class="form-label" for="share-detail">A link shows</label>
+          <select class="form-select" id="share-detail"><option value="full">Everything</option><option value="busy">Only when busy</option></select>
+        </div>
+        <div>
+          <label class="form-label" for="share-expires">Expires</label>
+          <select class="form-select" id="share-expires"><option value="">Never</option><option value="7">In 7 days</option><option value="30">In 30 days</option><option value="365">In a year</option></select>
+        </div>
+      </div>
+      <p class="form-error hide" id="share-error"></p>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Add share</button></div>
+    </form>
+  </div>
+  <div class="modal__foot"><button type="button" class="btn" data-modal-close>Done</button></div>
+</div>
+
+%# --- display preferences ---------------------------------------------------
+<div class="modal" id="prefs-modal" role="dialog" aria-modal="true" aria-labelledby="prefs-h">
+  <form id="prefs-form" autocomplete="off">
+  <div class="modal__head"><h2 id="prefs-h" class="panel__title">Time zone &amp; display</h2></div>
+  <div class="modal__body stack">
+    <div class="form-row"><label class="form-label" for="pref-zone">Time zone</label><select class="form-select" id="pref-zone"></select>
+      <p class="form-hint" id="pref-zone-hint"></p></div>
+    <div class="form-grid">
+      <div><label class="form-label" for="pref-week">Week starts on</label><select class="form-select" id="pref-week"><option value="0">Sunday</option><option value="1">Monday</option><option value="6">Saturday</option></select></div>
+      <div><label class="form-label" for="pref-time">Time format</label><select class="form-select" id="pref-time"><option value="12h">12-hour</option><option value="24h">24-hour</option></select></div>
+      <div><label class="form-label" for="pref-view">Opens in</label><select class="form-select" id="pref-view"><option value="month">Month</option><option value="week">Week</option><option value="day">Day</option><option value="agenda">Agenda</option></select></div>
+    </div>
+    <p class="form-error hide" id="prefs-error"></p>
+  </div>
+  <div class="modal__foot"><button type="button" class="btn" data-modal-close>Cancel</button><button type="submit" class="btn btn-primary">Save</button></div>
+  </form>
+</div>
+
+<script src="/vendor/fullcalendar/index.global.min.js"></script>
+<script>
+%= include 'calendar', format => 'js'
+Cal.boot(<%== $boot %>);
+</script>

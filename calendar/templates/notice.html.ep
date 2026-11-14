@@ -1,0 +1,14 @@
+% layout 'default';
+% title $heading;
+<main class="app__main">
+  <div class="container stack" style="max-width: 40rem">
+    <h1><%= $heading %></h1>
+    <div class="panel"><div class="panel__body stack">
+      <p><%= $body %></p>
+      % if (my $next = stash('login_next')) {
+      <div class="form-actions"><a class="btn btn-primary" href="/login?next=<%= Mojo::Util::url_escape($next) %>">Sign in</a></div>
+      % }
+      <div class="form-actions"><a class="btn" href="/">Calendar</a></div>
+    </div></div>
+  </div>
+</main>

@@ -1,0 +1,15 @@
+homelab-calendar (0.1.0) unstable; urgency=medium
+
+  * First release (post-cutover #74): calendar.<domain>. Calendars with
+    single and repeating events (daily, weekly on chosen weekdays, monthly
+    by date or by "the 2nd Tuesday", yearly; an interval; ending never,
+    after N or on a date), expanded on the server in the event's own time
+    zone so the wall clock holds across a DST change; per-occurrence edits
+    and cancellations, "this and following" splits; all-day events as
+    dates. Sharing a calendar or an event to another account (see, or see
+    and edit) or by link to anyone (everything, or busy times only), with a
+    read-only ICS feed per share for phones and an .ics export with the
+    rules kept. Sign-in through homelab-sso; the shared chrome; the
+    FullCalendar 6.1.22 MIT bundle shipped with the package.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 09:00:00 -0600

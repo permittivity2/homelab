@@ -1,0 +1,38 @@
+Source: homelab-calendar
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab
+
+Package: homelab-calendar
+Architecture: all
+Depends: perl (>= 5.36),
+         homelab-common (>= 0.1.32),
+         homelab-webtheme,
+         libmojolicious-perl,
+         libyaml-libyaml-perl,
+         libmojo-pg-perl,
+         libdatetime-perl,
+         libdatetime-timezone-perl,
+         libdatetime-format-ical-perl,
+         libdatetime-event-ical-perl,
+         libdata-ical-perl,
+         adduser,
+         curl,
+         sudo
+Recommends: homelab-api, homelab-sso, homelab-webproxy, homelab-audit, homelab-agent
+Description: Calendar web app for the homelab-* ecosystem
+ calendar.<domain>: calendars with single and repeating events (RFC 5545
+ rules, expanded on the server in the event's own time zone), per-occurrence
+ edits, sharing to other accounts (see, or see and edit) and by link to
+ anyone (everything, or busy times only), a read-only ICS feed per share
+ that a phone can subscribe to, and an .ics export with the rules kept.
+ .
+ A BFF-style Mojolicious app like homelab-drive: browsers talk only to this
+ app; sign-in is delegated to homelab-sso and the token is held in this
+ app's own session cookie, re-verified against homelab-api on every
+ request. Data lives in its own `calendar` Postgres schema (split
+ runtime/migrate roles). The FullCalendar MIT bundle is shipped with the
+ package and served by the app itself; nothing is loaded from a CDN.

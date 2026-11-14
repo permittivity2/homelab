@@ -93,10 +93,10 @@ RC=0
 
 # id | schedule | comment | prune-backups | vmid list
 JOBS=(
-"fleet-pos1|mon 03:13|Fleet position 1 - first of each failover set, plus singletons|$RET_SETS|400,403,406,409,412,415,418,421,424,427,430,433,436,439,442,446,462,465,469,470"
-"fleet-pos2|tue 03:13|Fleet position 2 - second of each failover set|$RET_SETS|401,404,407,410,413,416,419,422,425,428,431,434,437,440,443,463,466,471"
-"fleet-pos3|wed 03:13|Fleet position 3 - third of each failover set|$RET_SETS|402,405,408,411,414,417,420,423,426,429,432,435,438,441,444,464,467,472"
-"fleet-spares|Thu *-*-01..07 03:13|Bare spares - monthly, first Thursday|$RET_SPARES|445,447,448,449,450,451,452,453,454,455,456,457,458,459,460,461,468"
+"fleet-pos1|mon 03:13|Fleet position 1 - first of each failover set, plus singletons|$RET_SETS|400,403,406,409,412,415,418,421,424,427,430,433,436,439,442,446,450,462,465,469,470"
+"fleet-pos2|tue 03:13|Fleet position 2 - second of each failover set|$RET_SETS|401,404,407,410,413,416,419,422,425,428,431,434,437,440,443,451,463,466,471"
+"fleet-pos3|wed 03:13|Fleet position 3 - third of each failover set|$RET_SETS|402,405,408,411,414,417,420,423,426,429,432,435,438,441,444,452,464,467,472"
+"fleet-spares|Thu *-*-01..07 03:13|Bare spares - monthly, first Thursday|$RET_SPARES|445,447,448,449,453,454,455,456,457,458,459,460,461,468"
 )
 
 # --------------------------------------------------------------- create/update

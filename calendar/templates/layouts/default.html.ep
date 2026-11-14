@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+%# Shared chrome from homelab-webtheme (theme.css, fonts, favicon from
+%# static.mailmasker.org); only what this app needs is below. FullCalendar's
+%# own styles are injected by its bundle; the --fc-* variables map them onto
+%# the theme's colours.
+%= include 'homelab/head'
+<title><%= title %></title>
+<style>
+  :root {
+    --fc-page-bg-color: var(--surface);
+    --fc-neutral-bg-color: var(--surface-hover);
+    --fc-neutral-text-color: var(--text-muted);
+    --fc-border-color: var(--border-strong);
+    --fc-button-text-color: var(--text-primary);
+    --fc-button-bg-color: var(--surface-raised);
+    --fc-button-border-color: var(--border-strong);
+    --fc-button-hover-bg-color: var(--surface-hover);
+    --fc-button-hover-border-color: var(--silver-dim);
+    --fc-button-active-bg-color: var(--accent-steel);
+    --fc-button-active-border-color: var(--accent-steel);
+    --fc-event-bg-color: var(--info);
+    --fc-event-border-color: var(--info);
+    --fc-event-text-color: #fff;
+    --fc-more-link-bg-color: var(--surface-raised);
+    --fc-more-link-text-color: var(--text-primary);
+    --fc-today-bg-color: rgba(111, 148, 184, 0.12);
+    --fc-now-indicator-color: var(--error);
+    --fc-highlight-color: rgba(192, 192, 192, 0.15);
+    --fc-list-event-hover-bg-color: var(--surface-hover);
+    --fc-small-font-size: var(--app-sm);
+  }
+  .app__main { padding: var(--space-4); display: flex; flex-direction: column; min-height: 0; }
+  .fc { color: var(--text-primary); font-size: var(--app-base); }
+  .fc a { color: inherit; text-decoration: none; }
+  .fc .fc-toolbar-title { font-size: var(--app-lg); font-weight: var(--weight-medium); }
+  .fc .fc-button { border-radius: var(--radius-sm); font-size: var(--app-sm); padding: var(--space-1) var(--space-3); text-transform: none; }
+  .fc .fc-button:focus { box-shadow: 0 0 0 2px var(--focus-ring); }
+  .fc .fc-daygrid-day-number, .fc .fc-col-header-cell-cushion { color: var(--text-secondary); }
+  .fc .fc-day-today .fc-daygrid-day-number { color: var(--silver-bright); font-weight: var(--weight-semibold); }
+  .fc .fc-event { border-radius: var(--radius-sm); cursor: pointer; }
+  .fc .fc-event.is-busy { opacity: 0.7; }
+  .fc .fc-list-day-cushion { background: var(--surface-raised); }
+  .fc-theme-standard td, .fc-theme-standard th, .fc-theme-standard .fc-scrollgrid { border-color: var(--border); }
+  .fc .fc-timegrid-slot-label, .fc .fc-timegrid-axis-cushion { color: var(--text-muted); font-size: var(--app-xs); }
+  @media (max-width: 720px) {
+    .fc .fc-toolbar { flex-wrap: wrap; gap: var(--space-2); }
+    .fc .fc-toolbar-title { font-size: var(--app-md); }
+    .fc .fc-toolbar-chunk:nth-child(2) { order: 3; width: 100%; text-align: center; }
+  }
+
+  /* The calendar list beside the grid: ticks with the calendar's colour. */
+  .cal-side { gap: var(--space-2); }
+  .cal-side .sidenav__group:first-child { margin-top: 0; }
+  .cal-item { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-3); border-radius: var(--radius-md); color: var(--text-secondary); font-size: var(--app-base); }
+  .cal-item:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .cal-item .check { flex: 1 1 auto; min-width: 0; }
+  .cal-item .cal-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cal-item .check input { accent-color: var(--cal-color, var(--info)); }
+  .cal-item .cal-more { flex: none; opacity: 0; width: 1.75rem; height: 1.75rem; }
+  .cal-item:hover .cal-more, .cal-item:focus-within .cal-more { opacity: 1; }
+  @media (pointer: coarse) { .cal-item .cal-more { opacity: 1; } }
+  .swatch { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: var(--radius-sm); flex: none; }
+  #side-toggle { display: none; }
+  @media (max-width: 860px) {
+    #side-toggle { display: inline-flex; }
+    .cal-side { border-right: 0; border-bottom: 1px solid var(--border); width: auto; flex-basis: auto; }
+    .cal-side.hide { display: none; }
+  }
+
+  /* The editor. */
+  .modal { width: min(640px, calc(100vw - var(--space-4))); max-height: calc(100vh - var(--space-8)); display: none; flex-direction: column; }
+  .modal.open { display: flex; }
+  .modal__body { overflow: auto; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+  .form-grid .span2 { grid-column: 1 / -1; }
+  @media (max-width: 560px) { .form-grid { grid-template-columns: 1fr; } .form-grid .span2 { grid-column: auto; } }
+  .time-row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+  .time-row .form-input { width: auto; min-width: 0; flex: 1 1 8rem; }
+  .chips { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+  .chip { border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 2px var(--space-3); font-size: var(--app-sm); cursor: pointer; background: none; color: var(--text-secondary); }
+  .chip.is-on { background: var(--silver-bright); color: var(--black-primary); border-color: var(--silver-bright); }
+  .share-list { list-style: none; margin: 0; padding: 0; }
+  .share-list li { display: flex; gap: var(--space-2); align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .share-list li:last-child { border-bottom: 0; }
+  .share-who { flex: 1 1 10rem; min-width: 0; overflow-wrap: anywhere; }
+  .share-url { font-family: var(--font-mono); font-size: var(--app-xs); color: var(--text-muted); overflow-wrap: anywhere; flex: 1 1 100%; }
+  .modal__foot { flex-wrap: wrap; }
+  .modal__foot .spacer { flex: 1 1 auto; }
+  .toast { max-width: calc(100vw - 2 * var(--space-6)); overflow-wrap: anywhere; }
+  .color-dots { display: flex; gap: var(--space-1); flex-wrap: wrap; align-items: center; }
+  .color-dot { width: 1.5rem; height: 1.5rem; border-radius: var(--radius-pill); border: 2px solid transparent; cursor: pointer; padding: 0; }
+  .color-dot.is-on { border-color: var(--silver-bright); }
+  .muted-small { color: var(--text-muted); font-size: var(--app-sm); }
+  .event-when { font-size: var(--app-md); }
+</style>
+</head>
+<body class="app">
+%= include 'homelab/header'
+<%= content %>
+%= include 'homelab/footer'
+</body>
+</html>

@@ -1,0 +1,30 @@
+% layout 'default';
+% title $calendar->{name} . ' - Calendar';
+%# A calendar opened from a link: read-only, no sidebar. The grid reads
+%# /c/<token>/events. The feed link is what a phone's calendar app subscribes to.
+<main class="app__main">
+  <div class="toolbar" style="margin-bottom: var(--space-2); align-items: baseline; gap: var(--space-3)">
+    <span class="swatch" style="background: <%= $calendar->{color} %>"></span>
+    <h1 style="font-size: var(--app-lg); margin: 0"><%= $calendar->{name} %></h1>
+    % if ($detail eq 'busy') {
+    <span class="pill pill--info">busy times only</span>
+    % }
+    <span class="toolbar__spacer"></span>
+    <a class="btn btn-sm" href="<%= $calendar_feed = $c->app->public_base_url . '/c/' . $share->{token} . '.ics' %>">Subscribe (.ics)</a>
+  </div>
+  % if ($calendar->{description} && $detail ne 'busy') {
+  <p class="text-muted" style="margin-bottom: var(--space-2)"><%= $calendar->{description} %></p>
+  % }
+  <div id="calendar"></div>
+  <p class="muted-small" style="margin-top: var(--space-3)">Times are shown in <span id="zone-note"></span>. To follow this calendar on your phone or in another calendar app, add the subscription link above as a calendar by URL.</p>
+</main>
+<div class="modal" id="peek-modal" role="dialog" aria-modal="true" aria-labelledby="peek-h">
+  <div class="modal__head"><h2 id="peek-h" class="panel__title"></h2></div>
+  <div class="modal__body stack"><p class="event-when" id="peek-when"></p><p id="peek-where" class="text-muted"></p><p id="peek-desc" style="white-space: pre-wrap"></p></div>
+  <div class="modal__foot"><button type="button" class="btn" data-modal-close>Close</button></div>
+</div>
+<script src="/vendor/fullcalendar/index.global.min.js"></script>
+<script>
+%= include 'calendar', format => 'js'
+Cal.bootPublic(<%== $boot %>);
+</script>

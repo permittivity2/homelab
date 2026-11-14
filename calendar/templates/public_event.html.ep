@@ -1,0 +1,58 @@
+% layout 'default';
+% title $event->{title} . ' - Calendar';
+%# One event opened from a link, with its next occurrences when it repeats.
+% sub fmt_when ($o, $zone) {
+%   if ($o->{all_day}) {
+%     my $days = $o->{end}->delta_days($o->{start})->in_units('days');
+%     return $days <= 1 ? $o->{start}->strftime('%A, %B %e, %Y')
+%          : $o->{start}->strftime('%a, %b %e') . ' - ' . $o->{end}->clone->subtract(days => 1)->strftime('%a, %b %e, %Y');
+%   }
+%   my $same_day = $o->{start}->ymd eq $o->{end}->ymd;
+%   return $o->{start}->strftime('%A, %B %e, %Y %l:%M %p') . ' - '
+%        . ($same_day ? $o->{end}->strftime('%l:%M %p') : $o->{end}->strftime('%a, %b %e, %Y %l:%M %p'));
+% }
+<main class="app__main">
+  <div class="container stack" style="max-width: 44rem">
+    <div class="panel">
+      <div class="panel__head" style="display: flex; align-items: center; gap: var(--space-3)">
+        <span class="swatch" style="background: <%= $event->{color} // $calendar->{color} %>"></span>
+        <h1 class="panel__title" style="font-size: var(--app-lg)"><%= $event->{title} %></h1>
+      </div>
+      <div class="panel__body stack">
+        % if (@$occurrences) {
+        <p class="event-when"><%= fmt_when($occurrences->[0], $zone) %></p>
+        % } else {
+        <p class="event-when text-muted">No upcoming occurrence.</p>
+        % }
+        % if ($event->{rrule}) {
+        <p class="muted-small">Repeats. Times in <%= $zone %>.</p>
+        % } else {
+        <p class="muted-small">Times in <%= $zone %>.</p>
+        % }
+        % if ($event->{location}) {
+        <p class="text-muted"><%= $event->{location} %></p>
+        % }
+        % if ($event->{description}) {
+        <p style="white-space: pre-wrap"><%= $event->{description} %></p>
+        % }
+        <p class="muted-small">From the calendar "<%= $calendar->{name} %>".</p>
+        <div class="form-actions"><a class="btn btn-primary" href="<%= $ics_url %>">Add to my calendar (.ics)</a></div>
+      </div>
+    </div>
+    % if ($event->{rrule} && @$occurrences > 1) {
+    <div class="panel">
+      <div class="panel__head"><h2 class="panel__title">Next occurrences</h2></div>
+      <div class="panel__body">
+        <ul class="share-list">
+        % for my $o (@$occurrences) {
+          <li><span><%= fmt_when($o, $zone) %></span><% if ($o->{title} ne $event->{title}) { %> <span class="text-muted"><%= $o->{title} %></span><% } %></li>
+        % }
+        </ul>
+        % if ($more) {
+        <p class="muted-small">... and more.</p>
+        % }
+      </div>
+    </div>
+    % }
+  </div>
+</main>

@@ -1,0 +1,161 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/calendar
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-calendar
+
+case "$1" in
+    configure)
+        echo "homelab-calendar post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services
+        cp "$SHARE_DIR/services/calendar.yml" "/etc/homelab/services/calendar.yml"
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-calendar/db_host || true;               DB_HOST="${RET:-localhost}"
+            db_get homelab-calendar/pgbouncer_host || true;        PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-calendar/api_base || true;              API_BASE="${RET:-http://localhost:3000}"
+            db_get homelab-calendar/listen_port || true;           LISTEN_PORT="${RET:-2519}"
+            db_get homelab-calendar/advertise_host || true;        ADVERTISE_HOST="${RET:-127.0.0.1}"
+            db_get homelab-calendar/public_base_url || true;       PUBLIC_BASE_URL="${RET:-https://calendar.test.mailmasker.org}"
+            db_get homelab-calendar/default_timezone || true;      DEFAULT_TZ="${RET:-America/Chicago}"
+            db_get homelab-calendar/sso_base_url || true;          SSO_BASE_URL="${RET:-https://login.test.mailmasker.org}"
+            db_get homelab-calendar/sso_internal_base_url || true; SSO_INTERNAL_BASE_URL="${RET:-$SSO_BASE_URL}"
+            db_get homelab-calendar/sso_client_secret || true;     SSO_CLIENT_SECRET="$RET"
+            db_get homelab-calendar/session_secret || true;        SESSION_SECRET="$RET"
+
+            echo "  bootstrapping Postgres roles for 'homelab_calendar' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_calendar --schema calendar --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+            BOOTSTRAP_MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^BOOTSTRAP_MANUAL=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success -- see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-calendar' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            [ -n "$SESSION_SECRET" ] || SESSION_SECRET="$(openssl rand -base64 32 | tr -d '\n=')"
+
+            sed \
+                -e "s#https://api\.test\.mailmasker\.org#$API_BASE#g" \
+                -e "s#https://calendar\.test\.mailmasker\.org#$PUBLIC_BASE_URL#g" \
+                -e "s#default_timezone: America/Chicago#default_timezone: $DEFAULT_TZ#g" \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_calendar_runtime#$RUNTIME_ROLE#g" \
+                -e "s#YOUR_POSTGRES_HOST#$DB_HOST#g" \
+                -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
+                -e "s#homelab_calendar_migrate#$MIGRATE_ROLE#g" \
+                -e "s#\"http://127\.0\.0\.1:2519\"#\"http://0.0.0.0:$LISTEN_PORT\"#g" \
+                -e "s#  port: 2519#  port: $LISTEN_PORT#g" \
+                -e "s#  host: 127\.0\.0\.1#  host: $ADVERTISE_HOST#g" \
+                "$SHARE_DIR/config/calendar.example.yml" > "$CONFIG_FILE"
+
+            # Sign-in: written as a real block when a client secret was given,
+            # since the example keeps it commented out.
+            if [ -n "$SSO_CLIENT_SECRET" ]; then
+                cat >> "$CONFIG_FILE" <<EOF
+
+sso:
+  base_url: $SSO_BASE_URL
+  internal_base_url: $SSO_INTERNAL_BASE_URL
+  client_id: calendar
+  client_secret: $SSO_CLIENT_SECRET
+  redirect_uri: $PUBLIC_BASE_URL/oauth/callback
+
+session:
+  secret: "$SESSION_SECRET"
+EOF
+            else
+                echo "  NOTE: no sso_client_secret given -- nobody can sign in until an sso: block"
+                echo "        (and session.secret) is added to $CONFIG_FILE. Share links still work."
+            fi
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+
+            if [ "$BOOTSTRAP_MANUAL" = "1" ]; then
+                echo ""
+                echo "  ================================================================"
+                echo "  CONFIG WRITTEN -- but DB-side steps remain (runbook printed above):"
+                echo "    1) run the role SQL on the DB primary"
+                echo "    2) register '$RUNTIME_ROLE' in pgbouncer on each pooler"
+                echo "  Then finish this host (applies migrations + starts the service):"
+                echo "      sudo dpkg-reconfigure homelab-calendar"
+                echo "  ================================================================"
+                echo ""
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$RUNTIME_ROLE' by hand."
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+        fi
+
+        if [ -z "$RUNTIME_ROLE" ]; then
+            RUNTIME_ROLE="$(sed -n '/^database:/,/^database_migrate:/{s/^[[:space:]]*user: //p}' "$CONFIG_FILE" | head -1)"
+        fi
+        if [ -n "$RUNTIME_ROLE" ]; then
+            echo "  granting '$RUNTIME_ROLE' INSERT access on audit.queue (sharing and deletions are audited)..."
+            DB_HOST_FOR_GRANT="${DB_HOST:-$(sed -n '/^database_migrate:/,/^calendar:/{s/^[[:space:]]*host: //p}' "$CONFIG_FILE" | head -1)}"
+            homelab-audit-grant-queue-insert --role "$RUNTIME_ROLE" --db-host "${DB_HOST_FOR_GRANT:-localhost}" \
+                || echo "  WARNING: could not grant audit.queue access -- on a fleet host this is done from the workstation by calendar-orchestrate.sh; audit lines are logged as warnings until then."
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_CALENDAR_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
+            HOMELAB_CALENDAR_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-calendar-migrate
+
+        systemctl enable homelab-calendar >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-calendar; then
+            systemctl restart homelab-calendar || echo "WARNING: homelab-calendar restart failed -- check 'systemctl status homelab-calendar' by hand."
+        else
+            systemctl start homelab-calendar || echo "WARNING: homelab-calendar failed to start -- check 'systemctl status homelab-calendar' by hand."
+        fi
+
+        sleep 2
+        LISTEN_PORT="${LISTEN_PORT:-$(sed -n 's/^  listen: "http:\/\/[0-9.]*:\([0-9]*\)"/\1/p' "$CONFIG_FILE" | head -1)}"
+        if ! curl -fsS "http://127.0.0.1:${LISTEN_PORT:-2519}/health" >/dev/null 2>&1; then
+            echo "  WARNING: homelab-calendar did not answer its own /health check --"
+            echo "           check 'systemctl status homelab-calendar' and the journal by hand."
+        fi
+
+        db_stop
+        echo ""
+        echo "homelab-calendar configured."
+        echo "config: $CONFIG_FILE"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

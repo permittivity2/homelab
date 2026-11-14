@@ -1,0 +1,70 @@
+Template: homelab-calendar/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-calendar/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
+Template: homelab-calendar/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url -- every sign-in is
+ verified by introspecting the session's token here.
+
+Template: homelab-calendar/listen_port
+Type: string
+Default: 2519
+Description: Port for homelab-calendar to listen on:
+
+Template: homelab-calendar/advertise_host
+Type: string
+Default: 127.0.0.1
+Description: This host's own address to advertise in the service registry:
+ Written into config.yml's registry.host. Set it to this host's service
+ address for any distributed deployment.
+
+Template: homelab-calendar/public_base_url
+Type: string
+Default: https://calendar.test.mailmasker.org
+Description: Public URL of this calendar:
+ Share links and ICS feed URLs are built from it; must match the name
+ homelab-webproxy's sites.yml fronts this service as.
+
+Template: homelab-calendar/default_timezone
+Type: string
+Default: America/Chicago
+Description: Time zone used when an account has none:
+ An IANA zone name. Each account's own zone (from homelab-api, or saved
+ in this app's preferences) wins over it.
+
+Template: homelab-calendar/sso_base_url
+Type: string
+Default: https://login.test.mailmasker.org
+Description: Public base URL of homelab-sso (where the browser is sent to sign in):
+ A BROWSER redirect: it must be the public SSO name, never an internal
+ address (see homelab-drive's identical note).
+
+Template: homelab-calendar/sso_internal_base_url
+Type: string
+Default:
+Description: Internal base URL of homelab-sso for this app's own code exchange (blank = the public URL):
+
+Template: homelab-calendar/sso_client_secret
+Type: password
+Description: Shared secret for this app's "calendar" OAuth client:
+ Must match the 'calendar' client registered in homelab-sso's config.
+ Leave blank to install without sign-in (share links still work) and add
+ the sso: block to config.yml later.
+
+Template: homelab-calendar/session_secret
+Type: password
+Description: Session secret (the SAME value on every node of the pool):
+ Requests are not sticky across the pool, so a per-node secret would fail
+ sign-ins two times in three. Leave blank on a single node to generate one.
