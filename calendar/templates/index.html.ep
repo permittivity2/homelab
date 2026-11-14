@@ -10,6 +10,10 @@
     <div class="form-actions" style="padding: 0 var(--space-3)">
       <button type="button" class="btn btn-primary" id="btn-new-event" style="width: 100%">New event</button>
     </div>
+    %# Suggestions (#80): proposals made as email arrived, waiting to be saved.
+    <div class="form-actions hide" id="sugg-wrap" style="padding: 0 var(--space-3)">
+      <button type="button" class="btn" id="btn-suggestions" style="width: 100%">Suggestions (<span id="sugg-count">0</span>)</button>
+    </div>
     <div class="sidenav__group">My calendars</div>
     <div id="own-list"></div>
     <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-new-calendar">+ New calendar</button></div>
@@ -42,6 +46,7 @@
     %# AI proposal button when the person has consented.
     <div id="ev-mail" class="panel hide"><div class="panel__body stack" style="padding: var(--space-3)">
       <p class="muted-small" id="ev-mail-what"></p>
+      <p class="muted-small hide" id="ev-proposed-note"></p>
       <div class="form-actions" style="gap: var(--space-2)">
         <button type="button" class="btn btn-sm" id="ev-ai-propose">Propose with AI</button>
         <span class="muted-small" id="ev-ai-note"></span>
@@ -129,6 +134,30 @@
         <label class="form-label" for="ev-desc">Description</label>
         <textarea class="form-textarea" id="ev-desc" name="description" rows="3" maxlength="20000"></textarea>
       </div>
+      %# Reminder (#79): one per event, by email, minutes before each occurrence.
+      <div>
+        <label class="form-label" for="ev-reminder">Reminder</label>
+        <select class="form-select" id="ev-reminder">
+          <option value="">None</option>
+          <option value="0">At the time</option>
+          <option value="5">5 minutes before</option>
+          <option value="10">10 minutes before</option>
+          <option value="15">15 minutes before</option>
+          <option value="30">30 minutes before</option>
+          <option value="60">1 hour before</option>
+          <option value="120">2 hours before</option>
+          <option value="1440">1 day before</option>
+          <option value="2880">2 days before</option>
+          <option value="10080">1 week before</option>
+        </select>
+        <p class="form-hint" id="ev-reminder-hint">By email. All-day events remind at 9 AM.</p>
+      </div>
+      %# Share with (#79): on a NEW event only; existing ones have the Share button.
+      <div id="ev-share-wrap">
+        <label class="form-label" for="ev-share-with">Share with (email, optional)</label>
+        <input class="form-input" id="ev-share-with" type="email" placeholder="someone@example.com" maxlength="254" autocomplete="off">
+        <p class="form-hint">They can see it (and its reminders reach them too).</p>
+      </div>
       <div class="span2">
         <label class="form-label">Colour</label>
         <div class="color-dots" id="ev-colors"><button type="button" class="btn btn-sm btn-ghost" data-color="">Calendar's colour</button></div>
@@ -215,6 +244,18 @@
     </form>
   </div>
   <div class="modal__foot"><button type="button" class="btn" data-modal-close>Done</button></div>
+</div>
+
+%# --- Suggestions (#80): proposals made as the email arrived -----------------
+<div class="modal" id="sugg-modal" role="dialog" aria-modal="true" aria-labelledby="sugg-h">
+  <div class="modal__head"><h2 id="sugg-h" class="panel__title">Suggestions</h2></div>
+  <div class="modal__body stack">
+    <p class="muted-small">Events proposed from your email as it arrived. Save takes the proposal as it is; Open shows it in the editor first.</p>
+    <ul class="share-list" id="sugg-list"></ul>
+    <p class="text-muted hide" id="sugg-none">Nothing waiting.</p>
+    <p class="form-error hide" id="sugg-error"></p>
+  </div>
+  <div class="modal__foot"><a class="btn btn-ghost btn-sm" href="/settings">Settings</a><span class="spacer"></span><button type="button" class="btn" data-modal-close>Done</button></div>
 </div>
 
 %# --- the AI notices, asked once before the first proposal / research --------

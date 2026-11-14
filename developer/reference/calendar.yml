@@ -70,4 +70,35 @@ abilities:
       { "mail_links_enabled": true, "ai": { "available": true, "enabled": true, "consented_to_current_notice": true, "consent_at": "2026-11-14 16:05:00+00", "notice": "...", "notice_sha256": "3f1c...e9" }, "settings_url": "https://calendar.mailmasker.org/settings" }
     notes:
       - A stale notice hash answers 400 with a sentence saying to reload and agree again.
+      - Since calendar 0.1.8 the same call also takes auto_propose (with auto_propose_consent_sha256, a third notice, from the GET's auto.notice_sha256), research_at_arrival (only for an account whose auto.research_at_arrival_allowed is true), and reminder_addresses (a list of up to 5 addresses reminders go to; empty = your account address). The GET answers with an auto object and the reminder_addresses list beside ai and research.
+    cli: none
+
+  - id: calendar-admin-entitlements
+    title: Grant or remove a calendar entitlement (administrators)
+    method: PUT
+    path: /api/v1/calendar/admin/accounts/:email/entitlements
+    who: site-admin
+    summary: Turn "research at arrival" on or off for an account; the person's own switch sits under it.
+    description: >
+      What an account is allowed beyond the defaults. Today one entitlement:
+      research_at_arrival_allowed, which lets the person switch on the web
+      search step for email that arrives (the "Find out more" research, run
+      before any click). Taking it away also turns the person's switch off.
+      Meant for a site administrator today and for the billing work later,
+      which will call this when a paid option is bought or lapses.
+    params:
+      - name: email
+        in: path
+        required: true
+        about: The account's address.
+        example: someone@example.com
+      - name: research_at_arrival_allowed
+        in: body
+        required: true
+        about: true grants the entitlement, false removes it (and switches the feature off for the person).
+        example: true
+    response: |
+      { "email": "someone@example.com", "entitlements": { "research_at_arrival_allowed": true } }
+    notes:
+      - 403 without the site_admin role; 400 when the body lacks research_at_arrival_allowed.
     cli: none

@@ -50,6 +50,12 @@ sub settings ($c) {
         research => Homelab::Calendar::Consent::research_state_for($model->db, $me),
         research_notice => Homelab::Calendar::Consent::research_notice_body(),
         research_notice_sha => Homelab::Calendar::Consent::research_notice_sha256(),
+        # #80: consent #3 and the entitlement; #79: where reminders go.
+        auto => Homelab::Calendar::Consent::auto_state_for($model->db, $me),
+        auto_notice => Homelab::Calendar::Consent::auto_notice_body(),
+        auto_notice_sha => Homelab::Calendar::Consent::auto_notice_sha256(),
+        reminder_addresses => $model->reminder_addresses($me),
+        me => $me,
         ai_available => $c->app->ai->configured,
         account_zone => $c->stash('calendar.account_zone'),
         csrf     => $c->csrf_token,

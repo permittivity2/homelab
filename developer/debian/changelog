@@ -1,3 +1,12 @@
+homelab-developer (0.1.6) unstable; urgency=medium
+
+  * Reference: the calendar's entitlement route for administrators
+    (PUT /api/v1/calendar/admin/accounts/{email}/entitlements, post-cutover
+    #80) and the new keys of the account switches (auto_propose,
+    research_at_arrival, reminder_addresses; #79/#80).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 15 Nov 2026 00:30:00 -0600
+
 homelab-developer (0.1.5) unstable; urgency=medium
 
   * Reference: the calendar's account switches (GET/PUT /api/v1/calendar/account,

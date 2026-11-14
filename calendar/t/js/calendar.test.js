@@ -63,6 +63,14 @@ is(Cal.initialViewFor('timeGridWeek', true, 'month'), 'timeGridWeek', 'the view 
 is(Cal.initialViewFor('', true, 'month'), 'listWeek', 'no remembered view on a phone: the agenda');
 is(Cal.initialViewFor('', false, 'week'), 'timeGridWeek', 'no remembered view on a laptop: the saved default');
 is(Cal.initialViewFor('bogusView', false, 'month'), 'dayGridMonth', 'a remembered value that is not a view is ignored');
+// --- the Share field's address check (#79) ---
+ok(Cal.validEmail('someone@example.com'), 'a plain address passes');
+ok(Cal.validEmail('  first.last+tag@sub.example.co.uk '), '... with dots, a plus and spaces around it');
+ok(!Cal.validEmail('someone@example'), 'no dot after the @: refused');
+ok(!Cal.validEmail('someone example.com'), 'no @: refused');
+ok(!Cal.validEmail('two@@example.com'), 'two @: refused');
+ok(!Cal.validEmail(''), 'empty: refused');
+ok(!Cal.validEmail(null), 'null: refused');
 is(Cal.WEEKDAYS, ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'], 'weekday codes in RFC 5545 order from Sunday');
 ok(Cal.ZONES.indexOf('America/Chicago') === 0, 'Chicago leads the zone list');
 

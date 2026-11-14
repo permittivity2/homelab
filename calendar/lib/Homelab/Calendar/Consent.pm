@@ -4,7 +4,8 @@ use Exporter 'import';
 use Digest::SHA qw(sha256_hex);
 
 our @EXPORT_OK = qw(notice_body notice_sha256 state_for record withdraw
-                    research_notice_body research_notice_sha256 research_state_for research_record research_withdraw);
+                    research_notice_body research_notice_sha256 research_state_for research_record research_withdraw
+                    auto_notice_body auto_notice_sha256 auto_state_for auto_record auto_withdraw);
 
 # Informed consent for the AI proposal, recorded rather than assumed -- the
 # same shape as search's AI/Consent.pm: the record says WHICH WORDS the person
@@ -117,6 +118,64 @@ sub research_withdraw ($db, $email) {
     $db->query(
         q{INSERT INTO calendar.account_settings (user_email, research_enabled, research_auto) VALUES (?, FALSE, FALSE)
           ON CONFLICT (user_email) DO UPDATE SET research_enabled = FALSE, research_auto = FALSE, updated_at = NOW()}, lc $email,
+    );
+    return 1;
+}
+
+# ----- Propose at arrival (#80): a third notice -- it sends BEFORE a click -----
+
+my $AUTO_BODY = <<'NOTICE';
+"Propose automatically" sends email to Anthropic as it arrives, before you click anything.
+
+With this on, every email delivered to you that LOOKS like it has an event in
+it (a date, a time, or words like meeting, appointment, game) has its
+subject, sender, date and first part of its text sent to Anthropic's API,
+through Silver Linings' own AI service, within about a minute of arriving,
+to propose an event. The proposal waits for you in the calendar's
+Suggestions and behind the email's link; nothing is saved until you press
+Save. Email that does not look like an event is not sent.
+
+Your personal information is NOT removed first. It is sent as it appears in
+each such email.
+
+We do not tell Anthropic whose email it is. Requests carry no account name
+or address; an email's own contents may still identify you.
+
+If your account also allows "research at arrival", the same emails get the
+web-search step too, under the "Find out more" notice you agreed to.
+
+You can turn this off at any time in the calendar's Settings. Turning it off
+stops all further sending; it does not recall what was already sent.
+NOTICE
+
+sub auto_notice_body   { return $AUTO_BODY }
+sub auto_notice_sha256 { return sha256_hex($AUTO_BODY) }
+
+# auto_state_for($db, $email) -> { enabled, current, sha, research_allowed, research_at_arrival }
+sub auto_state_for ($db, $email) {
+    my $row = $db->query('SELECT auto_propose, auto_propose_consent_sha256, research_at_arrival_allowed, research_at_arrival FROM calendar.account_settings WHERE user_email = ?', lc $email)->hash // {};
+    my $sha = $row->{auto_propose_consent_sha256};
+    my $current = (defined $sha && $sha eq auto_notice_sha256()) ? 1 : 0;
+    return { enabled => ($row->{auto_propose} && $current) ? 1 : 0, current => $current, sha => $sha,
+             research_allowed => ($row->{research_at_arrival_allowed} ? 1 : 0),
+             research_at_arrival => ($row->{research_at_arrival_allowed} && $row->{research_at_arrival}) ? 1 : 0 };
+}
+
+sub auto_record ($db, $email, $sha) {
+    return 0 unless defined $sha && $sha eq auto_notice_sha256();
+    $db->query(
+        q{INSERT INTO calendar.account_settings (user_email, auto_propose, auto_propose_consent_sha256, auto_propose_consent_at)
+          VALUES (?, TRUE, ?, NOW())
+          ON CONFLICT (user_email) DO UPDATE SET auto_propose = TRUE, auto_propose_consent_sha256 = EXCLUDED.auto_propose_consent_sha256,
+              auto_propose_consent_at = NOW(), updated_at = NOW()}, lc $email, $sha,
+    );
+    return 1;
+}
+
+sub auto_withdraw ($db, $email) {
+    $db->query(
+        q{INSERT INTO calendar.account_settings (user_email, auto_propose, research_at_arrival) VALUES (?, FALSE, FALSE)
+          ON CONFLICT (user_email) DO UPDATE SET auto_propose = FALSE, research_at_arrival = FALSE, updated_at = NOW()}, lc $email,
     );
     return 1;
 }

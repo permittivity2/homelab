@@ -264,6 +264,8 @@ sub _event_json ($c, $event, $cal, $zone, $rid = undef) {
         color => $event->{color}, permission => $event->{permission}, is_recurring => ($event->{rrule} ? \1 : \0),
         created_by_email => $event->{created_by_email},
         calendar => { id => $cal->{id} + 0, name => $cal->{name}, color => $cal->{color}, owner_email => $cal->{owner_email} },
+        # #79: minutes before each occurrence an email goes out, or null.
+        reminder_minutes => do { my $r = $m->reminder_for($event->{id}); $r ? $r->{minutes_before} + 0 : undef },
     );
     if ($rid && $event->{rrule}) {
         my ($inst) = grep { $_->{recurrence_id} && $_->{recurrence_id}->epoch == $rid->epoch }
@@ -313,13 +315,35 @@ sub create_event ($c) {
     my $perm = $m->permission_for_calendar($me, $cal) or return _fail($c, 404, 'No such calendar.');
     return _fail($c, 403, 'You can see this calendar but not add to it.') unless may_edit($perm);
     my $zone = $c->viewer_zone($m->prefs($me));
+    # The Share field (#79): one address the new event is shared with, read-only.
+    my $share_with = _share_with($c, $b, $me, $perm); return if $share_with && $share_with eq "\0";
     my $event = _try($c, sub { $m->create_event($cal, $me, _event_input($c, $b, $zone)) }) or return;
     $event->{permission} = $perm;
+    if (exists $b->{reminder_minutes}) { _try($c, sub { $m->set_reminder($event->{id}, $b->{reminder_minutes}); 1 }) or return }
     # Created from a link in an email: the link remembers which event it became.
     if (my $link = (defined $b->{mail_link_token} ? $m->mail_link_for($b->{mail_link_token}, $me) : undef)) {
         $m->mail_link_used($link->{id}, $event->{id});
     }
+    if ($share_with) {
+        my $share = $m->create_share(owner => $me, event_id => $event->{id}, shared_with_email => $share_with, permission => 'read');
+        _audit($c, action => 'calendar.share_create', resource_type => 'calendar_share', resource_id => $share->{id}, affected_user => $share_with,
+            detail => { event_id => $event->{id}, with => $share_with, permission => 'read', at_creation => \1 });
+        _notify_share($c, $share, "the event \"$event->{title}\"");
+    }
     return $c->render(json => _event_json($c, $event, $cal, $zone), status => 201);
+}
+
+# The editor's "Share with" address on a new event: a valid address of
+# someone else, and only the calendar's owner may share. Returns the
+# address, '' for none, or "\0" after rendering an error.
+sub _share_with ($c, $b, $me, $perm) {
+    my $v = $b->{share_with};
+    return '' unless defined $v && !ref $v && $v =~ /\S/;
+    my $email = lc($v =~ s/\A\s+|\s+\z//gr);
+    unless ($email =~ /\A[^\s@]+@[^\s@]+\.[^\s@]+\z/ && length $email <= 254) { _fail($c, 400, 'The "Share with" address does not look like an email address.'); return "\0" }
+    if ($email eq $me) { _fail($c, 400, 'You already see your own event; share it with someone else.'); return "\0" }
+    unless (may_manage($perm)) { _fail($c, 400, 'Only the calendar\'s owner can share an event. Leave "Share with" empty, or ask the owner.'); return "\0" }
+    return $email;
 }
 
 # --- the account's switches (phase 3: mail links; phase 4: the AI proposal) ---
@@ -329,6 +353,7 @@ sub _account_json ($c, $me) {
     my $s = $m->account_settings($me);
     my $consent = Homelab::Calendar::Consent::state_for($m->db, $me);
     my $rs = Homelab::Calendar::Consent::research_state_for($m->db, $me);
+    my $as = Homelab::Calendar::Consent::auto_state_for($m->db, $me);
     return {
         mail_links_enabled => ($s->{mail_links_enabled} ? \1 : \0), mail_links_enabled_at => $s->{mail_links_enabled_at},
         ai => {
@@ -350,6 +375,20 @@ sub _account_json ($c, $me) {
             notice     => Homelab::Calendar::Consent::research_notice_body(),
             notice_sha256 => Homelab::Calendar::Consent::research_notice_sha256(),
         },
+        # #80: proposing as the email arrives (its own notice), and the
+        # research-at-arrival entitlement with the switch under it.
+        auto => {
+            available => ($c->app->ai->configured ? \1 : \0),
+            enabled   => ($as->{enabled} ? \1 : \0),
+            consented_to_current_notice => ($as->{current} ? \1 : \0),
+            consent_at => $s->{auto_propose_consent_at},
+            notice     => Homelab::Calendar::Consent::auto_notice_body(),
+            notice_sha256 => Homelab::Calendar::Consent::auto_notice_sha256(),
+            research_at_arrival_allowed => ($as->{research_allowed} ? \1 : \0),
+            research_at_arrival => ($as->{research_at_arrival} ? \1 : \0),
+        },
+        # #79: where reminders go (empty = the account's own address).
+        reminder_addresses => $m->reminder_addresses($me),
         settings_url => $c->app->public_base_url . '/settings',
     };
 }
@@ -390,6 +429,30 @@ sub _apply_account ($c, $me, $b) {
     }
     if (exists $b->{research_auto}) {
         $m->set_research_auto($me, $b->{research_auto} ? 1 : 0);
+    }
+    # #80: consent #3 (propose as the email arrives) ...
+    if (exists $b->{auto_propose}) {
+        if ($b->{auto_propose}) {
+            return 'To propose automatically, agree to its notice (reload the page and try again).'
+                unless Homelab::Calendar::Consent::auto_record($m->db, $me, $b->{auto_propose_consent_sha256});
+            _audit($c, action => 'calendar.auto_propose_consent', resource_type => 'calendar_account', resource_id => $me,
+                detail => { notice_sha256 => $b->{auto_propose_consent_sha256} });
+        }
+        else {
+            Homelab::Calendar::Consent::auto_withdraw($m->db, $me);
+            _audit($c, action => 'calendar.auto_propose_withdrawn', resource_type => 'calendar_account', resource_id => $me, detail => {});
+        }
+    }
+    # ... and the research-at-arrival switch, only for an entitled account.
+    if (exists $b->{research_at_arrival}) {
+        my $s = $m->account_settings($me);
+        return 'Research at arrival is not included in your account yet.' if $b->{research_at_arrival} && !$s->{research_at_arrival_allowed};
+        $m->set_research_at_arrival($me, $b->{research_at_arrival} ? 1 : 0);
+    }
+    # #79: the list of addresses reminders go to.
+    if (exists $b->{reminder_addresses}) {
+        my $ok = eval { $m->set_reminder_addresses($me, $b->{reminder_addresses}); 1 };
+        return ($@ =~ s/\s+\z//r || 'Those reminder addresses could not be saved.') unless $ok;
     }
     return undef;
 }
@@ -441,6 +504,9 @@ sub _mail_link_json ($c, $link, $me, $zone) {
         excerpt => substr($link->{text_excerpt} // '', 0, 2000), received_at => $link->{created_at},
         used_event_id => ($link->{event_id} ? $link->{event_id} + 0 : undef),
         guess => $guess, zone => $zone,
+        # #80: what the runner proposed (and found) when the email arrived, if anything.
+        proposal => (ref $link->{proposal} eq 'HASH' ? $link->{proposal} : undef), proposed_at => $link->{proposed_at},
+        facts => (ref $link->{facts} eq 'HASH' ? $link->{facts} : undef),
         ai => { available => ($c->app->ai->configured ? \1 : \0), enabled => ($consent->{enabled} ? \1 : \0),
                 notice => Homelab::Calendar::Consent::notice_body(), notice_sha256 => Homelab::Calendar::Consent::notice_sha256() },
         research => { available => ($c->app->ai->configured ? \1 : \0), enabled => ($rs->{enabled} ? \1 : \0), auto => ($rs->{auto} ? \1 : \0),
@@ -508,7 +574,80 @@ sub update_event ($c) {
         if $scope ne 'all' && $event->{rrule} && !$rid;
     my $row = _try($c, sub { $m->update_event($event, _event_input($c, $b, $zone), scope => $scope, recurrence_id => $rid) }) or return;
     $row->{permission} = $event->{permission};
+    # The reminder belongs to the event (or, after a split, to the new series).
+    if (exists $b->{reminder_minutes}) { _try($c, sub { $m->set_reminder($row->{id}, $b->{reminder_minutes}); 1 }) or return }
     return $c->render(json => _event_json($c, $row, $cal, $zone));
+}
+
+# --- suggestions (#80): proposals made as the email arrived --------------
+
+sub _suggestion_json ($c, $row, $zone) {
+    my $p = $row->{proposal} // {};
+    return {
+        token => $row->{token}, subject => $row->{subject}, from => $row->{from_addr}, received_at => $row->{created_at},
+        proposed_at => $row->{proposed_at}, zone => $zone,
+        proposal => { map { $_ => $p->{$_} } qw(title all_day start end location description confidence note) },
+        facts => (ref $row->{facts} eq 'HASH' ? scalar @{ $row->{facts}{facts} // [] } : 0),
+        open_url => $c->app->public_base_url . "/m/$row->{token}",
+    };
+}
+
+sub suggestions ($c) {
+    my $me = $c->require_login or return;
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    return $c->render(json => { suggestions => [ map { _suggestion_json($c, $_, $zone) } @{ $m->suggestions_for($me) } ] });
+}
+
+# POST /api/suggestions/:token/save -- the event, as proposed, in the default
+# calendar, with the default reminder; the editor is for anything else.
+sub save_suggestion ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $m = _model($c);
+    my $link = $m->mail_link_for($c->stash('token'), $me) or return _fail($c, 404, 'This suggestion is gone.');
+    return _fail($c, 404, 'This suggestion has no proposal.') unless ref $link->{proposal} eq 'HASH';
+    return _fail($c, 409, 'An event was already made from this email.') if $link->{event_id};
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my $cal = $m->ensure_default_calendar($me, $zone);
+    my $p = $link->{proposal};
+    # The proposal's wall clocks are in the zone it was made in (the account's
+    # at the time); the event carries its own zone, so that is what we pass.
+    my $pzone = (defined $p->{zone} && validate_zone($p->{zone})) ? $p->{zone} : $zone;
+    my $event = _try($c, sub { $m->create_event($cal, $me, {
+        title => (length($p->{title} // '') ? $p->{title} : ($link->{subject} // 'Event from email')),
+        all_day => ($p->{all_day} ? 1 : 0), start => $p->{start}, end => $p->{end}, timezone => $pzone,
+        location => $p->{location}, description => $p->{description},
+    }) }) or return;
+    $m->set_reminder($event->{id}, 10);
+    $m->mail_link_used($link->{id}, $event->{id});
+    $event->{permission} = 'owner';
+    return $c->render(json => _event_json($c, $event, $cal, $zone), status => 201);
+}
+
+sub dismiss_suggestion ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $m = _model($c);
+    my $link = $m->mail_link_for($c->stash('token'), $me) or return _fail($c, 404, 'This suggestion is gone.');
+    $m->dismiss_suggestion($link->{id});
+    return $c->render(json => { ok => \1 });
+}
+
+# PUT /internal/v1/calendar/admin/accounts/:email/entitlements -- what an
+# administrator grants an account (#80; #63's billing will call this too).
+# Through homelab-api's gateway as /api/v1/calendar/admin/accounts/...
+sub admin_entitlements ($c) {
+    my $me = $c->authenticated_site_admin or return;
+    my $email = lc($c->stash('email') // '');
+    return _fail($c, 400, 'That does not look like an email address.') unless $email =~ /\A[^\s@]+@[^\s@]+\.[^\s@]+\z/;
+    my $b = _body($c);
+    return _fail($c, 400, 'Send research_at_arrival_allowed (true or false).') unless exists $b->{research_at_arrival_allowed};
+    my $s = _model($c)->set_entitlements($email, research_at_arrival_allowed => ($b->{research_at_arrival_allowed} ? 1 : 0));
+    $c->stash('calendar.session_email' => $me); $c->stash('calendar.session_jti' => $c->stash('current_jti'));
+    _audit($c, action => 'calendar.entitlement_set', resource_type => 'calendar_account', resource_id => $email, affected_user => $email,
+        detail => { research_at_arrival_allowed => ($s->{research_at_arrival_allowed} ? \1 : \0) });
+    return $c->render(json => { email => $email, entitlements => { research_at_arrival_allowed => ($s->{research_at_arrival_allowed} ? \1 : \0) } });
 }
 
 sub delete_event ($c) {

@@ -36,6 +36,7 @@ YAML
 
 $ENV{HOMELAB_CALENDAR_HOME} = '.';
 $ENV{HOMELAB_WEBTHEME_HOME} = '../webtheme';
+$ENV{HOMELAB_CALENDAR_RUNNER} = '0';     # no background timer against the absent database
 
 my $SSO = <<'YAML';
 sso:
@@ -136,6 +137,13 @@ $t->get_ok('/')->status_is(302, 'the dead token is dropped and the page goes to 
 $t->post_ok('/api/shares/1/revoke' => { 'X-CSRF-Token' => 'f' x 40 } => json => {})->status_is(401, 'a wrong CSRF token with no sign-in: still 401 first');
 $t->post_ok('/logout')->status_is(302)->header_is(Location => 'https://login.example.test/logout', 'sign-out hands off to homelab-sso');
 $t->get_ok('/logout')->status_is(404, 'sign-out is POST only');
+
+# --- suggestions and the admin route (#79/#80): signed out, Bearer-less, wrong shapes ---
+$t->get_ok('/api/suggestions')->status_is(401, 'the Suggestions list needs a sign-in');
+$t->post_ok('/api/suggestions/' . ('a' x 64) . '/save')->status_is(401, '... so does saving one');
+$t->post_ok('/api/suggestions/short/save')->status_is(404, 'a token of the wrong shape is not even routed');
+$t->put_ok('/internal/v1/calendar/admin/accounts/someone@example.test/entitlements' => json => { research_at_arrival_allowed => 1 })
+  ->status_is(401, 'the entitlement route wants a Bearer token (an address with dots routes: relaxed placeholder)');
 
 # --- public links: the shape of the routes (the lookup itself needs the database) ---
 $t->get_ok('/c/not-a-token')->status_is(404, 'a token of the wrong shape is a 404 without touching anything');

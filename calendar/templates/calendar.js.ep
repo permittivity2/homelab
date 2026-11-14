@@ -122,6 +122,9 @@ var Cal = (function () {
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function showError(id, msg) { var el = $(id); el.textContent = msg || ''; el.classList.toggle('hide', !msg); }
 
+  // The shape of an email address, as the server tests it too (#79).
+  function validEmail(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim()) && String(s).trim().length <= 254; }
+
   // A place as typed -> a Google Maps search link (no API key, no lookup):
   // the cheap, certain half of "where is this".
   function mapsUrl(location) {
@@ -267,8 +270,10 @@ var Cal = (function () {
       modal: $('ev-modal'), form: $('ev-form'), title: $('ev-title'), cal: $('ev-calendar'), allday: $('ev-allday'),
       sd: $('ev-start-date'), st: $('ev-start-time'), ed: $('ev-end-date'), et: $('ev-end-time'),
       repeat: $('ev-repeat'), interval: $('ev-interval'), byday: $('ev-byday'), monthlyBy: $('ev-monthly-by'),
-      ends: $('ev-ends'), count: $('ev-count'), until: $('ev-until'), loc: $('ev-location'), desc: $('ev-desc'), colors: $('ev-colors')
+      ends: $('ev-ends'), count: $('ev-count'), until: $('ev-until'), loc: $('ev-location'), desc: $('ev-desc'), colors: $('ev-colors'),
+      reminder: $('ev-reminder'), shareWith: $('ev-share-with')
     };
+    var DEFAULT_REMINDER = '10';   // minutes before, on a new event (Gardner, 2026-11-14)
     ev.byday.innerHTML = WEEKDAYS.map(function (d, i) { return '<button type="button" class="chip" data-day="' + d + '" aria-pressed="false">' + DAY_SHORT[i] + '</button>'; }).join('');
     ev.byday.addEventListener('click', function (e) {
       var b = e.target.closest('[data-day]'); if (!b) return;
@@ -356,6 +361,10 @@ var Cal = (function () {
       ev.repeat.disabled = !!ro || !!(existing && data.rrule && !rep);   // a rule the editor cannot show stays as it is
       ev.loc.value = (occ && occ.location) || data.location || ''; ev.desc.value = (occ && occ.description) || data.description || '';
       colorDots(ev.colors, (occ && occ.color) || data.color || '', true);
+      // The reminder is the event's own (#79); a new event starts with the default.
+      ev.reminder.value = existing ? (data.reminder_minutes == null ? '' : String(data.reminder_minutes)) : DEFAULT_REMINDER;
+      if (ev.reminder.value !== (existing ? (data.reminder_minutes == null ? '' : String(data.reminder_minutes)) : DEFAULT_REMINDER)) ev.reminder.value = '';
+      $('ev-share-wrap').classList.toggle('hide', !!existing); ev.shareWith.value = '';
       updateRepeatUI(); syncMap();
       openModal('ev-modal');
       setTimeout(function () { ev.title.focus(); }, 50);
@@ -390,11 +399,21 @@ var Cal = (function () {
         title: ev.title.value, calendar_id: +ev.cal.value, all_day: ev.allday.checked,
         start: startWall(), end: endWall(), timezone: zone,
         location: ev.loc.value, description: ev.desc.value, color: ev.colors.dataset.color || null,
-        repeat: ev.repeat.disabled ? undefined : repeatForm()
+        repeat: ev.repeat.disabled ? undefined : repeatForm(),
+        reminder_minutes: ev.reminder.value === '' ? null : +ev.reminder.value
       };
       if (!body.start) { showError('ev-error', 'Give the event a start.'); return; }
       if (body.repeat === undefined) delete body.repeat;
       var editing = state.editing;
+      // The Share field (#79): the browser's own email check first
+      // (type="email"), then the same shape test the server applies.
+      if (!editing) {
+        var sw = ev.shareWith.value.trim();
+        if (sw) {
+          if (!ev.shareWith.checkValidity() || !validEmail(sw)) { showError('ev-error', 'The "Share with" address does not look like an email address.'); ev.shareWith.focus(); return; }
+          body.share_with = sw;
+        }
+      }
       var save = function (scope) {
         if (editing) {
           if (scope) { body.scope = scope; body.recurrence_id = editing.rid; }
@@ -624,9 +643,59 @@ var Cal = (function () {
       $('ev-research-line').classList.add('hide'); $('ev-facts').classList.add('hide'); researchHint = null;
       $('ev-mail-what').textContent = 'From the email "' + (mailLink.subject || '(no subject)') + '" sent by ' + (mailLink.from || 'unknown') + (g.source ? ' (date read from: ' + g.source + ')' : '');
       $('ev-ai-propose').classList.toggle('hide', !mailLink.ai.available);
+      $('ev-ai-propose').textContent = 'Propose with AI';
       $('ev-ai-note').textContent = mailLink.ai.available ? (mailLink.ai.enabled ? '' : 'Asks for your agreement the first time.') : '';
+      $('ev-proposed-note').classList.add('hide');
+      // Proposed as the email arrived (#80): the editor opens on the proposal,
+      // with any facts the research step found; the button offers a redo.
+      if (mailLink.proposal && !mailLink.used_event_id) {
+        var p = mailLink.proposal;
+        fillFromProposal(p);
+        $('ev-proposed-note').textContent = 'Proposed when the email arrived (' + (p.confidence || 'low') + ' confidence' + (p.note ? ': ' + p.note : '') + '). Check it, then Save.';
+        $('ev-proposed-note').classList.remove('hide');
+        $('ev-ai-propose').textContent = 'Propose again';
+        showResearchLine(p.research);
+        if (mailLink.facts) renderFacts(mailLink.facts);
+      }
       if (mailLink.used_event_id) $('ev-ai-note').textContent = 'An event was already made from this email.';
     }
+
+    // --- Suggestions (#80): the list, its count in the sidebar, Save / Open / Dismiss ---
+    function loadSuggestions() {
+      return api('GET', '/api/suggestions').then(function (r) {
+        var list = r.suggestions || [];
+        $('sugg-count').textContent = list.length;
+        $('sugg-wrap').classList.toggle('hide', !list.length);
+        return list;
+      }).catch(function () { return []; });
+    }
+    function renderSuggestions(list) {
+      $('sugg-none').classList.toggle('hide', list.length > 0);
+      $('sugg-list').innerHTML = list.map(function (s) {
+        var p = s.proposal || {};
+        var when = p.start ? (p.all_day ? fmtDate(p.start + 'T00:00:00') : fmtRange(p.start, p.end || addMinutes(p.start, 60), false, h24)) : 'no time found';
+        return '<li data-token="' + esc(s.token) + '"><span class="share-who">' + esc(p.title || s.subject || '(no title)')
+          + ' <span class="muted-small">' + esc(when) + (p.location ? ' at ' + esc(p.location) : '') + (p.confidence && p.confidence !== 'high' ? ' (' + esc(p.confidence) + ' confidence)' : '') + (s.facts ? ', ' + s.facts + ' fact' + (s.facts === 1 ? '' : 's') : '') + '</span>'
+          + '<br><span class="muted-small">from ' + esc(s.from || 'unknown') + ': "' + esc(s.subject || '') + '"</span></span>'
+          + '<button type="button" class="btn btn-sm btn-primary" data-sugg-save="' + esc(s.token) + '">Save</button>'
+          + '<a class="btn btn-sm" href="' + esc(s.open_url) + '">Open</a>'
+          + '<button type="button" class="btn btn-sm btn-danger" data-sugg-dismiss="' + esc(s.token) + '">Dismiss</button></li>';
+      }).join('');
+    }
+    $('btn-suggestions').addEventListener('click', function () {
+      showError('sugg-error', '');
+      loadSuggestions().then(function (list) { renderSuggestions(list); openModal('sugg-modal'); });
+    });
+    $('sugg-list').addEventListener('click', function (e) {
+      var s = e.target.closest('[data-sugg-save]'), d = e.target.closest('[data-sugg-dismiss]');
+      var tok = s ? s.getAttribute('data-sugg-save') : d ? d.getAttribute('data-sugg-dismiss') : null;
+      if (!tok) return;
+      var btn = s || d; btn.disabled = true;
+      api('POST', '/api/suggestions/' + tok + '/' + (s ? 'save' : 'dismiss'))
+        .then(function () { toast(s ? 'Event added.' : 'Dismissed.', 'ok'); if (s) fc.refetchEvents(); return loadSuggestions(); })
+        .then(renderSuggestions)
+        .catch(function (err) { btn.disabled = false; showError('sugg-error', err.message); });
+    });
     // The editor hides the "from email" panel again on every other open.
     var _openEditor = openEditor;
     openEditor = function (data, existing) { $('ev-mail').classList.add('hide'); return _openEditor(data, existing); };
@@ -638,6 +707,7 @@ var Cal = (function () {
     };
 
     loadCalendars().then(function () { if (mailLink) openFromMail(); }).catch(function (err) { toast(err.message, 'error'); });
+    loadSuggestions();
   }
 
   // ======================================================= a shared calendar
@@ -674,6 +744,7 @@ var Cal = (function () {
     wall: wall, wallDate: wallDate, parseWall: parseWall, addMinutes: addMinutes, addDays: addDays, minutesBetween: minutesBetween,
     splitWall: splitWall, joinWall: joinWall, weekdayOf: weekdayOf, fmtTime: fmtTime, fmtDate: fmtDate, fmtRange: fmtRange,
     repeatSummary: repeatSummary, ordinal: ordinal, viewName: viewName, initialViewFor: initialViewFor, mapsUrl: mapsUrl,
+    validEmail: validEmail,
     boot: boot, bootPublic: bootPublic
   };
 })();

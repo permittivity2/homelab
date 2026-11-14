@@ -39,13 +39,17 @@ SCRATCH="${TMPDIR:-/tmp}/calendar-orchestrate.$$"
 MAIL_NODES="10.20.2.183 10.20.2.184 10.20.2.185"     # prod-homelab39/40/41 (postfix + the block-link milter)
 MILTER_CONFIG=/etc/homelab/postfix-block-link/config.yml
 
-DRY=0; VERIFY_ONLY=0; MAIL_LINKS=0
+DRIVE_NODE=10.20.2.209                               # vm65: its mailer: block is the one the calendar copies
+DRIVE_CONFIG=/etc/homelab/drive/config.yml
+
+DRY=0; VERIFY_ONLY=0; MAIL_LINKS=0; MAILER=0
 for a in "$@"; do
     case "$a" in
         --dry-run) DRY=1 ;;
         --verify)  VERIFY_ONLY=1 ;;
         --mail-links) MAIL_LINKS=1 ;;
-        *) echo "unknown argument '$a' (usage: calendar-orchestrate.sh [--dry-run] [--verify] [--mail-links])"; exit 1 ;;
+        --mailer)  MAILER=1 ;;
+        *) echo "unknown argument '$a' (usage: calendar-orchestrate.sh [--dry-run] [--verify] [--mail-links] [--mailer])"; exit 1 ;;
     esac
 done
 
@@ -61,6 +65,7 @@ mkdir -p "$SCRATCH"; chmod 700 "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 on(){ ssh -n -o ConnectTimeout=15 -o BatchMode=yes "$1" "${@:2}"; }
+on_in(){ ssh -o ConnectTimeout=15 -o BatchMode=yes "$1" "${@:2}"; }     # stdin passed through (on() gives ssh -n: no stdin)
 off(){ ssh -n -o ConnectTimeout=15 -o BatchMode=yes offsite "$@"; }
 up(){ timeout 5 bash -c "echo > /dev/tcp/$1/22" 2>/dev/null; }
 svc(){ echo "10.50.2.${1##*.}"; }
@@ -111,6 +116,39 @@ if [ "$MAIL_LINKS" = 1 ]; then
     exit "$RC"
 fi
 
+# ------------------------------------------------------------ --mailer (#79)
+# Reminders and share notices need a submission account. Drive's mailer: block
+# (noreply@, the edge submission VIP, its password) is copied node to node
+# over ssh -- never printed, never on a command line -- into the calendar's
+# config on each pool node, validated, and the app restarted. Idempotent.
+if [ "$MAILER" = 1 ]; then
+    step "drive's mailer: block ($DRIVE_NODE) -> the calendar's config on $NODES"
+    up "$DRIVE_NODE" || die "$DRIVE_NODE (drive) is not up"
+    on "$DRIVE_NODE" "sudo awk '/^mailer:/{f=1; print; next} f&&/^[^ #]/{exit} f' $DRIVE_CONFIG" > "$SCRATCH/mailer.yml" 2>/dev/null
+    grep -q '^mailer:' "$SCRATCH/mailer.yml" && grep -q 'smtp_host:' "$SCRATCH/mailer.yml" && grep -q 'smtp_password:' "$SCRATCH/mailer.yml" \
+        || die "could not read a complete mailer: block from $DRIVE_NODE:$DRIVE_CONFIG"
+    HOST=$(sed -n 's/^ *smtp_host: *//p' "$SCRATCH/mailer.yml" | tr -d '"'); FROM=$(sed -n 's/^ *email: *//p' "$SCRATCH/mailer.yml" | tr -d '"')
+    note "from $FROM via $HOST (the password is not shown)"
+    for n in $NODES; do
+        up "$n" || { bad "$n down"; continue; }
+        if on "$n" "sudo grep -q '^mailer:' $CONFIG"; then ok "$n config already has a mailer: block (not touched)"
+        else
+            { printf '\n# Reminders and share notices (post-cutover #79); calendar-orchestrate.sh --mailer (copied from drive)\n'; cat "$SCRATCH/mailer.yml"; } \
+                | on_in "$n" "sudo cp -a $CONFIG $CONFIG.bak-\$(date +%Y%m%d-%H%M%S) && sudo tee -a $CONFIG >/dev/null && sudo perl -MYAML::XS -e 'my \$c = YAML::XS::LoadFile(q{$CONFIG}); exit((ref \$c->{mailer} eq q{HASH} && \$c->{mailer}{smtp_host}) ? 0 : 1)'" \
+                && ok "$n mailer: block written and parsed" || { bad "$n could not write the block (a .bak-* copy of the config is beside it)"; continue; }
+            on "$n" "sudo systemctl restart homelab-calendar" >/dev/null 2>&1; sleep 3
+        fi
+        h=$(on "$n" "curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:$PORT/health" 2>/dev/null)
+        [ "$h" = 200 ] && ok "$n /health -> 200" || bad "$n /health -> '${h:-no answer}' -- look: ssh $n 'sudo journalctl -u homelab-calendar -n 30 --no-pager'"
+        # Since THIS start of the unit: an earlier start (the upgrade's) warned before the block existed.
+        on "$n" "sudo journalctl -u homelab-calendar --since \"\$(systemctl show homelab-calendar -p ActiveEnterTimestamp --value)\" --no-pager 2>/dev/null | grep -q 'no mailer: configured'" \
+            && bad "$n still warns about a missing mailer" || ok "$n no 'no mailer' warning since the unit's last start"
+    done
+    step "result"
+    [ "$RC" = 0 ] && echo "  ${G}reminders can be sent from all three nodes.${O}" || echo "  ${R}not clean -- see FAIL lines above.${O}"
+    exit "$RC"
+fi
+
 # ----------------------------------------------------------------- verify only
 if [ "$VERIFY_ONLY" = 1 ]; then
     PRIMARY=$(find_primary) || die "could not find the Patroni leader among $DB_NODES"
@@ -149,11 +187,22 @@ if [ "$VERIFY_ONLY" = 1 ]; then
 
     step "schema and grants"
     TBL=$(psql_primary "SELECT count(*) FROM information_schema.tables WHERE table_schema='calendar'")
-    [ "${TBL:-0}" -ge 7 ] && ok "$TBL tables in the calendar schema" || bad "only ${TBL:-0} tables in the calendar schema (expected 7 incl. schema_migrations)"
+    [ "${TBL:-0}" -ge 11 ] && ok "$TBL tables in the calendar schema" || bad "only ${TBL:-0} tables in the calendar schema (expected 11 incl. schema_migrations; 0.1.8 added reminders, reminder_addresses, reminder_queue)"
     psql_primary "SELECT has_table_privilege('homelab_calendar_runtime','audit.queue','INSERT')" | grep -q t \
         && ok "runtime role may write audit.queue" || bad "runtime role cannot write audit.queue (shares and deletions log a warning instead of an audit line)"
+    psql_primary "SELECT has_table_privilege('homelab_calendar_runtime','calendar.reminder_queue','UPDATE')" | grep -q t \
+        && ok "runtime role may claim reminder_queue rows" || bad "runtime role cannot update calendar.reminder_queue (default privileges missing?)"
     psql_primary "SELECT count(*) FROM calendar.calendars WHERE deleted_at IS NULL" | sed 's/^/      calendars: /'
     psql_primary "SELECT count(*) FROM calendar.events WHERE deleted_at IS NULL" | sed 's/^/      events: /'
+    psql_primary "SELECT count(*) FROM calendar.reminders" | sed 's/^/      events with a reminder: /'
+    psql_primary "SELECT state || ': ' || count(*) FROM calendar.reminder_queue GROUP BY state ORDER BY state" | sed 's/^/      reminder queue  /'
+    psql_primary "SELECT coalesce(job_state, 'untouched') || ': ' || count(*) FROM calendar.mail_links WHERE expires_at > now() GROUP BY job_state ORDER BY 1" | sed 's/^/      mail links  /'
+
+    step "the runner (#79/#80)"
+    for n in $NODES; do
+        if on "$n" "sudo grep -q '^mailer:' $CONFIG"; then ok "$n has a mailer: block (reminders can be sent)"; else bad "$n has no mailer: block -- run: calendar-orchestrate.sh --mailer"; fi
+        on "$n" "sudo journalctl -u homelab-calendar --since '-1 hour' --no-pager 2>/dev/null | grep -c 'calendar runner:.*failed'" 2>/dev/null | { read -r c; [ "${c:-0}" = 0 ] && ok "$n no runner failures in the last hour" || bad "$n $c runner failure line(s) in the last hour: ssh $n 'sudo journalctl -u homelab-calendar --since -1h --no-pager | grep runner'"; }
+    done
 
     step "from the internet (offsite)"
     H=$(off "curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://$NAME/ 2>/dev/null" 2>/dev/null)

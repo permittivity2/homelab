@@ -1,6 +1,7 @@
 package Homelab::Calendar::AI;
 use Mojo::Base -base, -signatures;
 use Mojo::UserAgent;
+use Mojo::Promise;
 use Mojo::JSON qw(decode_json);
 use JSON::PP ();
 use Digest::SHA qw(sha256_hex);
@@ -8,8 +9,15 @@ use Homelab::Calendar::Recurrence qw(parse_wall validate_zone);
 
 # The AI proposal: one email's text in, one event's fields out, through the
 # fleet's internal AI service (homelab-ai, #76) -- never Anthropic directly,
-# so this app holds no key. Called only after the person consented (Consent.pm)
-# and pressed the button; the service records the call under that consent.
+# so this app holds no key. Called only after the person consented
+# (Consent.pm) and pressed the button (or, with the #80 consent, by the
+# runner as the email arrives); the service records the call under that
+# consent.
+#
+# Every call has a blocking form (propose, research: the request handlers)
+# and a promise form (propose_p, research_p: the runner, which must not stop
+# the event loop that serves pages while it waits). Both share the request
+# builder and the response parser, so there is one prompt and one shape.
 
 has service_url   => '';
 has service_token => '';
@@ -21,7 +29,7 @@ has research_model      => 'claude-sonnet-5-5';
 has research_max_tokens => 2048;
 has research_max_uses   => 5;
 has consent_name  => 'calendar';
-has ua            => sub { Mojo::UserAgent->new->connect_timeout(5)->inactivity_timeout(60)->request_timeout(60) };
+has ua            => sub { Mojo::UserAgent->new->connect_timeout(5)->inactivity_timeout(90)->request_timeout(90) };
 has log           => undef;
 
 sub configured ($self) { return (length $self->service_url && length $self->service_token) ? 1 : 0 }
@@ -44,58 +52,70 @@ You help fill in one calendar event made from one email. Use the web_search tool
 Rules: only facts you actually found on a page; never guess an address or an opponent; when the searches find nothing relevant, answer with an empty facts array and say so in the summary; prefer the official page of a venue, team or organisation as the source; keep the reference date in mind when choosing which schedule entry matters.
 PROMPT
 
-# propose(%args) -> { ok => 1, proposal => {...}, raw => $text } or { ok => 0, error => '...' }
-#   subject, from, date_header, text, zone, now (DateTime), account_key (opaque, optional)
-sub propose ($self, %a) {
-    return { ok => 0, error => 'AI proposals are not configured on this calendar' } unless $self->configured;
+sub _url ($self) { return $self->service_url =~ s{/\z}{}r . '/internal/v1/ai/messages' }
+
+sub _headers ($self, $consent_tag, $account_key) {
+    my %h = (
+        Authorization => 'Bearer ' . $self->service_token,
+        'Content-Type' => 'application/json',
+        'X-Homelab-Consent' => $consent_tag,
+    );
+    $h{'X-Homelab-Account'} = sha256_hex($account_key) if defined $account_key && length $account_key;
+    return \%h;
+}
+
+sub _ref ($zone, $now) { return $now ? $now->clone->set_time_zone($zone)->strftime('%A %Y-%m-%d %H:%M') : '' }
+
+# --- propose ----------------------------------------------------------------
+
+sub _propose_request ($self, %a) {
     my $zone = validate_zone($a{zone} // '') ? $a{zone} : 'America/Chicago';
-    my $now  = $a{now};
-    my $ref  = $now ? $now->clone->set_time_zone($zone)->strftime('%A %Y-%m-%d %H:%M') : '';
     my $text = substr($a{text} // '', 0, 12000);
-    my $user = "Time zone: $zone\nReference date and time: $ref\n\nFrom: " . ($a{from} // '') . "\nDate: " . ($a{date_header} // '')
+    my $user = "Time zone: $zone\nReference date and time: " . _ref($zone, $a{now}) . "\n\nFrom: " . ($a{from} // '') . "\nDate: " . ($a{date_header} // '')
              . "\nSubject: " . ($a{subject} // '') . "\n\n" . $text;
     my $payload = $CANON->encode({
         model => $self->model, max_tokens => $self->max_tokens,
         system => [ { type => 'text', text => $SYSTEM, cache_control => { type => 'ephemeral' } } ],
         messages => [ { role => 'user', content => $user } ],
     });
-    my %h = (
-        Authorization => 'Bearer ' . $self->service_token,
-        'Content-Type' => 'application/json',
-        'X-Homelab-Consent' => $self->consent_name . ':' . substr($a{consent_sha} // '', 0, 16),
-    );
-    $h{'X-Homelab-Account'} = sha256_hex($a{account_key}) if defined $a{account_key} && length $a{account_key};
-    my $tx = eval { $self->ua->post($self->service_url =~ s{/\z}{}r . '/internal/v1/ai/messages', \%h, $payload) };
-    return { ok => 0, error => 'the AI service could not be reached' } unless $tx;
-    my $err = $tx->error;
-    return { ok => 0, error => 'the AI service could not be reached: ' . ($err->{message} // 'connection error') } if $err && !$err->{code};
-    my $res = $tx->res;
+    my $tag = $self->consent_name . ':' . ($a{consent_kind} ? "$a{consent_kind}:" : '') . substr($a{consent_sha} // '', 0, 16);
+    return ($self->_url, $self->_headers($tag, $a{account_key}), $payload, $zone);
+}
+
+sub _parse_propose ($self, $res, $zone) {
+    my $err = $self->_service_error($res);
+    return $err if $err;
     my $body = eval { $res->json } // {};
-    if ($res->code != 200) {
-        # Anthropic's errors are objects; the service's own are plain strings.
-        my $e = ref $body eq 'HASH' ? $body->{error} : undef;
-        my $msg = ref $e eq 'HASH' ? ($e->{message} // $e->{type} // '') : (defined $e && !ref $e ? $e : '');
-        $self->log->warn("calendar ai: service answered " . $res->code . " $msg") if $self->log;
-        return { ok => 0, error => $res->code == 429 ? 'the AI budget for today is used up' : 'the AI service answered with an error' };
-    }
     my $text_out = join '', map { $_->{text} // '' } grep { ref $_ eq 'HASH' && ($_->{type} // '') eq 'text' } @{ $body->{content} // [] };
     my ($json) = $text_out =~ /(\{.*\})/s;
     my $p = $json ? eval { decode_json($json) } : undef;
     return { ok => 0, error => 'the AI answer was not usable', raw => substr($text_out, 0, 500) } unless ref $p eq 'HASH';
-    return { ok => 1, proposal => _sanitise($p, $zone), raw => substr($text_out, 0, 2000),
-             usage => $body->{usage}, model => $body->{model} };
+    return { ok => 1, proposal => _sanitise($p, $zone), raw => substr($text_out, 0, 2000), usage => $body->{usage}, model => $body->{model} };
 }
 
-# research(%args) -> { ok => 1, summary, facts => [...], searches => N } or { ok => 0, error }
-#   subject, from, text, about, query, zone, now (DateTime), consent_sha, account_key
-# One request with Anthropic's web-search server tool; the service counts
-# and caps the searches (#78). Facts come back sanitised for the editor.
-sub research ($self, %a) {
-    return { ok => 0, error => 'Research is not configured on this calendar' } unless $self->configured;
+# propose(%args) -> { ok => 1, proposal => {...} } or { ok => 0, error => '...' }
+#   subject, from, date_header, text, zone, now (DateTime), consent_sha, account_key (opaque, optional)
+sub propose ($self, %a) {
+    return { ok => 0, error => 'AI proposals are not configured on this calendar' } unless $self->configured;
+    my ($url, $h, $payload, $zone) = $self->_propose_request(%a);
+    my $tx = eval { $self->ua->post($url, $h, $payload) };
+    return $self->_transport_error($tx) // $self->_parse_propose($tx->res, $zone);
+}
+
+# The same, without blocking the event loop (the runner).
+sub propose_p ($self, %a) {
+    return Mojo::Promise->resolve({ ok => 0, error => 'AI proposals are not configured on this calendar' }) unless $self->configured;
+    my ($url, $h, $payload, $zone) = $self->_propose_request(%a);
+    return $self->ua->post_p($url, $h, $payload)->then(sub ($tx) { $self->_transport_error($tx) // $self->_parse_propose($tx->res, $zone) })
+        ->catch(sub ($e) { { ok => 0, error => 'the AI service could not be reached: ' . ($e // '') } });
+}
+
+# --- research ("Find out more", #78) ----------------------------------------
+
+sub _research_request ($self, %a) {
     my $zone = validate_zone($a{zone} // '') ? $a{zone} : 'America/Chicago';
-    my $ref  = $a{now} ? $a{now}->clone->set_time_zone($zone)->strftime('%A %Y-%m-%d %H:%M') : '';
     my $text = substr($a{text} // '', 0, 6000);
-    my $user = "Time zone: $zone\nReference date and time: $ref\nLook into: " . ($a{about} // '') . "\nSuggested search: " . ($a{query} // '')
+    my $user = "Time zone: $zone\nReference date and time: " . _ref($zone, $a{now}) . "\nLook into: " . ($a{about} // '') . "\nSuggested search: " . ($a{query} // '')
              . "\n\nFrom: " . ($a{from} // '') . "\nSubject: " . ($a{subject} // '') . "\n\n" . $text;
     my $payload = $CANON->encode({
         model => $self->research_model, max_tokens => $self->research_max_tokens,
@@ -103,25 +123,14 @@ sub research ($self, %a) {
         tools => [ { type => 'web_search_20250305', name => 'web_search', max_uses => $self->research_max_uses } ],
         messages => [ { role => 'user', content => $user } ],
     });
-    my %h = (
-        Authorization => 'Bearer ' . $self->service_token,
-        'Content-Type' => 'application/json',
-        'X-Homelab-Consent' => $self->consent_name . ':research:' . substr($a{consent_sha} // '', 0, 16),
-    );
-    $h{'X-Homelab-Account'} = sha256_hex($a{account_key}) if defined $a{account_key} && length $a{account_key};
-    my $tx = eval { $self->ua->post($self->service_url =~ s{/\z}{}r . '/internal/v1/ai/messages', \%h, $payload) };
-    return { ok => 0, error => 'the AI service could not be reached' } unless $tx;
-    my $err = $tx->error;
-    return { ok => 0, error => 'the AI service could not be reached: ' . ($err->{message} // 'connection error') } if $err && !$err->{code};
-    my $res = $tx->res;
+    my $tag = $self->consent_name . ':research:' . substr($a{consent_sha} // '', 0, 16);
+    return ($self->_url, $self->_headers($tag, $a{account_key}), $payload);
+}
+
+sub _parse_research ($self, $res) {
+    my $err = $self->_service_error($res, 1);
+    return $err if $err;
     my $body = eval { $res->json } // {};
-    if ($res->code != 200) {
-        my $e = ref $body eq 'HASH' ? $body->{error} : undef;
-        my $msg = ref $e eq 'HASH' ? ($e->{message} // $e->{type} // '') : (defined $e && !ref $e ? $e : '');
-        $self->log->warn("calendar research: service answered " . $res->code . " $msg") if $self->log;
-        return { ok => 0, error => $res->code == 429 ? ($msg =~ /search/ ? 'the web-search budget for today is used up' : 'the AI budget for today is used up')
-                                                      : 'the AI service answered with an error' };
-    }
     # With the search tool the answer is several blocks (searches, results,
     # text with citations); the JSON is in the text, fenced at the end.
     my $text_out = join "\n", map { $_->{text} // '' } grep { ref $_ eq 'HASH' && ($_->{type} // '') eq 'text' } @{ $body->{content} // [] };
@@ -132,6 +141,43 @@ sub research ($self, %a) {
     my $searches = (ref $body->{usage} eq 'HASH' && ref $body->{usage}{server_tool_use} eq 'HASH') ? ($body->{usage}{server_tool_use}{web_search_requests} // 0) : 0;
     return { ok => 1, summary => _str($p->{summary}, 300) // '', facts => _facts($p->{facts}), searches => $searches + 0,
              model => $body->{model}, usage => $body->{usage} };
+}
+
+# research(%args) -> { ok => 1, summary, facts => [...], searches => N } or { ok => 0, error }
+#   subject, from, text, about, query, zone, now (DateTime), consent_sha, account_key
+sub research ($self, %a) {
+    return { ok => 0, error => 'Research is not configured on this calendar' } unless $self->configured;
+    my ($url, $h, $payload) = $self->_research_request(%a);
+    my $tx = eval { $self->ua->post($url, $h, $payload) };
+    return $self->_transport_error($tx) // $self->_parse_research($tx->res);
+}
+
+sub research_p ($self, %a) {
+    return Mojo::Promise->resolve({ ok => 0, error => 'Research is not configured on this calendar' }) unless $self->configured;
+    my ($url, $h, $payload) = $self->_research_request(%a);
+    return $self->ua->post_p($url, $h, $payload)->then(sub ($tx) { $self->_transport_error($tx) // $self->_parse_research($tx->res) })
+        ->catch(sub ($e) { { ok => 0, error => 'the AI service could not be reached: ' . ($e // '') } });
+}
+
+# --- shared ----------------------------------------------------------------
+
+sub _transport_error ($self, $tx) {
+    return { ok => 0, error => 'the AI service could not be reached' } unless $tx;
+    my $err = $tx->error;
+    return { ok => 0, error => 'the AI service could not be reached: ' . ($err->{message} // 'connection error') } if $err && !$err->{code};
+    return undef;
+}
+
+sub _service_error ($self, $res, $research = 0) {
+    return undef if $res->code == 200;
+    my $body = eval { $res->json } // {};
+    # Anthropic's errors are objects; the service's own are plain strings.
+    my $e = ref $body eq 'HASH' ? $body->{error} : undef;
+    my $msg = ref $e eq 'HASH' ? ($e->{message} // $e->{type} // '') : (defined $e && !ref $e ? $e : '');
+    $self->log->warn('calendar ' . ($research ? 'research' : 'ai') . ': service answered ' . $res->code . " $msg") if $self->log;
+    return { ok => 0, error => $res->code == 429
+        ? ($msg =~ /search/ ? 'the web-search budget for today is used up' : 'the AI budget for today is used up')
+        : 'the AI service answered with an error' };
 }
 
 sub _str ($v, $max) { return (defined $v && !ref $v && length $v) ? substr($v =~ s/\s+/ /gr =~ s/^\s+|\s+$//gr, 0, $max) : undef }

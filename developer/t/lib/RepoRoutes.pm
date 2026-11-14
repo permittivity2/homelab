@@ -117,6 +117,9 @@ sub _public_path ($backend, $method, $service, $gateways) {
         my ($strip, $bp) = ($g->{strip_prefix} // '', $g->{backend_prefix} // '');
         next unless index($backend, $bp) == 0;
         my $public = $strip . substr($backend, length $bp);
+        # A relaxed placeholder (#name, for a value with dots such as an
+        # address) is the same placeholder to a reader: spell it :name.
+        $public =~ s{/#(\w+)}{/:$1}g;
         my $ok = $g->{open}
             ? ($public eq $g->{prefix} || index($public, "$g->{prefix}/") == 0)
             : $public eq $g->{prefix};

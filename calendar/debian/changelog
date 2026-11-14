@@ -1,3 +1,23 @@
+homelab-calendar (0.1.8) unstable; urgency=medium
+
+  * Reminders (post-cutover #79): one email reminder per event, minutes
+    before each occurrence (new events start at 10), to the owner and to
+    everyone the calendar or event is shared with; each account may list
+    where its reminders go (Settings; default its own address). A "Share
+    with" field on new events takes one address (browser email check plus
+    the server's). Migration 004: reminders, reminder_addresses and a
+    reminder_queue drained by a runner in every hypnotoad worker through
+    mailer: (calendar-orchestrate.sh --mailer copies drive's block).
+  * Proposals at arrival (#80): with a third consent, email that looks like
+    it carries an event is proposed by the AI service within a minute of
+    arriving, without blocking; the proposal (and, for an entitled account
+    with the switch on, the research facts) waits on the link's row, in a
+    Suggestions list (Save / Open / Dismiss) and behind the email's link.
+    Entitlements: PUT /internal/v1/calendar/admin/accounts/:email/entitlements
+    (site_admin, through the api gateway).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 15 Nov 2026 00:30:00 -0600
+
 homelab-calendar (0.1.7) unstable; urgency=medium
 
   * "Find out more" (post-cutover #78): the AI proposal now says whether a

@@ -48,9 +48,36 @@ Signed in (session cookie; writes carry `X-CSRF-Token`): `/`, `/login`,
 `/api/events?start&end&timeZone`, `POST /api/events`, `/api/events/:id` (GET with
 `recurrence_id`, PATCH with `scope` = all | this | following), `/api/events/:id/delete`
 (POST, same scope), `/api/events/:id/shares` (GET, POST), `/api/shares/:id/revoke`
-(POST), `/api/prefs` (GET, PUT). Public: `/c/:token[.ics]`, `/c/:token/events`,
-`/e/:token[.ics]`, `/health`. Nothing is gateway-fronted yet (phase 3 adds
-`/api/v1/calendar/account` for myaccount's consent switch).
+(POST), `/api/prefs` (GET, PUT); `/api/account` (GET, PUT: the switches and
+consents, the reminder addresses); `/api/mail-links/:token` (GET, `/propose`,
+`/research`); `/api/suggestions` (GET, `/:token/save`, `/:token/dismiss`).
+Public: `/c/:token[.ics]`, `/c/:token/events`, `/e/:token[.ics]`, `/health`.
+Gateway-fronted through homelab-api (`/api/v1/calendar/*` -> `/internal/v1/calendar/*`,
+Bearer): `account` (GET, PUT) for myaccount, and
+`admin/accounts/:email/entitlements` (PUT, site_admin) for what an account is
+allowed (#80; #63's billing later).
+
+Events carry `reminder_minutes` (one reminder per event, by email, `null` for
+none; new events get 10 in the editor) and, on creation, an optional
+`share_with` address (#79).
+
+## The background runner (#79, #80)
+
+`Homelab::Calendar::Runner` runs from a 30 s timer in every hypnotoad worker;
+the six processes on the pool share one queue in Postgres and claim rows with
+`FOR UPDATE SKIP LOCKED` (homelab-worker's pattern), so nothing is sent or
+proposed twice. Each tick: queue the next 48 h of occurrences of events with a
+reminder (`calendar.reminder_queue`, one row per reminder, occurrence and
+account: the owner and everyone the calendar or event is shared with), send
+the due ones through `mailer:` (the submission VIP, like drive's; a few per
+tick), then pick up links whose email arrived for an account with the
+"propose automatically" consent, run the plain-parse gate
+(`Runner::looks_like_event`), and call homelab-ai without blocking (promises;
+at most `runner.ai_in_flight` calls per process). Results land on the
+`mail_links` row (`proposal`, `facts`); the Suggestions list and the `/m/:token`
+page read them. `runner.enabled: 0` (or `HOMELAB_CALENDAR_RUNNER=0`, the tests)
+keeps it off. Without `mailer:` reminders queue and wait. Reminders for an
+all-day event are relative to 9 AM of its first day.
 
 ## Install
 

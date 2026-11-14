@@ -85,13 +85,51 @@
       </div>
     </section>
 
+    <section class="panel">
+      <div class="panel__head"><h2 class="panel__title">Propose automatically</h2></div>
+      <div class="panel__body stack">
+        % if (!$ai_available) {
+        <p class="text-muted">Not available on this calendar.</p>
+        % } else {
+        <p class="text-muted">Instead of waiting for "Propose with AI" when you open a link, have the proposal ready as the email arrives: it waits in the calendar's Suggestions and behind the email's link. Needs the email links above to be on.</p>
+        <label class="check"><input type="checkbox" id="s-auto"<%= $auto->{enabled} ? ' checked' : '' %><%= $account->{mail_links_enabled} ? '' : ' disabled' %>> <span>Propose an event from each email that looks like it has one, as it arrives</span></label>
+        % if (!$account->{mail_links_enabled}) {
+        <p class="form-hint">Turn on "Calendar links in your email" first.</p>
+        % }
+        % if ($auto->{sha} && !$auto->{current}) {
+        <p class="banner banner--warn"><span>The notice below has changed since you agreed to it. Read it and turn the switch on again to continue.</span></p>
+        % }
+        <pre class="panel" style="white-space: pre-wrap; padding: var(--space-4); font-family: var(--font-primary); font-size: var(--app-sm); color: var(--text-secondary)"><%= $auto_notice %></pre>
+        % if ($account->{auto_propose_consent_at} && $auto->{current}) {
+        <p class="muted-small">You agreed to this notice on <%= substr($account->{auto_propose_consent_at}, 0, 16) %>.</p>
+        % }
+        <h3 class="panel__title" style="font-size: var(--app-md)">Research at arrival</h3>
+        % if ($auto->{research_allowed}) {
+        <p class="text-muted">Your account includes this: the "Find out more" web search runs on the same emails, so the facts are waiting too. Needs "Find out more" to be on above.</p>
+        <label class="check"><input type="checkbox" id="s-research-arrival"<%= $auto->{research_at_arrival} ? ' checked' : '' %><%= ($auto->{enabled} && $research->{enabled}) ? '' : ' disabled' %>> <span>Also run "Find out more" as the email arrives</span></label>
+        % } else {
+        <p class="text-muted">Running "Find out more" on arriving email as well is part of a paid option that is still being put together. Your own clicks on "Find out more" are not affected.</p>
+        % }
+        % }
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head"><h2 class="panel__title">Reminders</h2></div>
+      <div class="panel__body stack">
+        <p class="text-muted">Reminders are sent by email, minutes before an event (set on each event; new events start at 10 minutes). They go to your account address unless you list other addresses here, one per line (up to 5). Events shared with you remind you too.</p>
+        <textarea class="form-textarea" id="s-reminder-addresses" rows="3" placeholder="<%= $me %>"><%= join "\n", @$reminder_addresses %></textarea>
+        <div class="form-actions"><button type="button" class="btn btn-primary" id="s-save-reminders">Save</button></div>
+      </div>
+    </section>
+
     <p class="form-error hide" id="s-error"></p>
     <div class="form-actions"><a class="btn" href="/">Back to the calendar</a></div>
   </div>
 </main>
 <script>
 (function () {
-  var csrf = '<%= $csrf %>', noticeSha = '<%= $notice_sha %>', researchSha = '<%= $research_notice_sha %>';
+  var csrf = '<%= $csrf %>', noticeSha = '<%= $notice_sha %>', researchSha = '<%= $research_notice_sha %>', autoSha = '<%= $auto_notice_sha %>';
   function $(id) { return document.getElementById(id); }
   function say(msg, kind) { if (window.HomelabShell) window.HomelabShell.toast(msg, kind); var e = $('s-error'); e.textContent = kind === 'error' ? msg : ''; e.classList.toggle('hide', kind !== 'error'); }
   function put(url, body) {
@@ -125,6 +163,26 @@
     put('/api/account', box.checked ? { ai_enabled: true, ai_consent_sha256: noticeSha } : { ai_enabled: false })
       .then(function () { say(box.checked ? 'AI proposals are on.' : 'AI proposals are off.', 'ok'); if (box.checked) setTimeout(function () { location.reload(); }, 600); })
       .catch(function (e) { box.checked = !box.checked; say(e.message, 'error'); });
+  });
+  // #80: consent #3 and the research-at-arrival switch under it.
+  var au = $('s-auto'), rr = $('s-research-arrival');
+  if (au) au.addEventListener('change', function () {
+    var box = this;
+    put('/api/account', box.checked ? { auto_propose: true, auto_propose_consent_sha256: autoSha } : { auto_propose: false })
+      .then(function () { say(box.checked ? 'Proposals will be ready as email arrives.' : 'Automatic proposals are off.', 'ok'); setTimeout(function () { location.reload(); }, 600); })
+      .catch(function (e) { box.checked = !box.checked; say(e.message, 'error'); });
+  });
+  if (rr) rr.addEventListener('change', function () {
+    var box = this;
+    put('/api/account', { research_at_arrival: box.checked }).then(function () { say(box.checked ? 'Research runs as email arrives.' : 'Research only when you ask.', 'ok'); })
+      .catch(function (e) { box.checked = !box.checked; say(e.message, 'error'); });
+  });
+  // #79: where reminders go.
+  $('s-save-reminders').addEventListener('click', function () {
+    var list = $('s-reminder-addresses').value.split(/[\n,;]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+    put('/api/account', { reminder_addresses: list })
+      .then(function (a) { $('s-reminder-addresses').value = (a.reminder_addresses || []).join('\n'); say(list.length ? 'Reminders go to ' + list.length + ' address' + (list.length === 1 ? '' : 'es') + '.' : 'Reminders go to your account address.', 'ok'); })
+      .catch(function (e) { say(e.message, 'error'); });
   });
 })();
 </script>

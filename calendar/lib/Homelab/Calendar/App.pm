@@ -10,6 +10,7 @@ use Homelab::Common::Registry qw(register_recurring);
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::Calendar::Model;
 use Homelab::Calendar::AI;
+use Homelab::Calendar::Runner;
 use Homelab::Calendar::Recurrence qw(validate_zone);
 
 has 'pg';
@@ -93,6 +94,20 @@ sub startup ($self) {
 
     mount_health_route($self, check => sub { $self->pg->db->query('SELECT 1'); 1 });
 
+    # The background runner (#79 reminders, #80 proposals at arrival): a timer
+    # in every hypnotoad worker, sharing one queue in Postgres (Runner.pm).
+    # runner.enabled: 0 in the config, or HOMELAB_CALENDAR_RUNNER=0 (the tests),
+    # keeps it off. No mailer = reminders queue up and wait for one.
+    my $run = $config->{runner} // {};
+    unless (($ENV{HOMELAB_CALENDAR_RUNNER} // '') eq '0' || (defined $run->{enabled} && !$run->{enabled})) {
+        $self->log->warn('calendar: no mailer: configured -- reminders will queue but cannot be sent') unless $self->mailer;
+        Homelab::Calendar::Runner->new(
+            model => $self->model, ai => $self->ai, mailer => $self->mailer, log => $self->log,
+            public_base_url => $self->public_base_url, default_zone => $self->default_zone,
+            interval => ($run->{interval} // 30), propose_max => ($run->{ai_in_flight} // 2),
+        )->start;
+    }
+
     my $me = $config->{registry} // {};
     if ($me->{host} && $me->{port}) {
         register_recurring(
@@ -135,6 +150,16 @@ sub startup ($self) {
         $c->stash(current_jti => $result->{jti});
         $c->stash(current_roles => $result->{roles} // []);
         return lc $result->{email};
+    });
+
+    # The same, for what only a site administrator may do (#80's entitlements).
+    $self->helper(authenticated_site_admin => sub ($c) {
+        my $email = $c->authenticated_email_any or return undef;
+        unless (grep { $_ eq 'site_admin' } @{ $c->stash('current_roles') // [] }) {
+            $c->render(json => { error => 'Only a site administrator can do this.' }, status => 403);
+            return undef;
+        }
+        return $email;
     });
 
     # Pages: send a visitor to sign in; JSON routes: 401. Both return the
@@ -194,6 +219,13 @@ sub startup ($self) {
     $r->post('/api/mail-links/:token/research' => $tok)->to('api#research');     # "Find out more" (#78)
     $r->get('/internal/v1/calendar/account')  ->to('api#internal_account_show');
     $r->put('/internal/v1/calendar/account')  ->to('api#internal_account_set');
+    # #80: the Suggestions list (proposals made as the email arrived), and the
+    # entitlement an administrator grants (a relaxed placeholder: the address
+    # has dots).
+    $r->get('/api/suggestions')                          ->to('api#suggestions');
+    $r->post('/api/suggestions/:token/save' => $tok)     ->to('api#save_suggestion');
+    $r->post('/api/suggestions/:token/dismiss' => $tok)  ->to('api#dismiss_suggestion');
+    $r->put('/internal/v1/calendar/admin/accounts/#email/entitlements')->to('api#admin_entitlements');
 
     # JSON, same-origin, signed in.
     $r->get('/api/calendars')                 ->to('api#calendars');

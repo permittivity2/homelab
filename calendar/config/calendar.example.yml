@@ -47,14 +47,23 @@ calendar:
 # session:
 #   secret: "THE SAME LONG RANDOM VALUE ON EVERY POOL NODE"
 
-# Optional: a note to the person a calendar or event is shared with. Same
-# shape as drive's. Must be a STARTTLS+AUTH submission endpoint (the edge's
-# submission VIP), never a postfix backend or loopback.
+# Share notifications and REMINDERS (#79) go out through this. Same shape as
+# drive's; calendar-orchestrate.sh --mailer copies drive's block here. Must be
+# a STARTTLS+AUTH submission endpoint (the edge's submission VIP), never a
+# postfix backend or loopback. Without it reminders queue up and wait.
 # mailer:
 #   email: calendar@test.mailmasker.org
 #   smtp_host: smtp.test.mailmasker.org
 #   smtp_port: 587
 #   smtp_password: YOUR_SMTP_PASSWORD_HERE
+
+# The background runner (#79 reminders, #80 proposals as email arrives): a
+# timer in every hypnotoad worker sharing one queue in Postgres (README.md).
+# All optional; shown with the defaults.
+# runner:
+#   enabled: 1
+#   interval: 30          # seconds between ticks, per process
+#   ai_in_flight: 2       # AI calls in flight per process
 
 # The fleet's AI service (homelab-ai, post-cutover #76), for "Propose with AI"
 # on events made from an email (#74 phase 4). Written by

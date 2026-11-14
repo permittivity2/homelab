@@ -359,6 +359,9 @@ sub update_event ($self, $event, $input, %o) {
     # Moving or re-ruling a series makes its per-occurrence edits meaningless
     # (they key on the old occurrence instants), so they go; a retitle keeps them.
     $db->query('DELETE FROM calendar.event_exceptions WHERE event_id = ?', $event->{id}) if $time_changed && $event->{rrule};
+    # Queued reminders key on the old times: a move drops them all (the new
+    # time gets its own), a retitle only what has not gone out yet (#79).
+    $self->_clear_reminder_queue($db, $event->{id}, $time_changed ? 'all' : 'pending');
     $tx->commit;
     return $row;
 }
@@ -389,7 +392,9 @@ sub _write_exception ($self, $event, $rid, $input, $cancelled) {
     }
     my @cols = sort keys %v;
     my $ridpg = $rid->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00');
-    $self->db->query(
+    my $db = $self->db;
+    my $tx = $db->begin;
+    $db->query(
         'INSERT INTO calendar.event_exceptions (event_id, recurrence_id, ' . join(', ', @cols) . ') VALUES (?, ?, ' . join(', ', ('?') x @cols) . ')'
         . ' ON CONFLICT (event_id, recurrence_id) DO UPDATE SET ' . join(', ', (map { "$_ = EXCLUDED.$_" } @cols),
             # A cancel wipes an earlier move; an edit after a cancel revives it.
@@ -397,6 +402,9 @@ sub _write_exception ($self, $event, $rid, $input, $cancelled) {
             'updated_at = NOW()'),
         $event->{id}, $ridpg, (map { $v{$_} } @cols),
     );
+    # This occurrence moved or went: its queued reminders with it (#79).
+    $db->query('DELETE FROM calendar.reminder_queue WHERE event_id = ? AND recurrence_id = ?', $event->{id}, $ridpg);
+    $tx->commit;
     return $self->event($event->{id});
 }
 
@@ -462,6 +470,10 @@ sub _split_series ($self, $event, $rid, $input) {
     else {
         $db->query('UPDATE calendar.event_exceptions SET event_id = ? WHERE event_id = ? AND recurrence_id >= ?', $new->{id}, $event->{id}, $ridpg);
     }
+    # The new series keeps the reminder; what was queued from the split on
+    # belongs to occurrences that no longer exist on the old one (#79).
+    $db->query('INSERT INTO calendar.reminders (event_id, minutes_before, channel) SELECT ?, minutes_before, channel FROM calendar.reminders WHERE event_id = ? ON CONFLICT (event_id) DO NOTHING', $new->{id}, $event->{id});
+    $db->query('DELETE FROM calendar.reminder_queue WHERE event_id = ? AND recurrence_id >= ?', $event->{id}, $ridpg);
     $tx->commit;
     return $new;
 }
@@ -486,6 +498,7 @@ sub delete_event ($self, $event, %o) {
             $db->query('UPDATE calendar.events SET rrule = ?, recurrence_end = ?, updated_at = NOW() WHERE id = ?',
                 $until_rule, ($bound ? $bound->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00') : undef), $event->{id});
             $db->query('DELETE FROM calendar.event_exceptions WHERE event_id = ? AND recurrence_id >= ?', $event->{id}, $ridpg);
+            $db->query('DELETE FROM calendar.reminder_queue WHERE event_id = ? AND recurrence_id >= ?', $event->{id}, $ridpg);
             $tx->commit;
             return 1;
         }
@@ -494,6 +507,7 @@ sub delete_event ($self, $event, %o) {
     my $tx = $db->begin;
     $db->query('UPDATE calendar.events SET deleted_at = NOW(), updated_at = NOW() WHERE id = ?', $event->{id});
     $db->query('UPDATE calendar.shares SET revoked_at = NOW() WHERE event_id = ? AND revoked_at IS NULL', $event->{id});
+    $self->_clear_reminder_queue($db, $event->{id}, 'pending');
     $tx->commit;
     return 1;
 }
@@ -668,7 +682,275 @@ sub account_settings ($self, $email) {
         ai_enabled => $row->{ai_enabled} ? 1 : 0, ai_consent_sha256 => $row->{ai_consent_sha256}, ai_consent_at => $row->{ai_consent_at},
         research_enabled => $row->{research_enabled} ? 1 : 0, research_consent_at => $row->{research_consent_at},
         research_auto => $row->{research_auto} ? 1 : 0,
+        # #80: proposing as email arrives, and the research-at-arrival
+        # entitlement (admin-set) with the person's own switch under it.
+        auto_propose => $row->{auto_propose} ? 1 : 0, auto_propose_consent_at => $row->{auto_propose_consent_at},
+        research_at_arrival_allowed => $row->{research_at_arrival_allowed} ? 1 : 0,
+        research_at_arrival => ($row->{research_at_arrival_allowed} && $row->{research_at_arrival}) ? 1 : 0,
     };
+}
+
+sub set_research_at_arrival ($self, $email, $on) {
+    $self->db->query(
+        q{INSERT INTO calendar.account_settings (user_email, research_at_arrival) VALUES (?, ?)
+          ON CONFLICT (user_email) DO UPDATE SET research_at_arrival = EXCLUDED.research_at_arrival, updated_at = NOW()},
+        _norm($email), ($on ? 1 : 0),
+    );
+    return 1;
+}
+
+# The entitlements an administrator (later #63's billing) grants an account.
+# Taking one away also turns the switch under it off.
+sub set_entitlements ($self, $email, %e) {
+    if (exists $e{research_at_arrival_allowed}) {
+        my $on = $e{research_at_arrival_allowed} ? 1 : 0;
+        $self->db->query(
+            q{INSERT INTO calendar.account_settings (user_email, research_at_arrival_allowed) VALUES (?, ?)
+              ON CONFLICT (user_email) DO UPDATE SET research_at_arrival_allowed = EXCLUDED.research_at_arrival_allowed,
+                  research_at_arrival = CASE WHEN EXCLUDED.research_at_arrival_allowed THEN calendar.account_settings.research_at_arrival ELSE FALSE END,
+                  updated_at = NOW()},
+            _norm($email), $on,
+        );
+    }
+    return $self->account_settings($email);
+}
+
+# ---------------------------------------------------------------- reminders (#79)
+
+# Where this account's reminders go: the addresses it listed, else its own.
+sub reminder_addresses ($self, $email) {
+    return [ map { $_->{address} } @{ $self->db->query('SELECT address FROM calendar.reminder_addresses WHERE user_email = ? ORDER BY created_at, address', _norm($email))->hashes->to_array } ];
+}
+
+sub reminder_recipients ($self, $email) {
+    my $list = $self->reminder_addresses($email);
+    return @$list ? $list : [ _norm($email) ];
+}
+
+# Replaces the list. Dies with a sentence for the person on a bad address.
+sub set_reminder_addresses ($self, $email, $list) {
+    my (%seen, @clean);
+    for my $a (@{ ref $list eq 'ARRAY' ? $list : [] }) {
+        next unless defined $a && !ref $a;
+        my $x = lc($a =~ s/\A\s+|\s+\z//gr);
+        next unless length $x;
+        die "\"$x\" does not look like an email address.\n" unless $x =~ /\A[^\s@]+@[^\s@]+\.[^\s@]+\z/ && length $x <= 254;
+        push @clean, $x unless $seen{$x}++;
+    }
+    die "At most 5 reminder addresses.\n" if @clean > 5;
+    my $db = $self->db;
+    my $tx = $db->begin;
+    $db->query('DELETE FROM calendar.reminder_addresses WHERE user_email = ?', _norm($email));
+    $db->query('INSERT INTO calendar.reminder_addresses (user_email, address) VALUES (?, ?)', _norm($email), $_) for @clean;
+    $tx->commit;
+    return \@clean;
+}
+
+sub reminder_for ($self, $event_id) {
+    return $self->db->query('SELECT * FROM calendar.reminders WHERE event_id = ?', $event_id)->hash;
+}
+
+# One reminder per event: minutes before each occurrence, or undef for none.
+# A change drops what was queued and not yet sent; the runner requeues.
+sub set_reminder ($self, $event_id, $minutes) {
+    my $db = $self->db;
+    my $tx = $db->begin;
+    if (defined $minutes && length $minutes) {
+        die "The reminder must be a number of minutes (0 to 20160).\n" unless $minutes =~ /\A\d+\z/ && $minutes <= 20160;
+        $db->query(
+            q{INSERT INTO calendar.reminders (event_id, minutes_before) VALUES (?, ?)
+              ON CONFLICT (event_id) DO UPDATE SET minutes_before = EXCLUDED.minutes_before}, $event_id, $minutes + 0,
+        );
+    }
+    else {
+        $db->query('DELETE FROM calendar.reminders WHERE event_id = ?', $event_id);
+    }
+    $self->_clear_reminder_queue($db, $event_id, 'pending');
+    $tx->commit;
+    return 1;
+}
+
+sub _clear_reminder_queue ($self, $db, $event_id, $which) {
+    $db->query('DELETE FROM calendar.reminder_queue WHERE event_id = ?' . ($which eq 'pending' ? q{ AND state = 'pending'} : ''), $event_id);
+    return;
+}
+
+# Every account that sees this event besides the owner: live shares of the
+# calendar and of the event itself. Reminders go to them too (Gardner,
+# 2026-11-14).
+sub shared_with_accounts ($self, $event) {
+    my $rows = $self->db->query(
+        q{SELECT DISTINCT lower(shared_with_email) AS e FROM calendar.shares
+           WHERE shared_with_email IS NOT NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
+             AND (calendar_id = ? OR event_id = ?)}, $event->{calendar_id}, $event->{id},
+    )->hashes->to_array;
+    return [ map { $_->{e} } @$rows ];
+}
+
+# The events with a reminder that may have an occurrence inside the window.
+sub reminder_candidates ($self, $ws, $we) {
+    my $wspg = $ws->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00');
+    my $wepg = $we->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00');
+    return $self->db->query(
+        q{SELECT e.*, r.id AS reminder_id, r.minutes_before, c.owner_email AS calendar_owner
+            FROM calendar.reminders r
+            JOIN calendar.events e ON e.id = r.event_id
+            JOIN calendar.calendars c ON c.id = e.calendar_id
+           WHERE e.deleted_at IS NULL AND c.deleted_at IS NULL AND e.starts_at < ?
+             AND ((e.rrule IS NULL AND e.ends_at > ?)
+               OR (e.rrule IS NOT NULL AND (e.recurrence_end IS NULL OR e.recurrence_end >= ?)))},
+        $wepg, $wspg, $wspg,
+    )->hashes->to_array;
+}
+
+# Queue one (reminder, occurrence, account) once; a second call is a no-op.
+sub queue_reminder ($self, %r) {
+    $self->db->query(
+        q{INSERT INTO calendar.reminder_queue (reminder_id, event_id, recurrence_id, recipient, due_at) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (reminder_id, recurrence_id, recipient) DO NOTHING},
+        $r{reminder_id}, $r{event_id}, $r{recurrence_id}->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00'),
+        _norm($r{recipient}), $r{due_at}->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00'),
+    );
+    return 1;
+}
+
+# Due rows, claimed so that no other process (there are six) sends them too.
+sub claim_due_reminders ($self, $limit = 3) {
+    return $self->db->query(
+        q{UPDATE calendar.reminder_queue SET state = 'running', attempts = attempts + 1, claimed_at = NOW()
+           WHERE id IN (SELECT id FROM calendar.reminder_queue WHERE state = 'pending' AND due_at <= NOW()
+                          ORDER BY due_at LIMIT ? FOR UPDATE SKIP LOCKED)
+          RETURNING *}, $limit,
+    )->hashes->to_array;
+}
+
+sub reminder_sent ($self, $id) {
+    $self->db->query(q{UPDATE calendar.reminder_queue SET state = 'sent', sent_at = NOW(), last_error = NULL WHERE id = ?}, $id);
+    return 1;
+}
+
+# A failed send goes back to the queue a little later, three times in all.
+sub reminder_failed ($self, $id, $error, $max_attempts = 3) {
+    $self->db->query(
+        q{UPDATE calendar.reminder_queue
+             SET state = CASE WHEN attempts >= ? THEN 'failed' ELSE 'pending' END,
+                 due_at = CASE WHEN attempts >= ? THEN due_at ELSE NOW() + INTERVAL '2 minutes' END,
+                 last_error = ?
+           WHERE id = ?}, $max_attempts, $max_attempts, substr($error // '', 0, 500), $id,
+    );
+    return 1;
+}
+
+# A process that died mid-send leaves 'running' rows; they go back after 5 min.
+sub reclaim_stale_reminders ($self) {
+    $self->db->query(q{UPDATE calendar.reminder_queue SET state = 'pending' WHERE state = 'running' AND claimed_at < NOW() - INTERVAL '5 minutes'});
+    # Rows for occurrences long past are of no use to anyone.
+    $self->db->query(q{DELETE FROM calendar.reminder_queue WHERE state IN ('sent', 'failed') AND due_at < NOW() - INTERVAL '30 days'});
+    return 1;
+}
+
+# --------------------------------------------- proposals at arrival (#80)
+
+# Links whose email arrived for an account that asked for proposals before
+# any click (consent #3, current wording), not yet looked at. Claimed per
+# process; a claim that never finishes is released by reclaim_stale_mail_link_jobs.
+sub claim_mail_links_for_proposal ($self, $consent_sha, $limit = 1) {
+    my $rows = $self->db->query(
+        q{UPDATE calendar.mail_links SET job_state = 'running', job_started_at = NOW(), job_attempts = job_attempts + 1
+           WHERE id IN (
+             SELECT m.id FROM calendar.mail_links m
+              WHERE m.proposal IS NULL AND m.job_state IS NULL AND m.event_id IS NULL
+                AND m.expires_at > NOW() AND m.created_at > NOW() - INTERVAL '2 days'
+                AND EXISTS (SELECT 1 FROM calendar.account_settings s
+                             WHERE s.auto_propose AND s.auto_propose_consent_sha256 = ?
+                               AND s.user_email IN (SELECT lower(a) FROM jsonb_array_elements_text(m.accounts) AS a))
+              ORDER BY m.created_at LIMIT ? FOR UPDATE SKIP LOCKED)
+          RETURNING *}, $consent_sha, $limit,
+    )->hashes->to_array;
+    for my $row (@$rows) {
+        my $accts = eval { Mojo::JSON::decode_json($row->{accounts}) } // [];
+        $row->{accounts} = [ map { lc } grep { defined && !ref } @$accts ];
+    }
+    return $rows;
+}
+
+# The accounts on this link that opted in, with their zones and whether the
+# research step is theirs to have.
+sub auto_propose_accounts ($self, $link, $consent_sha) {
+    return [] unless @{ $link->{accounts} // [] };
+    return $self->db->query(
+        q{SELECT s.user_email, s.research_at_arrival_allowed AND s.research_at_arrival AND s.research_enabled AS research,
+                 s.research_consent_sha256, p.timezone
+            FROM calendar.account_settings s LEFT JOIN calendar.user_prefs p ON p.user_email = s.user_email
+           WHERE s.auto_propose AND s.auto_propose_consent_sha256 = ? AND s.user_email = ANY(?)
+           ORDER BY s.user_email}, $consent_sha, $link->{accounts},
+    )->hashes->to_array;
+}
+
+sub mail_link_skipped ($self, $id) {
+    $self->db->query(q{UPDATE calendar.mail_links SET job_state = 'skipped' WHERE id = ?}, $id);
+    return 1;
+}
+
+sub mail_link_proposed ($self, $id, $proposal, $facts = undef) {
+    $self->db->query(
+        q{UPDATE calendar.mail_links SET proposal = ?::jsonb, facts = ?::jsonb, proposed_at = NOW(), job_state = 'done' WHERE id = ?},
+        Mojo::JSON::encode_json($proposal), ($facts ? Mojo::JSON::encode_json($facts) : undef), $id,
+    );
+    return 1;
+}
+
+sub mail_link_facts ($self, $id, $facts) {
+    $self->db->query(q{UPDATE calendar.mail_links SET facts = ?::jsonb WHERE id = ?}, Mojo::JSON::encode_json($facts), $id);
+    return 1;
+}
+
+# A failed call frees the row for another try (three in all).
+sub mail_link_job_failed ($self, $id, $max_attempts = 3) {
+    $self->db->query(
+        q{UPDATE calendar.mail_links SET job_state = CASE WHEN job_attempts >= ? THEN 'failed' ELSE NULL END WHERE id = ?}, $max_attempts, $id,
+    );
+    return 1;
+}
+
+sub reclaim_stale_mail_link_jobs ($self) {
+    $self->db->query(
+        q{UPDATE calendar.mail_links SET job_state = CASE WHEN job_attempts >= 3 THEN 'failed' ELSE NULL END
+           WHERE job_state = 'running' AND job_started_at < NOW() - INTERVAL '10 minutes'},
+    );
+    return 1;
+}
+
+sub _decode_link_json ($row) {
+    for my $k (qw(proposal facts)) {
+        $row->{$k} = (defined $row->{$k} && !ref $row->{$k}) ? (eval { Mojo::JSON::decode_json($row->{$k}) } // undef) : $row->{$k};
+    }
+    return $row;
+}
+
+# The Suggestions list: links with a proposal that became no event and were
+# not dismissed, newest first.
+sub suggestions_for ($self, $email) {
+    my $rows = $self->db->query(
+        q{SELECT * FROM calendar.mail_links
+           WHERE proposal IS NOT NULL AND event_id IS NULL AND dismissed_at IS NULL AND expires_at > NOW()
+             AND ? IN (SELECT lower(a) FROM jsonb_array_elements_text(accounts) AS a)
+           ORDER BY proposed_at DESC LIMIT 50}, _norm($email),
+    )->hashes->to_array;
+    return [ map { _decode_link_json($_) } @$rows ];
+}
+
+sub suggestions_count ($self, $email) {
+    return $self->db->query(
+        q{SELECT count(*) FROM calendar.mail_links
+           WHERE proposal IS NOT NULL AND event_id IS NULL AND dismissed_at IS NULL AND expires_at > NOW()
+             AND ? IN (SELECT lower(a) FROM jsonb_array_elements_text(accounts) AS a)}, _norm($email),
+    )->array->[0] + 0;
+}
+
+sub dismiss_suggestion ($self, $id) {
+    $self->db->query('UPDATE calendar.mail_links SET dismissed_at = NOW() WHERE id = ?', $id);
+    return 1;
 }
 
 sub set_research_auto ($self, $email, $on) {
@@ -699,7 +981,7 @@ sub mail_link ($self, $token) {
     my $row = $self->db->query('SELECT * FROM calendar.mail_links WHERE token = ? AND expires_at > NOW()', $token)->hash or return undef;
     my $accts = eval { Mojo::JSON::decode_json($row->{accounts}) } // [];
     $row->{accounts} = [ map { lc } grep { defined && !ref } @$accts ];
-    return $row;
+    return _decode_link_json($row);
 }
 
 sub mail_link_for ($self, $token, $email) {
