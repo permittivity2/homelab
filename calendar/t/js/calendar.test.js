@@ -55,6 +55,10 @@ is(Cal.ordinal(-1), 'last', 'ordinal -1');
 is(Cal.viewName('month'), 'dayGridMonth', 'month view');
 is(Cal.viewName('agenda'), 'listWeek', 'agenda view');
 is(Cal.viewName('nonsense'), 'dayGridMonth', 'unknown falls back to month');
+is(Cal.initialViewFor('timeGridWeek', true, 'month'), 'timeGridWeek', 'the view last used in this browser wins, on a phone too (0.1.3)');
+is(Cal.initialViewFor('', true, 'month'), 'listWeek', 'no remembered view on a phone: the agenda');
+is(Cal.initialViewFor('', false, 'week'), 'timeGridWeek', 'no remembered view on a laptop: the saved default');
+is(Cal.initialViewFor('bogusView', false, 'month'), 'dayGridMonth', 'a remembered value that is not a view is ignored');
 is(Cal.WEEKDAYS, ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'], 'weekday codes in RFC 5545 order from Sunday');
 ok(Cal.ZONES.indexOf('America/Chicago') === 0, 'Chicago leads the zone list');
 

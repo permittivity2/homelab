@@ -1,3 +1,12 @@
+homelab-calendar (0.1.3) unstable; urgency=medium
+
+  * The page opens in the view last used in that browser (kept in
+    localStorage), so a refresh on a phone comes back to Month or Week when
+    that is what you had; only a phone's first visit opens in the agenda.
+    Rotating the device no longer forces the agenda either.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 13:00:00 -0600
+
 homelab-calendar (0.1.2) unstable; urgency=medium
 
   * The link pages 500ed on render: an undeclared variable in the calendar

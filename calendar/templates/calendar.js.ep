@@ -124,6 +124,19 @@ var Cal = (function () {
 
   function viewName(pref) { return { month: 'dayGridMonth', week: 'timeGridWeek', day: 'timeGridDay', agenda: 'listWeek' }[pref] || 'dayGridMonth'; }
   function narrow() { return window.innerWidth < 720; }
+  // The view a page opens in: the one last used in THIS browser (so a
+  // refresh comes back to where you were, phone or laptop alike), else the
+  // saved default -- except that a phone's first visit gets the agenda, since
+  // a month grid is unreadable at that width. Until 0.1.3 a phone always
+  // opened in the agenda, whatever you had chosen.
+  var VIEW_KEY = 'homelab-calendar.view';
+  var VIEWS = ['dayGridMonth', 'timeGridWeek', 'timeGridDay', 'listWeek'];
+  function initialViewFor(stored, isNarrow, pref) {
+    if (stored && VIEWS.indexOf(stored) >= 0) return stored;
+    return isNarrow ? 'listWeek' : viewName(pref);
+  }
+  function storedView() { try { return window.localStorage ? (window.localStorage.getItem(VIEW_KEY) || '') : ''; } catch (e) { return ''; } }
+  function rememberView(v) { try { if (window.localStorage) window.localStorage.setItem(VIEW_KEY, v); } catch (e) {} }
   function browserZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; } }
   function fillZones(sel, current) {
     var list = ZONES.slice(), bz = browserZone();
@@ -159,7 +172,8 @@ var Cal = (function () {
 
     var fc = new FullCalendar.Calendar($('calendar'), {
       timeZone: zone,
-      initialView: narrow() ? 'listWeek' : viewName(cfg.prefs.default_view),
+      initialView: initialViewFor(storedView(), narrow(), cfg.prefs.default_view),
+      datesSet: function (arg) { rememberView(arg.view.type); },
       headerToolbar: { start: 'prev,next today', center: 'title', end: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek' },
       buttonText: { today: 'Today', month: 'Month', week: 'Week', day: 'Day', list: 'Agenda' },
       firstDay: +cfg.prefs.week_start || 0,
@@ -188,8 +202,7 @@ var Cal = (function () {
         if (p.is_recurring) bits.push('repeats');
         if (p.permission === 'read') bits.push('read-only');
         if (bits.length) arg.el.title = arg.event.title + ' - ' + bits.join(', ');
-      },
-      windowResize: function () { if (narrow() && fc.view.type !== 'listWeek') fc.changeView('listWeek'); }
+      }
     });
     fc.render();
 
@@ -550,7 +563,7 @@ var Cal = (function () {
     WEEKDAYS: WEEKDAYS, COLORS: COLORS, ZONES: ZONES,
     wall: wall, wallDate: wallDate, parseWall: parseWall, addMinutes: addMinutes, addDays: addDays, minutesBetween: minutesBetween,
     splitWall: splitWall, joinWall: joinWall, weekdayOf: weekdayOf, fmtTime: fmtTime, fmtDate: fmtDate, fmtRange: fmtRange,
-    repeatSummary: repeatSummary, ordinal: ordinal, viewName: viewName,
+    repeatSummary: repeatSummary, ordinal: ordinal, viewName: viewName, initialViewFor: initialViewFor,
     boot: boot, bootPublic: bootPublic
   };
 })();
