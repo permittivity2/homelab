@@ -1,3 +1,11 @@
+homelab-calendar (0.1.9) unstable; urgency=medium
+
+  * Proposals at arrival (#80) apply only to email that arrives AFTER the
+    consent was given, as the notice says; 0.1.8 also picked up links from
+    the previous two days (seen on the first live run).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 15 Nov 2026 00:50:00 -0600
+
 homelab-calendar (0.1.8) unstable; urgency=medium
 
   * Reminders (post-cutover #79): one email reminder per event, minutes

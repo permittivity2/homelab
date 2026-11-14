@@ -861,8 +861,11 @@ sub claim_mail_links_for_proposal ($self, $consent_sha, $limit = 1) {
              SELECT m.id FROM calendar.mail_links m
               WHERE m.proposal IS NULL AND m.job_state IS NULL AND m.event_id IS NULL
                 AND m.expires_at > NOW() AND m.created_at > NOW() - INTERVAL '2 days'
+                -- Only email that arrived AFTER the consent: the notice says
+                -- "as it arrives", so what came before stays untouched.
                 AND EXISTS (SELECT 1 FROM calendar.account_settings s
                              WHERE s.auto_propose AND s.auto_propose_consent_sha256 = ?
+                               AND s.auto_propose_consent_at IS NOT NULL AND m.created_at >= s.auto_propose_consent_at
                                AND s.user_email IN (SELECT lower(a) FROM jsonb_array_elements_text(m.accounts) AS a))
               ORDER BY m.created_at LIMIT ? FOR UPDATE SKIP LOCKED)
           RETURNING *}, $consent_sha, $limit,
