@@ -33,7 +33,7 @@
         <p class="muted-small">Times in <%= $zone %>.</p>
         % }
         % if ($event->{location}) {
-        <p class="text-muted"><%= $event->{location} %></p>
+        <p class="text-muted"><%= $event->{location} %> <a class="btn btn-sm" href="https://www.google.com/maps/search/?api=1&query=<%= Mojo::Util::url_escape($event->{location} =~ s/\s+/ /gr) %>" target="_blank" rel="noopener">Map</a></p>
         % }
         % if ($event->{description}) {
         <p style="white-space: pre-wrap"><%= $event->{description} %></p>

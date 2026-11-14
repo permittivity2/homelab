@@ -122,6 +122,12 @@ var Cal = (function () {
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function showError(id, msg) { var el = $(id); el.textContent = msg || ''; el.classList.toggle('hide', !msg); }
 
+  // A place as typed -> a Google Maps search link (no API key, no lookup):
+  // the cheap, certain half of "where is this".
+  function mapsUrl(location) {
+    var s = String(location == null ? '' : location).replace(/\s+/g, ' ').trim();
+    return s ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(s) : '';
+  }
   function viewName(pref) { return { month: 'dayGridMonth', week: 'timeGridWeek', day: 'timeGridDay', agenda: 'listWeek' }[pref] || 'dayGridMonth'; }
   function narrow() { return window.innerWidth < 720; }
   // The view a page opens in: the one last used in THIS browser (so a
@@ -311,6 +317,9 @@ var Cal = (function () {
     }
     ev.sd.addEventListener('change', shiftEnd); ev.st.addEventListener('change', shiftEnd);
     $('ev-zone-hint').textContent = 'Times in ' + zone.replace(/_/g, ' ') + '.';
+    // The Map link follows the location field.
+    function syncMap() { var u = mapsUrl(ev.loc.value); var a = $('ev-map'); a.href = u || '#'; a.classList.toggle('hide', !u); }
+    ev.loc.addEventListener('input', syncMap);
 
     function fillCalendarSelect(selectedId, lockTo) {
       var choices = state.calendars.filter(function (c) { return c.permission !== 'read' && (!lockTo || c.id === lockTo); });
@@ -347,7 +356,7 @@ var Cal = (function () {
       ev.repeat.disabled = !!ro || !!(existing && data.rrule && !rep);   // a rule the editor cannot show stays as it is
       ev.loc.value = (occ && occ.location) || data.location || ''; ev.desc.value = (occ && occ.description) || data.description || '';
       colorDots(ev.colors, (occ && occ.color) || data.color || '', true);
-      updateRepeatUI();
+      updateRepeatUI(); syncMap();
       openModal('ev-modal');
       setTimeout(function () { ev.title.focus(); }, 50);
     }
@@ -526,7 +535,7 @@ var Cal = (function () {
       }
       if (p.location) ev.loc.value = p.location;
       if (p.description) ev.desc.value = p.description;
-      updateRepeatUI();
+      updateRepeatUI(); syncMap();
     }
     function proposeNow() {
       var btn = $('ev-ai-propose'); btn.classList.add('is-loading'); btn.disabled = true; $('ev-ai-note').textContent = 'Asking...';
@@ -603,7 +612,7 @@ var Cal = (function () {
     WEEKDAYS: WEEKDAYS, COLORS: COLORS, ZONES: ZONES,
     wall: wall, wallDate: wallDate, parseWall: parseWall, addMinutes: addMinutes, addDays: addDays, minutesBetween: minutesBetween,
     splitWall: splitWall, joinWall: joinWall, weekdayOf: weekdayOf, fmtTime: fmtTime, fmtDate: fmtDate, fmtRange: fmtRange,
-    repeatSummary: repeatSummary, ordinal: ordinal, viewName: viewName, initialViewFor: initialViewFor,
+    repeatSummary: repeatSummary, ordinal: ordinal, viewName: viewName, initialViewFor: initialViewFor, mapsUrl: mapsUrl,
     boot: boot, bootPublic: bootPublic
   };
 })();

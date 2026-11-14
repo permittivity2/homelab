@@ -1,3 +1,10 @@
+homelab-calendar (0.1.6) unstable; urgency=medium
+
+  * A "Map" link beside the location, in the editor and on the public event
+    page: a Google Maps search for the place as typed (no key, no lookup).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 18:20:00 -0600
+
 homelab-calendar (0.1.5) unstable; urgency=medium
 
   * The event editor's Save and Cancel buttons were pushed below the window

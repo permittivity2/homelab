@@ -52,6 +52,10 @@ is(Cal.ordinal(1), 'first', 'ordinal 1');
 is(Cal.ordinal(-1), 'last', 'ordinal -1');
 
 // --- views ---
+is(Cal.mapsUrl('McCool Field, Cleveland, MS'), 'https://www.google.com/maps/search/?api=1&query=McCool%20Field%2C%20Cleveland%2C%20MS', 'a place becomes a Google Maps search link');
+is(Cal.mapsUrl('  12   Main St  '), 'https://www.google.com/maps/search/?api=1&query=12%20Main%20St', '... whitespace squeezed');
+is(Cal.mapsUrl(''), '', 'no place, no link');
+is(Cal.mapsUrl(null), '', 'null, no link');
 is(Cal.viewName('month'), 'dayGridMonth', 'month view');
 is(Cal.viewName('agenda'), 'listWeek', 'agenda view');
 is(Cal.viewName('nonsense'), 'dayGridMonth', 'unknown falls back to month');
