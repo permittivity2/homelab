@@ -178,7 +178,7 @@ if [ "$DRY" = 1 ]; then
     step "would do"
     cat <<PLANNED
   1. $DNS_NODE: pdnsutil rrset add $ZONE $NAME A 3600 <an edge address>; zone increase-serial
-     then: ONLY='^${NAME//./\\.}\$' $HERE/dns-lua-orchestrate.sh --apply   (Lua A+AAAA, rolling pdns restart)
+     then: ONLY='^${NAME//./[.]}\$' $HERE/dns-lua-orchestrate.sh --apply   (Lua A+AAAA, rolling pdns restart)
   2. $ISSUER:$CERT_CONF  -- add lineage {name: $NAME, domains: [$NAME]}
      then: homelab-cert-issue --lineage $NAME; homelab-cert-publish --drain
   3. each edge 00 01 02:
@@ -200,7 +200,10 @@ if [ -z "$A_NOW" ]; then
 fi
 if [ -n "$(auth_answer A)" ] && ! on "$DNS_NODE" "sudo pdnsutil zone list $ZONE 2>/dev/null | grep -qE '^$NAME\.?\s.*\sLUA\s'" ; then
     if [ -x "$HERE/dns-lua-orchestrate.sh" ]; then
-        ONLY="^${NAME//./\\.}\$" "$HERE/dns-lua-orchestrate.sh" --apply >/tmp/web-name-lua.$$ 2>&1 \
+        # ONLY is an awk regex handed over with -v, which eats backslashes
+        # (a "\." became a literal backslash on the first run, 2026-11-14, and
+        # the name was silently skipped): dots go in brackets instead.
+        ONLY="^${NAME//./[.]}\$" "$HERE/dns-lua-orchestrate.sh" --apply >/tmp/web-name-lua.$$ 2>&1 \
             && ok "converted to the health-steered Lua record (A + AAAA)" \
             || { tail -8 /tmp/web-name-lua.$$ | sed 's/^/      /'; warn "dns-lua-orchestrate.sh --apply returned non-zero; check its output above"; }
         rm -f /tmp/web-name-lua.$$

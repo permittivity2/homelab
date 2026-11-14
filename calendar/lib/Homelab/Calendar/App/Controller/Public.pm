@@ -15,7 +15,7 @@ use Homelab::Calendar::ICS qw(instances_ics masters_ics);
 sub _model ($c) { return $c->app->model }
 
 sub _gone ($c) {
-    my $ics = ($c->stash('format') // '') eq 'ics';
+    my $ics = $c->stash('feed');
     return $c->render(text => "This link is not valid.\n", status => 404) if $ics;
     return $c->render(template => 'notice', status => 404, heading => 'This link is not valid',
         body => 'The calendar or event it pointed to is gone, or the link was turned off by its owner.');
@@ -28,7 +28,7 @@ sub _share ($c) {
     if (my $with = $share->{shared_with_email}) {
         my $me = $c->session_email;
         unless (length $me) {
-            if ($c->app->sso && !$c->session('token') && ($c->stash('format') // '') ne 'ics') {
+            if ($c->app->sso && !$c->session('token') && !$c->stash('feed')) {
                 $c->redirect_to('/login?next=' . url_escape($c->req->url->path->to_string));
                 return undef;
             }
@@ -74,7 +74,7 @@ sub calendar_page ($c) {
     my $cal = $share->{calendar};
     my $detail = visible_detail($share);
     my $zone = _zone($c, $share);
-    if (($c->stash('format') // '') eq 'ics') {
+    if ($c->stash('feed')) {
         my ($ws, $we) = _feed_window($zone);
         my $inst = _model($c)->instances(calendars => [$cal], window_start => $ws, window_end => $we);
         my $ics = instances_ics(name => $cal->{name}, zone => $cal->{timezone}, detail => $detail,
@@ -113,7 +113,7 @@ sub event_page ($c) {
     my $m = _model($c);
     my ($event, $cal) = ($share->{event}, $share->{calendar});
     my $zone = _zone($c, $share);
-    if (($c->stash('format') // '') eq 'ics') {
+    if ($c->stash('feed')) {
         my (@ex, @ov);
         for my $x (@{ $m->exceptions_for($event->{id}) }) {
             my $rid = Homelab::Calendar::Model::_dt($x->{recurrence_id}, $event->{timezone});

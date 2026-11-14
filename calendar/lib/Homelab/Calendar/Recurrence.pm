@@ -225,7 +225,21 @@ sub recurrence_bound ($dtstart, $rrule) {
 }
 
 sub _set ($dtstart, $rrule) {
-    my $set = eval { DateTime::Format::ICal->parse_recurrence(recurrence => $rrule, dtstart => floating_dt($dtstart)) };
+    # The set is expanded in floating (wall-clock) time, so a UTC UNTIL must
+    # become the same instant's wall clock in the event's zone first: left as
+    # UTC it is compared digit-for-digit against wall clocks and lets through
+    # occurrences up to the zone's offset past the real end (a series split at
+    # the 09:00 Monday occurrence kept that occurrence; found live 2026-11-14).
+    my $rule = $rrule;
+    if ($rule =~ /UNTIL=(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/) {
+        my $until = eval { DateTime->new(year => $1, month => $2, day => $3, hour => $4, minute => $5, second => $6, time_zone => 'UTC') };
+        if ($until) {
+            $until->set_time_zone($dtstart->time_zone->name) unless $dtstart->time_zone->is_floating;
+            my $wall = $until->strftime('%Y%m%dT%H%M%S');
+            $rule =~ s/UNTIL=\d{8}T\d{6}Z/UNTIL=$wall/;
+        }
+    }
+    my $set = eval { DateTime::Format::ICal->parse_recurrence(recurrence => $rule, dtstart => floating_dt($dtstart)) };
     return $set;
 }
 

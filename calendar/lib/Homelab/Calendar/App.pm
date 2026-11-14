@@ -177,10 +177,15 @@ sub startup ($self) {
     $r->put('/api/prefs')                     ->to('api#save_prefs');
 
     # Links: a calendar or an event, to anyone holding the link (or to the
-    # account it was shared with). The .ics forms are what a phone subscribes to.
-    $r->get('/c/:token' => $tok => [format => ['ics']])         ->to('public#calendar_page');
-    $r->get('/c/:token/events' => $tok)                         ->to('public#calendar_events');
-    $r->get('/e/:token' => $tok => [format => ['ics']])         ->to('public#event_page');
+    # account it was shared with). The .ics forms are what a phone subscribes
+    # to. Two routes each, with format detection off: a restricted
+    # `format => ['ics']` made the extension REQUIRED and the plain page 404
+    # (found live 2026-11-14).
+    $r->get('/c/<token>.ics' => $tok => [format => 0])          ->to('public#calendar_page', feed => 1);
+    $r->get('/c/:token' => $tok => [format => 0])               ->to('public#calendar_page', feed => 0);
+    $r->get('/c/:token/events' => $tok => [format => 0])        ->to('public#calendar_events');
+    $r->get('/e/<token>.ics' => $tok => [format => 0])          ->to('public#event_page', feed => 1);
+    $r->get('/e/:token' => $tok => [format => 0])               ->to('public#event_page', feed => 0);
 
     return;
 }

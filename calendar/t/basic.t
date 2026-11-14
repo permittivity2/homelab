@@ -134,7 +134,13 @@ $t->get_ok('/logout')->status_is(404, 'sign-out is POST only');
 # --- public links: the shape of the routes (the lookup itself needs the database) ---
 $t->get_ok('/c/not-a-token')->status_is(404, 'a token of the wrong shape is a 404 without touching anything');
 $t->get_ok('/e/short')->status_is(404, '... for events too');
-$t->get_ok('/c/' . ('a' x 64) . '.txt')->status_is(404, 'only .ics is a known format');
+$t->get_ok('/c/' . ('a' x 64) . '.txt')->status_is(404, 'only .ics is a known extension');
+# Routed (the 500 is the missing database, not the router): the plain page,
+# the feed, the event page and its feed all reach the controller.
+for my $p ('/c/' . ('a' x 64), '/c/' . ('a' x 64) . '.ics', '/c/' . ('a' x 64) . '/events', '/e/' . ('b' x 64), '/e/' . ('b' x 64) . '.ics') {
+    $t->get_ok($p);
+    isnt $t->tx->res->code, 404, "$p is routed (found live 2026-11-14: a restricted format made the extension required)";
+}
 
 # --- the vendored bundle and the chrome ---
 $t->get_ok('/vendor/fullcalendar/index.global.min.js')->status_is(200)->content_like(qr/FullCalendar Standard Bundle v6\.1\.22/, 'the FullCalendar bundle is served by the app');

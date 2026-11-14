@@ -11,6 +11,7 @@ BEGIN {
         or plan skip_all => "DateTime::Format::ICal / DateTime::Event::ICal not installed: $@";
     use_ok 'Homelab::Calendar::Recurrence', qw(
         build_rrule parse_rrule validate_zone local_dt floating_dt wall_string parse_wall occurrences recurrence_bound
+        rrule_until_before rrule_strip_end occurrences_before shift_rrule
     );
 }
 
@@ -167,6 +168,30 @@ is recurrence_bound($mon, 'FREQ=DAILY'), undef, 'open-ended: no bound';
 is ymdhms(recurrence_bound($mon, 'FREQ=DAILY;COUNT=3')), '2026-10-28 09:00', 'COUNT: the last occurrence';
 is ymdhms(recurrence_bound($mon, 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20270101T055959Z')), '2026-12-31 23:59', 'UNTIL: the end of that day';
 is recurrence_bound($mon, 'FREQ=BOGUS'), undef, 'a broken rule: no bound';
+
+# --- UNTIL is an instant, compared as the event zone's wall clock ---
+# A series split at the Monday 2026-11-16 09:00 occurrence ends one second
+# before it: 2026-11-16T14:59:59Z, which is 08:59:59 in Chicago. The 09:00
+# occurrence that day must be gone (found live 2026-11-14: compared as UTC
+# digits, 09:00 < 14:59:59 let it through).
+my $until_rule = rrule_until_before('FREQ=WEEKLY;BYDAY=MO', chi(2026, 11, 16, 9));
+is $until_rule, 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20261116T145959Z', 'rrule_until_before: one second before, as UTC';
+$occ = occurrences(dtstart => $mon, rrule => $until_rule, window(chi(2026, 11, 1), chi(2026, 12, 1)));
+is_deeply [ map { $_->ymd } @$occ ], ['2026-11-02', '2026-11-09'], 'the split occurrence itself is excluded';
+is rrule_until_before('FREQ=DAILY;COUNT=10', chi(2026, 11, 16, 9)), 'FREQ=DAILY;UNTIL=20261116T145959Z', '... a COUNT is replaced';
+is rrule_strip_end('FREQ=DAILY;COUNT=10;UNTIL=20261116T145959Z'), 'FREQ=DAILY', 'rrule_strip_end';
+is occurrences_before($mon, 'FREQ=WEEKLY;BYDAY=MO', chi(2026, 11, 16, 9)), 3, 'three Mondays before the 16th (26 Oct, 2 Nov, 9 Nov)';
+is occurrences_before($mon, 'FREQ=WEEKLY;BYDAY=MO', $mon), 0, 'none before the first';
+# A rule ending on 2026-11-15 (UNTIL=20261116T055959Z): a Monday 09:00 on the
+# 16th is 15:00Z, after the end, and must not appear.
+$occ = occurrences(dtstart => $mon, rrule => 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20261116T055959Z', window(chi(2026, 11, 1), chi(2026, 12, 1)));
+is_deeply [ map { $_->ymd } @$occ ], ['2026-11-02', '2026-11-09'], 'an UNTIL early on the 16th UTC excludes the 16th 09:00 Chicago';
+# ... and a late-evening occurrence on the last allowed day is kept.
+$occ = occurrences(dtstart => chi(2026, 11, 2, 23), rrule => 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20261110T055959Z', window(chi(2026, 11, 1), chi(2026, 12, 1)));
+is_deeply [ map { ymdhms($_) } @$occ ], ['2026-11-02 23:00', '2026-11-09 23:00'], 'a 23:00 occurrence on the UNTIL day (05:59Z next day) is kept';
+is shift_rrule('FREQ=WEEKLY;BYDAY=MO,WE', chi(2026, 10, 27, 9), 1), 'FREQ=WEEKLY;BYDAY=TU,TH', 'shift_rrule rotates weekdays with the start';
+is shift_rrule('FREQ=MONTHLY;BYMONTHDAY=26', chi(2026, 10, 28, 9), 2), 'FREQ=MONTHLY;BYMONTHDAY=28', '... and follows the new day of month';
+is shift_rrule('FREQ=DAILY;COUNT=3', chi(2026, 10, 28, 9), 2), 'FREQ=DAILY;COUNT=3', '... and leaves a daily rule alone';
 
 # --- the gap night itself: a 02:30 daily event on 2026-03-08 ---
 $occ = occurrences(dtstart => chi(2026, 3, 6, 2, 30), rrule => 'FREQ=DAILY', window(chi(2026, 3, 6), chi(2026, 3, 10)));

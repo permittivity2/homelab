@@ -4,7 +4,7 @@ use ExtUtils::MakeMaker;
 
 WriteMakefile(
     NAME         => 'Homelab::Calendar',
-    VERSION      => '0.1.0',
+    VERSION      => '0.1.1',
     ABSTRACT     => 'Calendar web app for the homelab-* ecosystem: events, repeating events, sharing, ICS feeds',
     AUTHOR       => 'Jeff Gardner <mailmasker-api01@forge.name>',
     LICENSE      => 'agpl_3',
