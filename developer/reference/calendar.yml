@@ -1,12 +1,15 @@
 # Calendar: the per-account switches homelab-calendar keeps, reached through
-# the api so myaccount (and homelab-cli, one day) can show and set them. The
-# calendar itself is a web app at calendar.<domain>; its events, sharing and
-# ICS feeds are not part of the api.
+# the api so myaccount and homelab-cli can show and set them, and (post-cutover
+# #82) what homelab-cli needs of the calendar itself: the events in a range, a
+# new event, iCalendar out and in. Sharing and the editing of one event stay on
+# the web app at calendar.<domain>.
 area: Calendar
 order: 45
 intro: >
-  Your calendar's own switches: the "Add to calendar" link in your email,
-  and the AI proposal. The calendar itself lives at calendar.mailmasker.org.
+  Your calendar through the api: the events in a range, a new event, an .ics
+  file out or in, and your calendar's own switches (the "Add to calendar"
+  link in your email, the AI proposal). The calendar itself, with sharing
+  and the editing of one event, lives at calendar.mailmasker.org.
 abilities:
   - id: calendar-account-show
     title: See your calendar switches
@@ -102,3 +105,280 @@ abilities:
     notes:
       - 403 without the site_admin role; 400 when the body lacks research_at_arrival_allowed.
     cli: none
+
+  # --- the calendar itself, for homelab-cli (post-cutover #82) ---------------
+  - id: calendar-calendars-list
+    title: List your calendars
+    method: GET
+    path: /api/v1/calendar/calendars
+    who: signed-in
+    summary: Your own calendars and the ones shared with you, with their ids.
+    description: >
+      The calendars an event can go in or be listed from: yours first, the
+      default one marked, then those shared with you, each with what you may
+      do in it. The answer also says which time zone your dates are read in.
+    response: |
+      {
+        "timezone": "America/Chicago",
+        "own": [
+          { "id": 1, "name": "Personal", "color": "#1a73e8", "description": null, "timezone": "America/Chicago",
+            "is_default": true, "permission": "owner", "visible": true, "owner_email": "{me}" }
+        ],
+        "shared": [
+          { "id": 9, "name": "Family", "color": "#e67c73", "description": null, "timezone": "America/Chicago",
+            "is_default": false, "permission": "read", "visible": true, "owner_email": "someone@example.com" }
+        ]
+      }
+    cli: homelab-cli calendar calendars
+
+  - id: calendar-events-list
+    title: List your events
+    method: GET
+    path: /api/v1/calendar/events
+    who: signed-in
+    summary: Every occurrence in a range, today by default, a page at a time.
+    description: >
+      Each occurrence of each event you can see (your calendars, the ones
+      shared with you, and single events shared to you) between from and to,
+      in order, with wall-clock times in your calendar's zone. The two dates
+      are read in that zone and may be a date, a time (2026-11-20T14:30),
+      today or tomorrow. With neither you get today; with from alone, a year
+      from it; with to alone, from today; a date as to means that whole day.
+      Three years at most. Fifty per page unless limit says otherwise (up to
+      200); the answer says how many pages there are.
+    params:
+      - name: from
+        in: query
+        required: false
+        about: Where the range starts; a date, a time, today or tomorrow.
+        example: today
+      - name: to
+        in: query
+        required: false
+        about: Where it ends. A date alone means through that whole day.
+      - name: calendar_id
+        in: query
+        required: false
+        about: Only this calendar (see List your calendars).
+      - name: limit
+        in: query
+        required: false
+        about: Occurrences per page, 1 to 200; 50 when left out.
+      - name: page
+        in: query
+        required: false
+        about: Which page, from 1.
+    response: |
+      {
+        "timezone": "America/Chicago", "from": "2026-11-20T00:00:00", "to": "2026-11-21T00:00:00",
+        "page": 1, "pages": 1, "limit": 50, "total": 2,
+        "events": [
+          { "id": 3, "occurrence": "2026-11-20T15:00:00Z", "uid": "a81b...@example.com", "title": "Stand-up", "all_day": false,
+            "start": "2026-11-20T09:00:00", "end": "2026-11-20T09:15:00", "timezone": "America/Chicago", "event_timezone": "America/Chicago",
+            "location": null, "description": null, "calendar": { "id": 1, "name": "Personal" },
+            "permission": "owner", "is_recurring": true, "is_exception": false, "shared_event": false },
+          { "id": 7, "occurrence": null, "uid": "3f9c...@example.com", "title": "Dentist", "all_day": false,
+            "start": "2026-11-20T14:30:00", "end": "2026-11-20T15:30:00", "timezone": "America/Chicago", "event_timezone": "America/Chicago",
+            "location": "Delta Dental", "description": null, "calendar": { "id": 1, "name": "Personal" },
+            "permission": "owner", "is_recurring": false, "is_exception": false, "shared_event": false }
+        ]
+      }
+    notes:
+      - occurrence names one occurrence of a repeating event (its original start, UTC); null for a single event.
+      - An all-day event's start and end are dates, the end exclusive.
+      - A to before from, or a range over three years, answers 400 with a sentence.
+    cli: homelab-cli calendar list --from today
+
+  - id: calendar-events-add
+    title: Add an event
+    method: POST
+    path: /api/v1/calendar/events
+    who: signed-in
+    status: 201
+    summary: One new event in your default calendar, or the one you name.
+    description: >
+      The same body the calendar's own editor sends. Times are wall clocks in
+      the zone you name (your calendar's when you don't); an all-day event
+      takes dates. Without an end a timed event lasts an hour and an all-day
+      one a day. A reminder is minutes before the start, by email; share_with
+      makes a read-only share to one address and tells that person.
+    params:
+      - name: title
+        in: body
+        required: true
+        about: What shows on the calendar.
+        example: Dentist
+      - name: start
+        in: body
+        required: true
+        about: 2026-11-20T14:30:00, or a date for an all-day event.
+        example: 2026-11-20T14:30:00
+      - name: end
+        in: body
+        required: false
+        about: The end, same form; for all-day dates it is exclusive.
+        example: 2026-11-20T15:30:00
+      - name: all_day
+        in: body
+        required: false
+        about: true for an all-day event.
+      - name: timezone
+        in: body
+        required: false
+        about: The IANA zone the wall clocks are in; your calendar's when left out.
+      - name: location
+        in: body
+        required: false
+        about: Where.
+        example: Delta Dental
+      - name: description
+        in: body
+        required: false
+        about: Notes.
+      - name: calendar_id
+        in: body
+        required: false
+        about: The calendar to add to (see List your calendars); your default one when left out.
+      - name: reminder_minutes
+        in: body
+        required: false
+        about: Minutes before the start for the email reminder (0 to 20160); null for none.
+        example: 10
+      - name: repeat
+        in: body
+        required: false
+        about: An RRULE such as FREQ=WEEKLY;COUNT=4 when it repeats.
+      - name: share_with
+        in: body
+        required: false
+        about: One address to share the new event with, read-only.
+    response: |
+      { "id": 7, "calendar_id": 1, "uid": "3f9c...@example.com", "title": "Dentist", "description": null, "location": "Delta Dental",
+        "all_day": false, "event_timezone": "America/Chicago", "timezone": "America/Chicago",
+        "start": "2026-11-20T14:30:00", "end": "2026-11-20T15:30:00", "rrule": null, "repeat": null, "color": null,
+        "permission": "owner", "is_recurring": false, "created_by_email": "{me}",
+        "calendar": { "id": 1, "name": "Personal", "color": "#1a73e8", "owner_email": "{me}" }, "reminder_minutes": 10 }
+    notes:
+      - A missing title or start, an end before the start, or a zone that is not known answers 400 with a sentence.
+      - A calendar you can see but not change answers 403.
+    cli: homelab-cli calendar add Dentist --start 2026-11-20T14:30 --end 2026-11-20T15:30 --location "Delta Dental" --reminder 10
+
+  - id: calendar-events-ics
+    title: Get a range as iCalendar
+    method: GET
+    path: /api/v1/calendar/events.ics
+    who: signed-in
+    summary: The occurrences in a range as an .ics file, one VEVENT each.
+    description: >
+      The same range as List your events, as iCalendar text: every occurrence
+      is its own VEVENT with UTC times, so any calendar program imports it
+      without having to understand repeat rules. For a whole calendar with
+      its rules kept, see Export a calendar.
+    params:
+      - name: from
+        in: query
+        required: false
+        about: As in List your events.
+        example: today
+      - name: to
+        in: query
+        required: false
+        about: As in List your events.
+      - name: calendar_id
+        in: query
+        required: false
+        about: Only this calendar.
+    response: |
+      BEGIN:VCALENDAR
+      VERSION:2.0
+      PRODID:-//Silver Linings LLC//homelab-calendar//EN
+      BEGIN:VEVENT
+      UID:3f9c...@example.com
+      DTSTART:20261120T203000Z
+      DTEND:20261120T213000Z
+      SUMMARY:Dentist
+      LOCATION:Delta Dental
+      END:VEVENT
+      END:VCALENDAR
+    notes:
+      - The answer is text/calendar, not JSON.
+    cli: homelab-cli calendar export --from today --to tomorrow -o today.ics
+
+  - id: calendar-export-ics
+    title: Export a calendar
+    method: GET
+    path: /api/v1/calendar/export.ics
+    who: signed-in
+    summary: One whole calendar as .ics with its repeat rules kept.
+    description: >
+      Your default calendar, or the one named, as the calendar page's own
+      export makes it: each event once, with its RRULE, cancelled occurrences
+      as EXDATE and moved ones as their own components. This is the file to
+      carry a calendar somewhere else, or to keep.
+    params:
+      - name: calendar_id
+        in: query
+        required: false
+        about: The calendar to export; your default one when left out.
+    response: |
+      BEGIN:VCALENDAR
+      VERSION:2.0
+      PRODID:-//Silver Linings LLC//homelab-calendar//EN
+      X-WR-CALNAME:Personal
+      BEGIN:VEVENT
+      UID:a81b...@example.com
+      DTSTART;TZID=America/Chicago:20261120T090000
+      DTEND;TZID=America/Chicago:20261120T091500
+      RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR
+      SUMMARY:Stand-up
+      END:VEVENT
+      END:VCALENDAR
+    notes:
+      - The answer is text/calendar, not JSON.
+    cli: homelab-cli calendar export -o personal.ics
+
+  - id: calendar-import-ics
+    title: Import an iCalendar file
+    method: POST
+    path: /api/v1/calendar/import
+    who: signed-in
+    summary: Add the events of an .ics file to a calendar; a known UID updates its event.
+    description: >
+      Send the file's text as the body with Content-Type text/calendar. Times
+      with a TZID keep that zone, UTC times are converted to your calendar's
+      zone, floating times are read in it, and VALUE=DATE makes an all-day
+      event. A DURATION stands in for a missing end; a repeat rule is kept
+      when this calendar can show it; EXDATE cancels those occurrences; an
+      alarm set before the start becomes the email reminder. An event whose
+      UID is already in one of your editable calendars is updated in place, so
+      the same file twice does not duplicate. The answer says what was made,
+      what was updated, and what was skipped and why.
+    params:
+      - name: calendar_id
+        in: query
+        required: false
+        about: The calendar to import into; your default one when left out. Known UIDs update wherever they are.
+    response: |
+      { "created": 2, "updated": 1,
+        "skipped": [ { "uid": "9d1e...@example.com", "reason": "one changed occurrence of a repeating event; the series itself was imported" } ],
+        "events": [
+          { "id": 7, "title": "Dentist", "start": "2026-11-20T14:30:00", "end": "2026-11-20T15:30:00", "all_day": false,
+            "timezone": "America/Chicago", "reminder_minutes": 15, "permission": "owner", "calendar": { "id": 1, "name": "Personal" } }
+        ],
+        "calendar": { "id": 1, "name": "Personal", "is_default": true, "permission": "owner" } }
+    notes:
+      - 2 MB and 1000 events at most; a body that is not iCalendar answers 400 with a sentence.
+    cli: homelab-cli calendar import holidays.ics
+    curl: |
+      curl -s -X POST https://api.mailmasker.org/api/v1/calendar/import \
+        -H "Authorization: Bearer $TOKEN" -H "Content-Type: text/calendar" \
+        --data-binary @holidays.ics
+    perl: |
+      use Mojo::Base -strict;
+      use Mojo::UserAgent;
+      use Mojo::File qw(path);
+      my $ua  = Mojo::UserAgent->new;
+      my $res = $ua->post('https://api.mailmasker.org/api/v1/calendar/import',
+        { Authorization => "Bearer $ENV{TOKEN}", 'Content-Type' => 'text/calendar' },
+        path('holidays.ics')->slurp)->result;
+      print $res->body, "\n";

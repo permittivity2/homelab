@@ -226,6 +226,15 @@ sub startup ($self) {
     $r->post('/api/suggestions/:token/save' => $tok)     ->to('api#save_suggestion');
     $r->post('/api/suggestions/:token/dismiss' => $tok)  ->to('api#dismiss_suggestion');
     $r->put('/internal/v1/calendar/admin/accounts/#email/entitlements')->to('api#admin_entitlements');
+    # homelab-cli through the api gateway (#82): Bearer, no CSRF. The .ics
+    # routes keep format detection off so the extension is a literal, as the
+    # public /c and /e feeds do.
+    $r->get('/internal/v1/calendar/calendars')                   ->to('api#internal_calendars');
+    $r->get('/internal/v1/calendar/events')                      ->to('api#internal_events_list');
+    $r->post('/internal/v1/calendar/events')                     ->to('api#internal_event_create');
+    $r->get('/internal/v1/calendar/events.ics' => [format => 0]) ->to('api#internal_events_ics');
+    $r->get('/internal/v1/calendar/export.ics' => [format => 0]) ->to('api#internal_export_ics');
+    $r->post('/internal/v1/calendar/import')                     ->to('api#internal_import');
 
     # JSON, same-origin, signed in.
     $r->get('/api/calendars')                 ->to('api#calendars');

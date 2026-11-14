@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import argcomplete
@@ -1677,6 +1678,188 @@ def cmd_drive_append(args):
     return 0
 
 
+# --- calendar: homelab-calendar through homelab-api's /api/v1/calendar/*
+# gateway (post-cutover #82). The server reads --from/--to in the account's
+# own calendar zone and answers wall clocks in it; this side only formats. ---
+
+def _calendar_when(ev):
+    """The WHEN column: 'Fri Nov 20  2:30 PM - 3:30 PM', 'Fri Nov 20  11:00 PM
+    - Sat Nov 21 1:00 AM', 'Fri Nov 20  all day', 'Fri Nov 20 - Sun Nov 22
+    all day' (an all-day end is exclusive). Unreadable dates come back as
+    they are rather than failing the whole table."""
+    def day(d):
+        return f"{d:%a %b} {d.day}"
+
+    def clock(d):
+        return f"{d.hour % 12 or 12}:{d:%M} {'AM' if d.hour < 12 else 'PM'}"
+
+    try:
+        if ev.get("all_day"):
+            s = datetime.strptime(str(ev["start"])[:10], "%Y-%m-%d")
+            e = datetime.strptime(str(ev["end"])[:10], "%Y-%m-%d") - timedelta(days=1)
+            return f"{day(s)}  all day" if e <= s else f"{day(s)} - {day(e)}  all day"
+        s = datetime.strptime(str(ev["start"])[:19], "%Y-%m-%dT%H:%M:%S")
+        e = datetime.strptime(str(ev["end"])[:19], "%Y-%m-%dT%H:%M:%S")
+        if s.date() == e.date():
+            return f"{day(s)}  {clock(s)} - {clock(e)}"
+        return f"{day(s)}  {clock(s)} - {day(e)} {clock(e)}"
+    except (KeyError, ValueError, TypeError):
+        return f"{ev.get('start')} - {ev.get('end')}"
+
+
+def _calendar_day(s):
+    """'2026-11-20T00:00:00' -> 'Fri Nov 20'; anything unreadable as it is."""
+    try:
+        d = datetime.strptime(str(s)[:10], "%Y-%m-%d")
+        return f"{d:%a %b} {d.day}"
+    except (ValueError, TypeError):
+        return str(s)
+
+
+def _calendar_last_day(to):
+    """The server's `to` is exclusive ('2026-11-21T00:00:00' for today): the
+    last day the range covers, as a date."""
+    try:
+        return (datetime.strptime(str(to)[:19], "%Y-%m-%dT%H:%M:%S") - timedelta(seconds=1)).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return to
+
+
+def cmd_calendar_calendars(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).calendar_calendars(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not list calendars: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    rows = []
+    for c in result.get("own") or []:
+        rows.append([c["id"], c["name"], c.get("timezone") or "", "yes" if c.get("is_default") else "", c.get("permission") or "owner", ""])
+    for c in result.get("shared") or []:
+        rows.append([c["id"], c["name"], c.get("timezone") or "", "", c.get("permission") or "", c.get("owner_email") or ""])
+    if not rows:
+        print("(no calendars)")
+        return 0
+    _print_table(["ID", "NAME", "ZONE", "DEFAULT", "YOU MAY", "SHARED BY"], rows)
+    return 0
+
+
+def cmd_calendar_list(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        result = _client(args).calendar_events(
+            session["token"],
+            **{"from": args.from_, "to": args.to, "calendar_id": args.calendar, "limit": args.limit, "page": args.page},
+        )
+    except ApiError as e:
+        _emit_error(args, f"Could not list events: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    events = result.get("events") or []
+    span = f"from {_calendar_day(result.get('from'))} to {_calendar_day(_calendar_last_day(result.get('to')))}"
+    if not events:
+        print(f"(no events {span})")
+        return 0
+    rows = [
+        [_calendar_when(ev), ev.get("title") or "(no title)", ev.get("location") or "",
+         (ev.get("calendar") or {}).get("name") or "", ev.get("id")]
+        for ev in events
+    ]
+    _print_table(["WHEN", "TITLE", "WHERE", "CALENDAR", "ID"], rows)
+    total, page, pages = result.get("total", len(events)), result.get("page", 1), result.get("pages", 1)
+    more = f" (--page {page + 1} for the next)" if page < pages else ""
+    print(f"{total} event{'' if total == 1 else 's'} {span}; page {page} of {pages}{more}")
+    return 0
+
+
+def cmd_calendar_add(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    body = {"title": args.title, "start": args.start, "all_day": bool(args.all_day)}
+    if args.end:
+        body["end"] = args.end
+    for key, value in (("location", args.location), ("description", args.description), ("timezone", args.timezone),
+                       ("calendar_id", args.calendar), ("repeat", args.repeat), ("share_with", args.share_with)):
+        if value:
+            body[key] = value
+    reminder = (args.reminder or "").strip().lower()
+    if reminder == "none":
+        body["reminder_minutes"] = None
+    elif reminder.isdigit() and 0 <= int(reminder) <= 20160:
+        body["reminder_minutes"] = int(reminder)
+    else:
+        _emit_error(args, "--reminder takes a number of minutes (0 to 20160) or 'none'")
+        return 1
+    try:
+        ev = _client(args).calendar_add_event(session["token"], body)
+    except ApiError as e:
+        _emit_error(args, f"Could not add the event: {e.message}")
+        return 1
+    if _emit(args, ev):
+        return 0
+    cal = (ev.get("calendar") or {}).get("name")
+    print(f"Added event {ev.get('id')}: {ev.get('title')}, {_calendar_when(ev)}" + (f" ({cal})" if cal else ""))
+    return 0
+
+
+def cmd_calendar_export(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        ics = _client(args).calendar_ics(session["token"], **{"from": args.from_, "to": args.to, "calendar_id": args.calendar})
+    except ApiError as e:
+        _emit_error(args, f"Could not export: {e.message}")
+        return 1
+    if args.output:
+        # newline="" keeps the CRLF line ends iCalendar is written with.
+        Path(args.output).write_text(ics, encoding="utf-8", newline="")
+        if _emit(args, {"written_to": args.output, "bytes": len(ics.encode("utf-8"))}):
+            return 0
+        print(f"Wrote {args.output}")
+        return 0
+    if _emit(args, {"ics": ics}):
+        return 0
+    sys.stdout.write(ics)
+    return 0
+
+
+def cmd_calendar_import(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        data = Path(args.path).read_bytes()
+    except OSError as e:
+        _emit_error(args, f"Could not read {args.path}: {e.strerror or e}")
+        return 1
+    try:
+        result = _client(args).calendar_import(session["token"], data, calendar_id=args.calendar)
+    except ApiError as e:
+        _emit_error(args, f"Import failed: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    created, updated, skipped = result.get("created", 0), result.get("updated", 0), result.get("skipped") or []
+    n = created + updated
+    cal = (result.get("calendar") or {}).get("name")
+    print(f"Imported {n} event{'' if n == 1 else 's'} ({created} new, {updated} updated)"
+          + (f" into {cal}" if cal else "") + (f"; skipped {len(skipped)}" if skipped else ""))
+    for s in skipped:
+        print(f"  skipped {s.get('uid') or '(no UID)'}: {s.get('reason')}")
+    for ev in result.get("events") or []:
+        print(f"  {ev.get('id')}  {_calendar_when(ev)}  {ev.get('title')}")
+    return 0
+
+
 # --- jobs: homelab-api's /api/v1/jobs/* gateway -> homelab-worker (see
 # ../../worker/README.md). Not nested under `drive` even though the
 # zip-download feature is what submits jobs today -- homelab-worker is
@@ -2721,6 +2904,52 @@ def build_parser():
     p = drive_sub.add_parser("rmdir", help="Delete a folder, and everything inside it")
     p.add_argument("folder_id")
     p.set_defaults(func=cmd_drive_rmdir)
+
+    calendar = sub.add_parser("calendar", help="Your calendar, via homelab-api's calendar gateway: list, add, ICS out and in")
+    calendar_sub = calendar.add_subparsers(dest="calendar_command", required=True)
+
+    p = calendar_sub.add_parser("list", help="List the events in a range (today unless --from/--to say otherwise), a page at a time")
+    p.add_argument("--from", dest="from_", metavar="WHEN",
+                   help="Start of the range: a date (2026-11-20), a time (2026-11-20T14:30), today or tomorrow. Alone: a year from it")
+    p.add_argument("--to", metavar="WHEN",
+                   help="End of the range, same forms; a date alone means through that whole day. Alone: from today")
+    p.add_argument("--calendar", metavar="ID", help="Only this calendar (see 'calendar calendars')")
+    p.add_argument("--limit", type=int, default=50, help="Events per page, 1 to 200 (default 50)")
+    p.add_argument("--page", type=int, default=1, help="Which page, from 1")
+    p.set_defaults(func=cmd_calendar_list)
+
+    p = calendar_sub.add_parser("add", help="Add an event (to your default calendar unless --calendar)")
+    p.add_argument("title")
+    p.add_argument("--start", required=True, metavar="WHEN", help="2026-11-20T14:30, or a date with --all-day")
+    p.add_argument("--end", metavar="WHEN", help="Same form; an hour after the start (a day, for all-day) when left out")
+    p.add_argument("--all-day", action="store_true", help="An all-day event: --start/--end are dates (the end is exclusive)")
+    p.add_argument("--location", help="Where")
+    p.add_argument("--description", help="Notes")
+    p.add_argument("--timezone", metavar="ZONE", help="The IANA zone the times are in (your calendar's when left out)")
+    p.add_argument("--calendar", metavar="ID", help="The calendar to add to")
+    p.add_argument("--reminder", default="10", metavar="MINUTES",
+                   help="Email reminder this many minutes before the start (default 10), or 'none'")
+    p.add_argument("--repeat", metavar="RRULE", help="A repeat rule, e.g. FREQ=WEEKLY;COUNT=4")
+    p.add_argument("--share-with", metavar="EMAIL", help="Share the new event (read-only) with one address")
+    p.set_defaults(func=cmd_calendar_add)
+
+    p = calendar_sub.add_parser(
+        "export",
+        help="The events as an .ics file: a range (--from/--to, one VEVENT per occurrence), or the whole calendar with its rules")
+    p.add_argument("--from", dest="from_", metavar="WHEN",
+                   help="Start of the range (as in 'list'); with --from or --to the file holds the occurrences in the range")
+    p.add_argument("--to", metavar="WHEN", help="End of the range (as in 'list')")
+    p.add_argument("--calendar", metavar="ID", help="Only this calendar (for a whole-calendar export: which one; the default otherwise)")
+    p.add_argument("--output", "-o", metavar="FILE", help="Write here instead of standard output")
+    p.set_defaults(func=cmd_calendar_export)
+
+    p = calendar_sub.add_parser("import", help="Add the events of an .ics file (a UID already in your calendar updates that event)")
+    p.add_argument("path", help="The .ics file")
+    p.add_argument("--calendar", metavar="ID", help="The calendar to import into (your default when left out)")
+    p.set_defaults(func=cmd_calendar_import)
+
+    p = calendar_sub.add_parser("calendars", help="List your calendars and the ones shared with you, with their ids")
+    p.set_defaults(func=cmd_calendar_calendars)
 
     jobs = sub.add_parser("jobs", help="Background job status, via homelab-api's jobs gateway -> homelab-worker")
     jobs_sub = jobs.add_subparsers(dest="jobs_command", required=True)

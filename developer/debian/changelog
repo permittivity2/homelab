@@ -1,3 +1,11 @@
+homelab-developer (0.1.7) unstable; urgency=medium
+
+  * Reference: the calendar routes homelab-cli uses (post-cutover #82): the
+    account's calendars, the events in a range (paged), a new event, the range
+    as iCalendar, one calendar exported, an iCalendar file imported.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 14 Nov 2026 15:13:56 -0600
+
 homelab-developer (0.1.6) unstable; urgency=medium
 
   * Reference: the calendar's entitlement route for administrators

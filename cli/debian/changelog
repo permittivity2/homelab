@@ -1,3 +1,12 @@
+homelab-cli (0.6.16) unstable; urgency=medium
+
+  * calendar (post-cutover #82): list (today by default; --from/--to as a
+    date, a wall clock, today or tomorrow; --page/--limit), add, export (ICS;
+    a range, or the whole calendar with its rules), import (ICS) and
+    calendars. -j prints the real response, as everywhere.
+
+ -- Gardner <gardner@homelab>  Sat, 14 Nov 2026 15:13:56 -0600
+
 homelab-cli (0.6.15) unstable; urgency=medium
 
   * Release v0.6.15

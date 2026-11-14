@@ -5,7 +5,8 @@ use Mojo::Util qw(url_escape);
 use Homelab::Common::AuditClient qw(enqueue);
 use Homelab::Calendar::Recurrence qw(validate_zone parse_wall wall_string parse_rrule);
 use Homelab::Calendar::Access qw(may_edit may_manage);
-use Homelab::Calendar::ICS qw(masters_ics);
+use Homelab::Calendar::ICS qw(masters_ics instances_ics);
+use Homelab::Calendar::ICSImport qw(parse_ics);
 use Homelab::Calendar::Consent ();
 use Homelab::Calendar::MailExtract ();
 
@@ -205,36 +206,56 @@ sub events ($c) {
     my $zone = $c->viewer_zone($prefs);
     my ($ws, $we) = _window($c, $zone);
     return _fail($c, 400, 'The window must be a start before an end, at most three years apart.') unless $ws;
-
-    my $cals = $m->calendars_for($me);
-    my @visible = grep { $_->{visible} } @{ $cals->{own} }, @{ $cals->{shared} };
-    my %perm  = map { $_->{id} => $_->{permission} } @visible;
-    my %color = map { $_->{id} => $_->{color} } @visible;
     my @out;
-    for my $inst (@{ $m->instances(calendars => \@visible, window_start => $ws, window_end => $we) }) {
-        $inst->{calendar_color} = $color{ $inst->{calendar_id} };
-        push @out, _fc_event($inst, $zone, $perm{ $inst->{calendar_id} });
+    for my $inst (@{ _instances_for($m, $me, $ws, $we, visible_only => 1, shared_events => $prefs->{show_shared_events}) }) {
+        my $fc = _fc_event($inst, $zone, $inst->{permission});
+        $fc->{extendedProps}{shared_event} = \1 if $inst->{shared_event};
+        push @out, $fc;
     }
-    # Single events shared to me, unless the sidebar's "Shared events" is off.
-    if ($prefs->{show_shared_events}) {
-        my $shares = $m->viewer_event_shares($me);
+    return $c->render(json => \@out);
+}
+
+# Every occurrence the account sees in [$ws, $we): its calendars (all of them,
+# or with visible_only the ones ticked in the sidebar; or one, calendar_id),
+# plus with shared_events the single events shared to it that no calendar
+# above already shows. Each instance carries its permission, calendar_name,
+# calendar_color and, for a shared single event, shared_event. Sorted by start.
+sub _instances_for ($m, $me, $ws, $we, %o) {
+    my $cals = $m->calendars_for($me);
+    my @cals = grep { !$o{visible_only} || $_->{visible} } @{ $cals->{own} }, @{ $cals->{shared} };
+    @cals = grep { $_->{id} == $o{calendar_id} } @cals if $o{calendar_id};
+    my %perm  = map { $_->{id} => $_->{permission} } @cals;
+    my %color = map { $_->{id} => $_->{color} } @cals;
+    my %name  = map { $_->{id} => $_->{name} } @cals;
+    my @out;
+    for my $inst (@{ $m->instances(calendars => \@cals, window_start => $ws, window_end => $we) }) {
+        $inst->{calendar_color} = $color{ $inst->{calendar_id} };
+        $inst->{calendar_name}  = $name{ $inst->{calendar_id} };
+        $inst->{permission}     = $perm{ $inst->{calendar_id} };
+        push @out, $inst;
+    }
+    if ($o{shared_events} && !$o{calendar_id}) {
         my %ev_perm;
-        for my $s (@$shares) {
+        for my $s (@{ $m->viewer_event_shares($me) }) {
             my $p = $s->{permission} eq 'edit' ? 'edit' : 'read';
             $ev_perm{ $s->{event_id} } = $p if !$ev_perm{ $s->{event_id} } || $p eq 'edit';
         }
-        # Not the ones already shown through a shared calendar.
         delete $ev_perm{$_} for grep { my $e = $m->event($_); $e && $perm{ $e->{calendar_id} } } keys %ev_perm;
         if (%ev_perm) {
-            my @events = grep { $_ && $m->calendar($_->{calendar_id}) } map { $m->event($_) } sort keys %ev_perm;
+            my (%shared_cal, @events);
+            for my $e (grep { $_ } map { $m->event($_) } sort keys %ev_perm) {
+                $shared_cal{ $e->{calendar_id} } //= $m->calendar($e->{calendar_id}) or next;
+                push @events, $e;
+            }
             for my $inst (@{ $m->instances(events => \@events, window_start => $ws, window_end => $we) }) {
-                my $fc = _fc_event($inst, $zone, $ev_perm{ $inst->{event_id} });
-                $fc->{extendedProps}{shared_event} = \1;
-                push @out, $fc;
+                $inst->{permission}    = $ev_perm{ $inst->{event_id} };
+                $inst->{calendar_name} = $shared_cal{ $inst->{calendar_id} }{name};
+                $inst->{shared_event}  = 1;
+                push @out, $inst;
             }
         }
     }
-    return $c->render(json => \@out);
+    return [ sort { $a->{start} <=> $b->{start} || $a->{title} cmp $b->{title} } @out ];
 }
 
 sub _event_for ($c, $me, $need_edit) {
@@ -309,12 +330,18 @@ sub _event_input ($c, $b, $zone) {
 sub create_event ($c) {
     my $me = $c->require_login or return;
     $c->csrf_ok or return;
+    return _create_from_body($c, $me, _body($c));
+}
+
+# A new event from a body: the editor's, or homelab-cli's through the api
+# (#82). The calendar is the one named, else the account's default one.
+sub _create_from_body ($c, $me, $b) {
     my $m = _model($c);
-    my $b = _body($c);
-    my $cal = $m->calendar($b->{calendar_id}) or return _fail($c, 404, 'No such calendar.');
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my $cal = (defined $b->{calendar_id} && length $b->{calendar_id}) ? $m->calendar($b->{calendar_id}) : $m->ensure_default_calendar($me, $zone);
+    return _fail($c, 404, 'No such calendar.') unless $cal;
     my $perm = $m->permission_for_calendar($me, $cal) or return _fail($c, 404, 'No such calendar.');
     return _fail($c, 403, 'You can see this calendar but not add to it.') unless may_edit($perm);
-    my $zone = $c->viewer_zone($m->prefs($me));
     # The Share field (#79): one address the new event is shared with, read-only.
     my $share_with = _share_with($c, $b, $me, $perm); return if $share_with && $share_with eq "\0";
     my $event = _try($c, sub { $m->create_event($cal, $me, _event_input($c, $b, $zone)) }) or return;
@@ -808,6 +835,12 @@ sub export ($c) {
     my $m = _model($c);
     my $cal = $m->calendar($c->stash('id')) or return _fail($c, 404, 'No such calendar.');
     $m->permission_for_calendar($me, $cal) or return _fail($c, 404, 'No such calendar.');
+    return _ics_download($c, _calendar_masters_ics($m, $cal), $cal->{name});
+}
+
+# One calendar's events as iCalendar with the rules kept (the export a person
+# carries elsewhere; also homelab-cli's `calendar export` without a range).
+sub _calendar_masters_ics ($m, $cal) {
     my $events = $m->db->query('SELECT * FROM calendar.events WHERE calendar_id = ? AND deleted_at IS NULL ORDER BY starts_at', $cal->{id})->hashes->to_array;
     my @out;
     for my $e (@$events) {
@@ -828,11 +861,212 @@ sub export ($c) {
         }
         push @out, \%x;
     }
-    my $ics = masters_ics(name => $cal->{name}, zone => $cal->{timezone}, description => $cal->{description}, events => \@out);
-    my $fname = ($cal->{name} =~ s/[^A-Za-z0-9._-]+/_/gr) || 'calendar';
+    return masters_ics(name => $cal->{name}, zone => $cal->{timezone}, description => $cal->{description}, events => \@out);
+}
+
+sub _ics_download ($c, $ics, $name) {
+    my $fname = (($name // '') =~ s/[^A-Za-z0-9._-]+/_/gr) || 'calendar';
     $c->res->headers->content_type('text/calendar; charset=utf-8');
     $c->res->headers->content_disposition("attachment; filename=\"$fname.ics\"");
     return $c->render(data => $ics);
+}
+
+# --- homelab-cli through the api gateway (post-cutover #82) ----------------
+# Bearer, no CSRF (the gateway maps /api/v1/calendar/* here): the account's
+# calendars, the occurrences in a range (paged), one new event, the range as
+# iCalendar, a whole calendar as iCalendar with its rules, an iCalendar file in.
+
+# A Bearer caller acts as the signed-in account for the helpers below
+# (session_email reads the stash first).
+sub _as_session ($c, $me) {
+    $c->stash('calendar.session_email' => $me);
+    $c->stash('calendar.session_jti' => $c->stash('current_jti'));
+    return $me;
+}
+
+# from/to: a date (2026-11-20), a wall clock (2026-11-20T14:30), today or
+# tomorrow, read in the account's zone. Neither: today. from alone: a year on.
+# to alone: from today. A date (or today/tomorrow) as `to` means that whole
+# day. Three years at most. Returns ($ws, $we) or (undef, 'a sentence').
+sub _range ($c, $zone) {
+    my $today = DateTime->now(time_zone => $zone)->truncate(to => 'day');
+    my $read = sub ($s) {
+        return undef unless defined $s && length $s;
+        return $today->clone if lc $s eq 'today';
+        return $today->clone->add(days => 1) if lc $s eq 'tomorrow';
+        return parse_wall($s, $zone);
+    };
+    my ($f, $t) = ($c->param('from'), $c->param('to'));
+    my ($ws, $we) = ($read->($f), $read->($t));
+    return (undef, 'The from date must look like 2026-11-20 or 2026-11-20T14:30 (or today, tomorrow).') if defined $f && length $f && !$ws;
+    return (undef, 'The to date must look like 2026-11-20 or 2026-11-20T14:30 (or today, tomorrow).') if defined $t && length $t && !$we;
+    my $whole_day = defined $t && $t =~ /\A(?:\d{4}-\d{2}-\d{2}|today|tomorrow)\z/i;
+    if    (!$ws && !$we) { $ws = $today->clone; $we = $today->clone->add(days => 1) }
+    elsif ($ws && !$we)  { $we = $ws->clone->add(years => 1) }
+    elsif (!$ws && $we)  { $ws = $today->clone }
+    $we = $we->clone->add(days => 1) if $whole_day;
+    return (undef, 'The to date must come after the from date.') unless $we > $ws;
+    return (undef, 'The range cannot be more than three years.') if $we->epoch - $ws->epoch > 3 * 366 * 86400;
+    return ($ws, $we);
+}
+
+# ?calendar_id= -> ($cal, undef), (undef, undef) for none, or (undef, 'error').
+sub _cli_calendar_id ($c, $m, $me) {
+    my $cid = $c->param('calendar_id');
+    return (undef, undef) unless defined $cid && length $cid;
+    return (undef, 'calendar_id must be a number.') unless $cid =~ /\A\d+\z/;
+    my $cal = $m->calendar($cid);
+    return (undef, 'No such calendar.') unless $cal && $m->permission_for_calendar($me, $cal);
+    return ($cal, undef);
+}
+sub _fail_calendar ($c, $err) { return _fail($c, ($err eq 'No such calendar.' ? 404 : 400), $err) }
+
+# One occurrence as homelab-cli sees it: wall clocks in the account's zone.
+sub _cli_event ($inst, $zone) {
+    my $all_day = $inst->{all_day};
+    return {
+        id => $inst->{event_id} + 0, occurrence => _rid_str($inst->{recurrence_id}), uid => $inst->{uid},
+        title => $inst->{title}, all_day => ($all_day ? \1 : \0),
+        start => $all_day ? $inst->{start}->ymd : wall_string($inst->{start}->clone->set_time_zone($zone)),
+        end   => $all_day ? $inst->{end}->ymd   : wall_string($inst->{end}->clone->set_time_zone($zone)),
+        timezone => $zone, event_timezone => $inst->{event}{timezone},
+        location => $inst->{location}, description => $inst->{description},
+        calendar => { id => $inst->{calendar_id} + 0, name => $inst->{calendar_name} },
+        permission => $inst->{permission}, is_recurring => ($inst->{is_recurring} ? \1 : \0),
+        is_exception => ($inst->{is_exception} ? \1 : \0), shared_event => ($inst->{shared_event} ? \1 : \0),
+    };
+}
+
+# GET /internal/v1/calendar/calendars
+sub internal_calendars ($c) {
+    my $me = $c->authenticated_email_any or return;
+    _as_session($c, $me);
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    $m->ensure_default_calendar($me, $zone);
+    my $cals = $m->calendars_for($me);
+    return $c->render(json => {
+        timezone => $zone,
+        own    => [ map { _calendar_json($_) } @{ $cals->{own} } ],
+        shared => [ map { _calendar_json($_) } @{ $cals->{shared} } ],
+    });
+}
+
+# GET /internal/v1/calendar/events?from&to&calendar_id&limit&page
+sub internal_events_list ($c) {
+    my $me = $c->authenticated_email_any or return;
+    _as_session($c, $me);
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    $m->ensure_default_calendar($me, $zone);
+    my ($ws, $we) = _range($c, $zone); return _fail($c, 400, $we) unless $ws;
+    my ($cal, $err) = _cli_calendar_id($c, $m, $me); return _fail_calendar($c, $err) if $err;
+    my $limit = $c->param('limit') // 50;
+    my $page  = $c->param('page') // 1;
+    return _fail($c, 400, 'limit must be a number from 1 to 200.') unless $limit =~ /\A\d+\z/ && $limit >= 1 && $limit <= 200;
+    return _fail($c, 400, 'page must be a number from 1.') unless $page =~ /\A\d+\z/ && $page >= 1;
+    my $all = _instances_for($m, $me, $ws, $we, shared_events => 1, calendar_id => ($cal ? $cal->{id} : undef));
+    my $total = scalar @$all;
+    my $pages = $total ? int(($total + $limit - 1) / $limit) : 1;
+    my $first = ($page - 1) * $limit;
+    my $last  = $first + $limit - 1;
+    $last = $total - 1 if $last > $total - 1;
+    my @slice = $first <= $last ? @$all[ $first .. $last ] : ();
+    return $c->render(json => {
+        timezone => $zone, from => wall_string($ws), to => wall_string($we),
+        page => $page + 0, pages => $pages, limit => $limit + 0, total => $total,
+        events => [ map { _cli_event($_, $zone) } @slice ],
+    });
+}
+
+# POST /internal/v1/calendar/events -- the same body the editor sends.
+sub internal_event_create ($c) {
+    my $me = $c->authenticated_email_any or return;
+    _as_session($c, $me);
+    return _create_from_body($c, $me, _body($c));
+}
+
+# GET /internal/v1/calendar/events.ics?from&to&calendar_id -- every occurrence
+# in the range as its own VEVENT (UTC instants: any client imports it).
+sub internal_events_ics ($c) {
+    my $me = $c->authenticated_email_any or return;
+    _as_session($c, $me);
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my ($ws, $we) = _range($c, $zone); return _fail($c, 400, $we) unless $ws;
+    my ($cal, $err) = _cli_calendar_id($c, $m, $me); return _fail_calendar($c, $err) if $err;
+    my $list = _instances_for($m, $me, $ws, $we, shared_events => 1, calendar_id => ($cal ? $cal->{id} : undef));
+    my $ics = instances_ics(name => ($cal ? $cal->{name} : "Calendar of $me"), zone => $zone, instances => $list);
+    return _ics_download($c, $ics, ($cal ? $cal->{name} : 'events') . '-' . $ws->ymd . '-' . $we->clone->subtract(seconds => 1)->ymd);
+}
+
+# GET /internal/v1/calendar/export.ics?calendar_id -- one calendar, rules kept.
+sub internal_export_ics ($c) {
+    my $me = $c->authenticated_email_any or return;
+    _as_session($c, $me);
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my ($cal, $err) = _cli_calendar_id($c, $m, $me); return _fail_calendar($c, $err) if $err;
+    $cal //= $m->ensure_default_calendar($me, $zone);
+    return _ics_download($c, _calendar_masters_ics($m, $cal), $cal->{name});
+}
+
+# POST /internal/v1/calendar/import?calendar_id -- the body is the .ics text.
+# A UID already in one of the account's editable calendars updates that
+# event; anything else is created in the calendar named (else the default).
+sub internal_import ($c) {
+    my $me = $c->authenticated_email_any or return;
+    _as_session($c, $me);
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my ($cal, $err) = _cli_calendar_id($c, $m, $me); return _fail_calendar($c, $err) if $err;
+    $cal //= $m->ensure_default_calendar($me, $zone);
+    my $perm = $m->permission_for_calendar($me, $cal);
+    return _fail($c, 403, 'You can see this calendar but not add to it.') unless may_edit($perm);
+    my $text = $c->req->body // '';
+    return _fail($c, 413, 'The file is too large (2 MB at most).') if length $text > 2_000_000;
+    my $parsed = parse_ics($text, zone => $zone);
+    return _fail($c, 400, $parsed->{error}) if $parsed->{error};
+    my (@made, @skipped, $created, $updated);
+    ($created, $updated) = (0, 0);
+    push @skipped, @{ $parsed->{skipped} };
+    for my $in (@{ $parsed->{events} }) {
+        my %input = map { $_ => $in->{$_} } qw(title description location all_day start end timezone repeat);
+        my ($row, $jcal);
+        my $existing = defined $in->{uid} ? $m->event_by_uid($in->{uid}) : undef;
+        if ($existing) {
+            my $ecal  = $m->calendar($existing->{calendar_id});
+            my $eperm = $ecal ? $m->permission_for_event($me, $existing, $ecal) : undef;
+            if ($eperm && may_edit($eperm)) {
+                $row = eval { $m->update_event($existing, \%input) };
+                unless ($row) { push @skipped, { uid => $in->{uid}, reason => (($@ // 'could not be updated') =~ s/\n\z//r) }; next }
+                $updated++;
+                $row->{permission} = $eperm;
+                $jcal = $ecal;
+            }
+            else { delete $in->{uid} }     # someone else's event: one of our own instead
+        }
+        unless ($row) {
+            $input{uid} = $in->{uid} if defined $in->{uid};
+            $row = eval { $m->create_event($cal, $me, \%input) };
+            unless ($row) { push @skipped, { uid => $in->{uid}, reason => (($@ // 'could not be created') =~ s/\n\z//r) }; next }
+            $created++;
+            $row->{permission} = $perm;
+            $jcal = $cal;
+        }
+        if ($row->{rrule} && @{ $in->{exdates} // [] }) {
+            for my $x (@{ $in->{exdates} }) {
+                my $rid = parse_wall($x, $row->{timezone}) or next;
+                eval { $m->_write_exception($row, $rid, {}, 1) };
+            }
+        }
+        $m->set_reminder($row->{id}, $in->{reminder_minutes}) if defined $in->{reminder_minutes};
+        push @made, _event_json($c, $row, $jcal, $zone);
+    }
+    return $c->render(json => {
+        created => $created, updated => $updated, skipped => \@skipped, events => \@made,
+        calendar => _calendar_json({ %$cal, permission => $perm, visible => 1 }),
+    });
 }
 
 # --- preferences -----------------------------------------------------------

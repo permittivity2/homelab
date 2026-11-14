@@ -628,6 +628,39 @@ class Client:
     def dns_delete_mail_alias(self, token, source_pattern):
         return self._request("DELETE", f"/api/v1/domains/mail-aliases/{source_pattern}", headers=self._auth(token))
 
+    # --- Calendar, via homelab-api's /api/v1/calendar/* gateway ->
+    # homelab-calendar (post-cutover #82). Dates go to the server as typed
+    # (a date, a wall clock, today, tomorrow); it reads them in the account's
+    # own calendar zone, so this side never does date arithmetic. ---
+    def calendar_calendars(self, token):
+        return self._request("GET", "/api/v1/calendar/calendars", headers=self._auth(token))
+
+    def calendar_events(self, token, **params):
+        params = {k: v for k, v in params.items() if v is not None}
+        return self._request("GET", "/api/v1/calendar/events", headers=self._auth(token), params=params)
+
+    def calendar_add_event(self, token, body):
+        return self._request("POST", "/api/v1/calendar/events", headers=self._auth(token), json=body)
+
+    def calendar_ics(self, token, **params):
+        """The iCalendar text of a range (events.ics: one VEVENT per
+        occurrence) when `from`/`to` is given, else of the whole calendar
+        with its rules (export.ics). Text, not JSON, hence not _request()."""
+        params = {k: v for k, v in params.items() if v is not None}
+        path = "/api/v1/calendar/events.ics" if ("from" in params or "to" in params) else "/api/v1/calendar/export.ics"
+        resp = self._send("GET", path, headers=self._auth(token), params=params, timeout=120)
+        if not resp.ok:
+            raise ApiError(resp.status_code, _error_message(resp))
+        return resp.text
+
+    def calendar_import(self, token, ics_bytes, calendar_id=None):
+        params = {"calendar_id": calendar_id} if calendar_id else {}
+        return self._request(
+            "POST", "/api/v1/calendar/import",
+            headers=self._auth(token, **{"Content-Type": "text/calendar; charset=utf-8"}),
+            params=params, data=ics_bytes, timeout=120,
+        )
+
     # --- Mail, via homelab-api's /api/v1/mail/* gateway ->
     # homelab-mailbridge (see ../../mailbridge/README.md). No more
     # imaplib/smtplib here at all -- these are plain HTTP calls, same

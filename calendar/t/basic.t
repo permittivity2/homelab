@@ -145,6 +145,15 @@ $t->post_ok('/api/suggestions/short/save')->status_is(404, 'a token of the wrong
 $t->put_ok('/internal/v1/calendar/admin/accounts/someone@example.test/entitlements' => json => { research_at_arrival_allowed => 1 })
   ->status_is(401, 'the entitlement route wants a Bearer token (an address with dots routes: relaxed placeholder)');
 
+# --- homelab-cli's routes through the gateway (#82): every one wants a Bearer token ---
+$t->get_ok('/internal/v1/calendar/calendars')->status_is(401, 'the calendars list wants a Bearer token');
+$t->get_ok('/internal/v1/calendar/events?from=today')->status_is(401, '... so does the events list');
+$t->post_ok('/internal/v1/calendar/events' => json => { title => 'x', start => '2026-11-20T14:30:00' })->status_is(401, '... and adding one');
+$t->get_ok('/internal/v1/calendar/events.ics?from=today')->status_is(401, '... and the range as iCalendar (the .ics route is routed)');
+$t->get_ok('/internal/v1/calendar/export.ics')->status_is(401, '... and the export');
+$t->post_ok('/internal/v1/calendar/import' => { 'Content-Type' => 'text/calendar' } => "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n")
+  ->status_is(401, '... and the import');
+
 # --- public links: the shape of the routes (the lookup itself needs the database) ---
 $t->get_ok('/c/not-a-token')->status_is(404, 'a token of the wrong shape is a 404 without touching anything');
 $t->get_ok('/e/short')->status_is(404, '... for events too');

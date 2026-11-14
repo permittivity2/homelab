@@ -152,6 +152,36 @@ Talks to homelab-drive's Bearer-token-authenticated JSON API (see
 SSO redirect flow at all; it already holds its own JWT directly, and
 now never needs to know drive's own address either.
 
+## Calendar (`calendar`)
+
+```bash
+homelab-cli calendar list [--from <when>] [--to <when>] [--calendar <id>] [--limit <n>] [--page <n>]
+homelab-cli calendar add "<title>" --start <when> [--end <when>] [--all-day] [--location ...] [--description ...] \
+                         [--reminder <minutes>|none] [--repeat <RRULE>] [--share-with <email>] [--calendar <id>]
+homelab-cli calendar export [--from <when> --to <when>] [--calendar <id>] [-o <file>]
+homelab-cli calendar import <file.ics> [--calendar <id>]
+homelab-cli calendar calendars
+```
+
+`list` shows today unless told otherwise. `<when>` is a date
+(`2026-11-20`), a time (`2026-11-20T14:30`), `today` or `tomorrow`, read
+on the server in your calendar's own time zone; `--from` alone lists a
+year from it, `--to` alone from today, and a date as `--to` means through
+that whole day. Fifty events a page (`--limit` up to 200); the last line
+says how many pages there are and which `--page` comes next. `add` goes
+to your default calendar, lasts an hour (a day with `--all-day`) and sets
+an email reminder 10 minutes before; `--reminder none` for none. `export`
+with a range writes every occurrence in it as its own VEVENT with UTC
+times, so any program imports it; without a range it writes the whole
+calendar with its repeat rules kept, like the web page's export. `import`
+reads an .ics file (TZID, UTC and floating times, all-day dates, DURATION,
+RRULE, EXDATE and alarms are understood); an event whose UID is already in
+one of your calendars is updated rather than duplicated, and whatever was
+skipped is listed with the reason.
+
+Talks to homelab-calendar through `homelab-api`'s `/api/v1/calendar/*`
+gateway (see `../calendar/README.md`'s Routes section).
+
 ## DNS + mail-domain administration (`dns`)
 
 ```bash

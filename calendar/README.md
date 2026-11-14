@@ -53,9 +53,18 @@ consents, the reminder addresses); `/api/mail-links/:token` (GET, `/propose`,
 `/research`); `/api/suggestions` (GET, `/:token/save`, `/:token/dismiss`).
 Public: `/c/:token[.ics]`, `/c/:token/events`, `/e/:token[.ics]`, `/health`.
 Gateway-fronted through homelab-api (`/api/v1/calendar/*` -> `/internal/v1/calendar/*`,
-Bearer): `account` (GET, PUT) for myaccount, and
+Bearer): `account` (GET, PUT) for myaccount,
 `admin/accounts/:email/entitlements` (PUT, site_admin) for what an account is
-allowed (#80; #63's billing later).
+allowed (#80; #63's billing later), and for homelab-cli (#82): `calendars`
+(GET), `events` (GET `from`, `to`, `calendar_id`, `limit` 1-200, `page`; POST
+the editor's body), `events.ics` (GET: the range as one VEVENT per occurrence,
+UTC instants), `export.ics` (GET: one calendar with its rules, like the page's
+export) and `import` (POST, body `text/calendar`: `Homelab::Calendar::ICSImport`;
+a UID already in one of your editable calendars updates that event, EXDATE
+cancels occurrences, a VALARM trigger is the reminder, RECURRENCE-ID
+components are skipped with a reason). The range: a date, a wall clock, `today`
+or `tomorrow` in the account's zone; neither means today, `from` alone a year
+on, a date as `to` that whole day, three years at most.
 
 Events carry `reminder_minutes` (one reminder per event, by email, `null` for
 none; new events get 10 in the editor) and, on creation, an optional

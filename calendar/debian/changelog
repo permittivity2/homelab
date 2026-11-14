@@ -1,3 +1,15 @@
+homelab-calendar (0.1.11) unstable; urgency=medium
+
+  * homelab-cli reaches the calendar (post-cutover #82): Bearer routes through
+    the api gateway for the account's calendars, the occurrences in a range
+    (from/to as dates, wall clocks, today or tomorrow; paged), a new event, the
+    range as iCalendar (one VEVENT per occurrence), one calendar with its rules,
+    and an iCalendar file in (Homelab::Calendar::ICSImport: TZID, UTC and
+    floating times, all-day dates, DURATION, RRULE, EXDATE, VALARM; a known UID
+    updates its event). An import may bring an event's own UID.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 14 Nov 2026 15:13:56 -0600
+
 homelab-calendar (0.1.10) unstable; urgency=medium
 
   * A link in an email reused after it already became an event (post-cutover

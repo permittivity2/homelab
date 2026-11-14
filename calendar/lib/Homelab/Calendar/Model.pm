@@ -201,6 +201,16 @@ sub event ($self, $id) {
     return $self->db->query('SELECT * FROM calendar.events WHERE id = ? AND deleted_at IS NULL', $id)->hash;
 }
 
+# The live event carrying an iCalendar UID (an import updates it), and
+# whether a UID is in use at all (deleted events keep theirs).
+sub event_by_uid ($self, $uid) {
+    return undef unless defined $uid && length $uid;
+    return $self->db->query('SELECT * FROM calendar.events WHERE uid = ? AND deleted_at IS NULL', $uid)->hash;
+}
+sub uid_taken ($self, $uid) {
+    return $self->db->query('SELECT 1 FROM calendar.events WHERE uid = ?', $uid)->array ? 1 : 0;
+}
+
 sub exceptions_for ($self, $event_id) {
     return $self->db->query('SELECT * FROM calendar.event_exceptions WHERE event_id = ? ORDER BY recurrence_id', $event_id)->hashes->to_array;
 }
@@ -301,7 +311,12 @@ sub _event_values ($self, $input, $base = undef, $default_zone = undef) {
 sub create_event ($self, $cal, $email, $input) {
     my $v = $self->_event_values($input, undef, $cal->{timezone});
     my @cols = (@EVENT_FIELDS, qw(calendar_id uid created_by_email));
-    my @vals = ((map { $v->{$_} } @EVENT_FIELDS), $cal->{id}, $self->new_uid, _norm($email));
+    # An import (#82) may bring the event's own iCalendar UID, so the same
+    # file imported twice updates rather than duplicates; a UID already here
+    # (live or deleted: the column is unique) gets a fresh one.
+    my $uid = (defined $input->{uid} && $input->{uid} =~ /\A[A-Za-z0-9@._+:-]{1,255}\z/ && !$self->uid_taken($input->{uid}))
+        ? $input->{uid} : $self->new_uid;
+    my @vals = ((map { $v->{$_} } @EVENT_FIELDS), $cal->{id}, $uid, _norm($email));
     return $self->db->query(
         'INSERT INTO calendar.events (' . join(', ', @cols) . ') VALUES (' . join(', ', ('?') x @cols) . ') RETURNING *', @vals,
     )->hash;
