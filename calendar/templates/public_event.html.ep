@@ -1,16 +1,19 @@
 % layout 'default';
 % title $event->{title} . ' - Calendar';
 %# One event opened from a link, with its next occurrences when it repeats.
-% sub fmt_when ($o, $zone) {
+%# A plain sub: templates compile without the signatures feature.
+% my $fmt_when = sub {
+%   my ($o, $zone) = @_;
 %   if ($o->{all_day}) {
 %     my $days = $o->{end}->delta_days($o->{start})->in_units('days');
 %     return $days <= 1 ? $o->{start}->strftime('%A, %B %e, %Y')
 %          : $o->{start}->strftime('%a, %b %e') . ' - ' . $o->{end}->clone->subtract(days => 1)->strftime('%a, %b %e, %Y');
 %   }
 %   my $same_day = $o->{start}->ymd eq $o->{end}->ymd;
-%   return $o->{start}->strftime('%A, %B %e, %Y %l:%M %p') . ' - '
-%        . ($same_day ? $o->{end}->strftime('%l:%M %p') : $o->{end}->strftime('%a, %b %e, %Y %l:%M %p'));
-% }
+%   # %e and %l pad with a space; collapse the doubles they leave.
+%   return ($o->{start}->strftime('%A, %B %e, %Y %l:%M %p') . ' - '
+%        . ($same_day ? $o->{end}->strftime('%l:%M %p') : $o->{end}->strftime('%a, %b %e, %Y %l:%M %p'))) =~ s/\s+/ /gr;
+% };
 <main class="app__main">
   <div class="container stack" style="max-width: 44rem">
     <div class="panel">
@@ -20,7 +23,7 @@
       </div>
       <div class="panel__body stack">
         % if (@$occurrences) {
-        <p class="event-when"><%= fmt_when($occurrences->[0], $zone) %></p>
+        <p class="event-when"><%= $fmt_when->($occurrences->[0], $zone) %></p>
         % } else {
         <p class="event-when text-muted">No upcoming occurrence.</p>
         % }
@@ -45,7 +48,7 @@
       <div class="panel__body">
         <ul class="share-list">
         % for my $o (@$occurrences) {
-          <li><span><%= fmt_when($o, $zone) %></span><% if ($o->{title} ne $event->{title}) { %> <span class="text-muted"><%= $o->{title} %></span><% } %></li>
+          <li><span><%= $fmt_when->($o, $zone) %></span><% if ($o->{title} ne $event->{title}) { %> <span class="text-muted"><%= $o->{title} %></span><% } %></li>
         % }
         </ul>
         % if ($more) {

@@ -142,6 +142,35 @@ for my $p ('/c/' . ('a' x 64), '/c/' . ('a' x 64) . '.ics', '/c/' . ('a' x 64) .
     isnt $t->tx->res->code, 404, "$p is routed (found live 2026-11-14: a restricted format made the extension required)";
 }
 
+# --- the link pages render (template compile errors are 500s only a render finds) ---
+{
+    require DateTime;
+    my $share = { id => 1, token => 'c' x 64, shared_with_email => undef, detail => 'full', owner_email => 'o@example.test' };
+    my $cal   = { id => 1, name => 'Team & co', color => '#6f94b8', description => 'A <calendar>', timezone => 'America/Chicago', owner_email => 'o@example.test' };
+    my $ev    = { id => 2, title => 'Standup <weekly>', description => "Line 1\nLine 2", location => 'Room 4', color => undef, rrule => 'FREQ=WEEKLY;BYDAY=MO', all_day => 0, calendar_id => 1 };
+    my $s = DateTime->new(year => 2026, month => 11, day => 16, hour => 9, time_zone => 'America/Chicago');
+    my @occ = map { { all_day => 0, start => $s->clone->add(weeks => $_), end => $s->clone->add(weeks => $_, minutes => 30), title => 'Standup <weekly>', location => 'Room 4', description => 'x' } } 0 .. 2;
+    $app->routes->get('/t/public_calendar' => sub ($c) {
+        $c->render(template => 'public_calendar', share => $share, calendar => $cal, detail => 'full', boot => '{}');
+    });
+    $app->routes->get('/t/public_event' => sub ($c) {
+        $c->render(template => 'public_event', share => $share, event => $ev, calendar => $cal, zone => 'America/Chicago',
+            occurrences => \@occ, more => 1, ics_url => 'https://calendar.example.test/e/' . ('c' x 64) . '.ics');
+    });
+    $app->routes->get('/t/public_event_allday' => sub ($c) {
+        my $d = DateTime->new(year => 2026, month => 11, day => 20, time_zone => 'America/Chicago');
+        $c->render(template => 'public_event', share => $share, event => { %$ev, all_day => 1, rrule => undef }, calendar => $cal, zone => 'America/Chicago',
+            occurrences => [ { all_day => 1, start => $d, end => $d->clone->add(days => 2), title => 'Conf', location => undef, description => undef } ], more => 0,
+            ics_url => 'https://calendar.example.test/e/x.ics');
+    });
+    $t->get_ok('/t/public_calendar')->status_is(200)->content_like(qr/Subscribe \(\.ics\)/, 'the link page renders (found live 2026-11-14: an undeclared variable 500ed it)')
+      ->content_like(qr{/c/c{64}\.ics}, '... with the feed link')->content_like(qr/Team &amp; co/, '... and escapes the name');
+    $t->get_ok('/t/public_event')->status_is(200)->content_like(qr/Monday, November 16, 2026\s+9:00 AM - 9:30 AM/, 'the event page renders a timed occurrence')
+      ->content_like(qr/Next occurrences/, '... and lists the next ones')->content_like(qr/and more/, '... with the "more" note')
+      ->content_like(qr/Standup &lt;weekly&gt;/, '... escaping the title');
+    $t->get_ok('/t/public_event_allday')->status_is(200)->content_like(qr/Fri, Nov 20 - Sat, Nov 21, 2026/, 'an all-day span shows its last day');
+}
+
 # --- the vendored bundle and the chrome ---
 $t->get_ok('/vendor/fullcalendar/index.global.min.js')->status_is(200)->content_like(qr/FullCalendar Standard Bundle v6\.1\.22/, 'the FullCalendar bundle is served by the app');
 $t->get_ok('/vendor/fullcalendar/LICENSE.md')->status_is(200)->content_like(qr/MIT/, '... with its licence');

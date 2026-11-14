@@ -1,3 +1,11 @@
+homelab-calendar (0.1.2) unstable; urgency=medium
+
+  * The link pages 500ed on render: an undeclared variable in the calendar
+    page's template and a signatures-style sub in the event page's (templates
+    compile without that feature). Both pages now have render tests.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Fri, 14 Nov 2026 11:00:00 -0600
+
 homelab-calendar (0.1.1) unstable; urgency=medium
 
   * Two bugs found by the first end-to-end run from offsite (post-cutover

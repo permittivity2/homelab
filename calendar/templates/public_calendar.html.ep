@@ -10,7 +10,7 @@
     <span class="pill pill--info">busy times only</span>
     % }
     <span class="toolbar__spacer"></span>
-    <a class="btn btn-sm" href="<%= $calendar_feed = $c->app->public_base_url . '/c/' . $share->{token} . '.ics' %>">Subscribe (.ics)</a>
+    <a class="btn btn-sm" href="<%= $c->app->public_base_url . '/c/' . $share->{token} . '.ics' %>">Subscribe (.ics)</a>
   </div>
   % if ($calendar->{description} && $detail ne 'busy') {
   <p class="text-muted" style="margin-bottom: var(--space-2)"><%= $calendar->{description} %></p>
