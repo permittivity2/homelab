@@ -6,6 +6,7 @@ use Mojo::JSON qw(encode_json);
 use Homelab::Calendar::Recurrence qw(validate_zone parse_wall wall_string);
 use Homelab::Calendar::Access qw(visible_detail);
 use Homelab::Calendar::ICS qw(instances_ics masters_ics);
+use Homelab::Calendar::Invite qw(event_ics when_line status_word);
 
 # What a link opens: a calendar (/c/<token>, its feed /c/<token>.ics) or one
 # event (/e/<token>, /e/<token>.ics). A link to anyone needs no sign-in. A
@@ -140,6 +141,60 @@ sub event_page ($c) {
     return $c->render(template => 'public_event', share => $share, event => $event, calendar => $cal, zone => $zone,
         occurrences => \@next, more => (@$inst > 12 ? 1 : 0),
         ics_url => $c->app->public_base_url . "/e/$share->{token}.ics");
+}
+
+# GET|POST /i/:token[.ics] -- an invitation (#85): the event, the three
+# answers, what this person said so far. ?answer=accepted|tentative|declined
+# (or a POST with answer and comment) records it: one tap from the mail, then
+# a redirect to the clean address so a reload records nothing. The .ics is
+# the event for the person's own calendar program (a CANCEL once it is off).
+sub rsvp_page ($c) {
+    my $m = _model($c);
+    my $token = $c->stash('token');
+    my $att = $m->attendee_by_token($token);
+    unless ($att) {
+        return $c->render(text => "This link is not valid.\n", status => 404) if $c->stash('feed');
+        return $c->render(template => 'notice', status => 404, heading => 'This invitation is not valid',
+            body => 'The event it pointed to is gone, or you were taken off its list.');
+    }
+    my ($event, $cal) = ($att->{event}, $att->{calendar});
+    my $q = $c->param('timeZone') // $c->param('timezone');
+    my $zone = (defined $q && validate_zone($q)) ? $q : $event->{timezone};
+    my $cancelled = ($event->{deleted_at} || $cal->{deleted_at}) ? 1 : 0;
+    my $others = $m->attendees_for($event->{id});
+    my $base = $c->app->public_base_url;
+    if ($c->stash('feed')) {
+        my ($ex, $ov) = $m->series_parts($event);
+        my $ics = event_ics(event => $event, start => $m->event_start($event), end => $m->event_end($event), organizer => lc $cal->{owner_email},
+            method => ($cancelled ? 'CANCEL' : 'PUBLISH'), exdates => $ex, overrides => $ov, url => "$base/i/$token",
+            attendees => [ map { { email => $_->{email}, name => $_->{name}, status => $_->{status} } } @$others ],
+            created => Homelab::Calendar::Model::_dt($event->{created_at}), updated => Homelab::Calendar::Model::_dt($event->{updated_at}));
+        return _ics_response($c, $ics, $event->{title});
+    }
+    my $answer = $c->param('answer');
+    my $error;
+    if (defined $answer && length $answer) {
+        return $c->redirect_to("/i/$token") if $cancelled;
+        my $ok = eval { $m->set_attendee_status($att, $answer, comment => $c->param('comment'), via => 'link'); 1 };
+        if ($ok) { return $c->redirect_to("/i/$token?saved=1") }
+        $error = $@ =~ s/\s+\z//r;
+    }
+    my $start = $m->event_start($event)->set_time_zone($zone);
+    my $end   = $m->event_end($event)->set_time_zone($zone);
+    my @next;
+    if ($event->{rrule} && !$cancelled) {
+        my $now = DateTime->now(time_zone => $zone);
+        my $from = $start > $now ? $start->clone->subtract(days => 1) : $now->clone->truncate(to => 'day');
+        my $inst = $m->instances(events => [$event], window_start => $from, window_end => $from->clone->add(years => 2));
+        @next = map { when_line(start => $_->{start}->clone->set_time_zone($zone), end => $_->{end}->clone->set_time_zone($zone), all_day => $_->{all_day}, zone => $zone) }
+            @{$inst}[0 .. ($#$inst < 7 ? $#$inst : 7)];
+    }
+    my $me = $c->session_email;
+    return $c->render(template => 'rsvp', attendee => $att, event => $event, calendar => $cal, zone => $zone, cancelled => $cancelled,
+        when => when_line(start => $start, end => $end, all_day => $event->{all_day}, zone => $zone), occurrences => \@next,
+        others => [ grep { lc $_->{email} ne lc $att->{email} } @$others ], status_word => \&status_word,
+        saved => ($c->param('saved') ? 1 : 0), error => $error, ics_url => "$base/i/$token.ics",
+        in_my_calendar => (length $me && $me eq lc $att->{email}) ? "$base/?date=" . $start->ymd . "&event=$event->{id}" : undef);
 }
 
 1;

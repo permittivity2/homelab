@@ -329,6 +329,80 @@ var Cal = (function () {
     });
     ev.reminders.addEventListener('click', function (e) { var b = e.target.closest('[data-rem-remove]'); if (b) { b.closest('[data-rem]').remove(); syncReminderHint(); } });
     function defaultDuration() { return +state.prefs.default_duration_minutes || 60; }
+
+    // --- invitations (#85): the people asked, as chips; each with their
+    // answer, and for accounts here whether they are busy at the time chosen.
+    // The owner edits the list (the server diffs it on Save); everyone else
+    // sees it; an invited viewer gets Yes / Maybe / No.
+    var STATE_WORD = { accepted: 'yes', tentative: 'maybe', declined: 'no', 'needs-action': 'waiting' };
+    var attList = $('ev-attendees'), attInput = $('ev-invite');
+    function attendeesValue() { return Array.prototype.map.call(attList.querySelectorAll('[data-att]'), function (el) { return el.getAttribute('data-att'); }); }
+    function attendeeChip(a, editable) {
+      var st = a.status || 'needs-action';
+      return '<span class="att is-' + st + (a.busy ? ' is-busy' : '') + '" data-att="' + esc(a.email) + '" title="' + esc(a.email) + (a.name ? ' (' + esc(a.name) + ')' : '') + '">'
+        + '<span class="att__who">' + esc(a.name || a.email) + '</span>'
+        + '<span class="att__state" data-att-state>' + (a.id ? STATE_WORD[st] : 'new') + (a.busy === true ? ', busy' : a.busy === false ? ', free' : '') + '</span>'
+        + (editable ? '<button type="button" class="att__x" data-att-remove aria-label="Remove ' + esc(a.email) + '">&times;</button>' : '') + '</span>';
+    }
+    function setAttendees(list, editable) {
+      attList.innerHTML = (list || []).map(function (a) { return attendeeChip(a, editable); }).join('');
+      $('ev-invite-wrap').classList.toggle('hide', !editable && !(list || []).length);
+      attInput.parentNode.classList.toggle('hide', !editable);
+      $('ev-invite-hint').classList.toggle('hide', !editable);
+      $('ev-invite-wrap').querySelector('label').textContent = editable ? 'Invite (email, Enter to add)' : 'Invited';
+    }
+    function addAttendee(raw) {
+      var s = String(raw || '').trim().replace(/,$/, '');
+      if (!s) return;
+      var m = /<([^<>\s]+)>\s*$/.exec(s), email = (m ? m[1] : s).toLowerCase(), name = m ? s.slice(0, m.index).replace(/^"|"$/g, '').trim() : '';
+      if (!validEmail(email)) { showError('ev-error', '"' + s + '" does not look like an email address.'); return; }
+      if (email === String(cfg.me || '').toLowerCase()) { showError('ev-error', 'You are the organizer; no need to invite yourself.'); return; }
+      if (attendeesValue().indexOf(email) >= 0) { attInput.value = ''; return; }
+      showError('ev-error', '');
+      attList.insertAdjacentHTML('beforeend', attendeeChip({ email: email, name: name, status: 'needs-action' }, true));
+      attInput.value = '';
+      freeBusyCheck();
+    }
+    attInput.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addAttendee(attInput.value); } });
+    attInput.addEventListener('blur', function () { if (attInput.value.trim()) addAttendee(attInput.value); });
+    $('ev-invite-add').addEventListener('click', function () { addAttendee(attInput.value); attInput.focus(); });
+    attList.addEventListener('click', function (e) { var b = e.target.closest('[data-att-remove]'); if (b) { b.closest('[data-att]').remove(); } });
+    // Free/busy for accounts here (Gardner, 2026-11-15): asked for the
+    // window in the form, each time it or the list changes.
+    var fbTimer = null;
+    function freeBusyCheck() {
+      clearTimeout(fbTimer);
+      fbTimer = setTimeout(function () {
+        var emails = attendeesValue(); if (!emails.length || ev.allday.checked) return;
+        var s = startWall(), e = endWall(); if (!s || !e) return;
+        var z = ev.zoneSel.value || zone;
+        api('GET', '/api/freebusy?emails=' + encodeURIComponent(emails.join(',')) + '&start=' + encodeURIComponent(s) + '&end=' + encodeURIComponent(e) + '&timezone=' + encodeURIComponent(z)).then(function (r) {
+          (r.people || []).forEach(function (p) {
+            var chip = attList.querySelector('[data-att="' + p.email.replace(/"/g, '\\"') + '"]'); if (!chip) return;
+            chip.classList.toggle('is-busy', !!p.busy);
+            var st = chip.querySelector('[data-att-state]'), base = st.textContent.replace(/, (busy|free)$/, '');
+            st.textContent = base + (p.known ? (p.busy ? ', busy' : ', free') : '');
+            if (p.busy && p.intervals && p.intervals.length) chip.title = p.email + ' is busy ' + p.intervals.map(function (i) { return fmtTime(i.start, h24) + ' - ' + fmtTime(i.end, h24); }).join(', ');
+          });
+        }).catch(function () {});
+      }, 400);
+    }
+    [ev.sd, ev.st, ev.ed, ev.et, ev.allday, ev.zoneSel].forEach(function (el) { el.addEventListener('change', freeBusyCheck); });
+    // The viewer's own answer (an invited account).
+    function showRsvp(data) {
+      var wrap = $('ev-rsvp-wrap'), mine = data && data.my_status;
+      wrap.classList.toggle('hide', !mine);
+      if (!mine) return;
+      wrap.querySelectorAll('[data-rsvp]').forEach(function (b) { b.classList.toggle('btn-primary', b.getAttribute('data-rsvp') === mine); b.disabled = false; });
+      $('ev-rsvp-note').textContent = mine === 'needs-action' ? 'You have not answered yet.' : 'You said ' + STATE_WORD[mine] + '.';
+    }
+    $('ev-rsvp-wrap').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-rsvp]'); if (!b || !state.editing) return;
+      b.disabled = true;
+      api('POST', '/api/events/' + state.editing.id + '/rsvp', { answer: b.getAttribute('data-rsvp') })
+        .then(function (r) { state.editing.data.my_status = r.status; showRsvp(state.editing.data); setAttendees(r.attendees, false); toast('Answer sent to ' + (r.organizer || 'the organizer') + '.', 'ok'); fc.refetchEvents(); })
+        .catch(function (err) { b.disabled = false; showError('ev-error', err.message); });
+    });
     ev.byday.innerHTML = WEEKDAYS.map(function (d, i) { return '<button type="button" class="chip" data-day="' + d + '" aria-pressed="false">' + DAY_SHORT[i] + '</button>'; }).join('');
     ev.byday.addEventListener('click', function (e) {
       var b = e.target.closest('[data-day]'); if (!b) return;
@@ -426,6 +500,13 @@ var Cal = (function () {
       // converted to it); the select under "More" lets another be chosen.
       fillZones(ev.zoneSel, zone); syncZoneHint();
       $('ev-share-wrap').classList.toggle('hide', !!existing); ev.shareWith.value = '';
+      // The people asked (#85): the owner edits the list, others see it; an
+      // invited viewer answers here. A new event's list starts empty.
+      var canInvite = existing ? !!data.can_invite : (function () { var c = state.byId[data.calendar_id]; return !c || c.permission === 'owner'; })();
+      setAttendees(existing ? (data.attendees || []) : [], canInvite && !ro);
+      attInput.value = '';
+      showRsvp(existing ? data : null);
+      if (canInvite && existing && (data.attendees || []).length) freeBusyCheck();
       updateRepeatUI(); syncMap();
       openModal('ev-modal');
       setTimeout(function () { ev.title.focus(); }, 50);
@@ -474,6 +555,11 @@ var Cal = (function () {
       if (!body.start) { showError('ev-error', 'Give the event a start.'); return; }
       if (body.repeat === undefined) delete body.repeat;
       var editing = state.editing;
+      // The people asked (#85): the whole list, from the owner only (the
+      // server diffs it: new ones are invited, missing ones told). Something
+      // typed but not added counts too.
+      if (attInput.value.trim()) addAttendee(attInput.value);
+      if (!$('ev-invite-wrap').classList.contains('hide') && !attInput.parentNode.classList.contains('hide')) body.attendees = attendeesValue();
       // The Share field (#79): the browser's own email check first
       // (type="email"), then the same shape test the server applies.
       if (!editing) {
@@ -882,8 +968,14 @@ var Cal = (function () {
       var when = fmtRange(e.allDay ? s + 'T00:00:00' : s, e.allDay ? wallDate(endDate) + 'T00:00:00' : wall(endDate), e.allDay, h24);
       var cal = state.byId[p.calendar_id];
       var deep = window.location.origin + '/?date=' + s.slice(0, 10) + '&event=' + p.event_id + (p.recurrence_id ? '&rid=' + encodeURIComponent(p.recurrence_id) : '');
+      // Invitations (#85): who said what, and the viewer's own answer.
+      var g = p.attendees, guests = '';
+      if (g && g.total) guests = '<p class="muted-small">' + g.total + ' invited: ' + [[g.accepted, 'yes'], [g.tentative, 'maybe'], [g.declined, 'no'], [g.waiting, 'waiting']].filter(function (x) { return x[0]; }).map(function (x) { return x[0] + ' ' + x[1]; }).join(', ') + '</p>';
+      var rsvp = p.my_status ? '<p class="muted-small">Are you coming? ' + ['accepted', 'tentative', 'declined'].map(function (s) {
+        return '<button type="button" class="btn btn-sm' + (p.my_status === s ? ' btn-primary' : '') + '" data-peek-rsvp="' + s + '">' + { accepted: 'Yes', tentative: 'Maybe', declined: 'No' }[s] + '</button>'; }).join(' ') + '</p>' : '';
       peekBox.innerHTML = '<h3>' + esc(e.title) + '</h3><p>' + esc(when) + (p.is_recurring ? ' (repeats)' : '') + '</p>'
         + (p.location ? '<p>' + esc(p.location) + '</p>' : '') + (cal ? '<p class="muted-small">' + esc(cal.name) + (p.permission === 'read' ? ', read-only' : '') + '</p>' : '')
+        + guests + rsvp
         + '<div class="form-actions"><button type="button" class="btn btn-sm btn-primary" data-peek="edit">' + (p.permission === 'read' ? 'Open' : 'Edit') + '</button>'
         + (p.permission !== 'read' ? '<button type="button" class="btn btn-sm btn-danger" data-peek="delete">Delete</button>' : '')
         + '<button type="button" class="btn btn-sm" data-peek="copy" data-link="' + esc(deep) + '">Copy link</button>'
@@ -896,6 +988,14 @@ var Cal = (function () {
       peekBox.style.left = left + 'px'; peekBox.style.top = top + 'px';
     }
     peekBox.addEventListener('click', function (e) {
+      var r = e.target.closest('[data-peek-rsvp]');
+      if (r && peekEvent) {
+        var pe = peekEvent;
+        api('POST', '/api/events/' + pe.extendedProps.event_id + '/rsvp', { answer: r.getAttribute('data-peek-rsvp') })
+          .then(function (res) { toast('Answer sent to ' + (res.organizer || 'the organizer') + '.', 'ok'); hidePeek(); fc.refetchEvents(); })
+          .catch(function (err) { toast(err.message, 'error'); });
+        return;
+      }
       var b = e.target.closest('[data-peek]'); if (!b || !peekEvent) return;
       var act = b.getAttribute('data-peek'), ev0 = peekEvent;
       if (act === 'close') { hidePeek(); return; }

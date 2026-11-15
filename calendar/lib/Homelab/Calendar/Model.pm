@@ -45,6 +45,14 @@ sub _dt ($s, $zone = 'UTC') {
     return $dt->set_time_zone($zone);
 }
 
+# Two timestamptz texts (any offsets) name the same instant.
+sub _same_instant ($a, $b) {
+    my ($x, $y) = (_dt($a), _dt($b));
+    return 1 if !$x && !$y;
+    return 0 unless $x && $y;
+    return $x->epoch == $y->epoch ? 1 : 0;
+}
+
 sub _date ($s) {
     return undef unless defined $s && length $s;
     my ($y, $m, $d) = $s =~ /\A(\d{4})-(\d{2})-(\d{2})/ or return undef;
@@ -365,7 +373,11 @@ sub update_event ($self, $event, $input, %o) {
         $in{repeat} = shift_rrule($event->{rrule}, $shifted, $days) if $event->{rrule} && !exists $in{repeat} && $days;
     }
     my $v = $self->_event_values(\%in, $event);
-    my $time_changed = grep { ($v->{$_} // '') ne ($event->{$_} // '') } qw(starts_at ends_at rrule all_day);
+    # Instants are compared as instants: the row's text carries the session's
+    # offset (UTC in production, but not everywhere), the new value is +00.
+    my $time_changed = (grep { ($v->{$_} // '') ne ($event->{$_} // '') } qw(rrule))
+                    || !_same_instant($v->{starts_at}, $event->{starts_at}) || !_same_instant($v->{ends_at}, $event->{ends_at})
+                    || (($v->{all_day} ? 1 : 0) != ($event->{all_day} ? 1 : 0));
     my @set = map { "$_ = ?" } @EVENT_FIELDS;
     my $db = $self->db;
     my $tx = $db->begin;
@@ -378,7 +390,22 @@ sub update_event ($self, $event, $input, %o) {
     # time gets its own), a retitle only what has not gone out yet (#79).
     $self->_clear_reminder_queue($db, $event->{id}, $time_changed ? 'all' : 'pending');
     $tx->commit;
+    # Invitations (#85): the people asked hear of a change; a new time or
+    # place asks them to answer again (SEQUENCE+1), a retitle keeps their answers.
+    my $place_changed = ($v->{location} // '') ne ($event->{location} // '');
+    my $other_changed = grep { ($v->{$_} // '') ne ($event->{$_} // '') } qw(title description);
+    if ($time_changed || $place_changed || $other_changed) {
+        my $big = ($time_changed || $place_changed) ? 1 : 0;
+        if ($self->notify_attendees($row, bump => $big, reset => $big,
+                changed => [ ($time_changed ? 'time' : ()), ($place_changed ? 'place' : ()), ($other_changed ? 'details' : ()) ])) {
+            $row->{sequence} = $self->_sequence_of($row->{id});     # the caller's JSON shows the bumped value (0.3.1)
+        }
+    }
     return $row;
+}
+
+sub _sequence_of ($self, $event_id) {
+    return $self->db->query('SELECT sequence FROM calendar.events WHERE id = ?', $event_id)->array->[0];
 }
 
 sub _day_delta ($from, $to) {
@@ -420,6 +447,9 @@ sub _write_exception ($self, $event, $rid, $input, $cancelled) {
     # This occurrence moved or went: its queued reminders with it (#79).
     $db->query('DELETE FROM calendar.reminder_queue WHERE event_id = ? AND recurrence_id = ?', $event->{id}, $ridpg);
     $tx->commit;
+    # One occurrence changed: the attendees get the series again, with the
+    # change inside it (RECURRENCE-ID), SEQUENCE+1, answers kept (#85).
+    $self->notify_attendees($self->event($event->{id}), bump => 1, reset => 0, changed => [ $cancelled ? 'one occurrence was removed' : 'one occurrence' ]);
     return $self->event($event->{id});
 }
 
@@ -429,6 +459,21 @@ sub _write_exception ($self, $event, $rid, $input, $cancelled) {
 sub clear_cancelled_exceptions ($self, $event_id) {
     $self->db->query('DELETE FROM calendar.event_exceptions WHERE event_id = ? AND cancelled', $event_id);
     return 1;
+}
+
+# A series' cancelled dates and changed occurrences, in the shape
+# ICS::masters_ics takes (exdates => [DateTime], overrides => [ {...} ]).
+sub series_parts ($self, $event) {
+    my (@ex, @ov);
+    return (\@ex, \@ov) unless $event->{rrule};
+    for my $x (@{ $self->exceptions_for($event->{id}) }) {
+        my $rid = _dt($x->{recurrence_id}, $event->{timezone});
+        if ($x->{cancelled}) { push @ex, $rid; next }
+        my $i = $self->_exception_instance($event, $x, $rid);
+        push @ov, { recurrence_id => $rid, start => $i->{start}, end => $i->{end}, all_day => $i->{all_day},
+            title => $i->{title}, description => $i->{description}, location => $i->{location} };
+    }
+    return (\@ex, \@ov);
 }
 
 sub _occurrence_as_event ($self, $event, $rid) {
@@ -471,7 +516,8 @@ sub _split_series ($self, $event, $rid, $input) {
         $in{repeat} = $rule;
     }
     my $v = $self->_event_values(\%in, $occ);
-    my $time_changed = grep { ($v->{$_} // '') ne ($occ->{$_} // '') } qw(starts_at ends_at all_day);
+    my $time_changed = !_same_instant($v->{starts_at}, $occ->{starts_at}) || !_same_instant($v->{ends_at}, $occ->{ends_at})
+                    || (($v->{all_day} ? 1 : 0) != ($occ->{all_day} ? 1 : 0));
 
     my $db = $self->db;
     my $tx = $db->begin;
@@ -498,6 +544,10 @@ sub _split_series ($self, $event, $rid, $input) {
     $db->query('INSERT INTO calendar.reminders (event_id, minutes_before, channel) SELECT ?, minutes_before, channel FROM calendar.reminders WHERE event_id = ? ON CONFLICT (event_id, minutes_before, channel) DO NOTHING', $new->{id}, $event->{id});
     $db->query('DELETE FROM calendar.reminder_queue WHERE event_id = ? AND recurrence_id >= ?', $event->{id}, $ridpg);
     $tx->commit;
+    # The people asked (#85) are asked to the new series too, and hear that
+    # the old one now ends.
+    $self->copy_attendees($event->{id}, $new->{id});
+    $self->notify_attendees($self->event($event->{id}), bump => 1, reset => 0, changed => ['the series now ends earlier']);
     return $new;
 }
 
@@ -523,6 +573,7 @@ sub delete_event ($self, $event, %o) {
             $db->query('DELETE FROM calendar.event_exceptions WHERE event_id = ? AND recurrence_id >= ?', $event->{id}, $ridpg);
             $db->query('DELETE FROM calendar.reminder_queue WHERE event_id = ? AND recurrence_id >= ?', $event->{id}, $ridpg);
             $tx->commit;
+            $self->notify_attendees($self->event($event->{id}), bump => 1, reset => 0, changed => ['the series now ends earlier']);
             return 1;
         }
     }
@@ -532,6 +583,8 @@ sub delete_event ($self, $event, %o) {
     $db->query('UPDATE calendar.shares SET revoked_at = NOW() WHERE event_id = ? AND revoked_at IS NULL', $event->{id});
     $self->_clear_reminder_queue($db, $event->{id}, 'pending');
     $tx->commit;
+    # Called off: a CANCEL to everyone who was invited (#85).
+    $self->cancel_attendees($event);
     return 1;
 }
 
@@ -1029,7 +1082,10 @@ sub deleted_event ($self, $id) {
     return $self->db->query('SELECT * FROM calendar.events WHERE id = ? AND deleted_at IS NOT NULL', $id)->hash;
 }
 sub restore_event ($self, $id) {
-    return $self->db->query('UPDATE calendar.events SET deleted_at = NULL, updated_at = NOW() WHERE id = ? RETURNING *', $id)->hash;
+    my $row = $self->db->query('UPDATE calendar.events SET deleted_at = NULL, updated_at = NOW() WHERE id = ? RETURNING *', $id)->hash;
+    # Back after a CANCEL: the invitation goes out again and everyone answers afresh (#85).
+    $row->{sequence} = $self->_sequence_of($id) if $row && $self->notify_attendees($row, bump => 1, reset => 1, reason => 'restored', changed => ['it is back on']);
+    return $row;
 }
 
 # --- search (0.2.0): events of the account's calendars whose title, place or
@@ -1162,6 +1218,336 @@ sub mail_link_events_for ($self, $link_id, $email) {
 # Whether this account ever made an event from the link, deleted or not.
 sub mail_link_made_by ($self, $link_id, $email) {
     return $self->db->query('SELECT 1 FROM calendar.mail_link_events WHERE link_id = ? AND user_email = ? LIMIT 1', $link_id, _norm($email))->array ? 1 : 0;
+}
+
+# ------------------------------------------------------------ attendees (#85)
+#
+# People asked to an event. The organizer is the calendar's owner; each
+# attendee has a status (needs-action until they answer), an RSVP token (the
+# capability behind /i/<token>) and the SEQUENCE of the last invitation
+# mailed to them. The mail itself goes through notice_queue (below), claimed
+# by the runner as reminders are, so Save never waits on SMTP.
+
+my %STATUS = map { $_ => 1 } qw(needs-action accepted tentative declined);
+
+sub attendees_for ($self, $event_id) {
+    return $self->db->query('SELECT * FROM calendar.event_attendees WHERE event_id = ? ORDER BY invited_at, id', $event_id)->hashes->to_array;
+}
+sub attendee ($self, $id) {
+    return undef unless defined $id && $id =~ /\A\d+\z/;
+    return $self->db->query('SELECT * FROM calendar.event_attendees WHERE id = ?', $id)->hash;
+}
+sub attendee_of ($self, $event_id, $email) {
+    return $self->db->query('SELECT * FROM calendar.event_attendees WHERE event_id = ? AND lower(email) = ?', $event_id, _norm($email))->hash;
+}
+
+# The attendee row behind an RSVP link, with its event (live or cancelled:
+# the page says which) and calendar. undef when the token is unknown.
+sub attendee_by_token ($self, $token) {
+    return undef unless defined $token && $token =~ /\A[0-9a-f]{64}\z/;
+    my $att = $self->db->query('SELECT * FROM calendar.event_attendees WHERE token = ?', $token)->hash or return undef;
+    $att->{event} = $self->db->query('SELECT * FROM calendar.events WHERE id = ?', $att->{event_id})->hash or return undef;
+    $att->{calendar} = $self->db->query('SELECT * FROM calendar.calendars WHERE id = ?', $att->{event}{calendar_id})->hash or return undef;
+    return $att;
+}
+
+# "Ann Example <ann@example.com>" or "ann@example.com" -> (email, name) in
+# lower case, or () when it is not an address.
+sub parse_attendee ($s) {
+    return () unless defined $s && !ref $s;
+    my $x = $s =~ s/\A\s+|\s+\z//gr;
+    my $name;
+    if ($x =~ /\A(?:"([^"]*)"|([^<>"]*?))\s*<([^<>\s]+)>\z/) { $name = $1 // $2; $x = $3 }
+    $x = lc $x;
+    return () unless $x =~ /\A[^\s@]+@[^\s@]+\.[^\s@]+\z/ && length $x <= 254;
+    $name = defined $name ? ($name =~ s/\A\s+|\s+\z//gr) : '';
+    return ($x, length $name ? substr($name, 0, 200) : undef);
+}
+
+# Invite people: a list of addresses (or "Name <address>"). Dies with a
+# sentence for the person. Returns { added => [rows], existing => [rows] };
+# each new row has a request queued for it.
+sub add_attendees ($self, $event, $list, %o) {
+    my $cal = $self->calendar($event->{calendar_id}) or die "Its calendar is gone.\n";
+    my (%seen, @want);
+    for my $s (@{ ref $list eq 'ARRAY' ? $list : [$list] }) {
+        next unless defined $s && (!ref $s || ref $s eq 'HASH');
+        my ($email, $name) = ref $s ? parse_attendee(defined $s->{name} && length $s->{name} ? "$s->{name} <$s->{email}>" : $s->{email}) : parse_attendee($s);
+        unless ($email) { my $shown = ref $s ? ($s->{email} // '') : $s; die "\"$shown\" does not look like an email address.\n" if length($shown // '') }
+        next unless $email;
+        die "You are the organizer; there is no need to invite yourself.\n" if $email eq _norm($cal->{owner_email});
+        push @want, [ $email, $name ] unless $seen{$email}++;
+    }
+    my @have = @{ $self->attendees_for($event->{id}) };
+    my %by = map { _norm($_->{email}) => $_ } @have;
+    die "At most 50 people per event.\n" if @have + grep({ !$by{ $_->[0] } } @want) > 50;
+    my (@added, @existing);
+    my $db = $self->db;
+    my $tx = $db->begin;
+    for my $w (@want) {
+        if (my $row = $by{ $w->[0] }) { push @existing, $row; next }
+        my $row = $db->query(
+            'INSERT INTO calendar.event_attendees (event_id, email, name, token) VALUES (?, ?, ?, ?) RETURNING *',
+            $event->{id}, $w->[0], $w->[1], $self->new_token,
+        )->hash;
+        push @added, $row;
+        $self->queue_notice(db => $db, event_id => $event->{id}, kind => 'request', recipient => $w->[0], payload => { reason => 'invited' });
+        # Someone with an account here sees the event in their own calendar
+        # at once: a read-only share (the plan's "attendees with accounts").
+        # For anyone else the row is inert: nobody can sign in as them.
+        $db->query(
+            q{INSERT INTO calendar.shares (token, owner_email, event_id, shared_with_email, permission, detail)
+              SELECT ?, ?, ?, ?, 'read', 'full'
+               WHERE NOT EXISTS (SELECT 1 FROM calendar.shares WHERE event_id = ? AND lower(shared_with_email) = ? AND revoked_at IS NULL)},
+            $self->new_token, _norm($cal->{owner_email}), $event->{id}, $w->[0], $event->{id}, $w->[0],
+        );
+    }
+    $tx->commit;
+    return { added => \@added, existing => \@existing };
+}
+
+# Taken off the list: the row goes; someone who got the invitation gets the
+# cancellation (its payload carries what the mail needs, the row being gone).
+sub remove_attendee ($self, $event, $att) {
+    my $db = $self->db;
+    my $tx = $db->begin;
+    $db->query('DELETE FROM calendar.event_attendees WHERE id = ?', $att->{id});
+    $db->query(q{DELETE FROM calendar.notice_queue WHERE event_id = ? AND lower(recipient) = ? AND kind = 'request' AND state = 'pending'}, $event->{id}, _norm($att->{email}));
+    # The read-only share the invitation made goes with it (so does one the
+    # owner made by hand for the same person: they are off the event now).
+    $db->query(q{UPDATE calendar.shares SET revoked_at = NOW() WHERE event_id = ? AND lower(shared_with_email) = ? AND permission = 'read' AND revoked_at IS NULL}, $event->{id}, _norm($att->{email}));
+    if (defined $att->{sequence_sent}) {
+        my $seq = $self->bump_sequence($event->{id}, $db);
+        $self->queue_notice(db => $db, event_id => $event->{id}, kind => 'cancel', recipient => $att->{email},
+            payload => { reason => 'removed', sequence => $seq, name => $att->{name} });
+    }
+    $tx->commit;
+    return 1;
+}
+
+# The editor sends the whole list: what is new is invited, what is missing is
+# taken off. Returns the attendees as they now are.
+sub set_attendees ($self, $event, $list) {
+    my %keep;
+    for my $s (@{ ref $list eq 'ARRAY' ? $list : [] }) {
+        my ($email) = ref $s eq 'HASH' ? parse_attendee($s->{email}) : parse_attendee($s);
+        $keep{$email} = 1 if $email;
+    }
+    for my $a (@{ $self->attendees_for($event->{id}) }) {
+        $self->remove_attendee($event, $a) unless $keep{ _norm($a->{email}) };
+    }
+    $self->add_attendees($event, $list);
+    return $self->attendees_for($event->{id});
+}
+
+# An answer: from the RSVP link, the web page, the CLI or a mailed REPLY. The
+# organizer is told (a 'reply' notice). Dies on an unknown status.
+sub set_attendee_status ($self, $att, $status, %o) {
+    my $s = lc($status // '');
+    my %alias = (yes => 'accepted', maybe => 'tentative', no => 'declined', 'needs_action' => 'needs-action');
+    $s = $alias{$s} // $s;
+    die "The answer must be accepted, tentative or declined.\n" unless $STATUS{$s};
+    my $comment = defined $o{comment} && !ref $o{comment} ? substr($o{comment} =~ s/\A\s+|\s+\z//gr, 0, 500) : undef;
+    $comment = undef if defined $comment && !length $comment;
+    my $via = ($o{via} // 'link') =~ /\A(?:link|web|mail|cli)\z/ ? $o{via} : 'link';
+    my $db = $self->db;
+    my $tx = $db->begin;
+    my $row = $db->query(
+        'UPDATE calendar.event_attendees SET status = ?, comment = ?, responded_at = NOW(), responded_via = ? WHERE id = ? RETURNING *',
+        $s, $comment, $via, $att->{id},
+    )->hash or die "That invitation is gone.\n";
+    my $event = $db->query('SELECT * FROM calendar.events WHERE id = ?', $row->{event_id})->hash;
+    my $cal = $event ? $db->query('SELECT * FROM calendar.calendars WHERE id = ?', $event->{calendar_id})->hash : undef;
+    if ($cal && !$event->{deleted_at} && !$o{quiet}) {
+        $self->queue_notice(db => $db, event_id => $event->{id}, kind => 'reply', recipient => $cal->{owner_email},
+            payload => { attendee => $row->{email}, name => $row->{name}, status => $s, comment => $comment, via => $via });
+    }
+    $tx->commit;
+    return $row;
+}
+
+# How many were asked and what they said, per event, for the grid's peek.
+sub attendee_counts ($self, $ids) {
+    return {} unless @{ $ids // [] };
+    my %out;
+    for my $r (@{ $self->db->query(
+        q{SELECT event_id, count(*) AS total,
+                 count(*) FILTER (WHERE status = 'accepted') AS accepted, count(*) FILTER (WHERE status = 'tentative') AS tentative,
+                 count(*) FILTER (WHERE status = 'declined') AS declined, count(*) FILTER (WHERE status = 'needs-action') AS waiting
+            FROM calendar.event_attendees WHERE event_id = ANY(?) GROUP BY event_id}, $ids)->hashes->to_array }) {
+        $out{ $r->{event_id} } = { map { $_ => $r->{$_} + 0 } qw(total accepted tentative declined waiting) };
+    }
+    return \%out;
+}
+
+# This account's own answers on the events given: { event_id => status }.
+sub my_attendance ($self, $email, $ids) {
+    return {} unless @{ $ids // [] };
+    return { map { $_->{event_id} => $_->{status} }
+        @{ $self->db->query('SELECT event_id, status FROM calendar.event_attendees WHERE event_id = ANY(?) AND lower(email) = ?', $ids, _norm($email))->hashes->to_array } };
+}
+
+sub bump_sequence ($self, $event_id, $db = undef) {
+    return ($db // $self->db)->query('UPDATE calendar.events SET sequence = sequence + 1 WHERE id = ? RETURNING sequence', $event_id)->array->[0];
+}
+
+# The event changed: every attendee gets the invitation again. A change of
+# time or place (significant) bumps SEQUENCE and asks everyone to answer
+# afresh (RFC 5546); a retitle keeps their answers. `changed` names what
+# changed, for the mail. Nothing happens for an event nobody was invited to.
+sub notify_attendees ($self, $event, %o) {
+    my $list = $self->attendees_for($event->{id});
+    return 0 unless @$list;
+    my $db = $self->db;
+    my $tx = $db->begin;
+    my $seq = $o{bump} ? $self->bump_sequence($event->{id}, $db) : $event->{sequence};
+    $db->query(q{UPDATE calendar.event_attendees SET status = 'needs-action', responded_at = NULL, comment = NULL WHERE event_id = ?}, $event->{id}) if $o{reset};
+    for my $a (@$list) {
+        $self->queue_notice(db => $db, event_id => $event->{id}, kind => 'request', recipient => $a->{email},
+            payload => { reason => ($o{reason} // 'changed'), changed => ($o{changed} // []), sequence => $seq });
+    }
+    $tx->commit;
+    return scalar @$list;
+}
+
+# The event is called off: a CANCEL to everyone who was sent the invitation;
+# a pending invitation to anyone else is simply dropped.
+sub cancel_attendees ($self, $event) {
+    my $list = $self->attendees_for($event->{id});
+    return 0 unless @$list;
+    my $db = $self->db;
+    my $tx = $db->begin;
+    my $seq = $self->bump_sequence($event->{id}, $db);
+    $db->query(q{DELETE FROM calendar.notice_queue WHERE event_id = ? AND kind = 'request' AND state = 'pending'}, $event->{id});
+    for my $a (grep { defined $_->{sequence_sent} } @$list) {
+        $self->queue_notice(db => $db, event_id => $event->{id}, kind => 'cancel', recipient => $a->{email},
+            payload => { reason => 'cancelled', sequence => $seq, name => $a->{name} });
+    }
+    $tx->commit;
+    return scalar @$list;
+}
+
+# The organizer's own copy of an attendee list for a new series split off an
+# old one: the same people, fresh tokens, asked again.
+sub copy_attendees ($self, $from_id, $to_id) {
+    my $list = $self->attendees_for($from_id);
+    return 0 unless @$list;
+    for my $a (@$list) {
+        $self->db->query('INSERT INTO calendar.event_attendees (event_id, email, name, token) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING',
+            $to_id, $a->{email}, $a->{name}, $self->new_token);
+        $self->queue_notice(event_id => $to_id, kind => 'request', recipient => $a->{email}, payload => { reason => 'invited' });
+    }
+    return scalar @$list;
+}
+
+# --- the notice queue: the same claim pattern as reminders ---
+
+# queue_notice(event_id, kind, recipient, payload => {}, due_at => DateTime)
+# A request replaces a pending request to the same person and waits a few
+# seconds, so three quick edits send one mail, rendered from the event as it
+# then is. Cancels and replies go at once.
+sub queue_notice ($self, %n) {
+    my $db = $n{db} // $self->db;
+    my $kind = $n{kind};
+    my $to = _norm($n{recipient});
+    if ($kind eq 'request') {
+        $db->query(q{DELETE FROM calendar.notice_queue WHERE event_id = ? AND lower(recipient) = ? AND kind = 'request' AND state = 'pending'}, $n{event_id}, $to);
+    }
+    my $due = $n{due_at} ? $n{due_at}->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00') : undef;
+    $db->query(
+        q{INSERT INTO calendar.notice_queue (event_id, kind, recipient, payload, due_at)
+          VALUES (?, ?, ?, ?::jsonb, COALESCE(?::timestamptz, NOW() + (?::int * INTERVAL '1 second')))},
+        $n{event_id}, $kind, $to, Mojo::JSON::encode_json($n{payload} // {}), $due, ($kind eq 'request' ? 20 : 0),
+    );
+    return 1;
+}
+
+sub claim_due_notices ($self, $limit = 3) {
+    my $rows = $self->db->query(
+        q{UPDATE calendar.notice_queue SET state = 'running', attempts = attempts + 1, claimed_at = NOW()
+           WHERE id IN (SELECT id FROM calendar.notice_queue WHERE state = 'pending' AND due_at <= NOW()
+                          ORDER BY due_at LIMIT ? FOR UPDATE SKIP LOCKED)
+          RETURNING *}, $limit,
+    )->hashes->to_array;
+    return [ map { _decode_payload($_) } @$rows ];
+}
+sub _decode_payload ($r) {
+    $r->{payload} = (defined $r->{payload} && !ref $r->{payload}) ? (eval { Mojo::JSON::decode_json($r->{payload}) } // {}) : ($r->{payload} // {});
+    return $r;
+}
+sub notice_sent ($self, $id) {
+    $self->db->query(q{UPDATE calendar.notice_queue SET state = 'sent', sent_at = NOW(), last_error = NULL WHERE id = ?}, $id);
+    return 1;
+}
+sub notice_failed ($self, $id, $error, $max_attempts = 3) {
+    $self->db->query(
+        q{UPDATE calendar.notice_queue
+             SET state = CASE WHEN attempts >= ? THEN 'failed' ELSE 'pending' END,
+                 due_at = CASE WHEN attempts >= ? THEN due_at ELSE NOW() + INTERVAL '2 minutes' END,
+                 last_error = ?
+           WHERE id = ?}, $max_attempts, $max_attempts, substr($error // '', 0, 500), $id,
+    );
+    return 1;
+}
+sub reclaim_stale_notices ($self) {
+    $self->db->query(q{UPDATE calendar.notice_queue SET state = 'pending' WHERE state = 'running' AND claimed_at < NOW() - INTERVAL '5 minutes'});
+    $self->db->query(q{DELETE FROM calendar.notice_queue WHERE state IN ('sent', 'failed') AND created_at < NOW() - INTERVAL '30 days'});
+    return 1;
+}
+# The invitation went out: remember which SEQUENCE this person has.
+sub attendee_mark_sent ($self, $event_id, $email, $sequence) {
+    $self->db->query('UPDATE calendar.event_attendees SET sequence_sent = ? WHERE event_id = ? AND lower(email) = ?', $sequence, $event_id, _norm($email));
+    return 1;
+}
+sub notices_for ($self, $event_id) {
+    return [ map { _decode_payload($_) } @{ $self->db->query('SELECT * FROM calendar.notice_queue WHERE event_id = ? ORDER BY id', $event_id)->hashes->to_array } ];
+}
+
+# --- free/busy (Gardner, 2026-11-15: yes, for accounts here) ---
+# For each address: whether it has a calendar here (known) and, if so, the
+# timed occurrences on its own calendars inside the window, as bare
+# intervals -- no titles, no places. All-day events count as free, as
+# Google's do. At most 20 addresses and 31 days.
+sub freebusy ($self, $emails, $ws, $we) {
+    die "At most 20 addresses at a time.\n" if @{ $emails // [] } > 20;
+    die "The window must be a start before an end, at most 31 days apart.\n" unless $ws && $we && $we > $ws && $we->epoch - $ws->epoch <= 31 * 86400;
+    my (%seen, @out);
+    for my $raw (@$emails) {
+        my ($e) = parse_attendee($raw) or next;
+        next if $seen{$e}++;
+        my $cals = $self->db->query('SELECT * FROM calendar.calendars WHERE lower(owner_email) = ? AND deleted_at IS NULL', $e)->hashes->to_array;
+        unless (@$cals) { push @out, { email => $e, known => 0, busy => [] }; next }
+        my $inst = $self->instances(calendars => $cals, window_start => $ws, window_end => $we);
+        push @out, { email => $e, known => 1, busy => [ map { { start => $_->{start}, end => $_->{end} } } grep { !$_->{all_day} } @$inst ] };
+    }
+    return \@out;
+}
+
+# --- answers that came by mail (phase 2): the milter's rows, applied here ---
+
+sub claim_itip_inbox ($self, $limit = 10) {
+    return $self->db->query(
+        q{UPDATE calendar.itip_inbox SET processed_at = NOW(), result = 'running'
+           WHERE id IN (SELECT id FROM calendar.itip_inbox WHERE processed_at IS NULL ORDER BY received_at LIMIT ? FOR UPDATE SKIP LOCKED)
+          RETURNING *}, $limit,
+    )->hashes->to_array;
+}
+sub itip_result ($self, $id, $result) {
+    $self->db->query('UPDATE calendar.itip_inbox SET result = ? WHERE id = ?', substr($result // '', 0, 200), $id);
+    return 1;
+}
+# One mailed answer: the live event by UID, the attendee by address, then
+# the status (an older SEQUENCE than the one sent is ignored). The sentence
+# returned is what itip_inbox.result records.
+sub apply_itip_reply ($self, $row) {
+    my $event = $self->event_by_uid($row->{uid}) or return 'no live event with that uid';
+    my $att = $self->attendee_of($event->{id}, $row->{attendee_email}) or return 'not an attendee of that event';
+    return 'an answer to an older invitation' if defined $row->{sequence} && defined $att->{sequence_sent} && $row->{sequence} < $att->{sequence_sent};
+    my %p = ('NEEDS-ACTION' => 'needs-action', ACCEPTED => 'accepted', TENTATIVE => 'tentative', DECLINED => 'declined');
+    my $status = $p{ uc($row->{partstat} // '') } or return "unknown PARTSTAT '$row->{partstat}'";
+    return 'no answer yet' if $status eq 'needs-action';
+    $self->set_attendee_status($att, $status, comment => $row->{comment}, via => 'mail');
+    return "recorded: $status";
 }
 
 # -------------------------------------------------------------------- prefs

@@ -357,3 +357,92 @@ def test_errors_are_json_on_stderr_in_json_mode(capsys):
         assert main(["-j", "calendar", "list", "--from", "2026-11-21", "--to", "2026-11-20"]) == 1
     err = json.loads(capsys.readouterr().err)
     assert "to date" in err["error"]
+
+
+# --- invitations (post-cutover #85) -------------------------------------------
+
+ATTENDEES = {
+    "event_id": 7, "organizer": "test@example.com", "sequence": 1,
+    "attendees": [
+        {"id": 3, "email": "ann@example.com", "name": "Ann", "status": "accepted", "comment": "Bringing dessert",
+         "invited_at": "2026-11-15 10:00:00-06", "responded_at": "2026-11-15 10:30:00-06", "responded_via": "link", "invitation_sent": True},
+        {"id": 4, "email": "bob@example.com", "name": None, "status": "needs-action", "comment": None,
+         "invited_at": "2026-11-15 10:00:00-06", "responded_at": None, "responded_via": None, "invitation_sent": False},
+    ],
+    "attendee_counts": {"total": 2, "accepted": 1, "tentative": 0, "declined": 0, "waiting": 1},
+    "my_status": None, "can_invite": True,
+}
+
+
+def test_attendees_table(capsys):
+    with patch("requests.request", return_value=_resp(200, ATTENDEES)) as req:
+        assert main(["calendar", "attendees", "7"]) == 0
+    assert req.call_args.args[1].endswith("/api/v1/calendar/events/7/attendees")
+    out = capsys.readouterr().out
+    assert "Ann <ann@example.com>" in out and "yes" in out and "Bringing dessert" in out and "sent" in out
+    assert "bob@example.com" in out and "waiting" in out and "queued" in out
+    assert "2 invited: 1 yes, 1 waiting.  Organizer: test@example.com" in out
+
+
+def test_invite_sends_the_addresses(capsys):
+    resp = dict(ATTENDEES, added=[ATTENDEES["attendees"][1]], already_invited=["ann@example.com"])
+    with patch("requests.request", return_value=_resp(201, resp)) as req:
+        assert main(["calendar", "invite", "7", "bob@example.com", "ann@example.com"]) == 0
+    assert req.call_args.kwargs["json"] == {"emails": ["bob@example.com", "ann@example.com"]}
+    assert req.call_args.args[1].endswith("/api/v1/calendar/events/7/attendees")
+    out = capsys.readouterr().out
+    assert "Invited bob@example.com (attendee id 4)" in out and "ann@example.com was already invited" in out
+
+
+def test_uninvite_by_address_looks_the_id_up(capsys):
+    with patch("requests.request", side_effect=[_resp(200, ATTENDEES), _resp(200, {"ok": True})]) as req:
+        assert main(["calendar", "uninvite", "7", "Ann@Example.com"]) == 0
+    assert req.call_args.args[1].endswith("/api/v1/calendar/events/7/attendees/3/remove")
+    assert "off the list" in capsys.readouterr().out
+
+
+def test_uninvite_unknown_address_is_an_error(capsys):
+    with patch("requests.request", return_value=_resp(200, ATTENDEES)):
+        assert main(["calendar", "uninvite", "7", "zed@example.com"]) == 1
+    assert "not invited" in capsys.readouterr().err
+
+
+def test_rsvp_maps_the_words(capsys):
+    with patch("requests.request", return_value=_resp(200, dict(ATTENDEES, ok=True, status="tentative"))) as req:
+        assert main(["calendar", "rsvp", "7", "maybe", "--comment", "Might be late"]) == 0
+    assert req.call_args.kwargs["json"] == {"answer": "tentative", "comment": "Might be late"}
+    assert req.call_args.args[1].endswith("/api/v1/calendar/events/7/rsvp")
+    assert "You said maybe to event 7. test@example.com has been told." in capsys.readouterr().out
+
+
+def test_freebusy_prints_busy_free_and_unknown(capsys):
+    fb = {"timezone": "America/Chicago", "start": "2026-11-20T13:00:00", "end": "2026-11-20T14:00:00", "people": [
+        {"email": "ann@example.com", "known": True, "busy": True, "intervals": [{"start": "2026-11-20T12:30:00", "end": "2026-11-20T13:30:00"}]},
+        {"email": "bob@example.com", "known": True, "busy": False, "intervals": []},
+        {"email": "zed@example.net", "known": False, "busy": False, "intervals": []},
+    ]}
+    with patch("requests.request", return_value=_resp(200, fb)) as req:
+        assert main(["calendar", "freebusy", "ann@example.com", "bob@example.com", "zed@example.net", "--start", "2026-11-20T13:00", "--duration", "1h"]) == 0
+    params = req.call_args.kwargs["params"]
+    assert params["emails"] == "ann@example.com,bob@example.com,zed@example.net" and params["start"] == "2026-11-20T13:00" and params["end"] == "2026-11-20T14:00"
+    out = capsys.readouterr().out
+    assert "ann@example.com" in out and "BUSY: 12:30 PM - 1:30 PM" in out
+    assert "bob@example.com" in out and "free" in out
+    assert "not an account here" in out
+
+
+def test_add_with_invite_sends_attendees(capsys):
+    created = dict(LIST["events"][0], attendees=[{"id": 9, "email": "ann@example.com", "status": "needs-action"}])
+    with patch("requests.request", return_value=_resp(201, created)) as req:
+        assert main(["calendar", "add", "Lunch", "--start", "2026-11-20T12:30", "--invite", "ann@example.com", "--invite", "Bob <bob@example.com>"]) == 0
+    assert req.call_args.kwargs["json"]["attendees"] == ["ann@example.com", "Bob <bob@example.com>"]
+    assert "Invited: ann@example.com; the invitations go out within a minute." in capsys.readouterr().out
+
+
+def test_show_prints_the_invited_and_my_answer(capsys):
+    ev = dict(LIST["events"][0], attendees=ATTENDEES["attendees"], my_status="tentative", organizer="owner@example.com")
+    with patch("requests.request", return_value=_resp(200, ev)):
+        assert main(["calendar", "show", "7"]) == 0
+    out = capsys.readouterr().out
+    assert "Invited:   ann@example.com (yes), bob@example.com (waiting)" in out
+    assert "You:       maybe  (organizer owner@example.com)" in out

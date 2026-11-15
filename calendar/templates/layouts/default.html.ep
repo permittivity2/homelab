@@ -112,6 +112,17 @@
   .chips { display: flex; gap: var(--space-1); flex-wrap: wrap; }
   .chip { border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 2px var(--space-3); font-size: var(--app-sm); cursor: pointer; background: none; color: var(--text-secondary); }
   .chip.is-on { background: var(--silver-bright); color: var(--black-primary); border-color: var(--silver-bright); }
+  /* Invitations (#85): one chip per person asked, its answer as a colour. */
+  .att-list:empty { display: none; }
+  .att { display: inline-flex; align-items: center; gap: var(--space-1); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 2px var(--space-2) 2px var(--space-3); font-size: var(--app-sm); color: var(--text-secondary); max-width: 100%; }
+  .att__who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 18rem; }
+  .att__state { font-size: var(--app-xs); color: var(--text-muted); white-space: nowrap; }
+  .att.is-accepted .att__state { color: #5c9e7c; }
+  .att.is-declined .att__state { color: #d85c5c; }
+  .att.is-tentative .att__state { color: #d9a441; }
+  .att.is-busy { border-color: #d85c5c; }
+  .att__x { border: 0; background: none; color: var(--text-muted); cursor: pointer; padding: 0 2px; font-size: var(--app-md); line-height: 1; }
+  .att__x:hover { color: var(--text-primary); }
   .share-list { list-style: none; margin: 0; padding: 0; }
   .share-list li { display: flex; gap: var(--space-2); align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   .share-list li:last-child { border-bottom: 0; }

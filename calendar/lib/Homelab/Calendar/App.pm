@@ -288,6 +288,20 @@ sub startup ($self) {
     $r->post('/api/shares/:id/revoke' => [id => qr/\d+/])     ->to('api#revoke_share');
     $r->get('/api/prefs')                     ->to('api#prefs');
     $r->put('/api/prefs')                     ->to('api#save_prefs');
+    # Invitations (#85): the people asked to an event, an answer from a
+    # signed-in attendee, and free/busy for accounts here.
+    $r->get('/api/events/:id/attendees' => [id => qr/\d+/])                              ->to('api#attendees');
+    $r->post('/api/events/:id/attendees' => [id => qr/\d+/])                             ->to('api#invite');
+    $r->post('/api/events/:id/attendees/:aid/remove' => [id => qr/\d+/, aid => qr/\d+/]) ->to('api#uninvite');
+    $r->post('/api/events/:id/attendees/:aid/resend' => [id => qr/\d+/, aid => qr/\d+/]) ->to('api#reinvite');
+    $r->post('/api/events/:id/rsvp' => [id => qr/\d+/])                                  ->to('api#rsvp');
+    $r->get('/api/freebusy')                                                             ->to('api#freebusy');
+    $r->get('/internal/v1/calendar/events/:id/attendees' => [id => qr/\d+/])                              ->to('api#internal_attendees');
+    $r->post('/internal/v1/calendar/events/:id/attendees' => [id => qr/\d+/])                             ->to('api#internal_invite');
+    $r->post('/internal/v1/calendar/events/:id/attendees/:aid/remove' => [id => qr/\d+/, aid => qr/\d+/]) ->to('api#internal_uninvite');
+    $r->post('/internal/v1/calendar/events/:id/attendees/:aid/resend' => [id => qr/\d+/, aid => qr/\d+/]) ->to('api#internal_reinvite');
+    $r->post('/internal/v1/calendar/events/:id/rsvp' => [id => qr/\d+/])                                  ->to('api#internal_rsvp');
+    $r->get('/internal/v1/calendar/freebusy')                                                             ->to('api#internal_freebusy');
 
     # Links: a calendar or an event, to anyone holding the link (or to the
     # account it was shared with). The .ics forms are what a phone subscribes
@@ -299,6 +313,10 @@ sub startup ($self) {
     $r->get('/c/:token/events' => $tok => [format => 0])        ->to('public#calendar_events');
     $r->get('/e/<token>.ics' => $tok => [format => 0])          ->to('public#event_page', feed => 1);
     $r->get('/e/:token' => $tok => [format => 0])               ->to('public#event_page', feed => 0);
+    # The invitation (#85): what the links in the mail open. No sign-in; the
+    # token is the capability. ?answer= records an answer in one tap.
+    $r->get('/i/<token>.ics' => $tok => [format => 0])          ->to('public#rsvp_page', feed => 1);
+    $r->any([qw(GET POST)] => '/i/:token' => $tok => [format => 0]) ->to('public#rsvp_page', feed => 0);
 
     return;
 }

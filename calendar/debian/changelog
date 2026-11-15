@@ -1,3 +1,31 @@
+homelab-calendar (0.3.1) unstable; urgency=medium
+
+  * The row a time change hands back (the editor's and the CLI's JSON) now
+    carries the bumped SEQUENCE; it showed the old value while the mail
+    carried the new one (seen in the live end-to-end check of 0.3.0).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 15 Nov 2026 10:30:00 -0600
+
+homelab-calendar (0.3.0) unstable; urgency=medium
+
+  * Invitations (post-cutover #85): invite people to an event (the editor's
+    Invite field, with free/busy for accounts here; the CLI); each gets an
+    email with Yes / Maybe / No links and an iCalendar REQUEST part (their
+    mail program's own buttons work too); /i/<token> is the invitation page;
+    a change re-invites (SEQUENCE+1 and a fresh answer when the time or place
+    changed), a delete sends a CANCEL, the organizer is told of every answer
+    (mail, and the webhook when set); answers mailed back (METHOD:REPLY) are
+    applied from the milter's inbox table. Migration 007: events.sequence,
+    event_attendees, notice_queue, itip_inbox. Needs homelab-common >= 0.1.37.
+  * Fix: with the database session in America/Chicago (production's setting)
+    every change to an event counted as a time change, because the row's
+    starts_at text (-06) was compared with the new value (+00) as strings:
+    a retitle of a repeating event dropped its moved and cancelled
+    occurrences, and emptied its reminder queue. Instants are now compared
+    as instants. Found by t/model.t against a scratch PostgreSQL in that zone.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 15 Nov 2026 10:00:00 -0600
+
 homelab-calendar (0.2.2) unstable; urgency=medium
 
   * A "this and following" change of a repeating event failed since 0.2.0: the

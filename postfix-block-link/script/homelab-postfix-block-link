@@ -40,6 +40,7 @@ use Homelab::PostfixBlockLink::Milter qw(
     reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
     single_account footer_text_lines footer_html
     calendar_links_enabled insert_mail_link text_excerpt
+    itip_reply_candidate parse_itip_reply insert_itip_reply
 );
 use Mojo::JSON qw(encode_json);
 use Email::MIME;
@@ -217,6 +218,10 @@ $cbs{eoh} = sub {
         log_line("reply-identity: footer check for $account failed (failing open, no footer line): $@") if $@;
         $priv->{reply_line_account} = $account if $on;
     }
+    # An answer to a calendar invitation (#85): a message to an account here
+    # whose shape says it may carry a METHOD:REPLY part is buffered too.
+    $priv->{itip_candidate} = 1
+        if $cal_cfg->{public_base_url} && @{ $priv->{recipients} // [] } && itip_reply_candidate($priv->{content_type}, $priv->{headers}{subject});
     $ctx->setpriv($priv);
     return SMFIS_CONTINUE;
 };
@@ -230,7 +235,7 @@ $cbs{body} = sub {
     # on 587 (attachments included) and every inbound message for a
     # non-enabled account out of memory.
     $priv->{body_chunks}++;
-    if (@{ $priv->{candidates} // [] } || defined $priv->{reply_line_account} || @{ $priv->{calendar_accounts} // [] }) {
+    if (@{ $priv->{candidates} // [] } || defined $priv->{reply_line_account} || @{ $priv->{calendar_accounts} // [] } || $priv->{itip_candidate}) {
         $priv->{body} = '' unless defined $priv->{body};
         $priv->{body} .= $chunk;
     }
@@ -246,6 +251,7 @@ $cbs{eom} = sub {
     # the line promises what the 587 half will do, and that half needs the row.
     my $reply_alias = defined $priv->{reply_line_account} ? $chosen->{ $priv->{reply_line_account} } : undef;
     _inject_footer($ctx, $priv, $reply_alias);   # (b) click-to-block link + reply line -- fails open
+    _record_itip_reply($priv);                 # (b2) #85: an emailed answer to an invitation -- fails open
     return _rewrite_reply($ctx, $priv);          # (c) #67 submission half -- fails closed on DB error
 };
 
@@ -394,6 +400,25 @@ sub _inject_footer {
     if ($@) {
         log_line("eom injection failed (failing open, message delivered unmodified): $@");
     }
+    return;
+}
+
+# (b2) An answer to a homelab-calendar invitation sent by the attendee's own
+# mail program (a text/calendar part with METHOD:REPLY) for an organizer
+# here: the facts go to calendar.itip_inbox for the calendar's runner to
+# apply. Nothing in the message changes; a failure is logged and the mail
+# is delivered as it is.
+sub _record_itip_reply {
+    my ($priv) = @_;
+    return unless $priv->{itip_candidate} && defined $priv->{body};
+    eval {
+        my @replies = parse_itip_reply($priv->{content_type}, $priv->{body});
+        for my $r (@replies) {
+            insert_itip_reply(_pg()->db, %$r, message_id => $priv->{message_id}, from_addr => $priv->{headers}{from});
+            log_line("calendar reply recorded: $r->{attendee_email} $r->{partstat} for uid $r->{uid}");
+        }
+    };
+    log_line("calendar reply not recorded (failing open, message delivered unmodified): $@") if $@;
     return;
 }
 

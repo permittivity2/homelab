@@ -116,6 +116,31 @@ page read them. `runner.enabled: 0` (or `HOMELAB_CALENDAR_RUNNER=0`, the tests)
 keeps it off. Without `mailer:` reminders queue and wait. Reminders for an
 all-day event are relative to 9 AM of its first day.
 
+## Invitations (#85)
+
+An event's owner (the organizer) invites people by address: `calendar.event_attendees`
+holds each with a status (`needs-action` until they answer), an RSVP token and the
+iCalendar SEQUENCE last mailed to them. The mail goes through `calendar.notice_queue`,
+claimed by the runner as reminders are, so Save never waits on SMTP: a `request`
+(the invitation; also when the event changes, with SEQUENCE+1 and everyone asked
+again when the time or place changed, their answers kept for a retitle), a `cancel`
+(the event deleted, or the person taken off the list) and a `reply` (to the
+organizer: who answered what, plus their webhook when set). `Homelab::Calendar::Invite`
+renders the text; `Homelab::Common::Mailer`'s `calendar` option gives the message
+the shape Google's own invitations have (multipart/mixed > multipart/alternative of
+text/plain + `text/calendar; method=REQUEST`, then the .ics attached), which is what
+Gmail, Outlook and Apple Mail turn into their own Yes / Maybe / No buttons; the body
+carries the same three choices as one-tap links to `/i/<token>` (no sign-in; the
+token is the capability, as `/c/` and `/e/` links are), and `/i/<token>.ics` is a copy
+for any calendar program. An invited address that is an account here gets a
+read-only event share at once, so the event sits in their calendar and their
+reminders follow the shared-reminder switch; the editor and the peek offer them
+Yes / Maybe / No. Answers sent by a mail program (a `METHOD:REPLY` part) are read by
+the block-link milter on the mail pool into `calendar.itip_inbox`; the runner
+applies them. Free/busy for accounts here (`GET /api/freebusy`): bare busy
+intervals from the person's own calendars, no titles. No counter-proposals (by
+decision, 2026-11-15; maybe later).
+
 ## Install
 
 Pool on prod-homelab50/51/52 via `install-orchestrators/calendar-orchestrate.sh`

@@ -162,7 +162,7 @@ jobs:
           cd calendar && HOMELAB_CALENDAR_CONFIG=/tmp/calendar-ci.yml HOMELAB_CALENDAR_MIGRATIONS_DIR=migrations \
             perl -I lib -I ../common/lib script/homelab-calendar-migrate
       - name: Run the database-backed tests
-        run: cd calendar && TEST_PG_URL=postgres://homelab:homelab@127.0.0.1:5432/homelab HOMELAB_CALENDAR_RUNNER=0 prove -I lib -I ../common/lib t/model.t
+        run: cd calendar && PGTZ=America/Chicago TEST_PG_URL=postgres://homelab:homelab@127.0.0.1:5432/homelab HOMELAB_CALENDAR_RUNNER=0 prove -I lib -I ../common/lib t/model.t
 
   e2e-suite-lint:
     # The tests/e2e/ suite is pytest too. It needs a real, pre-provisioned

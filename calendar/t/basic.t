@@ -183,6 +183,24 @@ $t->get_ok('/metrics')->status_is(200, '/metrics answers without a sign-in')
   ->content_type_like(qr{text/plain}, '... as Prometheus text')
   ->content_like(qr/^homelab_calendar_up 0$/m, '... saying the database did not answer here');
 
+# --- invitations (#85): every route wants a sign-in or a Bearer token; the RSVP link is routed ---
+$t->get_ok('/api/events/7/attendees')->status_is(401, 'the attendee list needs a sign-in');
+$t->post_ok('/api/events/7/attendees' => json => { emails => ['x@example.com'] })->status_is(401, '... so does inviting');
+$t->post_ok('/api/events/7/attendees/3/remove')->status_is(401, '... and taking someone off');
+$t->post_ok('/api/events/7/rsvp' => json => { answer => 'yes' })->status_is(401, '... and answering');
+$t->get_ok('/api/freebusy?emails=x@example.com&start=2026-11-20T09:00:00')->status_is(401, '... and free/busy');
+$t->get_ok('/internal/v1/calendar/events/7/attendees')->status_is(401, 'the Bearer twins want a token');
+$t->post_ok('/internal/v1/calendar/events/7/attendees' => json => { emails => ['x@example.com'] })->status_is(401, '... inviting');
+$t->post_ok('/internal/v1/calendar/events/7/rsvp' => json => { answer => 'yes' })->status_is(401, '... answering');
+$t->get_ok('/internal/v1/calendar/freebusy?emails=x@example.com&start=2026-11-20T09:00:00')->status_is(401, '... free/busy');
+$t->get_ok('/i/short')->status_is(404, 'an RSVP token of the wrong shape is a 404 without touching anything');
+for my $p ('/i/' . ('d' x 64), '/i/' . ('d' x 64) . '.ics', '/i/' . ('d' x 64) . '?answer=accepted') {
+    $t->get_ok($p);
+    isnt $t->tx->res->code, 404, "$p is routed (the lookup needs the database)";
+}
+$t->post_ok('/i/' . ('d' x 64) => form => { answer => 'accepted' });
+isnt $t->tx->res->code, 404, 'a POSTed answer is routed too';
+
 # --- public links: the shape of the routes (the lookup itself needs the database) ---
 $t->get_ok('/c/not-a-token')->status_is(404, 'a token of the wrong shape is a 404 without touching anything');
 $t->get_ok('/e/short')->status_is(404, '... for events too');
@@ -221,6 +239,26 @@ for my $p ('/c/' . ('a' x 64), '/c/' . ('a' x 64) . '.ics', '/c/' . ('a' x 64) .
       ->content_like(qr/Next occurrences/, '... and lists the next ones')->content_like(qr/and more/, '... with the "more" note')
       ->content_like(qr/Standup &lt;weekly&gt;/, '... escaping the title');
     $t->get_ok('/t/public_event_allday')->status_is(200)->content_like(qr/Fri, Nov 20 - Sat, Nov 21, 2026/, 'an all-day span shows its last day');
+    # The invitation page (#85): waiting, answered, and cancelled.
+    require Homelab::Calendar::Invite;
+    my $att = { id => 5, email => 'ann@example.com', name => 'Ann <A>', status => 'needs-action', token => 'e' x 64, comment => undef };
+    my %rsvp = (attendee => $att, event => $ev, calendar => $cal, zone => 'America/Chicago', cancelled => 0,
+        when => 'Monday, November 16, 2026 9:00 AM to 9:30 AM (America/Chicago)', occurrences => [ 'Monday, November 16, 2026 9:00 AM to 9:30 AM (America/Chicago)', 'Monday, November 23, 2026 9:00 AM to 9:30 AM (America/Chicago)' ],
+        others => [ { email => 'bob@example.com', name => undef, status => 'accepted' } ], status_word => \&Homelab::Calendar::Invite::status_word,
+        saved => 0, error => undef, ics_url => 'https://calendar.example.test/i/' . ('e' x 64) . '.ics', in_my_calendar => undef);
+    $app->routes->get('/t/rsvp' => sub ($c) { $c->render(template => 'rsvp', %rsvp) });
+    $app->routes->get('/t/rsvp_saved' => sub ($c) { $c->render(template => 'rsvp', %rsvp, attendee => { %$att, status => 'declined', comment => 'Sorry "no"' }, saved => 1, in_my_calendar => 'https://calendar.example.test/?date=2026-11-16&event=2') });
+    $app->routes->get('/t/rsvp_cancelled' => sub ($c) { $c->render(template => 'rsvp', %rsvp, cancelled => 1, occurrences => []) });
+    $t->get_ok('/t/rsvp')->status_is(200)->content_like(qr/Are you coming\?/, 'the invitation page renders')
+      ->content_like(qr{<form method="post" action="/i/e{64}"}, '... with the answer form on this token')
+      ->content_like(qr/You have not answered yet/, '... waiting')->content_like(qr/Ann &lt;A&gt; \(ann\@example\.com\)/, '... escaping the name')
+      ->content_like(qr/Also invited/, '... listing the others')->content_like(qr/bob\@example\.com.*accepted/s, '... with their answers')
+      ->content_like(qr/Next occurrences/, '... and the next occurrences of a series');
+    $t->get_ok('/t/rsvp_saved')->status_is(200)->content_like(qr/Your answer was saved\. You said no\./, 'an answer just saved is confirmed')
+      ->content_like(qr/value="Sorry &quot;no&quot;"/, '... the note is kept in the field, escaped')
+      ->content_like(qr/Open in my calendar here/, '... an account here is pointed at its own calendar');
+    $t->get_ok('/t/rsvp_cancelled')->status_is(200)->content_like(qr/This event was cancelled by o\@example\.test/, 'a cancelled event says so')
+      ->content_unlike(qr/Are you coming\?/, '... and asks nothing')->content_like(qr/Download the cancellation/, '... but offers the CANCEL .ics');
 }
 
 # --- the vendored bundle and the chrome ---

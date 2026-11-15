@@ -191,6 +191,10 @@ GRANT USAGE ON SCHEMA calendar TO "$ROLE";
 GRANT SELECT ON calendar.account_settings TO "$ROLE";
 GRANT INSERT ON calendar.mail_links TO "$ROLE";
 GRANT USAGE ON SEQUENCE calendar.mail_links_id_seq TO "$ROLE";
+-- Post-cutover #85, answers to invitations that came by mail (homelab-calendar
+-- migration 007): the milter WRITES the bare facts of a METHOD:REPLY part.
+GRANT INSERT ON calendar.itip_inbox TO "$ROLE";
+GRANT USAGE ON SEQUENCE calendar.itip_inbox_id_seq TO "$ROLE";
 SQL
 }
 
@@ -234,7 +238,7 @@ sub fetch_scram_secret {
 my @REQUIRED_TABLES = qw(
     api.users domainadmin.domains domainadmin.mail_aliases block_link.pending_links
     domainadmin.mail_reply_identity domainadmin.mail_received_via
-    calendar.account_settings calendar.mail_links
+    calendar.account_settings calendar.mail_links calendar.itip_inbox
 );
 
 sub check_all_exist {

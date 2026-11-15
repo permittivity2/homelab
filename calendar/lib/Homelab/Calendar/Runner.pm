@@ -6,6 +6,7 @@ use Exporter 'import';
 use Homelab::Calendar::Recurrence qw(validate_zone);
 use Homelab::Calendar::MailExtract ();
 use Homelab::Calendar::Consent ();
+use Homelab::Calendar::Invite qw(request_message cancel_message reply_notice_message event_ics);
 
 our @EXPORT_OK = qw(looks_like_event reminder_message);
 
@@ -58,8 +59,98 @@ sub start ($self) {
 
 sub tick ($self) {
     $self->_guard('reminders' => sub { $self->run_reminders });
+    $self->_guard('notices'   => sub { $self->run_notices });
     $self->_guard('proposals' => sub { $self->run_proposals });
     return;
+}
+
+# ----------------------------------------------------------- invitations (#85)
+
+# Answers that came by mail are applied first (the milter's inbox rows), so
+# the organizer's note about one goes out in the same tick; then the queued
+# invitations, cancellations and notes, a few per tick as reminders are.
+sub run_notices ($self) {
+    my $m = $self->model;
+    $m->reclaim_stale_notices;
+    for my $row (@{ $m->claim_itip_inbox(10) }) {
+        my $res = eval { $m->apply_itip_reply($row) };
+        $res = 'failed: ' . ($@ =~ s/\s+\z//r) unless defined $res;
+        $m->itip_result($row->{id}, $res);
+        $self->log->info("calendar runner: mailed answer $row->{id} from $row->{attendee_email}: $res") if $self->log;
+    }
+    return unless $self->mailer;
+    for my $row (@{ $m->claim_due_notices($self->reminder_batch) }) {
+        my $ok = eval { $self->send_notice($row); 1 };
+        if ($ok) { $m->notice_sent($row->{id}) }
+        else {
+            my $err = $@ =~ s/\s+\z//r;
+            $self->log->warn("calendar runner: $row->{kind} notice $row->{id} to $row->{recipient} failed: $err") if $self->log;
+            $m->notice_failed($row->{id}, $err);
+        }
+    }
+    return;
+}
+
+# One queued notice, rendered from the event as it is now.
+sub send_notice ($self, $row) {
+    my $m = $self->model;
+    my $event = $m->db->query('SELECT * FROM calendar.events WHERE id = ?', $row->{event_id})->hash or die "event $row->{event_id} is gone\n";
+    my $cal   = $m->db->query('SELECT * FROM calendar.calendars WHERE id = ?', $event->{calendar_id})->hash or die "calendar $event->{calendar_id} is gone\n";
+    my $organizer = lc $cal->{owner_email};
+    my $base = $self->public_base_url;
+    my $attendees = $m->attendees_for($event->{id});
+    my %common = (event => $event, start => $m->event_start($event), end => $m->event_end($event), organizer => $organizer,
+        base_url => $base, payload => $row->{payload}, now => DateTime->now(time_zone => 'UTC'));
+    my $url = "$base/?date=" . $common{start}->ymd . "&event=$event->{id}";
+
+    if ($row->{kind} eq 'reply') {
+        # To the organizer: who answered what; the webhook too when they set one.
+        die "event is gone\n" if $event->{deleted_at};
+        my $msg = reply_notice_message(%common, url => $url, counts => $m->attendee_counts([ $event->{id} ])->{ $event->{id} });
+        $self->_send($row->{recipient}, $msg);
+        my $prefs = $m->prefs($row->{recipient});
+        if (($prefs->{webhook_url} // '') =~ /\S/) {
+            my $p = $row->{payload};
+            eval { $self->post_webhook($prefs->{webhook_url}, {
+                type => 'rsvp', recipient => $row->{recipient}, event_id => $event->{id} + 0, url => $url, title => $event->{title},
+                attendee => $p->{attendee}, name => $p->{name}, status => $p->{status}, comment => $p->{comment},
+                subject => $msg->{subject}, text => $msg->{body},
+            }) } or $self->log->warn("calendar runner: rsvp webhook for $row->{recipient} failed: $@") if $self->log;
+        }
+        return 1;
+    }
+
+    # A request or a cancel, to one attendee. Someone taken off the list has
+    # no row any more: the payload carries their name, the mail still goes.
+    my $att = $m->attendee_of($event->{id}, $row->{recipient})
+           // { email => lc $row->{recipient}, name => $row->{payload}{name}, status => 'needs-action', token => undef };
+    my $cancel = $row->{kind} eq 'cancel';
+    unless ($cancel) {
+        die "no longer invited\n" unless $att->{token};
+        die "event is gone\n" if $event->{deleted_at};
+    }
+    my ($ex, $ov) = $m->series_parts($event);
+    my $seq = $cancel ? ($row->{payload}{sequence} // $event->{sequence}) : $event->{sequence};
+    my $ics = event_ics(%common, method => ($cancel ? 'CANCEL' : 'REQUEST'), exdates => $ex, overrides => $ov, sequence => $seq,
+        attendees => [ map { { email => $_->{email}, name => $_->{name}, status => $_->{status} } } (@$attendees, ($att->{token} ? () : $att)) ],
+        url => ($att->{token} ? "$base/i/$att->{token}" : undef),
+        created => Homelab::Calendar::Model::_dt($event->{created_at}), updated => Homelab::Calendar::Model::_dt($event->{updated_at}));
+    my $msg = $cancel ? cancel_message(%common, attendee => $att, attendees => $attendees)
+                      : request_message(%common, attendee => $att, attendees => $attendees);
+    $self->_send($att->{email}, $msg, calendar => { method => ($cancel ? 'CANCEL' : 'REQUEST'), ics => $ics }, reply_to => $organizer);
+    $m->attendee_mark_sent($event->{id}, $att->{email}, $seq) unless $cancel;
+    return 1;
+}
+
+sub _send ($self, $to, $msg, %extra) {
+    require Homelab::Common::Mailer;
+    my $mail = $self->mailer;
+    Homelab::Common::Mailer::send_mail(
+        smtp_host => $mail->{smtp_host}, smtp_port => $mail->{smtp_port} // 587,
+        from_email => $mail->{email}, from_password => $mail->{smtp_password},
+        to => $to, subject => $msg->{subject}, body => $msg->{body}, %extra,
+    );
+    return 1;
 }
 
 # One line per failure kind per five minutes: a database outage must not

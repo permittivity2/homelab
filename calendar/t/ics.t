@@ -112,4 +112,34 @@ is_deeply prop($ev[2], 'exdate')->parameters, { VALUE => 'DATE' }, '... marked s
 ok !prop($ev[3], 'rrule'), 'a single event has no rule';
 is scalar(() = $ics =~ /^PRODID:/mg), 1, 'one PRODID in the export too';
 
+# --- invitations (#85): METHOD, ORGANIZER, ATTENDEE, SEQUENCE, STATUS ---
+$ics = masters_ics(name => 'Lunch', zone => $CHI, now => $now, method => 'REQUEST', events => [ {
+    uid => 'd4@calendar.test', title => 'Lunch', all_day => 0, start => chi(2026, 11, 20, 12, 30), end => chi(2026, 11, 20, 13, 30),
+    sequence => 2, organizer => { email => 'Owner@Example.org', name => 'The "Owner"' },
+    attendees => [ { email => 'ANN@example.com', name => 'Ann', status => 'accepted' }, { email => 'bob@example.com', status => 'needs-action' }, { email => '', status => 'declined' } ],
+    rrule => 'FREQ=WEEKLY;COUNT=3', overrides => [ { recurrence_id => chi(2026, 11, 27, 12, 30), start => chi(2026, 11, 27, 13), end => chi(2026, 11, 27, 14) } ],
+} ]);
+$cal = parse($ics);
+is $cal->property('method')->[0]->value, 'REQUEST', 'the calendar\'s METHOD is REQUEST';
+@ev = grep { $_->ical_entry_type eq 'VEVENT' } @{ $cal->entries };
+is scalar(@ev), 2, 'the master and its override';
+is val($ev[0], 'sequence'), '2', 'SEQUENCE';
+is val($ev[0], 'organizer'), 'mailto:owner@example.org', 'the organizer, lower-cased';
+is prop($ev[0], 'organizer')->parameters->{CN}, 'The Owner', '... a CN without the quotes it had';
+my @att = @{ $ev[0]->property('attendee') };
+is scalar(@att), 2, 'two attendees (one without an address was dropped)';
+is $att[0]->value, 'mailto:ann@example.com', 'the first, lower-cased';
+is_deeply { %{ $att[0]->parameters } }, { CUTYPE => 'INDIVIDUAL', ROLE => 'REQ-PARTICIPANT', PARTSTAT => 'ACCEPTED', RSVP => 'TRUE', CN => 'Ann' }, '... with her answer and name';
+is $att[1]->parameters->{PARTSTAT}, 'NEEDS-ACTION', 'the second has not answered';
+ok !exists $att[1]->parameters->{CN}, '... and has no name';
+is scalar @{ $ev[1]->property('attendee') }, 2, 'the override carries the attendees too (every component of a REQUEST does)';
+is val($ev[1], 'organizer'), 'mailto:owner@example.org', '... and the organizer';
+ok !prop($ev[0], 'status'), 'no STATUS unless given';
+$ics = masters_ics(name => 'Lunch', zone => $CHI, now => $now, method => 'CANCEL', events => [ {
+    uid => 'd4@calendar.test', title => 'Lunch', all_day => 0, start => chi(2026, 11, 20, 12, 30), end => chi(2026, 11, 20, 13, 30), sequence => 3, status => 'cancelled' } ]);
+like $ics, qr/^METHOD:CANCEL\r?$/m, 'METHOD:CANCEL';
+like $ics, qr/^STATUS:CANCELLED\r?$/m, 'STATUS:CANCELLED, upper-cased';
+$ics = masters_ics(name => 'x', zone => $CHI, now => $now, method => 'DELETE', events => []);
+like $ics, qr/^METHOD:PUBLISH\r?$/m, 'an unknown method is PUBLISH';
+
 done_testing;

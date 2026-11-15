@@ -1,3 +1,17 @@
+homelab-postfix-block-link (0.2.5) unstable; urgency=medium
+
+  * Answers to calendar invitations (post-cutover #85): an inbound message
+    for an account here that carries a text/calendar part with METHOD:REPLY
+    (the attendee pressed Yes / Maybe / No in Gmail, Outlook, Apple Mail,
+    Thunderbird) has its facts -- UID, attendee, PARTSTAT, SEQUENCE, COMMENT
+    -- written to calendar.itip_inbox for the calendar's runner to apply.
+    Buffered only when the shape says so (a calendar part at the top, or a
+    multipart whose subject reads Accepted/Declined/Tentative). The role
+    gains INSERT on itip_inbox (calendar-orchestrate.sh --mail-links grants
+    it on the leader). Fails open.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 15 Nov 2026 10:00:00 -0600
+
 homelab-postfix-block-link (0.2.4) unstable; urgency=medium
 
   * "Add to calendar" links (post-cutover #74 phase 3): for recipients whose

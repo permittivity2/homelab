@@ -92,10 +92,11 @@ if [ "$MAIL_LINKS" = 1 ]; then
     ROLES=$(psql_primary "SELECT string_agg(rolname, ' ') FROM pg_roles WHERE rolname LIKE 'homelab_postfix_block_link%'")
     [ -n "$ROLES" ] || die "no homelab_postfix_block_link* role on $PRIMARY"
     for role in $ROLES; do
-        if psql_primary "SELECT has_table_privilege('$role','calendar.mail_links','INSERT') AND has_table_privilege('$role','calendar.account_settings','SELECT')" | grep -q t; then
-            ok "$role already has the calendar grants"
-        elif on "$PRIMARY" "sudo -u postgres psql -d homelab -v ON_ERROR_STOP=1 -q -c \"GRANT USAGE ON SCHEMA calendar TO \\\"$role\\\"; GRANT SELECT ON calendar.account_settings TO \\\"$role\\\"; GRANT INSERT ON calendar.mail_links TO \\\"$role\\\"; GRANT USAGE ON SEQUENCE calendar.mail_links_id_seq TO \\\"$role\\\";\"" >/dev/null 2>&1; then
-            ok "$role: SELECT account_settings, INSERT mail_links (+ sequence) granted"
+        # #85 (milter >= 0.2.5): INSERT on itip_inbox too (calendar migration 007 must have run).
+        if psql_primary "SELECT has_table_privilege('$role','calendar.mail_links','INSERT') AND has_table_privilege('$role','calendar.account_settings','SELECT') AND has_table_privilege('$role','calendar.itip_inbox','INSERT')" 2>/dev/null | grep -q t; then
+            ok "$role already has the calendar grants (mail_links, account_settings, itip_inbox)"
+        elif on "$PRIMARY" "sudo -u postgres psql -d homelab -v ON_ERROR_STOP=1 -q -c \"GRANT USAGE ON SCHEMA calendar TO \\\"$role\\\"; GRANT SELECT ON calendar.account_settings TO \\\"$role\\\"; GRANT INSERT ON calendar.mail_links TO \\\"$role\\\"; GRANT USAGE ON SEQUENCE calendar.mail_links_id_seq TO \\\"$role\\\"; GRANT INSERT ON calendar.itip_inbox TO \\\"$role\\\"; GRANT USAGE ON SEQUENCE calendar.itip_inbox_id_seq TO \\\"$role\\\";\"" >/dev/null 2>&1; then
+            ok "$role: SELECT account_settings, INSERT mail_links + itip_inbox (+ sequences) granted"
         else bad "$role: could not grant"; fi
     done
     step "the calendar: block in the milter's config on $MAIL_NODES"

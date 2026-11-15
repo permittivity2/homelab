@@ -46,9 +46,12 @@ sub _calendar (%args) {
     my $cal = Data::ICal->new(rfc_strict => 1);
     # Data::ICal writes its own PRODID; replace it with ours.
     $cal->properties->{prodid} = [];
+    # PUBLISH for feeds and exports; an invitation is a REQUEST and a
+    # cancellation a CANCEL (RFC 5546, #85).
+    my $method = ($args{method} // 'PUBLISH') =~ /\A(?:REQUEST|CANCEL|REPLY)\z/ ? $args{method} : 'PUBLISH';
     $cal->add_properties(
         prodid => $PRODID,
-        method => 'PUBLISH',
+        method => $method,
         ($args{name} ? ('X-WR-CALNAME' => $args{name}) : ()),
         ($args{zone} ? ('X-WR-TIMEZONE' => $args{zone}) : ()),
         ($args{description} ? ('X-WR-CALDESC' => $args{description}) : ()),
@@ -86,8 +89,32 @@ sub _event_props ($e, $when, $detail, $now) {
     }
     push @props, created         => ics_datetime($e->{created}) if $e->{created};
     push @props, 'last-modified' => ics_datetime($e->{updated}) if $e->{updated};
+    # Invitations (#85): who asks, who is asked and what each answered, the
+    # change counter, and CANCELLED when the event is called off.
+    push @props, sequence => $e->{sequence} + 0 if defined $e->{sequence};
+    push @props, status => uc $e->{status} if defined $e->{status} && length $e->{status};
+    if (my $o = $e->{organizer}) {
+        push @props, organizer => [ 'mailto:' . lc($o->{email}), { (defined $o->{name} && length $o->{name} ? (CN => _param($o->{name})) : ()) } ];
+    }
+    for my $a (@{ $e->{attendees} // [] }) {
+        next unless defined $a->{email} && length $a->{email};
+        push @props, attendee => [ 'mailto:' . lc($a->{email}), {
+            CUTYPE => 'INDIVIDUAL', ROLE => 'REQ-PARTICIPANT',
+            PARTSTAT => _partstat($a->{status}), RSVP => ($a->{rsvp} // 1) ? 'TRUE' : 'FALSE',
+            (defined $a->{name} && length $a->{name} ? (CN => _param($a->{name})) : ()),
+        } ];
+    }
     return @props;
 }
+
+# PARTSTAT as RFC 5545 spells it; anything unknown is still waiting.
+sub _partstat ($s) {
+    my %p = ('needs-action' => 'NEEDS-ACTION', accepted => 'ACCEPTED', tentative => 'TENTATIVE', declined => 'DECLINED');
+    return $p{ lc($s // '') } // 'NEEDS-ACTION';
+}
+# A parameter value: no control characters, no double quotes (Data::ICal
+# quotes the value when it has to).
+sub _param ($s) { return substr(($s =~ s/[\x00-\x1f"]//gr), 0, 200) }
 
 # instances_ics(name => ..., zone => ..., detail => 'full'|'busy', now => DateTime,
 #               instances => [ { ...occurrence, recurrence_id => DateTime|undef } ])
@@ -107,8 +134,9 @@ sub instances_ics (%args) {
     return $cal->as_string;
 }
 
-# masters_ics(name => ..., zone => ..., now => DateTime, events => [ { ...event,
-#             rrule, exdates => [DateTime], overrides => [ { recurrence_id => DateTime, ... } ] } ])
+# masters_ics(name => ..., zone => ..., now => DateTime, method => PUBLISH|REQUEST|CANCEL,
+#             events => [ { ...event, rrule, exdates => [DateTime], overrides => [ { recurrence_id => DateTime, ... } ],
+#                           sequence, status, organizer => { email, name }, attendees => [ { email, name, status } ] } ])
 sub masters_ics (%args) {
     my $now = $args{now} // DateTime->now(time_zone => 'UTC');
     my $cal = _calendar(%args);
@@ -132,7 +160,7 @@ sub masters_ics (%args) {
         for my $o (@{ $e->{overrides} // [] }) {
             my $zone = $e->{start}->time_zone->name;
             my %x = (%$e, %$o, uid => $e->{uid});
-            delete @x{qw(rrule exdates overrides recurrence_id)};
+            delete @x{qw(rrule exdates overrides recurrence_id)};     # organizer and attendees stay: every component of a REQUEST carries them
             my $ov = Data::ICal::Entry::Event->new;
             my @op = _event_props(\%x, 'tzid', 'full', $now);
             push @op, 'recurrence-id' => $e->{all_day}

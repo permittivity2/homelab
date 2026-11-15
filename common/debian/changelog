@@ -1,3 +1,14 @@
+homelab-common (0.1.37) unstable; urgency=medium
+
+  * Mailer: send_mail takes `calendar => { method, ics }` for an iTIP message
+    (homelab-calendar's invitations, post-cutover #85): multipart/mixed of a
+    multipart/alternative (text/plain [+ html] + text/calendar; method=...)
+    and the .ics attached, the shape every mail program's Yes/Maybe/No
+    buttons are tuned to; and `reply_to`. A Subject with non-ASCII is now an
+    RFC 2047 encoded word (ASCII subjects are byte-identical to before).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 15 Nov 2026 10:00:00 -0600
+
 homelab-common (0.1.36) unstable; urgency=medium
 
   * MailSetup: the manual-settings table (myaccount device page, invite

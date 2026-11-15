@@ -722,6 +722,27 @@ class Client:
     def calendar_set_account(self, token, body):
         return self._request("PUT", "/api/v1/calendar/account", headers=self._auth(token), json=body)
 
+    # Invitations (post-cutover #85): who is asked to an event, inviting,
+    # taking someone off, sending again, your own answer, free/busy.
+    def calendar_attendees(self, token, event_id):
+        return self._request("GET", f"/api/v1/calendar/events/{event_id}/attendees", headers=self._auth(token))
+
+    def calendar_invite(self, token, event_id, body):
+        return self._request("POST", f"/api/v1/calendar/events/{event_id}/attendees", headers=self._auth(token), json=body)
+
+    def calendar_uninvite(self, token, event_id, attendee_id):
+        return self._request("POST", f"/api/v1/calendar/events/{event_id}/attendees/{attendee_id}/remove", headers=self._auth(token))
+
+    def calendar_reinvite(self, token, event_id, attendee_id):
+        return self._request("POST", f"/api/v1/calendar/events/{event_id}/attendees/{attendee_id}/resend", headers=self._auth(token))
+
+    def calendar_rsvp(self, token, event_id, body):
+        return self._request("POST", f"/api/v1/calendar/events/{event_id}/rsvp", headers=self._auth(token), json=body)
+
+    def calendar_freebusy(self, token, **params):
+        params = {k: v for k, v in params.items() if v is not None}
+        return self._request("GET", "/api/v1/calendar/freebusy", headers=self._auth(token), params=params)
+
     # --- Mail, via homelab-api's /api/v1/mail/* gateway ->
     # homelab-mailbridge (see ../../mailbridge/README.md). No more
     # imaplib/smtplib here at all -- these are plain HTTP calls, same

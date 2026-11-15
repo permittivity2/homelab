@@ -1827,10 +1827,182 @@ def _print_event(ev, h24=False):
     if ev.get("rrule"):
         print(f"  Repeats:   {ev['rrule']}")
     print(f"  Reminders: {_reminder_summary(ev)}")
+    if ev.get("attendees"):
+        print("  Invited:   " + ", ".join(f"{a.get('email')} ({_ANSWER_WORD.get(a.get('status'), a.get('status'))})" for a in ev["attendees"]))
+    if ev.get("my_status"):
+        print(f"  You:       {_ANSWER_WORD.get(ev['my_status'], ev['my_status'])}" + ("" if ev["my_status"] == "needs-action" else "") + f"  (organizer {ev.get('organizer')})")
     if ev.get("url"):
         print(f"  Link:      {ev['url']}")
     if ev.get("description"):
         print("  Notes:     " + str(ev["description"]).replace("\n", "\n             "))
+
+
+# Invitations (post-cutover #85).
+def _clock_s(s, h24=False):
+    """A wall-clock string ('2026-11-20T12:30:00') as a clock, or the string itself."""
+    try:
+        return _clock(datetime.fromisoformat(str(s)), h24)
+    except (TypeError, ValueError):
+        return str(s or "")
+
+
+_ANSWER_WORD = {"accepted": "yes", "tentative": "maybe", "declined": "no", "needs-action": "waiting"}
+_ANSWER_FOR = {"yes": "accepted", "maybe": "tentative", "no": "declined", "accepted": "accepted", "tentative": "tentative", "declined": "declined"}
+
+
+def _print_attendees(r):
+    atts = r.get("attendees") or []
+    if not atts:
+        print("(nobody invited)")
+        return
+    rows = []
+    for a in atts:
+        who = f"{a['name']} <{a['email']}>" if a.get("name") else a.get("email")
+        rows.append([a.get("id"), who, _ANSWER_WORD.get(a.get("status"), a.get("status")), str(a.get("responded_at") or "")[:16],
+                     "sent" if a.get("invitation_sent") else "queued", a.get("comment") or ""])
+    _print_table(["ID", "WHO", "ANSWER", "ANSWERED", "INVITATION", "NOTE"], rows)
+    c = r.get("attendee_counts") or {}
+    if c.get("total"):
+        parts = [f"{c[k]} {w}" for k, w in (("accepted", "yes"), ("tentative", "maybe"), ("declined", "no"), ("waiting", "waiting")) if c.get(k)]
+        print(f"{c['total']} invited: {', '.join(parts)}.  Organizer: {r.get('organizer')}")
+
+
+def cmd_calendar_attendees(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        r = _client(args).calendar_attendees(session["token"], args.event_id)
+    except ApiError as e:
+        _emit_error(args, f"Could not read who is invited to event {args.event_id}: {e.message}")
+        return 1
+    if _emit(args, r):
+        return 0
+    _print_attendees(r)
+    return 0
+
+
+def cmd_calendar_invite(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    try:
+        r = _client(args).calendar_invite(session["token"], args.event_id, {"emails": args.emails})
+    except ApiError as e:
+        _emit_error(args, f"Could not invite: {e.message}")
+        return 1
+    if _emit(args, r):
+        return 0
+    for a in r.get("added") or []:
+        print(f"Invited {a.get('email')} (attendee id {a.get('id')}); the invitation goes out within a minute.")
+    for email in r.get("already_invited") or []:
+        print(f"{email} was already invited.")
+    return 0
+
+
+def _attendee_id(args, session, event_id, who):
+    """An attendee id as given, or looked up from an address."""
+    if str(who).isdigit():
+        return who, None
+    try:
+        r = _client(args).calendar_attendees(session["token"], event_id)
+    except ApiError as e:
+        return None, f"Could not read who is invited to event {event_id}: {e.message}"
+    for a in r.get("attendees") or []:
+        if str(a.get("email", "")).lower() == str(who).strip().lower():
+            return a.get("id"), None
+    return None, f"{who} is not invited to event {event_id}"
+
+
+def cmd_calendar_uninvite(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    aid, err = _attendee_id(args, session, args.event_id, args.who)
+    if err:
+        _emit_error(args, err)
+        return 1
+    try:
+        r = _client(args).calendar_uninvite(session["token"], args.event_id, aid)
+    except ApiError as e:
+        _emit_error(args, f"Could not take {args.who} off the list: {e.message}")
+        return 1
+    if _emit(args, r):
+        return 0
+    print(f"{args.who} is off the list for event {args.event_id}; they are told if they had the invitation.")
+    return 0
+
+
+def cmd_calendar_reinvite(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    aid, err = _attendee_id(args, session, args.event_id, args.who)
+    if err:
+        _emit_error(args, err)
+        return 1
+    try:
+        r = _client(args).calendar_reinvite(session["token"], args.event_id, aid)
+    except ApiError as e:
+        _emit_error(args, f"Could not send the invitation again: {e.message}")
+        return 1
+    if _emit(args, r):
+        return 0
+    print(f"The invitation to {r.get('email') or args.who} goes out again within a minute.")
+    return 0
+
+
+def cmd_calendar_rsvp(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    answer = _ANSWER_FOR.get(args.answer.lower())
+    if not answer:
+        _emit_error(args, "The answer is yes, maybe or no")
+        return 1
+    body = {"answer": answer}
+    if args.comment:
+        body["comment"] = args.comment
+    try:
+        r = _client(args).calendar_rsvp(session["token"], args.event_id, body)
+    except ApiError as e:
+        _emit_error(args, f"Could not answer: {e.message}")
+        return 1
+    if _emit(args, r):
+        return 0
+    print(f"You said {_ANSWER_WORD.get(r.get('status'), r.get('status'))} to event {args.event_id}. {r.get('organizer') or 'The organizer'} has been told.")
+    return 0
+
+
+def cmd_calendar_freebusy(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    end = args.end
+    if not end and args.duration:
+        minutes = _duration_minutes(args.duration)
+        if minutes is None or minutes <= 0:
+            _emit_error(args, "--duration looks like 90m, 1h30m or 2h")
+            return 1
+        end = _add_minutes(args.start, minutes, False)
+    try:
+        r = _client(args).calendar_freebusy(session["token"], emails=",".join(args.emails), start=args.start, end=end, timezone=args.timezone)
+    except ApiError as e:
+        _emit_error(args, f"Could not read free/busy: {e.message}")
+        return 1
+    if _emit(args, r):
+        return 0
+    h24 = False
+    print(f"{_calendar_when({'start': r.get('start'), 'end': r.get('end'), 'all_day': False}, h24)}  ({r.get('timezone')})")
+    for p in r.get("people") or []:
+        if not p.get("known"):
+            state = "not an account here (no calendar to check)"
+        elif p.get("busy"):
+            state = "BUSY: " + ", ".join(f"{_clock_s(i.get('start'), h24)} - {_clock_s(i.get('end'), h24)}" for i in p.get("intervals") or [])
+        else:
+            state = "free"
+        print(f"  {p.get('email'):<40} {state}")
+    return 0
 
 
 def cmd_calendar_calendars(args):
@@ -1912,6 +2084,8 @@ def cmd_calendar_add(args):
                        ("calendar_id", args.calendar), ("share_with", args.share_with)):
         if value:
             body[key] = value
+    if getattr(args, "invite", None):
+        body["attendees"] = args.invite
     rrule = args.repeat or _build_rrule(getattr(args, "freq", None), getattr(args, "every", None), getattr(args, "count", None),
                                         getattr(args, "until", None), getattr(args, "on", None), bool(args.all_day))
     if rrule:
@@ -1933,6 +2107,8 @@ def cmd_calendar_add(args):
         return 0
     cal = (ev.get("calendar") or {}).get("name")
     print(f"Added event {ev.get('id')}: {ev.get('title')}, {_calendar_when(ev)}" + (f" ({cal})" if cal else ""))
+    if ev.get("attendees"):
+        print("Invited: " + ", ".join(a.get("email") for a in ev["attendees"]) + "; the invitations go out within a minute.")
     return 0
 
 
@@ -3452,6 +3628,7 @@ def build_parser():
                    help="Email reminder this many minutes before the start (default 10), or 'none'")
     repeat_flags(p)
     p.add_argument("--share-with", metavar="EMAIL", help="Share the new event (read-only) with one address")
+    p.add_argument("--invite", action="append", metavar="EMAIL", help="Invite this person (repeat for several); each gets an email with Yes / Maybe / No")
     p.set_defaults(func=cmd_calendar_add)
 
     p = calendar_sub.add_parser("edit", help="Change an event: give only what changes")
@@ -3538,6 +3715,41 @@ def build_parser():
     p = calendar_sub.add_parser("unshare", help="Remove a share by its id (see 'shares')")
     p.add_argument("share_id")
     p.set_defaults(func=cmd_calendar_unshare)
+
+    # Invitations (post-cutover #85).
+    p = calendar_sub.add_parser("attendees", help="Who is invited to an event and what each answered")
+    p.add_argument("event_id")
+    p.set_defaults(func=cmd_calendar_attendees)
+
+    p = calendar_sub.add_parser("invite", help="Invite people to an event you own: each gets an email with Yes / Maybe / No and an .ics request")
+    p.add_argument("event_id")
+    p.add_argument("emails", nargs="+", metavar="EMAIL", help="Addresses, or 'Name <address>'")
+    p.set_defaults(func=cmd_calendar_invite)
+
+    p = calendar_sub.add_parser("uninvite", help="Take someone off an event's list (they are told if they had the invitation)")
+    p.add_argument("event_id")
+    p.add_argument("who", metavar="EMAIL|ID", help="Their address, or the attendee id from 'attendees'")
+    p.set_defaults(func=cmd_calendar_uninvite)
+
+    p = calendar_sub.add_parser("reinvite", help="Send someone their invitation again")
+    p.add_argument("event_id")
+    p.add_argument("who", metavar="EMAIL|ID", help="Their address, or the attendee id from 'attendees'")
+    p.set_defaults(func=cmd_calendar_reinvite)
+
+    p = calendar_sub.add_parser("rsvp", help="Answer an invitation you received (an event shared with you): yes, maybe or no")
+    p.add_argument("event_id")
+    p.add_argument("answer", choices=["yes", "maybe", "no"])
+    p.add_argument("--comment", help="A note for the organizer")
+    p.set_defaults(func=cmd_calendar_rsvp)
+
+    p = calendar_sub.add_parser("freebusy", help="Whether accounts here are busy at a time (bare busy intervals, no titles)")
+    p.add_argument("emails", nargs="+", metavar="EMAIL")
+    p.add_argument("--start", required=True, metavar="WHEN", help="2026-11-20T14:00")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--end", metavar="WHEN", help="Same form; an hour after the start when left out")
+    g.add_argument("--duration", metavar="LENGTH", help="Instead of --end: 90m, 1h30m, 2h")
+    p.add_argument("--timezone", metavar="ZONE", help="The IANA zone the times are in (your calendar's when left out)")
+    p.set_defaults(func=cmd_calendar_freebusy)
 
     p = calendar_sub.add_parser("suggestions", help="Events proposed from your email as it arrived (or 'suggestions save|dismiss TOKEN')")
     p.set_defaults(func=cmd_calendar_suggestions)

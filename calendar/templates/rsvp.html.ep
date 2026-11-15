@@ -1,0 +1,90 @@
+% layout 'default';
+% title 'Invitation: ' . $event->{title} . ' - Calendar';
+%# An invitation opened from the mail (#85): the event, Yes / Maybe / No, the
+%# answer so far, who else is asked. The token in the address is the
+%# capability; nothing here needs a sign-in. Plain subs: templates compile
+%# without the signatures feature.
+% my $status = $attendee->{status} // 'needs-action';
+% my %label = (accepted => 'You said yes.', tentative => 'You said maybe.', declined => 'You said no.');
+<main class="app__main">
+  <div class="container stack" style="max-width: 44rem">
+    % if ($saved) {
+    <p class="banner banner--ok"><span>Your answer was saved. <%= $label{$status} // '' %> <%= $calendar->{owner_email} %> has been told.</span></p>
+    % }
+    % if ($error) {
+    <p class="banner banner--error"><span><%= $error %></span></p>
+    % }
+    <div class="panel">
+      <div class="panel__head" style="display: flex; align-items: center; gap: var(--space-3)">
+        <span class="swatch" style="background: <%= $event->{color} // $calendar->{color} %>"></span>
+        <h1 class="panel__title" style="font-size: var(--app-lg)"><%= $event->{title} %></h1>
+      </div>
+      <div class="panel__body stack">
+        % if ($cancelled) {
+        <p class="banner banner--info"><span>This event was cancelled by <%= $calendar->{owner_email} %>.</span></p>
+        % }
+        <p class="event-when"><%= $when %></p>
+        % if ($event->{rrule}) {
+        <p class="muted-small">Repeats. Times in <%= $zone %>.</p>
+        % } else {
+        <p class="muted-small">Times in <%= $zone %>.</p>
+        % }
+        % if ($event->{location}) {
+        <p class="text-muted"><%= $event->{location} %> <a class="btn btn-sm" href="https://www.google.com/maps/search/?api=1&query=<%= Mojo::Util::url_escape($event->{location} =~ s/\s+/ /gr) %>" target="_blank" rel="noopener">Map</a></p>
+        % }
+        % if ($event->{description}) {
+        <p style="white-space: pre-wrap"><%= $event->{description} %></p>
+        % }
+        <p class="muted-small">Organizer: <%= $calendar->{owner_email} %>. Invited: <%= $attendee->{name} ? $attendee->{name} . ' (' . $attendee->{email} . ')' : $attendee->{email} %>.</p>
+        % unless ($cancelled) {
+        <div class="stack" style="gap: var(--space-2)">
+          <p><strong>Are you coming?</strong> <span class="text-muted"><%= $status eq 'needs-action' ? 'You have not answered yet.' : $label{$status} %></span></p>
+          <form method="post" action="/i/<%= $attendee->{token} %>" class="stack" style="gap: var(--space-2)">
+            <div class="form-actions" style="gap: var(--space-2); flex-wrap: wrap">
+              <button class="btn <%= $status eq 'accepted' ? 'btn-primary' : '' %>" name="answer" value="accepted">Yes</button>
+              <button class="btn <%= $status eq 'tentative' ? 'btn-primary' : '' %>" name="answer" value="tentative">Maybe</button>
+              <button class="btn <%= $status eq 'declined' ? 'btn-primary' : '' %>" name="answer" value="declined">No</button>
+            </div>
+            <div>
+              <label class="form-label" for="comment">A note for the organizer (optional)</label>
+              <input class="form-input" id="comment" name="comment" maxlength="500" value="<%= $attendee->{comment} // '' %>" placeholder="Running 10 minutes late">
+            </div>
+          </form>
+        </div>
+        <div class="form-actions" style="gap: var(--space-2); flex-wrap: wrap">
+          <a class="btn" href="<%= $ics_url %>">Add to my calendar (.ics)</a>
+          % if ($in_my_calendar) {
+          <a class="btn" href="<%= $in_my_calendar %>">Open in my calendar here</a>
+          % }
+        </div>
+        % } else {
+        <div class="form-actions"><a class="btn" href="<%= $ics_url %>">Download the cancellation (.ics)</a></div>
+        % }
+      </div>
+    </div>
+    % if (@$others) {
+    <div class="panel">
+      <div class="panel__head"><h2 class="panel__title">Also invited</h2></div>
+      <div class="panel__body">
+        <ul class="share-list">
+        % for my $o (@$others) {
+          <li><span class="share-who"><%= $o->{name} ? $o->{name} . ' (' . $o->{email} . ')' : $o->{email} %></span><span class="pill"><%= $status_word->($o->{status}) %></span></li>
+        % }
+        </ul>
+      </div>
+    </div>
+    % }
+    % if (@$occurrences > 1) {
+    <div class="panel">
+      <div class="panel__head"><h2 class="panel__title">Next occurrences</h2></div>
+      <div class="panel__body">
+        <ul class="share-list">
+        % for my $o (@$occurrences) {
+          <li><span><%= $o %></span></li>
+        % }
+        </ul>
+      </div>
+    </div>
+    % }
+  </div>
+</main>

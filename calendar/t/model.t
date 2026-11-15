@@ -25,7 +25,8 @@ my ($tok1, $tok2) = (sha256_hex("$tag-1"), sha256_hex("$tag-2"));
 sub dt (%a) { return DateTime->new(%a, time_zone => 'America/Chicago') }
 sub cleanup {
     $db->query('DELETE FROM calendar.mail_links WHERE token IN (?, ?)', $tok1, $tok2);
-    $db->query('DELETE FROM calendar.calendars WHERE owner_email LIKE ?', "$tag-%");
+    $db->query('DELETE FROM calendar.itip_inbox WHERE attendee_email LIKE ?', "$tag-%");
+    $db->query('DELETE FROM calendar.calendars WHERE owner_email LIKE ?', "$tag-%");    # events, attendees, notices, shares cascade
     $db->query("DELETE FROM calendar.$_ WHERE user_email LIKE ?", "$tag-%") for qw(user_prefs account_settings reminder_addresses calendar_visibility);
 }
 END { cleanup() if $db }
@@ -143,6 +144,143 @@ ok $m->mail_link_made_by($link->{id}, $alice), '... but the suggestion stays con
 # --- metrics -----------------------------------------------------------------
 my $met = $m->metrics;
 ok defined $met->{events} && defined $met->{reminders_overdue} && defined $met->{reminders}, 'the metrics have their numbers';
+
+# --- invitations (#85): attendees, the notice queue, answers, free/busy, mailed replies ---
+my ($carol, $dave) = ("$tag-carol\@example.test", "$tag-dave\@example.test");
+my $lunch = $m->create_event($cal, $alice, { title => 'Lunch', start => '2026-11-20T12:30:00', end => '2026-11-20T13:30:00', timezone => 'America/Chicago', location => 'Cafe' });
+my $notices = sub ($kind = undef) { [ grep { !$kind || $_->{kind} eq $kind } @{ $m->notices_for($lunch->{id}) } ] };
+my $r = $m->add_attendees($lunch, [ "Bob <$bob>", $carol, " $carol ", 'not-an-address' x 0 ]);
+is scalar @{ $r->{added} }, 2, 'two people invited (one twice counts once)';
+is $r->{added}[0]{name}, 'Bob', '... a name is kept';
+is $r->{added}[0]{email}, $bob, '... the address lower-cased';
+like $r->{added}[0]{token}, qr/\A[0-9a-f]{64}\z/, '... each with an RSVP token';
+is $r->{added}[0]{status}, 'needs-action', '... waiting';
+is scalar @{ $notices->('request') }, 2, 'a request is queued for each';
+ok $notices->('request')->[0]{due_at} gt $notices->('request')->[0]{created_at}, '... a few seconds out, so quick edits send one mail';
+is scalar @{ $m->viewer_event_shares($bob) }, 1, 'an invited account sees the event in its own calendar (a read-only share)';
+is $m->permission_for_event($bob, $m->event($lunch->{id})), 'read', '... read-only';
+$r = $m->add_attendees($lunch, [ $bob ]);
+is scalar @{ $r->{existing} }, 1, 'inviting someone again: already there';
+is scalar @{ $r->{added} }, 0, '... nothing new';
+eval { $m->add_attendees($lunch, [ $alice ]) };
+like $@, qr/organizer/, 'the organizer cannot invite herself';
+eval { $m->add_attendees($lunch, [ 'nobody' ]) };
+like $@, qr/does not look like an email address/, 'a bad address is refused with a sentence';
+is_deeply $m->attendee_counts([ $lunch->{id} ])->{ $lunch->{id} }, { total => 2, accepted => 0, tentative => 0, declined => 0, waiting => 2 }, 'the counts';
+is_deeply $m->my_attendance($bob, [ $lunch->{id} ]), { $lunch->{id} => 'needs-action' }, 'Bob\'s own answer so far';
+
+# the queue: claim, send, mark
+my $pending = $m->claim_due_notices(10);
+is scalar @$pending, 0, 'nothing due yet (the grace period)';
+$db->query('UPDATE calendar.notice_queue SET due_at = NOW() WHERE event_id = ?', $lunch->{id});
+$pending = $m->claim_due_notices(10);
+is scalar @$pending, 2, 'both due now and claimed';
+is $pending->[0]{state}, 'running', '... running';
+is ref $pending->[0]{payload}, 'HASH', '... the payload decoded';
+is $pending->[0]{payload}{reason}, 'invited', '... an invitation';
+is scalar @{ $m->claim_due_notices(10) }, 0, 'a second claim gets nothing: no double send';
+$m->notice_sent($pending->[0]{id});
+$m->attendee_mark_sent($lunch->{id}, $pending->[0]{recipient}, 0);
+ok defined $m->attendee_of($lunch->{id}, $pending->[0]{recipient})->{sequence_sent}, 'the attendee remembers the sequence sent';
+$m->notice_failed($pending->[1]{id}, 'SMTP down');
+is((grep { $_->{id} == $pending->[1]{id} } @{ $notices->() })[0]{state}, 'pending', 'a failed send goes back to the queue');
+$db->query('UPDATE calendar.notice_queue SET attempts = 3 WHERE id = ?', $pending->[1]{id});
+$m->notice_failed($pending->[1]{id}, 'SMTP down');
+is((grep { $_->{id} == $pending->[1]{id} } @{ $notices->() })[0]{state}, 'failed', '... and fails for good on the third try');
+
+# an answer, and the note to the organizer
+my $bobrow = $m->attendee_of($lunch->{id}, $bob);
+my $ans = $m->set_attendee_status($bobrow, 'yes', comment => '  Bringing dessert ', via => 'link');
+is $ans->{status}, 'accepted', 'yes means accepted';
+is $ans->{comment}, 'Bringing dessert', '... the note trimmed';
+is $ans->{responded_via}, 'link', '... how';
+ok $ans->{responded_at}, '... when';
+my @reply = @{ $notices->('reply') };
+is scalar @reply, 1, 'the organizer is told';
+is $reply[0]{recipient}, $alice, '... at her address';
+is_deeply $m->attendee_counts([ $lunch->{id} ])->{ $lunch->{id} }, { total => 2, accepted => 1, tentative => 0, declined => 0, waiting => 1 }, 'the counts follow';
+eval { $m->set_attendee_status($bobrow, 'perhaps') };
+like $@, qr/accepted, tentative or declined/, 'an unknown answer is refused';
+my $by_token = $m->attendee_by_token($bobrow->{token});
+is $by_token->{event}{id}, $lunch->{id}, 'the token finds the attendee, event and calendar';
+is $by_token->{calendar}{owner_email}, $alice, '... (the organizer)';
+ok !$m->attendee_by_token('0' x 64), 'an unknown token finds nothing';
+
+# a change: a retitle keeps the answers, a new time asks again with SEQUENCE+1.
+# (Found here 2026-11-15: with the database session in America/Chicago, as
+# production's is, the old string compare of starts_at saw every edit as a
+# time change; _same_instant compares instants.)
+$db->query('DELETE FROM calendar.notice_queue WHERE event_id = ?', $lunch->{id});
+$m->_write_exception($series, dt(year => 2026, month => 11, day => 20, hour => 9), { title => 'Stand-up (moved)', start => '2026-11-20T10:00:00', end => '2026-11-20T10:15:00' }, 0);
+$m->update_event($m->event($series->{id}), { description => 'a retitle-sized change' });
+is scalar @{ $m->exceptions_for($series->{id}) }, 2, 'a retitle of a series keeps its moved and cancelled occurrences';
+$m->update_event($m->event($lunch->{id}), { title => 'Lunch (tacos)' });
+is scalar @{ $notices->('request') }, 2, 'a retitle: everyone hears';
+is $m->attendee_of($lunch->{id}, $bob)->{status}, 'accepted', '... Bob\'s yes stands';
+is $m->event($lunch->{id})->{sequence}, 0, '... the sequence is unchanged';
+is $notices->('request')->[0]{payload}{changed}[0], 'details', '... the mail says the details changed';
+$db->query('DELETE FROM calendar.notice_queue WHERE event_id = ?', $lunch->{id});
+my $moved = $m->update_event($m->event($lunch->{id}), { start => '2026-11-20T13:00:00', end => '2026-11-20T14:00:00', timezone => 'America/Chicago' });
+is $m->event($lunch->{id})->{sequence}, 1, 'a new time bumps the sequence';
+is $moved->{sequence}, 1, '... and the row handed back carries the bumped value (seen stale live, 0.3.1)';
+is $m->attendee_of($lunch->{id}, $bob)->{status}, 'needs-action', '... and asks Bob again';
+is $notices->('request')->[0]{payload}{changed}[0], 'time', '... the mail says the time changed';
+is $notices->('request')->[0]{payload}{sequence}, 1, '... and carries the new sequence';
+$db->query('DELETE FROM calendar.notice_queue WHERE event_id = ?', $lunch->{id});
+$m->update_event($m->event($lunch->{id}), { description => 'the same' });
+$m->update_event($m->event($lunch->{id}), { description => 'the same again' });
+is scalar @{ $notices->('request') }, 2, 'two quick edits: one pending request per person, not two';
+
+# the whole list from the editor: one off, one on
+$db->query('DELETE FROM calendar.notice_queue WHERE event_id = ?', $lunch->{id});
+my $list = $m->set_attendees($m->event($lunch->{id}), [ $carol, $dave ]);
+is_deeply [ sort map { $_->{email} } @$list ], [ sort $carol, $dave ], 'Bob is off, Dave is on';
+is scalar @{ $notices->('cancel') }, 1, 'Bob, who had the invitation, gets a cancel';
+is $notices->('cancel')->[0]{recipient}, $bob, '... addressed to him';
+is $notices->('cancel')->[0]{payload}{name}, 'Bob', '... with his name (his row is gone)';
+is scalar @{ $m->viewer_event_shares($bob) }, 0, '... and his share is revoked';
+is scalar @{ $notices->('request') }, 1, 'Dave gets an invitation';
+is $notices->('request')->[0]{recipient}, $dave, '... addressed to him';
+
+# free/busy for accounts here
+my $fb = $m->freebusy([ $alice, $bob, 'stranger@example.net' ], dt(year => 2026, month => 11, day => 20, hour => 13), dt(year => 2026, month => 11, day => 20, hour => 14));
+is scalar @$fb, 3, 'three people asked about';
+my %fb = map { $_->{email} => $_ } @$fb;
+ok $fb{$alice}{known}, 'Alice has a calendar here';
+is scalar @{ $fb{$alice}{busy} }, 1, '... and is busy: the lunch';
+ok $fb{$bob}{known} || !@{ $fb{$bob}{busy} }, 'Bob: known or free, never busy from someone else\'s event';
+ok !$fb{'stranger@example.net'}{known}, 'a stranger is not known';
+is scalar @{ $m->freebusy([ $alice ], dt(year => 2026, month => 11, day => 20, hour => 15), dt(year => 2026, month => 11, day => 20, hour => 16))->[0]{busy} }, 0, 'Alice is free at three';
+eval { $m->freebusy([ ($alice) x 21 ], dt(year => 2026, month => 11, day => 20), dt(year => 2026, month => 11, day => 21)) };
+like $@, qr/At most 20/, 'too many addresses: refused';
+
+# an answer that came by mail (the milter's inbox row)
+$db->query('INSERT INTO calendar.itip_inbox (uid, attendee_email, partstat, sequence) VALUES (?, ?, ?, ?)', $m->event($lunch->{id})->{uid}, uc $dave, 'TENTATIVE', 1);
+$db->query('INSERT INTO calendar.itip_inbox (uid, attendee_email, partstat, sequence) VALUES (?, ?, ?, ?)', 'nothing@calendar.example.test', $dave, 'ACCEPTED', 1);
+$db->query('INSERT INTO calendar.itip_inbox (uid, attendee_email, partstat, sequence) VALUES (?, ?, ?, ?)', $m->event($lunch->{id})->{uid}, $bob, 'ACCEPTED', 1);
+my $inbox = $m->claim_itip_inbox(10);
+is scalar @$inbox, 3, 'three mailed answers claimed';
+is scalar @{ $m->claim_itip_inbox(10) }, 0, '... once';
+my %res = map { $_->{attendee_email} . '/' . $_->{uid} => $m->apply_itip_reply($_) } @$inbox;
+is $res{ uc($dave) . '/' . $m->event($lunch->{id})->{uid} }, 'recorded: tentative', 'Dave\'s maybe is recorded (address case ignored)';
+is $m->attendee_of($lunch->{id}, $dave)->{status}, 'tentative', '... on his row';
+is $m->attendee_of($lunch->{id}, $dave)->{responded_via}, 'mail', '... as having come by mail';
+like $res{"$dave/nothing\@calendar.example.test"}, qr/no live event/, 'an unknown UID is noted, not applied';
+like $res{ "$bob/" . $m->event($lunch->{id})->{uid} }, qr/not an attendee/, 'someone no longer invited is noted, not applied';
+
+# cancelled: a CANCEL to everyone who had the invitation
+$db->query('DELETE FROM calendar.notice_queue WHERE event_id = ?', $lunch->{id});
+$m->attendee_mark_sent($lunch->{id}, $dave, 1);
+my $seq0 = $m->event($lunch->{id})->{sequence};
+$m->delete_event($m->event($lunch->{id}), scope => 'all');
+is scalar @{ $notices->('cancel') }, 1, 'the delete sends one cancel: to Dave, who had the invitation';
+is $notices->('cancel')->[0]{recipient}, $dave, '... Carol never got hers, so gets no cancel';
+is $m->deleted_event($lunch->{id})->{sequence}, $seq0 + 1, '... with the sequence bumped';
+$db->query('DELETE FROM calendar.notice_queue WHERE event_id = ?', $lunch->{id});
+$m->restore_event($lunch->{id});
+is scalar @{ $notices->('request') }, 2, 'restored: both are asked again';
+is $m->event($lunch->{id})->{sequence}, $seq0 + 2, '... with the sequence bumped once more';
+is $notices->('request')->[0]{payload}{reason}, 'restored', '... as "back on"';
 
 cleanup();
 done_testing;

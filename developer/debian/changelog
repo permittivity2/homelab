@@ -1,3 +1,11 @@
+homelab-developer (0.1.9) unstable; urgency=medium
+
+  * Reference: the calendar's invitation routes (post-cutover #85): who is
+    invited, invite, take off, send again, your answer, free/busy; the
+    invitation page /i/<token> described.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Sat, 15 Nov 2026 10:00:00 -0600
+
 homelab-developer (0.1.8) unstable; urgency=medium
 
   * Reference: the calendar routes homelab-cli 0.7.0 uses (post-cutover #83):

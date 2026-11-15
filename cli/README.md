@@ -169,6 +169,9 @@ homelab-cli calendar calendars [create <name> [--color #rrggbb] [--timezone <zon
 homelab-cli calendar shares <id> | --calendar <id>
 homelab-cli calendar share <id> --with <email> [--edit]      homelab-cli calendar share --calendar <id> --link [--busy]
 homelab-cli calendar unshare <share-id>
+homelab-cli calendar invite <id> <email>... | attendees <id> | uninvite <id> <email|attendee-id> | reinvite <id> <email|attendee-id>
+homelab-cli calendar rsvp <id> yes|maybe|no [--comment ...]     homelab-cli calendar add "..." --start ... --invite <email> [--invite ...]
+homelab-cli calendar freebusy <email>... --start <when> [--end <when> | --duration 90m]
 homelab-cli calendar suggestions [save <token> | dismiss <token>]
 homelab-cli calendar settings [--date-format dmy] [--default-reminder 15] [--all-day-hour 7] [--default-length 45] [--remind-shared off] [--webhook <url>|none] ...
 homelab-cli calendar account [--mail-links on|off]

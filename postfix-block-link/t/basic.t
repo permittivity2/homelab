@@ -14,7 +14,7 @@ use Homelab::PostfixBlockLink::Milter qw(
     choose_reply_address rewrite_address_header
     reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
     single_account reply_footer_line footer_text_lines footer_html
-    calendar_footer_line text_excerpt
+    calendar_footer_line text_excerpt itip_reply_candidate parse_itip_reply
 );
 
 # --- Pure functions -- no DB, no Sendmail::PMilter, run everywhere ------
@@ -176,6 +176,31 @@ is(text_excerpt('multipart/mixed; boundary="b2"', $html_only), "Dinner\nFriday &
 is(length(text_excerpt('text/plain', 'x' x 50000, 100)), 100, 'the excerpt is capped');
 is(text_excerpt('text/plain', ''), '', 'an empty body is an empty excerpt');
 is(text_excerpt('application/pdf', "%PDF-1.4 binary"), '', 'no text part: nothing');
+
+# --- answers to invitations (0.2.5, #85) ------------------------------------
+ok(itip_reply_candidate('multipart/alternative; boundary="x"', 'Accepted: Lunch @ Fri Nov 20, 2026 12:30pm (owner)'), 'a Gmail-style answer is a candidate');
+ok(itip_reply_candidate('multipart/mixed; boundary="x"', 'Tentatively Accepted: Lunch'), q{... Outlook's "Tentatively Accepted" too});
+ok(itip_reply_candidate('multipart/mixed; boundary="x"', 'Re: Declined: Lunch'), '... and a forwarded-looking Re:');
+ok(itip_reply_candidate('text/calendar; method=REPLY; charset=UTF-8', 'anything'), 'a bare calendar part with the method is one whatever the subject');
+ok(!itip_reply_candidate('multipart/alternative; boundary="x"', 'Lunch?'), 'an ordinary multipart is not');
+ok(!itip_reply_candidate('text/plain', 'Accepted: Lunch'), '... nor plain text, whatever it says');
+my $reply_ics = join("\r\n", 'BEGIN:VCALENDAR', 'PRODID:-//Google Inc//Google Calendar 70.9054//EN', 'VERSION:2.0', 'METHOD:REPLY', 'BEGIN:VEVENT',
+    'DTSTART;TZID=America/Chicago:20261120T123000', 'DTEND;TZID=America/Chicago:20261120T133000', 'DTSTAMP:20261115T160000Z',
+    'ORGANIZER;CN=owner@example.org:mailto:owner@example.org',
+    'UID:abc123@calendar.example.test',
+    'ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=Ann Exa', ' mple;X-NUM-GUESTS=0:mailto:Ann@Example.com',
+    'COMMENT:See you there\\, bringing dessert', 'SEQUENCE:2', 'SUMMARY:Accepted: Lunch', 'END:VEVENT', 'END:VCALENDAR', '');
+my $reply_mp = join("\r\n", '--r1', 'Content-Type: text/plain; charset="UTF-8"', '', 'Ann Example has accepted this invitation.', '',
+    '--r1', 'Content-Type: text/calendar; charset="UTF-8"; method=REPLY', '', $reply_ics, '--r1--', '');
+my @got = parse_itip_reply('multipart/alternative; boundary="r1"', $reply_mp);
+is(scalar @got, 1, 'one answer read from a Gmail-shaped reply');
+is_deeply($got[0], { uid => 'abc123@calendar.example.test', attendee_email => 'ann@example.com', partstat => 'ACCEPTED', sequence => 2, comment => 'See you there, bringing dessert' },
+    '... with the uid, the address lower-cased (the folded ATTENDEE line unfolded), PARTSTAT, SEQUENCE and the comment unescaped');
+is(scalar(() = parse_itip_reply('text/calendar; method=REPLY', $reply_ics)), 1, 'a bare calendar body is read too');
+is(scalar(() = parse_itip_reply('text/calendar', $reply_ics =~ s/METHOD:REPLY/METHOD:REQUEST/r)), 0, 'a REQUEST is not an answer');
+is(scalar(() = parse_itip_reply('multipart/alternative; boundary="r1"', $reply_mp =~ s/;PARTSTAT=ACCEPTED//r)), 0, 'an ATTENDEE without a PARTSTAT says nothing');
+is(scalar(() = parse_itip_reply('text/plain', "Accepted: Lunch\n")), 0, 'plain text: nothing');
+is(scalar(() = parse_itip_reply('multipart/mixed; boundary="q"', "--q\r\nContent-Type: text/plain\r\n\r\nhello\r\n--q--\r\n")), 0, 'a multipart without a calendar part: nothing');
 
 # --- DB-backed functions -- real Postgres only, same "no mocks" -----------
 # convention as every other homelab-* test suite. Point

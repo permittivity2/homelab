@@ -58,6 +58,44 @@ subtest 'html makes it multipart/alternative' => sub {
     is decode_base64($h_body), $html, 'html part decodes to the html body';
 };
 
+subtest 'calendar makes an iTIP message: mixed > alternative (plain, text/calendar) + the .ics attached' => sub {
+    # homelab-calendar's invitations (post-cutover #85): the shape Google's
+    # own invitations have, which the mail programs' Yes/Maybe/No buttons
+    # are tuned to.
+    my $ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nEND:VCALENDAR\r\n";
+    my $m = build(from => 'cal@x.org', to => 'b@y.org', subject => 'Invitation: Lunch', body => "Come to lunch\n",
+        reply_to => 'owner@x.org', calendar => { method => 'REQUEST', ics => $ics });
+    like $m, qr/\r\nReply-To: owner\@x\.org\r\n/, 'Reply-To names the organizer';
+    my ($outer) = $m =~ /Content-Type: multipart\/mixed; boundary="([^"]+)"/;
+    my ($inner) = $m =~ /Content-Type: multipart\/alternative; boundary="([^"]+)"/;
+    ok $outer && $inner && $outer ne $inner, 'two boundaries, mixed outside, alternative inside';
+    ok index($m, "--$outer\r\nContent-Type: multipart/alternative") > 0, 'the alternative is the first part of the mixed';
+    like $m, qr{--\Q$inner\E\r\nContent-Type: text/plain; charset=UTF-8\r\n}, 'the plain text is the first alternative';
+    like $m, qr{--\Q$inner\E\r\nContent-Type: text/calendar; charset=UTF-8; method=REQUEST\r\n}, 'text/calendar with the method is the last alternative';
+    like $m, qr{--\Q$outer\E\r\nContent-Type: application/ics; name="invite\.ics"\r\nContent-Disposition: attachment; filename="invite\.ics"\r\n}, 'the .ics is attached too';
+    like $m, qr/\r\n--\Q$inner\E--\r\n--\Q$outer\E\r\n/, 'the alternative closes before the attachment';
+    like $m, qr/\r\n--\Q$outer\E--\r\n$/, 'the mixed closes the message';
+    my @ics_parts = $m =~ /Content-Transfer-Encoding: base64\r\n\r\n((?:[A-Za-z0-9+\/=]+\r\n)+)/g;
+    is scalar(grep { decode_base64($_) eq $ics } @ics_parts), 2, 'the calendar text appears twice, byte for byte';
+    is scalar(() = $m =~ /BEGIN:VCALENDAR/g), 0, '... and never in the clear';
+
+    my $c = build(from => 'cal@x.org', to => 'b@y.org', subject => 'Cancelled', body => "Off\n", calendar => { method => 'CANCEL', ics => $ics });
+    like $c, qr{text/calendar; charset=UTF-8; method=CANCEL}, 'a CANCEL carries its method';
+    my $bad = build(from => 'cal@x.org', to => 'b@y.org', subject => 'x', body => "x\n", calendar => { method => 'DROP TABLE', ics => $ics });
+    like $bad, qr{method=REQUEST}, 'an unknown method falls back to REQUEST';
+    my $none = build(from => 'cal@x.org', to => 'b@y.org', subject => 'x', body => "plain\n", calendar => { method => 'REQUEST', ics => '' });
+    unlike $none, qr/multipart/, 'an empty ics is no calendar at all: plain text as before';
+};
+
+subtest 'a subject with non-ASCII is an encoded word' => sub {
+    my $m = build(from => 'a@x.org', to => 'b@y.org', subject => "Caf\x{e9} \x{2014} r\x{e9}union", body => "x\n");
+    like $m, qr/\r\nSubject: =\?UTF-8\?B\?[A-Za-z0-9+\/=]+\?=\r\n/, 'RFC 2047, base64, UTF-8';
+    my ($b64) = $m =~ /Subject: =\?UTF-8\?B\?([A-Za-z0-9+\/=]+)\?=/;
+    is Encode::decode('UTF-8', decode_base64($b64)), "Caf\x{e9} \x{2014} r\x{e9}union", '... decoding gives the subject back';
+    my $plain = build(from => 'a@x.org', to => 'b@y.org', subject => "Plain subject", body => "x\n");
+    like $plain, qr/\r\nSubject: Plain subject\r\n/, 'an ASCII subject is left exactly as it was';
+};
+
 subtest 'base64 keeps lines inside the SMTP limit' => sub {
     # SMTP caps a line at 998 octets. HTML written as a here-doc routinely
     # has longer lines than that; base64 is what makes it safe.

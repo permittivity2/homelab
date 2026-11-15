@@ -149,6 +149,27 @@
           <span class="form-hint" id="ev-reminder-hint"></span>
         </div>
       </div>
+      %# Invitations (#85): the people asked (owner only), each with their
+      %# answer and, for accounts here, whether they are busy at that time.
+      <div class="span2" id="ev-invite-wrap">
+        <label class="form-label" for="ev-invite">Invite (email, Enter to add)</label>
+        <div class="chips att-list" id="ev-attendees" aria-live="polite"></div>
+        <div class="time-row" style="margin-top: var(--space-1)">
+          <input class="form-input" id="ev-invite" type="text" placeholder="someone@example.com" maxlength="300" autocomplete="off" style="flex: 1 1 14rem">
+          <button type="button" class="btn btn-sm" id="ev-invite-add">Add</button>
+        </div>
+        <p class="form-hint" id="ev-invite-hint">Each person gets an email with Yes / Maybe / No. Accounts here see the event in their own calendar.</p>
+      </div>
+      %# The viewer was invited: their own answer, one tap.
+      <div class="span2 hide" id="ev-rsvp-wrap">
+        <label class="form-label">Are you coming?</label>
+        <div class="form-actions" style="gap: var(--space-2); flex-wrap: wrap">
+          <button type="button" class="btn btn-sm" data-rsvp="accepted">Yes</button>
+          <button type="button" class="btn btn-sm" data-rsvp="tentative">Maybe</button>
+          <button type="button" class="btn btn-sm" data-rsvp="declined">No</button>
+          <span class="form-hint" id="ev-rsvp-note"></span>
+        </div>
+      </div>
       %# Share with (#79): on a NEW event only; existing ones have the Share button.
       <div id="ev-share-wrap">
         <label class="form-label" for="ev-share-with">Share with (email, optional)</label>

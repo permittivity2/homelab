@@ -12,6 +12,7 @@ our @EXPORT_OK = qw(
     reply_from_alias_enabled record_received_via lookup_received_via allowed_to_send_as
     single_account reply_footer_line footer_text_lines footer_html
     calendar_links_enabled insert_mail_link calendar_footer_line text_excerpt
+    itip_reply_candidate parse_itip_reply insert_itip_reply
 );
 
 # Replicates Postfix's OWN virtual_alias_maps resolution for one envelope
@@ -408,6 +409,88 @@ sub text_excerpt {
     $text =~ s/\n{3,}/\n\n/g;
     $text =~ s/^\s+|\s+\z//g;
     return length $text > $limit ? substr($text, 0, $limit) : $text;
+}
+
+# ===== Answers to invitations (0.2.5, post-cutover #85) =====================
+#
+# When someone answers a homelab-calendar invitation with their mail
+# program's own Yes / Maybe / No button, the program mails the organizer a
+# message carrying a text/calendar part with METHOD:REPLY (RFC 5546). The
+# organizer is an account here, so the message passes this milter on its way
+# in. The milter reads the bare facts (the event's UID, who answered, their
+# PARTSTAT, the SEQUENCE they answered, a COMMENT) into calendar.itip_inbox;
+# the calendar's runner matches them to an attendee and records the answer.
+# INSERT only, as with mail_links. Everything here fails open: a reply that
+# cannot be read is delivered unchanged and the organizer still has the mail.
+
+# Whether a message is worth buffering for a reply: a calendar part at the
+# top, or a multipart whose subject reads like an answer ("Accepted: Lunch",
+# "Declined: ...", "Tentative: ...", "Tentatively Accepted: ..."; Gmail,
+# Outlook, Apple Mail and Thunderbird all write one of those).
+sub itip_reply_candidate {
+    my ($content_type, $subject) = @_;
+    my $ct = lc($content_type // '');
+    return 1 if $ct =~ m{^\s*text/calendar} && $ct =~ /method\s*=\s*"?reply/;
+    return 0 unless $ct =~ m{^\s*multipart/} || $ct =~ m{^\s*text/calendar};
+    return (($subject // '') =~ /^\s*(?:re:\s*)?(?:accepted|declined|tentative(?:ly accepted)?|maybe)\b/i) ? 1 : 0;
+}
+
+# The REPLY's facts, one entry per ATTENDEE with a PARTSTAT, or an empty
+# list when there is no METHOD:REPLY calendar part. Lines are unfolded first
+# (RFC 5545 wraps at 75 octets); parameters are read from the ATTENDEE line.
+sub parse_itip_reply {
+    my ($content_type, $body) = @_;
+    return () unless defined $body && length $body;
+    my $ct = $content_type // 'text/plain';
+    my @ics;
+    if (lc($ct) =~ m{^\s*text/calendar}) { push @ics, $body }
+    else {
+        eval {
+            require Email::MIME;
+            my $msg = Email::MIME->new("Content-Type: $ct\n\n$body");
+            $msg->walk_parts(sub {
+                my ($part) = @_;
+                return if $part->subparts;
+                my $pct = lc($part->content_type // '');
+                push @ics, (eval { $part->body_str } // $part->body) if $pct =~ m{^\s*text/calendar};
+            });
+        };
+    }
+    my @out;
+    for my $text (@ics) {
+        my $flat = $text =~ s/\r?\n[ \t]//gr;
+        next unless $flat =~ /^METHOD:REPLY\s*$/mi;
+        for my $vevent ($flat =~ /^BEGIN:VEVENT\s*$(.*?)^END:VEVENT\s*$/msg) {
+            my ($uid) = $vevent =~ /^UID(?:;[^:\r\n]*)?:(.+?)\s*$/mi;
+            next unless defined $uid && length $uid;
+            my ($seq) = $vevent =~ /^SEQUENCE(?:;[^:\r\n]*)?:(\d+)\s*$/mi;
+            my ($comment) = $vevent =~ /^COMMENT(?:;[^:\r\n]*)?:(.+?)\s*$/mi;
+            $comment = _ics_unescape($comment) if defined $comment;
+            while ($vevent =~ /^ATTENDEE((?:;[^:\r\n]*)?):(?:mailto:)?([^\s\r\n]+)\s*$/mig) {
+                my ($params, $addr) = ($1, lc $2);
+                my ($partstat) = $params =~ /;PARTSTAT=([A-Z-]+)/i;
+                next unless $partstat;
+                next unless $addr =~ /^[^\s@]+@[^\s@]+\.[^\s@]+$/ && length $addr <= 254;
+                push @out, { uid => $uid, attendee_email => $addr, partstat => uc $partstat,
+                    sequence => (defined $seq ? $seq + 0 : undef), comment => (defined $comment ? substr($comment, 0, 500) : undef) };
+            }
+        }
+    }
+    return @out;
+}
+
+sub _ics_unescape {
+    my ($s) = @_;
+    $s =~ s/\\n/\n/gi; $s =~ s/\\,/,/g; $s =~ s/\\;/;/g; $s =~ s/\\\\/\\/g;
+    return $s;
+}
+
+sub insert_itip_reply {
+    my ($db, %o) = @_;
+    return $db->query(
+        q{INSERT INTO calendar.itip_inbox (uid, attendee_email, partstat, sequence, comment, message_id, from_addr) VALUES (?, ?, ?, ?, ?, ?, ?)},
+        $o{uid}, lc($o{attendee_email}), $o{partstat}, $o{sequence}, $o{comment}, $o{message_id}, $o{from_addr},
+    );
 }
 
 sub _strip_html {

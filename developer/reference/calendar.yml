@@ -7,9 +7,12 @@ area: Calendar
 order: 45
 intro: >
   Your calendar through the api: the events in a range, a new event, an .ics
-  file out or in, and your calendar's own switches (the "Add to calendar"
+  file out or in, invitations (who is asked, their answers, free/busy for
+  accounts here), and your calendar's own switches (the "Add to calendar"
   link in your email, the AI proposal). The calendar itself, with sharing
-  and the editing of one event, lives at calendar.mailmasker.org.
+  and the editing of one event, lives at calendar.mailmasker.org; an
+  invitation's own page is calendar.mailmasker.org/i/<token>, which needs no
+  sign-in.
 abilities:
   - id: calendar-account-show
     title: See your calendar switches
@@ -873,3 +876,191 @@ abilities:
     notes:
       - A value outside its range answers 400 with a sentence.
     cli: homelab-cli calendar settings --date-format dmy --default-reminder 15
+
+  # --- invitations (post-cutover #85) ------------------------------------------
+  - id: calendar-event-attendees-list
+    title: Who is invited to an event
+    method: GET
+    path: /api/v1/calendar/events/:id/attendees
+    who: signed-in
+    summary: The people asked to an event, what each answered, the counts, and your own answer.
+    description: >
+      Everyone who can see the event sees the list. Each person has a status
+      (needs-action until they answer, then accepted, tentative or declined),
+      the note they left, when and how they answered (the link in the mail,
+      the web page, the CLI, or their mail program's reply), and whether their
+      invitation has gone out. my_status is your own answer when you are among
+      them; can_invite says whether you are the organizer (the calendar's owner).
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+    response: |
+      { "event_id": 7, "organizer": "me@example.com", "sequence": 1, "can_invite": true, "my_status": null,
+        "attendees": [ { "id": 3, "email": "ann@example.com", "name": "Ann", "status": "accepted", "comment": "Bringing dessert",
+                         "invited_at": "2026-11-15 10:00:00-06", "responded_at": "2026-11-15 10:30:00-06", "responded_via": "link", "invitation_sent": true } ],
+        "attendee_counts": { "total": 1, "accepted": 1, "tentative": 0, "declined": 0, "waiting": 0 } }
+    cli: homelab-cli calendar attendees 7
+
+  - id: calendar-event-invite
+    title: Invite people to an event
+    method: POST
+    path: /api/v1/calendar/events/:id/attendees
+    who: signed-in
+    status: 201
+    summary: Ask people to an event you own; each gets an email with Yes / Maybe / No and an iCalendar request.
+    description: >
+      Only the calendar's owner (the organizer) invites. Each new person gets
+      an invitation within a minute: a plain-text mail with three one-tap links
+      and a text/calendar REQUEST part, so Gmail, Outlook and Apple Mail show
+      their own Yes / Maybe / No buttons too; the link opens the invitation page
+      (/i/<token>, no sign-in). An invited address that is an account here sees
+      the event in its own calendar at once (a read-only share). When the event's
+      time or place changes later, everyone is asked again (SEQUENCE+1); a change
+      of title or notes is sent without resetting the answers; deleting the event
+      sends a cancellation. The organizer is told of every answer by mail (and by
+      webhook when one is set in Settings). At most 50 people per event. Also
+      accepted at creation: `attendees` on POST /api/v1/calendar/events.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+      - name: emails
+        in: body
+        required: true
+        about: The addresses, or "Name <address>" forms (a list).
+        example: ["ann@example.com", "Bob <bob@example.com>"]
+    response: |
+      { "event_id": 7, "organizer": "me@example.com", "sequence": 0, "can_invite": true, "my_status": null,
+        "added": [ { "id": 4, "email": "bob@example.com", "name": "Bob", "status": "needs-action", "invitation_sent": false } ],
+        "already_invited": [ "ann@example.com" ],
+        "attendees": [ "..." ], "attendee_counts": { "total": 2, "accepted": 1, "tentative": 0, "declined": 0, "waiting": 1 } }
+    notes:
+      - Inviting yourself, or from a calendar you do not own, answers 400 and 403.
+      - There is no counter-proposal flow (by decision); an attendee answers yes, maybe or no, with a note.
+    cli: homelab-cli calendar invite 7 ann@example.com "Bob <bob@example.com>"
+
+  - id: calendar-event-uninvite
+    title: Take someone off an event's list
+    method: POST
+    path: /api/v1/calendar/events/:id/attendees/:aid/remove
+    who: signed-in
+    summary: Remove an invited person; they get a cancellation if they had the invitation.
+    description: >
+      The organizer only. The person's row and their read-only share go; someone
+      who was already sent the invitation gets a CANCEL so their calendar program
+      removes the event.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+      - name: aid
+        in: path
+        required: true
+        about: The attendee's id (from the list).
+        example: 4
+    response: |
+      { "ok": true, "event_id": 7, "attendees": [ "..." ], "attendee_counts": { "total": 1, "accepted": 1, "tentative": 0, "declined": 0, "waiting": 0 } }
+    cli: homelab-cli calendar uninvite 7 bob@example.com
+
+  - id: calendar-event-reinvite
+    title: Send an invitation again
+    method: POST
+    path: /api/v1/calendar/events/:id/attendees/:aid/resend
+    who: signed-in
+    summary: Queue the invitation to one person once more.
+    description: >
+      The organizer only. The same mail as the first time (with the event as
+      it is now and the person's own Yes / Maybe / No links); it goes out
+      within a minute. Their answer so far is kept.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+      - name: aid
+        in: path
+        required: true
+        about: The attendee's id (from the list).
+        example: 4
+    response: |
+      { "ok": true, "email": "bob@example.com" }
+    cli: homelab-cli calendar reinvite 7 bob@example.com
+
+  - id: calendar-event-rsvp
+    title: Answer an invitation
+    method: POST
+    path: /api/v1/calendar/events/:id/rsvp
+    who: signed-in
+    summary: Your own answer to an event you were invited to (it is in your calendar as a shared event).
+    description: >
+      For an account here that was invited. The organizer is told. People
+      without an account answer through the link in their mail (/i/<token>) or
+      their mail program's own buttons.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The event's id.
+        example: 7
+      - name: answer
+        in: body
+        required: true
+        about: yes, maybe or no (also accepted, tentative, declined).
+        example: yes
+      - name: comment
+        in: body
+        required: false
+        about: A note for the organizer (500 characters at most).
+        example: Running ten minutes late
+    response: |
+      { "ok": true, "event_id": 7, "status": "accepted", "comment": "Running ten minutes late", "organizer": "owner@example.com", "my_status": "accepted",
+        "attendees": [ "..." ], "attendee_counts": { "total": 2, "accepted": 1, "tentative": 0, "declined": 0, "waiting": 1 } }
+    notes:
+      - An account that is not on the event's list is answered 404.
+    cli: homelab-cli calendar rsvp 7 yes --comment "Running ten minutes late"
+
+  - id: calendar-freebusy
+    title: Free/busy for accounts here
+    method: GET
+    path: /api/v1/calendar/freebusy
+    who: signed-in
+    summary: Whether people with calendars here are busy in a window; bare intervals, no titles.
+    description: >
+      For each address: known says whether it has a calendar here at all; busy
+      whether any timed event on its own calendars overlaps the window, with the
+      bare intervals (all-day events count as free). Nothing else about the
+      events is shown. At most 20 addresses and 31 days.
+    params:
+      - name: emails
+        in: query
+        required: true
+        about: Comma-separated addresses.
+        example: ann@example.com,bob@example.com
+      - name: start
+        in: query
+        required: true
+        about: The window's start, a wall clock in the zone given.
+        example: 2026-11-20T13:00:00
+      - name: end
+        in: query
+        required: false
+        about: The window's end; an hour after the start when left out.
+        example: 2026-11-20T14:00:00
+      - name: timezone
+        in: query
+        required: false
+        about: The IANA zone the wall clocks are in (your calendar's when left out).
+        example: America/Chicago
+    response: |
+      { "timezone": "America/Chicago", "start": "2026-11-20T13:00:00", "end": "2026-11-20T14:00:00",
+        "people": [ { "email": "ann@example.com", "known": true, "busy": true, "intervals": [ { "start": "2026-11-20T12:30:00", "end": "2026-11-20T13:30:00" } ] },
+                    { "email": "bob@example.com", "known": false, "busy": false, "intervals": [] } ] }
+    cli: homelab-cli calendar freebusy ann@example.com bob@example.com --start 2026-11-20T13:00

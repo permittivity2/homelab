@@ -207,9 +207,17 @@ sub events ($c) {
     my ($ws, $we) = _window($c, $zone);
     return _fail($c, 400, 'The window must be a start before an end, at most three years apart.') unless $ws;
     my @out;
-    for my $inst (@{ _instances_for($m, $me, $ws, $we, visible_only => 1, shared_events => $prefs->{show_shared_events}) }) {
+    my $list = _instances_for($m, $me, $ws, $we, visible_only => 1, shared_events => $prefs->{show_shared_events});
+    # Invitations (#85): how many were asked and what they said, and this
+    # account's own answer, for the peek. Two queries for the whole window.
+    my %ids = map { $_->{event_id} => 1 } @$list;
+    my $counts = $m->attendee_counts([ keys %ids ]);
+    my $mine   = $m->my_attendance($me, [ keys %ids ]);
+    for my $inst (@$list) {
         my $fc = _fc_event($inst, $zone, $inst->{permission});
         $fc->{extendedProps}{shared_event} = \1 if $inst->{shared_event};
+        $fc->{extendedProps}{attendees} = $counts->{ $inst->{event_id} } if $counts->{ $inst->{event_id} };
+        $fc->{extendedProps}{my_status} = $mine->{ $inst->{event_id} } if $mine->{ $inst->{event_id} };
         push @out, $fc;
     }
     return $c->render(json => \@out);
@@ -291,6 +299,9 @@ sub _event_json ($c, $event, $cal, $zone, $rid = undef) {
         reminders => [ map { { minutes_before => $_->{minutes_before} + 0, channel => $_->{channel} } } @{ $m->reminders_for($event->{id}) } ],
         url => $c->app->public_base_url . '/?date=' . ($event->{all_day} ? $start->ymd : $start->clone->set_time_zone($zone)->ymd)
              . '&event=' . $event->{id} . ($rid ? '&rid=' . _rid_str($rid) : ''),
+        # Invitations (#85): who asks, who is asked and what each said, the
+        # viewer's own answer when they are among them.
+        %{ _attendees_json($c, $event, $cal, $c->session_email) },
     );
     if ($rid && $event->{rrule}) {
         my ($inst) = grep { $_->{recurrence_id} && $_->{recurrence_id}->epoch == $rid->epoch }
@@ -348,9 +359,17 @@ sub _create_from_body ($c, $me, $b) {
     return _fail($c, 403, 'You can see this calendar but not add to it.') unless may_edit($perm);
     # The Share field (#79): one address the new event is shared with, read-only.
     my $share_with = _share_with($c, $b, $me, $perm); return if $share_with && $share_with eq "\0";
+    # Invitations (#85): the people asked, only by the calendar's owner (the organizer).
+    my $invite = _attendee_list($b);
+    return _fail($c, 403, 'Only the calendar\'s owner can invite people to an event on it.') if @$invite && !may_manage($perm);
     my $event = _try($c, sub { $m->create_event($cal, $me, _event_input($c, $b, $zone)) }) or return;
     $event->{permission} = $perm;
     _apply_reminders($c, $m, $event->{id}, $b) or return;
+    if (@$invite) {
+        my $r = _try($c, sub { $m->add_attendees($event, $invite) }) or return;
+        _audit($c, action => 'calendar.invite', resource_type => 'calendar_event', resource_id => $event->{id}, affected_user => $_->{email},
+            detail => { event_id => $event->{id}, with => $_->{email}, at_creation => \1 }) for @{ $r->{added} };
+    }
     # Created from a link in an email: the link remembers which event it
     # became, for this account (#81: a link may become several).
     if (my $link = (defined $b->{mail_link_token} ? $m->mail_link_for($b->{mail_link_token}, $me) : undef)) {
@@ -626,10 +645,18 @@ sub update_event ($c) {
     my $rid = _rid($b->{recurrence_id});
     return _fail($c, 400, 'Say which occurrence (recurrence_id) when changing this one or the following ones.')
         if $scope ne 'all' && $event->{rrule} && !$rid;
+    # The editor sends the whole list of people asked (#85); only the owner may change it.
+    return _fail($c, 403, 'Only the calendar\'s owner can change who is invited.') if exists $b->{attendees} && !may_manage($event->{permission});
     my $row = _try($c, sub { $m->update_event($event, _event_input($c, $b, $zone), scope => $scope, recurrence_id => $rid) }) or return;
     $row->{permission} = $event->{permission};
     # The reminder belongs to the event (or, after a split, to the new series).
     _apply_reminders($c, $m, $row->{id}, $b) or return;
+    if (exists $b->{attendees}) {
+        my $before = { map { lc $_->{email} => 1 } @{ $m->attendees_for($row->{id}) } };
+        my $list = _try($c, sub { $m->set_attendees($row, $b->{attendees}) }) or return;
+        _audit($c, action => 'calendar.invite', resource_type => 'calendar_event', resource_id => $row->{id}, affected_user => $_->{email},
+            detail => { event_id => $row->{id}, with => $_->{email} }) for grep { !$before->{ lc $_->{email} } } @$list;
+    }
     # "Update it from this email" (#81): the link remembers this event for
     # this account too (the new series after a split).
     if (my $link = (defined $b->{mail_link_token} ? $m->mail_link_for($b->{mail_link_token}, $me) : undef)) {
@@ -1122,6 +1149,136 @@ sub _import_preview ($in, $action, $id = undef) {
         (exists $in->{recurrence_id} ? (recurrence_id => $in->{recurrence_id}) : ()),
     };
 }
+
+# --- invitations (#85) ------------------------------------------------------
+# The organizer is the calendar's owner; only the owner invites (as only the
+# owner shares). Everyone who sees the event sees who is asked and what they
+# answered. The mail goes out from the runner's queue (Runner.pm).
+
+sub _attendee_json ($a) {
+    return {
+        id => $a->{id} + 0, email => $a->{email}, name => $a->{name}, status => $a->{status}, comment => $a->{comment},
+        invited_at => $a->{invited_at}, responded_at => $a->{responded_at}, responded_via => $a->{responded_via},
+        invitation_sent => (defined $a->{sequence_sent} ? \1 : \0),
+    };
+}
+
+# The attendee block of an event: organizer, sequence, the list, the counts,
+# the viewer's own answer, whether the viewer may invite.
+sub _attendees_json ($c, $event, $cal, $me) {
+    my $m = _model($c);
+    my $list = $m->attendees_for($event->{id});
+    my ($mine) = grep { lc $_->{email} eq lc($me // '') } @$list;
+    my %n = (total => 0, accepted => 0, tentative => 0, declined => 0, waiting => 0);
+    $n{ $_->{status} eq 'needs-action' ? 'waiting' : $_->{status} }++, $n{total}++ for @$list;
+    return {
+        organizer => lc $cal->{owner_email}, sequence => ($event->{sequence} // 0) + 0,
+        attendees => [ map { _attendee_json($_) } @$list ], attendee_counts => \%n,
+        my_status => ($mine ? $mine->{status} : undef), can_invite => (may_manage($event->{permission}) ? \1 : \0),
+    };
+}
+
+# The addresses in a body: `attendees` (a list of addresses or of { email,
+# name }), `emails`, `invite`, or one `email`.
+sub _attendee_list ($b) {
+    for my $k (qw(attendees emails invite)) { return $b->{$k} if ref $b->{$k} eq 'ARRAY' }
+    return [ $b->{email} ] if defined $b->{email} && !ref $b->{email} && $b->{email} =~ /\S/;
+    return [];
+}
+
+# GET /api/events/:id/attendees
+sub attendees ($c) {
+    my $me = $c->require_login or return;
+    my ($err, $event, $cal) = _event_for($c, $me, 0); return $err if $err;
+    return $c->render(json => { event_id => $event->{id} + 0, %{ _attendees_json($c, $event, $cal, $me) } });
+}
+
+# POST /api/events/:id/attendees { emails: [...] } -- invite people; each
+# gets the invitation by mail (with the .ics request) within a minute.
+sub invite ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my ($err, $event, $cal) = _event_for($c, $me, 0); return $err if $err;
+    return _fail($c, 403, 'Only the calendar\'s owner can invite people to an event.') unless may_manage($event->{permission});
+    my $list = _attendee_list(_body($c));
+    return _fail($c, 400, 'Say who to invite: emails, a list of addresses.') unless @$list;
+    my $r = _try($c, sub { _model($c)->add_attendees($event, $list) }) or return;
+    _audit($c, action => 'calendar.invite', resource_type => 'calendar_event', resource_id => $event->{id}, affected_user => $_->{email},
+        detail => { event_id => $event->{id}, with => $_->{email} }) for @{ $r->{added} };
+    return $c->render(json => { event_id => $event->{id} + 0, %{ _attendees_json($c, $event, $cal, $me) },
+        added => [ map { _attendee_json($_) } @{ $r->{added} } ], already_invited => [ map { $_->{email} } @{ $r->{existing} } ] }, status => 201);
+}
+
+sub _attendee_for ($c, $event) {
+    my $att = _model($c)->attendee($c->stash('aid'));
+    return (_fail($c, 404, 'Nobody with that id is invited to this event.'), undef) unless $att && $att->{event_id} == $event->{id};
+    return (undef, $att);
+}
+
+# POST /api/events/:id/attendees/:aid/remove -- off the list; they are told.
+sub uninvite ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my ($err, $event, $cal) = _event_for($c, $me, 0); return $err if $err;
+    return _fail($c, 403, 'Only the calendar\'s owner can change who is invited.') unless may_manage($event->{permission});
+    my ($e2, $att) = _attendee_for($c, $event); return $e2 if $e2;
+    _model($c)->remove_attendee($event, $att);
+    _audit($c, action => 'calendar.uninvite', resource_type => 'calendar_event', resource_id => $event->{id}, affected_user => $att->{email},
+        detail => { event_id => $event->{id}, with => $att->{email} });
+    return $c->render(json => { ok => \1, event_id => $event->{id} + 0, %{ _attendees_json($c, $event, $cal, $me) } });
+}
+
+# POST /api/events/:id/attendees/:aid/resend -- the invitation once more.
+sub reinvite ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my ($err, $event, $cal) = _event_for($c, $me, 0); return $err if $err;
+    return _fail($c, 403, 'Only the calendar\'s owner can send an invitation.') unless may_manage($event->{permission});
+    my ($e2, $att) = _attendee_for($c, $event); return $e2 if $e2;
+    _model($c)->queue_notice(event_id => $event->{id}, kind => 'request', recipient => $att->{email}, payload => { reason => 'invited' });
+    return $c->render(json => { ok => \1, email => $att->{email} });
+}
+
+# POST /api/events/:id/rsvp { answer: yes|maybe|no (or accepted|tentative|declined), comment }
+# -- the signed-in account's own answer to an event it was invited to.
+sub rsvp ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my ($err, $event, $cal) = _event_for($c, $me, 0); return $err if $err;
+    my $m = _model($c);
+    my $att = $m->attendee_of($event->{id}, $me) or return _fail($c, 404, 'You are not on the list for this event.');
+    my $b = _body($c);
+    my $row = _try($c, sub { $m->set_attendee_status($att, $b->{answer} // $b->{status}, comment => $b->{comment}, via => ($c->stash('calendar.bearer') ? 'cli' : 'web')) }) or return;
+    return $c->render(json => { ok => \1, event_id => $event->{id} + 0, status => $row->{status}, comment => $row->{comment}, %{ _attendees_json($c, $event, $cal, $me) } });
+}
+
+# GET /api/freebusy?emails=a,b&start=&end=&timezone= -- for accounts here,
+# whether they are busy in the window (bare intervals, no titles); for
+# anyone else, known: false. Gardner, 2026-11-15: yes, for accounts here.
+sub freebusy ($c) {
+    my $me = $c->require_login or return;
+    my $m = _model($c);
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my @emails = map { split /[,\s]+/ } grep { defined } @{ $c->every_param('emails') }, @{ $c->every_param('email') };
+    return _fail($c, 400, 'Say whose free/busy: emails=a@example.com,b@example.com.') unless @emails;
+    my $ws = parse_wall($c->param('start'), $zone) or return _fail($c, 400, 'start must look like 2026-11-20T14:00:00.');
+    my $we = parse_wall($c->param('end'), $zone) // $ws->clone->add(hours => 1);
+    my $list = _try($c, sub { $m->freebusy(\@emails, $ws, $we) }) or return;
+    return $c->render(json => {
+        timezone => $zone, start => wall_string($ws), end => wall_string($we),
+        people => [ map { {
+            email => $_->{email}, known => ($_->{known} ? \1 : \0), busy => (@{ $_->{busy} } ? \1 : \0),
+            intervals => [ map { { start => wall_string($_->{start}->clone->set_time_zone($zone)), end => wall_string($_->{end}->clone->set_time_zone($zone)) } } @{ $_->{busy} } ],
+        } } @$list ],
+    });
+}
+
+sub internal_attendees ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return attendees($c) }
+sub internal_invite    ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return invite($c) }
+sub internal_uninvite  ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return uninvite($c) }
+sub internal_reinvite  ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return reinvite($c) }
+sub internal_rsvp      ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return rsvp($c) }
+sub internal_freebusy  ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return freebusy($c) }
 
 # The editor sends `reminders` (0.2.0: up to three, each minutes_before and
 # channel); older clients and the CLI send one `reminder_minutes`.
