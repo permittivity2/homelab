@@ -279,7 +279,9 @@ for my $p ('/c/' . ('a' x 64), '/c/' . ('a' x 64) . '.ics', '/c/' . ('a' x 64) .
       ->element_exists('#ev-form #ev-pin', 'the editor can pin an event to its zone')
       ->element_exists('#ev-form #ev-zone-from-place', '... and read the zone off the address')
       ->content_like(qr/\.cal-side\.open \{ transform: translateX\(0\)/, 'the layout carries the drawer rule')
-      ->content_like(qr/\.cal-actions, \.cal-side__head, \.cal-side-backdrop \{ display: none; \}/, '... and hides the phone pieces on a wide screen');
+      ->content_like(qr/\.cal-actions, \.cal-side__head, \.cal-side-backdrop \{ display: none; \}/, '... and hides the phone pieces on a wide screen')
+      ->content_like(qr/\.modal \{[^}]*max-height: calc\(100vh[^}]*max-height: calc\(100dvh/, 'a dialog is capped in dvh, the visible height on a phone (0.4.3: 100vh put Save under Brave\'s bottom bars), after a 100vh fallback')
+      ->content_like(qr/\.modal > form \{[^}]*max-height: calc\(100dvh/, '... and so is the editor\'s form');
 }
 
 # --- the vendored bundle and the chrome ---

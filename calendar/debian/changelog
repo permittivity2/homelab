@@ -1,3 +1,12 @@
+homelab-calendar (0.4.3) unstable; urgency=medium
+
+  * Dialogs are capped at 100dvh, the height a phone browser leaves visible
+    under its own bars (a 100vh line stays for old browsers). On Android
+    100vh is the height with every bar hidden, so the editor stuck out under
+    Brave's bottom bars and Delete / Save / Cancel could not be reached.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 22:43:02 -0600
+
 homelab-calendar (0.4.2) unstable; urgency=medium
 
   * In a phone's month cell the time never shrinks (0.4.1 let it, so "9:00am"

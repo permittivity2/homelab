@@ -186,6 +186,12 @@ drawer head and the backdrop are `display: none` on a wide screen, so nothing
 there is invisible but clickable. The breakpoint is the theme's, on purpose:
 the drawer takes over exactly where the strip would have appeared.
 
+Dialogs are capped at `100dvh` (0.4.3), the height of the part of the window the
+phone's browser is not covering with its own bars, with a `100vh` line before it
+for old browsers. `100vh` on Android and iOS is the height with every bar hidden,
+so the editor, centred on the screen, stuck out under Brave's bottom bars and its
+Delete / Save / Cancel could not be reached. Never size a fixed box with `100vh`.
+
 ## Install
 
 Pool on prod-homelab50/51/52 via `install-orchestrators/calendar-orchestrate.sh`
