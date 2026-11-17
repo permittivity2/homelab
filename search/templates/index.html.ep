@@ -40,13 +40,14 @@
 %# somewhere else still shows its own reason.
 % my $fopen = $c->param('fopen');
 % my $panel_open = (defined $fopen && length $fopen) ? ($fopen eq '1' ? 1 : 0) : $filters_on;
-% my $want_mail  = $f->{source} ne 'drive';
-% my $want_drive = $f->{source} ne 'mail';
+% my $want_mail  = $f->{source} eq 'both' || $f->{source} eq 'mail';
+% my $want_drive = $f->{source} eq 'both' || $f->{source} eq 'drive';
+% my $want_cal   = $f->{calendar} ? 1 : 0;
 <form class="searchbar" method="get" action="/">
   <div class="askrow">
     <input type="text" id="q" name="q" value="<%= $f->{q} %>" autofocus
-           aria-label="Search your email and files"
-           placeholder="Search your email and files">
+           aria-label="Search your email, files and calendar"
+           placeholder="Search your email, files and calendar">
     <button class="btn btn-primary" type="submit">Search</button>
     %#  AI SEARCH IS A BUTTON, not a mode you leave switched on. A named
     %#  submit button sends its name only when it is the button that
@@ -86,8 +87,11 @@
         <div class="row-chk">
           <label class="box"><input type="checkbox" name="src" value="mail" id="srcMail"<%= $want_mail ? ' checked' : '' %>><span>Email</span></label>
           <label class="box"><input type="checkbox" name="src" value="drive" id="srcDrive"<%= $want_drive ? ' checked' : '' %>><span>Files</span></label>
+          %# The calendar (#90) is asked live, by words only: the filters
+          %# below are about mail and files and leave it alone.
+          <label class="box"><input type="checkbox" name="src" value="calendar" id="srcCal"<%= $want_cal ? ' checked' : '' %>><span>Calendar</span></label>
         </div>
-        <p class="note warn" id="srcNote" hidden>Neither is selected, so this searches both.</p>
+        <p class="note warn" id="srcNote" hidden>None is selected, so this searches all three.</p>
       </section>
 
       %# Most date filtering is relative, so five presets answer it in one
@@ -302,7 +306,7 @@
   var $  = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
-  var srcMail = $('#srcMail'), srcDrive = $('#srcDrive');
+  var srcMail = $('#srcMail'), srcDrive = $('#srcDrive'), srcCal = $('#srcCal');
   if (!srcMail || !srcDrive) return;
   var secMail = $('#secMail'), secDrive = $('#secDrive');
   var sumActive = $('#sumActive'), srcNote = $('#srcNote');
@@ -319,7 +323,8 @@
   }
 
   function syncSource() {
-    var m = srcMail.checked, d = srcDrive.checked, none = !m && !d;
+    var m = srcMail.checked, d = srcDrive.checked, cal = srcCal ? srcCal.checked : false,
+        none = !m && !d && !cal;
     // Neither ticked means both -- the same as sending no source at all,
     // which is also what this form sends with the script off. Said out loud
     // rather than silently corrected.
@@ -340,7 +345,7 @@
     applyScope();
     summarize();
   }
-  [srcMail, srcDrive].forEach(function (c) { c.addEventListener('change', syncSource); });
+  [srcMail, srcDrive, srcCal].forEach(function (c) { if (c) c.addEventListener('change', syncSource); });
 
   // ---- dates ---------------------------------------------------------
   function ymd(d) {
@@ -487,8 +492,13 @@
   function summarize() {
     if (!sumActive) return;
     var bits = [];
-    var m = srcMail.checked, d = srcDrive.checked;
-    if (m !== d) bits.push(m ? 'email only' : 'files only');
+    var m = srcMail.checked, d = srcDrive.checked, cal = srcCal ? srcCal.checked : false;
+    // Which sources, when it is not all of them (none ticked means all).
+    var on = [];
+    if (m) on.push('email');
+    if (d) on.push('files');
+    if (cal) on.push('calendar');
+    if (on.length && on.length < 3) bits.push(on.length === 1 ? on[0] + ' only' : on.join(' + '));
 
     // A whole family reads as its own name; a part-selected one says how much
     // of it, because "pictures" and "3 of the 8 picture types" are different
@@ -646,13 +656,59 @@
    %><% if (($counts->{shared_items} // 0) > 0) { %>, plus <%= commify($counts->{shared_items}) %> shared with you<% } %>.</p>
 % }
 
+% if ($account && !$searched) {
+  <p class="empty">Type something above to search your mail, files and calendar together.</p>
+% }
+
+%# ---------------------------------------------------------------- calendar
+%#
+%# Asked live from the calendar, not read from the index (#90), so it is
+%# here even before the indexer has seen anything of this person's. First,
+%# because it is short and dated: an appointment is what a search like
+%# "haircut" is usually for, and under fifty emails it would never be seen.
+%# `when` was composed server-side from the calendar's wall clocks (in the
+%# person's own zone, as the calendar keeps it); `url` is the calendar's own
+%# link, kept only when it is a web address.
+% if ($searched && $cal) {
+%   my $n = scalar @{ $cal->{events} // [] };
+  <h2 class="sec">Calendar<% if ($cal->{ok}) { %> — <%= $n %> result<%= $n == 1 ? '' : 's' %><% } %></h2>
+  <div class="res" id="calRes">
+%   if (!$cal->{ok}) {
+    <p class="empty">The calendar could not be searched just now.</p>
+%   } else {
+%     for my $e (@{ $cal->{events} }) {
+    <div class="hit">
+      <div class="t">
+        <span class="subj"><% if (length($e->{url})) { %><a href="<%= $e->{url} %>"><%= length($e->{title}) ? $e->{title} : '(no title)' %></a><% } else { %><%= length($e->{title}) ? $e->{title} : '(no title)' %><% } %></span>
+        <span class="meta"><%= $e->{when} %><% if (length($e->{calendar})) { %> · <%= $e->{calendar} %><% } %><%= $e->{is_recurring} ? ' · repeats' : '' %></span>
+      </div>
+%       if (length($e->{location})) {
+      <div class="who"><%= $e->{location} %></div>
+%       }
+    </div>
+%     }
+%     unless (@{ $cal->{events} }) {
+    <p class="empty">No matching events.</p>
+%     }
+%#  "Related by meaning" is one model call on the calendar's side, so the
+%#  page asks for it after it has rendered (the script at the foot) and only
+%#  when this account has the calendar's AI on. Available but off: say where
+%#  the switch is, once, in the calendar's own settings -- not this site's
+%#  AI switch, which is a different agreement about different data.
+%     if ($cal->{ai}{enabled}) {
+    <div id="calRelated" data-q="<%= $f->{q} %>"><p class="empty calwait">Looking for related events…</p></div>
+%     } elsif ($cal->{ai}{available}) {
+    <p class="empty"><a href="<%= calendar_base() %>/settings">Turn on AI in the calendar&rsquo;s settings</a> to also find events by meaning.</p>
+%     }
+%   }
+  </div>
+% }
+
 % unless ($account) {
   <p class="empty">Nothing of yours has been indexed yet. If you have just signed up, give the indexer a few minutes.</p>
-% } elsif (!$searched) {
-  <p class="empty">Type something above to search your mail and files together.</p>
-% } else {
+% } elsif ($searched) {
 
-% if ($f->{source} ne 'drive') {
+% if ($want_mail) {
   <h2 class="sec">Email — <%= scalar @$mail %> result<%= @$mail == 1 ? '' : 's' %></h2>
   <div class="res">
 % for my $m (@$mail) {
@@ -684,7 +740,7 @@
   </div>
 % }
 
-% if ($f->{source} ne 'mail') {
+% if ($want_drive) {
   <h2 class="sec">Files — <%= scalar @$drive %> result<%= @$drive == 1 ? '' : 's' %></h2>
   <div class="res">
 % for my $d (@$drive) {
@@ -875,6 +931,49 @@
   </div>
 % }
 
+% }
+
+%# ------------------------------------------- the calendar's related events
+%#
+%# Asked for AFTER the page is on the screen, because it is one model call on
+%# the calendar's side (#90). Rendered only when there is a place for it,
+%# which the server put there only when this account has the calendar's AI
+%# on. Everything that arrives is put in the page as TEXT -- createElement
+%# and textContent, never innerHTML -- because a title, a place and a reason
+%# are strings somebody, or a model, wrote. The link is used only when it is
+%# a web address. With the script off, the literal results are simply all
+%# there is, which is the right failure.
+% if ($searched && $cal && $cal->{ok} && $cal->{ai}{enabled}) {
+<script>
+(function () {
+  var box = document.getElementById('calRelated');
+  if (!box || !window.fetch) return;
+  var wait = box.querySelector('.calwait');
+  function text(tag, cls, s) { var el = document.createElement(tag); if (cls) el.className = cls; el.textContent = s; return el; }
+  function hit(e) {
+    var h = text('div', 'hit', ''), t = text('div', 't', ''), subj = text('span', 'subj', '');
+    var title = (e.title && String(e.title).length) ? String(e.title) : '(no title)';
+    if (e.url && /^https?:\/\//i.test(e.url)) { var a = document.createElement('a'); a.href = e.url; a.textContent = title; subj.appendChild(a); }
+    else subj.textContent = title;
+    t.appendChild(subj);
+    t.appendChild(text('span', 'meta', (e.when || '') + (e.calendar ? ' · ' + e.calendar : '') + (e.is_recurring ? ' · repeats' : '')));
+    h.appendChild(t);
+    if (e.location) h.appendChild(text('div', 'who', String(e.location)));
+    if (e.why) h.appendChild(text('span', 'why', String(e.why)));
+    return h;
+  }
+  fetch('/calendar/related?q=' + encodeURIComponent(box.getAttribute('data-q') || ''),
+        { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      if (wait) wait.remove();
+      if (!j || !j.related || !j.related.length) return;
+      box.appendChild(text('h3', 'calsub', 'Related by meaning'));
+      j.related.forEach(function (e) { box.appendChild(hit(e)); });
+    })
+    .catch(function () { if (wait) wait.remove(); });
+})();
+</script>
 % }
 
 %# The consent dialog is opened by the AI Search button. There are two of

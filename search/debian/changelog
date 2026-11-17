@@ -1,3 +1,15 @@
+homelab-search (0.3.11) unstable; urgency=medium
+
+  * The calendar is a source of the search (post-cutover #90): events whose
+    words match come first, asked live from the calendar through the
+    gateway with the person's own token, never indexed; "Related by
+    meaning" follows when the calendar's AI is on. A third box under
+    "Search in"; /api/v1/search answers a `calendar` object, with
+    related=1 for the AI part; source=calendar|all and calendar=0|1 on
+    the wire.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 23:09:23 -0600
+
 homelab-search (0.3.10) unstable; urgency=medium
 
   * /settings (post-cutover #77): the account dropdown's Settings line leads

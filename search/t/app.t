@@ -36,7 +36,7 @@ my $EMAIL = $ENV{HOMELAB_SEARCH_TEST_EMAIL} // 'permittivity@mailmasker.org';
 my $t = Test::Mojo->new('Homelab::Search::App');
 
 # The empty search page must render before anything is typed.
-$t->get_ok('/')->status_is(200)->content_like(qr/Search your email and files/);
+$t->get_ok('/')->status_is(200)->content_like(qr/Search your email, files and calendar/);
 
 # A real query across both sources -- the case that was broken.
 # ASCII-only assertions on purpose: the page uses an em-dash in those

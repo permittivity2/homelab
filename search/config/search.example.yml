@@ -75,6 +75,14 @@ public_base_url: https://search.mailmasker.org
 homelab_api:
   base_url: http://api.svc.homelab:3000
 
+# The calendar is a source of the search (post-cutover #90). It is asked
+# live through homelab_api.base_url above, with the person's own token, so
+# nothing of the calendar is copied into the index. The one setting here is
+# the address the page links to when the calendar's AI is off ("turn it on
+# in the calendar's settings"); this is its default.
+calendar:
+  public_base_url: https://calendar.mailmasker.org
+
 # Session cookie signing secret -- CHANGE THIS.
 session:
   secret: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"

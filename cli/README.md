@@ -90,6 +90,23 @@ If the refresh token itself has expired or been revoked (e.g. via
 expired -- run `homelab-cli login` again" instead of a confusing raw
 401.
 
+## Search (`search`)
+
+One search over your mail, files and calendar, through the search service's
+`/api/v1/search` behind the gateway:
+
+```bash
+homelab-cli search <words> [--source all|mail|drive|calendar|both] [--person <name>] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
+                   [--mailbox INBOX] [--include-type cat:pictures] [--exclude-type image/png] [--attachments] [--trash]
+                   [--no-related] [--limit <n>]
+```
+
+The calendar comes first (0.7.3, post-cutover #90): events whose words match,
+then, when the calendar has AI on for the account, "Related by meaning" with
+the reason for each pick; `--no-related` skips that one AI call. `--source
+both` is mail and files without the calendar, as it always was; `all`, the
+default, is everything.
+
 ## Email (`mail`)
 
 ```bash

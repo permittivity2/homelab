@@ -1,3 +1,10 @@
+homelab-developer (0.1.11) unstable; urgency=medium
+
+  * The search ability answers a `calendar` object (post-cutover #90):
+    source=calendar|all, calendar=0|1 and related=1 documented.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 23:12:52 -0600
+
 homelab-developer (0.1.10) unstable; urgency=medium
 
   * Calendar reference: search by meaning (related), the zone of a place,

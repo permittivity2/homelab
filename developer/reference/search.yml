@@ -1,18 +1,19 @@
-# One search over your mail and your files. See README.md for the fields.
+# One search over your mail, your files and your calendar. See README.md for the fields.
 area: Search
 order: 70
 intro: >
-  Search your email and your files together. It looks through a copy of
-  both that is kept up to date in the background, so something that has
-  only just arrived can take a little while to show up.
+  Search your email, your files and your calendar together. Mail and files
+  are looked up in a copy that is kept up to date in the background, so
+  something that has only just arrived can take a little while to show up;
+  events come straight from the calendar.
 
 abilities:
   - id: search
-    title: Search your mail and files
+    title: Search your mail, files and calendar
     method: GET
     path: /api/v1/search
     who: signed-in
-    summary: Find email and files by words, people, dates or type, in one search.
+    summary: Find email, files and calendar events by words, people, dates or type, in one search.
     description: >
       Mail matches on its subject and text, files on their name and text;
       with `q` the best matches come first, otherwise the newest. Results
@@ -20,6 +21,12 @@ abilities:
       someone has shared with you are included, with their address in
       `shared_by`. `filters` shows how your request was read, and
       `indexed` is false until something of yours has been indexed.
+      Events come in a third object, `calendar`: the ones whose words match
+      in `events`, and, when you ask with `related=1` and that account has
+      AI on in the calendar, the ones its AI finds related by meaning in
+      `related`, each with a `why`. The calendar is matched by words only;
+      the other filters are about mail and files. `calendar` is null when
+      the calendar was not asked.
     params:
       - name: q
         in: query
@@ -41,7 +48,15 @@ abilities:
       - name: source
         in: query
         required: false
-        about: both (the default), mail or drive.
+        about: both (the default; mail and files, with the calendar unless calendar=0), mail, drive, calendar (events only) or all.
+      - name: calendar
+        in: query
+        required: false
+        about: 1 or 0, whether the calendar is searched too. On with both, all and calendar; off with mail or drive unless you say 1.
+      - name: related
+        in: query
+        required: false
+        about: 1 to also ask the calendar for events related by meaning. One AI call, made only when that account has AI on in the calendar; otherwise `related` is empty and `related_note` says why.
       - name: mailbox
         in: query
         required: false
@@ -97,8 +112,43 @@ abilities:
         "filters": {
           "q": "invoice", "person": "", "from": "", "to": "", "mailbox": "",
           "mime": "", "tag": "", "shared": "include", "source": "both",
+          "calendar": 1, "related": 1,
           "type_in": [], "type_ex": [], "in_trash": 0, "has_attachments": 0,
           "limit": 50, "offset": 0
+        },
+        "calendar": {
+          "ok": 1,
+          "events": [
+            {
+              "id": 31,
+              "title": "Invoice review with Dana",
+              "location": "Room 4",
+              "calendar": "My calendar",
+              "start": "2026-11-18T10:00:00",
+              "end": "2026-11-18T10:30:00",
+              "all_day": 0,
+              "is_recurring": 0,
+              "when": "Wed, Nov 18 · 10:00 – 10:30 AM",
+              "url": "https://calendar.mailmasker.org/?date=2026-11-18&event=31"
+            }
+          ],
+          "related": [
+            {
+              "id": 27,
+              "title": "Call the accountant",
+              "location": "",
+              "calendar": "My calendar",
+              "start": "2026-11-20T15:00:00",
+              "end": "2026-11-20T15:30:00",
+              "all_day": 0,
+              "is_recurring": 0,
+              "when": "Fri, Nov 20 · 3:00 – 3:30 PM",
+              "url": "https://calendar.mailmasker.org/?date=2026-11-20&event=27",
+              "why": "about money owed"
+            }
+          ],
+          "related_note": null,
+          "ai": { "available": 1, "enabled": 1 }
         },
         "mail": [
           {
@@ -135,6 +185,7 @@ abilities:
       }
     notes:
       - With no words and no filter, nothing is searched and both lists come back empty. Choosing only a `source` doesn't count as a filter.
+      - Calendar results come live from the calendar, so they need no indexing. `when` is the day and time in your own zone, `url` opens the event in the calendar. The calendar needs at least two characters in `q`, and `calendar` is null when there were none; `ok` is 0, with an `error`, when the calendar could not be asked.
       - A mail result's `message_id` is the search's own number for it, not the `uid` that Read a message takes.
       - Files you have kept out of search (marked private in drive, alone or by their folder) never come back.
     cli: homelab-cli search invoice

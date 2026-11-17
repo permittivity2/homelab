@@ -18,6 +18,7 @@ use Homelab::Search::MailParse qw(parse_message);
 use Homelab::Search::AI;
 use Homelab::Search::AI::Client;
 use Homelab::Search::AI::Consent ();
+use Homelab::Search::Calendar;
 
 # search.mailmasker.org -- one place that searches mail and drive together.
 #
@@ -43,6 +44,7 @@ has 'drive_root';
 has 'query';
 has 'pg';
 has 'ai';
+has 'calendar';
 
 sub startup ($self) {
     my $home = $ENV{HOMELAB_SEARCH_HOME} // '/usr/share/homelab-search';
@@ -138,6 +140,16 @@ sub startup ($self) {
             log        => $self->log,
         ),
     ));
+
+    # The calendar as a source (#90): asked live through the gateway with the
+    # person's own token, never indexed. See Homelab::Search::Calendar.
+    # calendar.public_base_url is only for the one link the page offers when
+    # the calendar's AI is off ("turn it on in the calendar's settings").
+    my $cal_cfg = $config->{calendar} // {};
+    $self->calendar(Homelab::Search::Calendar->new(api_base => $self->api_base, log => $self->log));
+    my $cal_base = $cal_cfg->{public_base_url} // 'https://calendar.mailmasker.org';
+    $cal_base =~ s{/+\z}{};
+    $self->helper(calendar_base => sub ($c) { $cal_base });
 
     mount_health_route($self, check => sub { $self->pg->db->query('SELECT 1'); 1 });
 
@@ -300,6 +312,9 @@ sub startup ($self) {
     $r->post('/logout')         ->to('search#logout');
     $r->post('/ai/consent')     ->to('search#ai_consent');
     $r->get('/api/v1/search')   ->to('search#api_search');
+    # The calendar's "related by meaning" for the page, asked for after the
+    # results have rendered: one model call, so it is not in the page's path.
+    $r->get('/calendar/related')->to('search#calendar_related');
     # Viewing one result. Both ids are re-resolved under the account's own
     # scope inside Query, so an id belonging to someone else does not resolve
     # and there is no separate ownership check to forget.
@@ -340,10 +355,12 @@ sub _current_auth ($c) {
 # The signed-in address and its indexed account row. The account id comes
 # from here and nowhere else -- never from a request parameter.
 sub _scope ($c) {
-    my ($email) = _current_auth($c);
-    return (undef, undef) unless $email;
+    my ($email, $jwt) = _current_auth($c);
+    return (undef, undef, undef) unless $email;
     my $acct = $c->app->query->account_for($email);
-    return ($email, $acct);
+    # The token comes back too, for the one call made on the person's behalf
+    # (the calendar, #90). Callers that want only the first two still work.
+    return ($email, $acct, $jwt);
 }
 
 sub login_form ($c) {
@@ -426,7 +443,7 @@ sub _filters ($c) {
     # they are results like any other, labelled with whose they are.
     $f{shared} = $c->param('shared') // 'include';
     $f{shared} = 'include' unless $f{shared} =~ /\A(?:include|exclude|only)\z/;
-    # Source arrives two ways, and both have to keep working.
+    # Sources arrive two ways, and both have to keep working.
     #
     # `source=both|mail|drive` is the WIRE contract -- homelab-cli sends it,
     # /api/v1/search documents it, and a bookmarked URL carries it. The form
@@ -435,17 +452,19 @@ sub _filters ($c) {
     # as a three-option <select> hid the answer inside a control you had to
     # read before you could tell why half the panel was greyed out.
     #
-    # Neither ticked means BOTH, deliberately: that is also exactly what a
-    # browser with JavaScript off sends when you clear both boxes, and a
-    # search over nothing at all is never what was meant. The page says so
+    # Nothing ticked means EVERYTHING, deliberately: that is also exactly
+    # what a browser with JavaScript off sends when you clear the boxes, and
+    # a search over nothing at all is never what was meant. The page says so
     # in as many words rather than silently correcting it.
-    my %src = map { $_ => 1 } grep { /\A(?:mail|drive)\z/ } @{ $c->every_param('src') };
-    if (keys %src == 1) { ($f{source}) = keys %src }
-    elsif (keys %src)   { $f{source} = 'both' }
-    else {
-        $f{source} = ($c->param('source') // 'both');
-        $f{source} = 'both' unless $f{source} =~ /\A(?:both|mail|drive)\z/;
-    }
+    #
+    # The calendar (#90) is a third box and rides beside `source` as its own
+    # yes/no, `calendar`, so every old `source` value still means what it
+    # did; see _sources for the whole table.
+    ($f{source}, $f{calendar}) = _sources($c->every_param('src'), scalar $c->param('source'), scalar $c->param('calendar'));
+    # Also ask the calendar's AI for events related by meaning: one model
+    # call, so only when asked for. The page never sends it (it asks after
+    # rendering, see calendar_related); homelab-cli sends it by default.
+    $f{related} = $c->param('related') ? 1 : 0;
 
     # Type include/exclude. Repeatable, and capped at 40 tokens each purely
     # to bound the generated boolean -- a request with 5,000 of them should
@@ -495,7 +514,30 @@ sub _searched ($f) {
 
 sub _filters_on ($f) {
     return 1 if ($f->{shared} // 'include') ne 'include';
-    return (_searched($f) || ($f->{source} // 'both') ne 'both') ? 1 : 0;
+    return (_searched($f) || ($f->{source} // 'both') ne 'both' || !$f->{calendar}) ? 1 : 0;
+}
+
+# WHICH SOURCES, as one table (#90). Ticks from the form win; without any,
+# the wire's words.
+#
+#   ticks                         source     calendar
+#   none                          both       1        everything
+#   mail / drive / mail+drive     that       0        narrowed stays narrowed
+#   calendar                      calendar   1        events only
+#   mail+calendar etc.            that       1
+#   all three                     both       1
+#
+#   wire `source`   both (default) -> mail+files, calendar on unless calendar=0
+#                   mail | drive   -> that one, calendar off unless calendar=1
+#                   calendar       -> events only
+#                   all            -> both + calendar on (a plainer word for it)
+#
+# `source` keeps its old values and meanings, with one new one: `calendar`,
+# meaning neither mail nor files. _run and the template read it as such.
+sub _sources ($ticks, $source, $calendar) {
+    # The table itself lives with the calendar source, where t/calendar.t
+    # can reach it without a database.
+    return Homelab::Search::Calendar::sources($ticks, $source, $calendar);
 }
 
 sub _run ($c, $acct, $f) {
@@ -508,13 +550,25 @@ sub _run ($c, $acct, $f) {
     # row. That was the whole of the delay between clicking Deep Search and
     # seeing the page.
     return ($mail, $drive) unless _searched($f);
-    $mail  = $c->app->query->search_mail($acct->{account_id}, $f)  if $f->{source} ne 'drive';
+    $mail  = $c->app->query->search_mail($acct->{account_id}, $f)
+        if $f->{source} eq 'both' || $f->{source} eq 'mail';
     # search_drive_all, not search_drive: own files plus anything another
     # account has shared with this one, resolved live against drive.shares
     # on every request so a revoked share stops matching immediately.
     $drive = $c->app->query->search_drive_all($acct->{account_id}, $acct->{email}, $f)
-        if $f->{source} ne 'mail';
+        if $f->{source} eq 'both' || $f->{source} eq 'drive';
     return ($mail, $drive);
+}
+
+# The calendar's answer, or undef when it was not asked: the box is off, the
+# words are under two characters (the calendar's own floor), or there is no
+# token to ask with. Words only -- the calendar knows nothing of mailboxes,
+# file types or photo tags, so those filters leave it alone rather than
+# pretending to apply. It does not need an indexed account: a new person's
+# events are theirs to find before the indexer has seen their mail.
+sub _run_calendar ($c, $jwt, $f, $related = 0) {
+    return undef unless $f->{calendar} && length($f->{q} // '') >= 2 && $jwt;
+    return $c->app->calendar->search($jwt, $f->{q}, related => $related);
 }
 
 # Is AI mode even offerable here? Three separate things, and the page has
@@ -545,11 +599,14 @@ sub _ai_state ($c, $acct) {
 }
 
 sub index ($c) {
-    my ($email, $acct) = _scope($c);
+    my ($email, $acct, $jwt) = _scope($c);
     return $c->redirect_to('/login') unless $email;
 
     my $f = _filters($c);
     my ($mail, $drive) = _run($c, $acct, $f);
+    # The literal calendar matches only (#90). "Related by meaning" is a
+    # model call, so the page asks for it after it has rendered.
+    my $cal = _run_calendar($c, $jwt, $f, 0);
 
     # AI runs only when asked for, and only on top of a real question. The
     # keyword results above are computed either way, which is what makes
@@ -576,6 +633,7 @@ sub index ($c) {
         f          => $f,
         mail       => $mail,
         drive      => $drive,
+        cal        => $cal,
         ai         => $ai,
         ai_state   => $ai_state,
         mailboxes  => ($acct ? $c->app->query->mailboxes($acct->{account_id}) : []),
@@ -702,17 +760,36 @@ sub _mime_groups ($facets) {
 }
 
 sub api_search ($c) {
-    my ($email, $acct) = _scope($c);
+    my ($email, $acct, $jwt) = _scope($c);
     return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
     my $f = _filters($c);
     my ($mail, $drive) = _run($c, $acct, $f);
+    # Both calendar parts in one answer when related=1 (#90): a program can
+    # wait the second or two the model takes; the page cannot.
+    my $cal = _run_calendar($c, $jwt, $f, $f->{related});
     return $c->render(json => {
-        account => ($acct ? $acct->{email} : $email),
-        indexed => ($acct ? \1 : \0),
-        filters => $f,
-        mail    => $mail,
-        drive   => $drive,
+        account  => ($acct ? $acct->{email} : $email),
+        indexed  => ($acct ? \1 : \0),
+        filters  => $f,
+        mail     => $mail,
+        drive    => $drive,
+        calendar => $cal,
     });
+}
+
+# GET /calendar/related?q=... -- the calendar's "related by meaning" for the
+# page, fetched after the results have rendered. JSON built into the page by
+# its own script with textContent only: a title, a place and a reason are
+# text somebody (or a model) wrote, never markup. Failure is an empty list;
+# the literal results are already on the screen.
+sub calendar_related ($c) {
+    my ($email, $acct, $jwt) = _scope($c);
+    return $c->render(json => { error => 'not logged in' }, status => 401) unless $email;
+    my $q = ($c->param('q') // '') =~ s/\A\s+|\s+\z//gr;
+    my $r = (length $q >= 2 && $jwt) ? $c->app->calendar->search($jwt, $q, related => 1) : undef;
+    return $c->render(json => { related => [], related_note => undef, error => ($r ? $r->{error} : 'skipped') })
+        unless $r && $r->{ok};
+    return $c->render(json => { related => $r->{related}, related_note => $r->{related_note}, ai => $r->{ai} });
 }
 
 # ----------------------------------------------------- serving one result

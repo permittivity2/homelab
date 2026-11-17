@@ -314,6 +314,14 @@
       letter-spacing: var(--tracking-wide); text-transform: uppercase;
       color: var(--text-muted); margin: var(--space-6) 0 var(--space-2);
     }
+    /* Calendar results (#90): the reason a related event was picked, and the
+       small heading above those. Model-authored TEXT, escaped, never markup. */
+    .hit .why { display: block; color: var(--text-secondary); font-size: var(--app-xs); margin-top: 2px; }
+    .calsub {
+      font-size: var(--app-xs); font-weight: var(--weight-normal);
+      letter-spacing: var(--tracking-wide); text-transform: uppercase;
+      color: var(--text-muted); margin: var(--space-3) 0 var(--space-1);
+    }
     .res { border-top: 1px solid var(--border); }
     .hit { padding: var(--space-3) 0; border-bottom: 1px solid var(--border); min-width: 0; }
     /* Stacked by default: a subject and a date side by side do not fit a

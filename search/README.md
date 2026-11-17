@@ -19,6 +19,19 @@ The split that makes the scope guarantee checkable: **the indexer touches the
 filesystem; the request path touches only Postgres.** Nothing in a search
 request opens a file.
 
+**The calendar is the one source that is not indexed** (0.3.11, post-cutover
+#90). A search with words also asks the calendar, live, on the person's own
+behalf: `GET /api/v1/calendar/search` through the gateway with the bearer token
+the session already holds (`Homelab::Search::Calendar`). That keeps one copy of
+the calendar's rules (whose events, which shares, which account has AI on) and
+no copy of its rows here. The page renders the literal matches with the rest
+and then asks `/calendar/related` for the calendar's "related by meaning", one
+model call, so it is never in the page's path; `/api/v1/search` answers both in
+one `calendar` object when asked with `related=1`. A failure costs the page its
+Calendar section and nothing else. The third "Search in" box rides beside
+`source` as its own yes/no, `calendar`, so every old `source` value still means
+what it did; the table is in `Homelab::Search::Calendar::sources`.
+
 ## The one invariant: no account ever sees another's data
 
 Not left to every future `WHERE` clause being written correctly. Four layers,

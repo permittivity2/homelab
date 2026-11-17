@@ -1345,6 +1345,9 @@ def cmd_search(args):
             has_attachments=args.attachments,
             in_trash=args.trash,
             limit=args.limit,
+            # The calendar's "related by meaning" too (#90): one AI call on
+            # the calendar's side, so it is asked for by name.
+            related=0 if args.no_related else 1,
         )
     except ApiError as e:
         _emit_error(args, f"Search failed: {e.message}")
@@ -1355,15 +1358,54 @@ def cmd_search(args):
 
     mail = result.get("mail") or []
     drive = result.get("drive") or []
+    # The calendar first, as on the page: short, dated, and the thing a search
+    # like "haircut" is usually for. Absent (None) when it was not asked --
+    # no words, or --source mail/drive/both.
+    cal = result.get("calendar") or {}
+    cal_events = cal.get("events") or []
+    cal_related = cal.get("related") or []
+    printed = False
+
+    def section(title):
+        nonlocal printed
+        if printed:
+            print()
+        print(title)
+        printed = True
+
+    if cal and not cal.get("ok"):
+        section("CALENDAR")
+        print("  (the calendar could not be searched just now)")
+    elif cal_events or cal_related:
+        section(f"CALENDAR ({len(cal_events)})")
+        if cal_events:
+            rows = [[_calendar_day(ev.get("start")), _calendar_span(ev), ev.get("title") or "(no title)",
+                     ev.get("location") or "", ev.get("calendar") or "", ev.get("id")] for ev in cal_events]
+            _print_table(["DAY", "WHEN", "TITLE", "WHERE", "CALENDAR", "ID"], rows)
+        if cal_related:
+            print("Related by meaning:")
+            rows = [[_calendar_day(ev.get("start")), _calendar_span(ev), ev.get("title") or "(no title)",
+                     ev.get("location") or "", ev.get("why") or "", ev.get("id")] for ev in cal_related]
+            _print_table(["DAY", "WHEN", "TITLE", "WHERE", "WHY", "ID"], rows)
+    ai = cal.get("ai") or {}
+    if cal.get("ok") and not args.no_related and ai.get("available") and not ai.get("enabled"):
+        if printed:
+            print()
+        print("Turn on AI in the calendar's settings to also find events by meaning.")
+        printed = True
+
     if not result.get("indexed"):
+        if printed:
+            print()
         print("Nothing of yours has been indexed yet.")
         return 0
     if not mail and not drive:
-        print("No matches.")
+        if not printed:
+            print("No matches.")
         return 0
 
     if mail:
-        print(f"EMAIL ({len(mail)})")
+        section(f"EMAIL ({len(mail)})")
         rows = []
         for m in mail:
             who = m.get("from_name") or m.get("from_addr") or "?"
@@ -1372,9 +1414,7 @@ def cmd_search(args):
                          (m.get("subject") or "(no subject)")[:52], m.get("mailbox", "")])
         _print_table(["ID", "DATE", "FROM", "SUBJECT", "MAILBOX"], rows)
     if drive:
-        if mail:
-            print()
-        print(f"FILES ({len(drive)})")
+        section(f"FILES ({len(drive)})")
         rows = []
         for d in drive:
             when = (d.get("content_created_at") or d.get("uploaded_at") or "")[:16]
@@ -3550,8 +3590,12 @@ def build_parser():
     # --to reads as a recipient next to --person.
     p.add_argument("--since", metavar="YYYY-MM-DD", help="Only items on or after this date")
     p.add_argument("--until", metavar="YYYY-MM-DD", help="Only items on or before this date")
-    p.add_argument("--source", choices=["both", "mail", "drive"], default="both",
-                   help="Search mail, files, or both (default: both)")
+    # The calendar is a source too (#90). Nothing sent means everything; `both`
+    # keeps its old meaning, mail and files without the calendar.
+    p.add_argument("--source", choices=["all", "mail", "drive", "calendar", "both"], default=None,
+                   help="all (the default), mail, drive, calendar (events only), or both (mail and files, no calendar)")
+    p.add_argument("--no-related", action="store_true",
+                   help="Skip the calendar's search by meaning (one AI call, when the calendar has AI on)")
     p.add_argument("--mailbox", help="Restrict to one mailbox")
     p.add_argument("--type", help="File type: text, image, application/pdf, video, audio")
     # Include/exclude by type, repeatable. A value is either a group
