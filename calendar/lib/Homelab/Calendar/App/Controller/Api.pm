@@ -1485,6 +1485,50 @@ sub internal_suggestion_save     ($c) { my $me = $c->authenticated_email_any or 
 sub internal_suggestion_dismiss  ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return dismiss_suggestion($c) }
 sub internal_prefs               ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return prefs($c) }
 sub internal_prefs_save          ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return save_prefs($c) }
+sub internal_devices             ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return devices($c) }
+sub internal_device_create       ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return device_create($c) }
+sub internal_device_revoke       ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return device_revoke($c) }
+
+# --- CalDAV devices (#84): the app passwords a phone or desktop app signs in
+# with. The secret is in the answer to the POST and nowhere again. ----------
+
+sub _device_json ($d) {
+    return {
+        id => $d->{id} + 0, label => $d->{label}, created_at => $d->{created_at},
+        last_used_at => $d->{last_used_at}, last_used_agent => $d->{last_used_agent},
+        (exists $d->{secret} ? (secret => $d->{secret}) : ()),
+    };
+}
+
+# GET /api/devices -- the live app passwords, and what to type beside one.
+sub devices ($c) {
+    my $me = $c->require_login or return;
+    return $c->render(json => {
+        devices  => [ map { _device_json($_) } @{ _model($c)->app_passwords_for($me) } ],
+        server   => $c->app->public_base_url,
+        username => $me,
+    });
+}
+
+# POST /api/devices {label} -- a new app password, shown once.
+sub device_create ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $b = _body($c);
+    my $row = _try($c, sub { _model($c)->create_app_password($me, $b->{label}) }) or return;
+    _audit($c, action => 'calendar.device_add', resource_type => 'calendar_app_password', resource_id => $row->{id}, detail => { label => $row->{label} });
+    return $c->render(json => { %{ _device_json($row) }, server => $c->app->public_base_url, username => $me }, status => 201);
+}
+
+# POST /api/devices/:id/revoke -- that device signs in no more.
+sub device_revoke ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $id = $c->stash('id');
+    return _fail($c, 404, 'No such device.') unless _model($c)->revoke_app_password($me, $id);
+    _audit($c, action => 'calendar.device_revoke', resource_type => 'calendar_app_password', resource_id => $id, detail => {});
+    return $c->render(json => { ok => \1, id => $id + 0 });
+}
 
 # --- preferences -----------------------------------------------------------
 

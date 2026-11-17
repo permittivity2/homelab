@@ -2478,6 +2478,46 @@ def cmd_calendar_share(args):
     return 0
 
 
+def cmd_calendar_devices(args):
+    """The app passwords a phone or desktop calendar app signs in to CalDAV
+    with (#84): list them, make one (shown once), revoke one."""
+    session = _require_session(args)
+    if not session:
+        return 1
+    client = _client(args)
+    what = getattr(args, "devices_command", None) or "list"
+    try:
+        if what == "add":
+            result = client.calendar_device_add(session["token"], " ".join(args.label).strip())
+        elif what == "revoke":
+            result = client.calendar_device_revoke(session["token"], args.device_id)
+        else:
+            result = client.calendar_devices(session["token"])
+    except ApiError as e:
+        verb = {"add": "make the device", "revoke": "revoke the device"}.get(what, "list the devices")
+        _emit_error(args, f"Could not {verb}: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    if what == "add":
+        print(f"App password for \"{result.get('label')}\" (id {result.get('id')}), shown once:\n")
+        print(f"    {result.get('secret')}\n")
+        print(f"Server:    {result.get('server')}\nUser name: {result.get('username')}\nPassword:  the code above (dashes optional)")
+        return 0
+    if what == "revoke":
+        print(f"Revoked device {result.get('id')}.")
+        return 0
+    devices = result.get("devices") or []
+    if not devices:
+        print('No devices. Make one with: homelab-cli calendar devices add "My phone"')
+        return 0
+    rows = [[d.get("id"), d.get("label"), (d.get("created_at") or "")[:16], (d.get("last_used_at") or "never")[:16],
+             (d.get("last_used_agent") or "")[:40]] for d in devices]
+    _print_table(["ID", "DEVICE", "ADDED", "LAST USED", "AGENT"], rows)
+    print(f"\nServer {result.get('server')}, user name {result.get('username')}.")
+    return 0
+
+
 def cmd_calendar_unshare(args):
     session = _require_session(args)
     if not session:
@@ -3814,6 +3854,19 @@ def build_parser():
     p = calendar_sub.add_parser("unshare", help="Remove a share by its id (see 'shares')")
     p.add_argument("share_id")
     p.set_defaults(func=cmd_calendar_unshare)
+
+    # CalDAV devices (post-cutover #84): the app passwords a phone signs in with.
+    p = calendar_sub.add_parser("devices", help="App passwords for CalDAV: list them, add one (shown once), revoke one")
+    dsub = p.add_subparsers(dest="devices_command")
+    pd = dsub.add_parser("list", help="The devices (what plain 'devices' shows)")
+    pd.set_defaults(func=cmd_calendar_devices)
+    pd = dsub.add_parser("add", help="Make an app password for a device; it is shown once")
+    pd.add_argument("label", nargs="+", help="A name for the device, e.g. \"Dana's iPhone\"")
+    pd.set_defaults(func=cmd_calendar_devices)
+    pd = dsub.add_parser("revoke", help="That device signs in no more")
+    pd.add_argument("device_id")
+    pd.set_defaults(func=cmd_calendar_devices)
+    p.set_defaults(func=cmd_calendar_devices)
 
     # Invitations (post-cutover #85).
     p = calendar_sub.add_parser("attendees", help="Who is invited to an event and what each answered")

@@ -19,6 +19,7 @@ Depends: perl (>= 5.36),
          libdatetime-format-ical-perl,
          libdatetime-event-ical-perl,
          libdata-ical-perl,
+         libxml-libxml-perl,
          adduser,
          curl,
          sudo

@@ -708,6 +708,16 @@ class Client:
     def calendar_revoke_share(self, token, share_id):
         return self._request("POST", f"/api/v1/calendar/shares/{share_id}/revoke", headers=self._auth(token))
 
+    # CalDAV devices (#84): the app passwords a phone or desktop app signs in with.
+    def calendar_devices(self, token):
+        return self._request("GET", "/api/v1/calendar/devices", headers=self._auth(token))
+
+    def calendar_device_add(self, token, label):
+        return self._request("POST", "/api/v1/calendar/devices", headers=self._auth(token), json={"label": label})
+
+    def calendar_device_revoke(self, token, device_id):
+        return self._request("POST", f"/api/v1/calendar/devices/{device_id}/revoke", headers=self._auth(token))
+
     def calendar_suggestions(self, token):
         return self._request("GET", "/api/v1/calendar/suggestions", headers=self._auth(token))
 

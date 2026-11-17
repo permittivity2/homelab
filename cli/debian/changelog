@@ -1,3 +1,10 @@
+homelab-cli (0.7.4) unstable; urgency=medium
+
+  * `calendar devices [list|add|revoke]` (post-cutover #84): the app
+    passwords a phone or desktop calendar app signs in to CalDAV with.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 17 Nov 2026 00:02:16 -0600
+
 homelab-cli (0.7.3) unstable; urgency=medium
 
   * `search` prints the calendar too (post-cutover #90): events whose words

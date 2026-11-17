@@ -192,6 +192,50 @@ for old browsers. `100vh` on Android and iOS is the height with every bar hidden
 so the editor, centred on the screen, stuck out under Brave's bottom bars and its
 Delete / Save / Cancel could not be reached. Never size a fixed box with `100vh`.
 
+## CalDAV (0.5.0, #84)
+
+Phones and desktop apps sync both ways over CalDAV (RFC 4791) with
+sync-collection (RFC 6578): `Homelab::Calendar::App::Controller::Dav`, tests in
+`t/dav.t` and `t/caldav-model.t`.
+
+- **Sign-in is an app password**, HTTP Basic with the account's address: made on
+  Settings → Devices (or `homelab-cli calendar devices add`), shown once,
+  revoked alone (`App.pm`'s `dav_login`). Never the SSO password, never a
+  Bearer token; the session cookie plays no part. `calendar.app_passwords` keeps
+  a salted SHA-256 of the secret, not argon2: the secret is 120 random bits, so
+  a slow hash would only cost CPU on every request a phone makes.
+- **The tree:** `/.well-known/caldav` → `/dav/`; `/dav/principals/<email>/`
+  answers `calendar-home-set`; `/dav/calendars/<email>/` lists one collection
+  per calendar the account owns or has been given (read-only unless the share
+  says edit), each at `<id>/` or at the name a client made it under with
+  MKCALENDAR (`calendars.dav_name`); objects are `<uid>.ics`. Someone else's
+  address answers 403. `PROPFIND /` answers like `/dav/` because an iPhone asks
+  it when the well-known path is not where it looked.
+- **Objects** are whole events as `masters_ics` writes them: RRULE, EXDATE,
+  one RECURRENCE-ID component per moved occurrence, reminders as VALARMs, no
+  METHOD (RFC 4791 4.1); the phone expands. A PUT goes through
+  `ICSImport::parse_ics`: a new UID creates, a known one replaces (its
+  exceptions and reminder become the file's), a UID that lives in another
+  calendar of the person's moves the event there (that is how a phone moves
+  one: PUT the copy, DELETE the old), a UID in the trash restores it. If-Match
+  and If-None-Match are honoured (412).
+- **ETag and sync token** come from one counter, `events.change_seq`, stamped by
+  migration 009's triggers on every change to the event row, its exceptions or
+  its attendees. ETag = `"<change_seq>"`; a calendar's ctag and sync-token are
+  the largest among its events, deleted ones included, so a deletion is a
+  change `sync-collection` reports (as a 404 entry). A token the calendar never
+  gave is refused with `valid-sync-token`, and the client starts over.
+- **Reports:** calendar-query (a VEVENT time-range; a filter for anything else
+  matches nothing), calendar-multiget, sync-collection. PROPPATCH changes the
+  name, colour (Apple's `#RRGGBBAA` accepted and given), description and order;
+  other properties are refused in the propstat, as the spec has it.
+- **XML** comes in through XML::LibXML with entities and the network off and
+  goes out by hand, escaped.
+- **Not here:** scheduling (no schedule-inbox; attendees are not written into
+  objects, so a phone never tries to send invitations itself), VTODO/VJOURNAL,
+  single events shared without their calendar, VTIMEZONE components (TZID
+  names IANA zones, as Google's exports do).
+
 ## Install
 
 Pool on prod-homelab50/51/52 via `install-orchestrators/calendar-orchestrate.sh`

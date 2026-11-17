@@ -1128,3 +1128,63 @@ abilities:
         "people": [ { "email": "ann@example.com", "known": true, "busy": true, "intervals": [ { "start": "2026-11-20T12:30:00", "end": "2026-11-20T13:30:00" } ] },
                     { "email": "bob@example.com", "known": false, "busy": false, "intervals": [] } ] }
     cli: homelab-cli calendar freebusy ann@example.com bob@example.com --start 2026-11-20T13:00
+  - id: calendar-devices-list
+    title: See your CalDAV devices
+    method: GET
+    path: /api/v1/calendar/devices
+    who: signed-in
+    summary: The app passwords your phones and desktop calendar apps sign in to CalDAV with.
+    description: >
+      Each device you made an app password for, with when it was made and
+      when it last synced. The password itself is never shown again; the
+      answer also carries the server and user name to type beside one.
+      CalDAV itself is at /.well-known/caldav, which points at /dav/: a
+      phone needs only the server name, your address and an app password,
+      and then keeps your calendars both ways.
+    response: |
+      { "devices": [ { "id": 3, "label": "Dana's iPhone", "created_at": "2026-11-17 01:02:03-06",
+                       "last_used_at": "2026-11-17 08:00:00-06", "last_used_agent": "iOS/26.1 (23B85) dataaccessd/1.0" } ],
+        "server": "https://calendar.mailmasker.org", "username": "{me}" }
+    notes:
+      - An app password opens only the calendar, over CalDAV. It is not your sign-in password and cannot be used on the web site or this API.
+    cli: homelab-cli calendar devices
+  - id: calendar-devices-add
+    title: Make an app password for a device
+    method: POST
+    path: /api/v1/calendar/devices
+    who: signed-in
+    summary: A new app password, named for the device, shown once in the answer.
+    description: >
+      Name the device ("Dana's iPhone"). The answer carries `secret`, the
+      password to type into it, with the server and user name. It is not
+      kept in a readable form and cannot be shown again; make another if it
+      is lost. Up to 20 devices at a time.
+    params:
+      - name: label
+        in: body
+        required: true
+        about: The device's name, 1 to 80 characters.
+        example: Dana's iPhone
+    response: |
+      { "id": 4, "label": "Dana's iPhone", "secret": "k7mp-x2vq-r9tn-ab3c-d5ef-gh6j", "created_at": "2026-11-17 01:02:03-06",
+        "last_used_at": null, "last_used_agent": null, "server": "https://calendar.mailmasker.org", "username": "{me}" }
+    cli: homelab-cli calendar devices add "Dana's iPhone"
+  - id: calendar-devices-revoke
+    title: Revoke a device
+    method: POST
+    path: /api/v1/calendar/devices/:id/revoke
+    who: signed-in
+    summary: That device's app password stops working at once.
+    description: >
+      The device keeps nothing it can sign in with afterwards; set it up
+      again with a new app password if you want it back. Revoking is the
+      thing to do when a phone is lost.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The device's id, from the list.
+        example: 4
+    response: |
+      { "ok": true, "id": 4 }
+    cli: homelab-cli calendar devices revoke 4

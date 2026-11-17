@@ -1,3 +1,25 @@
+homelab-calendar (0.5.1) unstable; urgency=medium
+
+  * Settings, Devices: on a phone the name box and its button wrap and the
+    table stays inside the panel (templates only).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 17 Nov 2026 00:08:04 -0600
+
+homelab-calendar (0.5.0) unstable; urgency=medium
+
+  * CalDAV (post-cutover #84): phones and desktop calendar apps sync both
+    ways. /.well-known/caldav, /dav/ with principals, the calendar home,
+    one collection per calendar (own and shared), events as objects with
+    ETags; PROPFIND, REPORT (calendar-query, calendar-multiget,
+    sync-collection), PUT, DELETE, MKCALENDAR, PROPPATCH. Sign-in is an app
+    password (Settings, Devices; /api/devices; homelab-cli calendar devices),
+    never the SSO password. Migration 009: app_passwords, a change counter
+    stamped by triggers (the ETag and sync token), calendars.dav_name.
+    Objects carry reminders as VALARMs and no METHOD. Depends on
+    libxml-libxml-perl.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 23:54:21 -0600
+
 homelab-calendar (0.4.3) unstable; urgency=medium
 
   * Dialogs are capped at 100dvh, the height a phone browser leaves visible

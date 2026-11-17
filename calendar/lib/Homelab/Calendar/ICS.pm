@@ -4,6 +4,7 @@ use Exporter 'import';
 use DateTime;
 use Data::ICal;
 use Data::ICal::Entry::Event;
+use Data::ICal::Entry::Alarm::Display;
 
 our @EXPORT_OK = qw(instances_ics masters_ics ics_datetime ics_date);
 
@@ -47,11 +48,12 @@ sub _calendar (%args) {
     # Data::ICal writes its own PRODID; replace it with ours.
     $cal->properties->{prodid} = [];
     # PUBLISH for feeds and exports; an invitation is a REQUEST and a
-    # cancellation a CANCEL (RFC 5546, #85).
-    my $method = ($args{method} // 'PUBLISH') =~ /\A(?:REQUEST|CANCEL|REPLY)\z/ ? $args{method} : 'PUBLISH';
+    # cancellation a CANCEL (RFC 5546, #85). 'none' leaves METHOD out: a
+    # CalDAV object must not carry one (RFC 4791 4.1; #84).
+    my $method = ($args{method} // 'PUBLISH') =~ /\A(?:REQUEST|CANCEL|REPLY|none)\z/ ? $args{method} : 'PUBLISH';
     $cal->add_properties(
         prodid => $PRODID,
-        method => $method,
+        ($method eq 'none' ? () : (method => $method)),
         ($args{name} ? ('X-WR-CALNAME' => $args{name}) : ()),
         ($args{zone} ? ('X-WR-TIMEZONE' => $args{zone}) : ()),
         ($args{description} ? ('X-WR-CALDESC' => $args{description}) : ()),
@@ -153,6 +155,13 @@ sub masters_ics (%args) {
             }
         }
         $ev->add_properties(@props);
+        # Reminders as display alarms (#84: a phone shows and edits them).
+        for my $a (@{ $e->{alarms} // [] }) {
+            my $min = $a->{minutes} // next;
+            my $alarm = Data::ICal::Entry::Alarm::Display->new;
+            $alarm->add_properties(trigger => ($min > 0 ? "-PT${min}M" : 'PT0S'), description => ($e->{title} // 'Reminder'));
+            $ev->add_entry($alarm);
+        }
         $cal->add_entry($ev);
 
         # A moved or retitled occurrence: the same UID, RECURRENCE-ID naming

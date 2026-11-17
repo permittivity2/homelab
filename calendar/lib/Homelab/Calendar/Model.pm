@@ -2,6 +2,7 @@ package Homelab::Calendar::Model;
 use Mojo::Base -base, -signatures;
 use DateTime;
 use Mojo::JSON ();
+use Mojo::Util ();
 use Homelab::Calendar::Recurrence qw(
     validate_zone parse_wall wall_string occurrences recurrence_bound build_rrule parse_rrule
     rrule_until_before rrule_strip_end occurrences_before shift_rrule
@@ -703,6 +704,163 @@ sub _exception_instance ($self, $e, $x, $rid) {
     $inst->{is_exception} = 1;
     for my $k (qw(title description location color)) { $inst->{$k} = $x->{$k} if defined $x->{$k} }
     return $inst;
+}
+
+# ------------------------------------------------------------- CalDAV (#84)
+
+# App passwords: the credential a phone's or a desktop app's CalDAV account
+# types. The secret is 24 characters from an alphabet of 32 without
+# look-alikes (120 bits), made here and shown once; the row keeps a salted
+# SHA-256 of it. Not argon2 as a password a person chose would get: a secret
+# this random cannot be guessed, and every CalDAV request verifies it (a
+# phone asks every few minutes), so a deliberately slow hash would only cost
+# the pool CPU for nothing.
+my @SECRET_ALPHABET = ('a' .. 'k', 'm', 'n', 'p' .. 'z', '2' .. '9');
+
+sub _new_secret {
+    my $out = '';
+    my $n = @SECRET_ALPHABET;
+    my $limit = 256 - (256 % $n);       # rejection sampling keeps every symbol equally likely
+    while (length $out < 24) {
+        for my $b (map { hex } (_random_hex(32) =~ /../g)) {
+            next if $b >= $limit;
+            $out .= $SECRET_ALPHABET[$b % $n];
+            last if length $out >= 24;
+        }
+    }
+    return $out;
+}
+# Typed on a phone: dashes, spaces and case do not count.
+sub _norm_secret ($s) { return lc(($s // '') =~ s/[\s-]+//gr) }
+sub _secret_hash ($salt, $secret) { require Digest::SHA; return Digest::SHA::sha256_hex("$salt:" . _norm_secret($secret)) }
+
+sub app_passwords_for ($self, $email) {
+    return $self->db->query(
+        'SELECT id, label, created_at, last_used_at, last_used_agent FROM calendar.app_passwords WHERE lower(user_email) = ? AND revoked_at IS NULL ORDER BY created_at, id',
+        _norm($email))->hashes->to_array;
+}
+
+# create_app_password($email, $label) -> the row plus `secret`, the one time it is known.
+sub create_app_password ($self, $email, $label) {
+    $label = (($label // '') =~ s/\s+/ /gr) =~ s/\A\s+|\s+\z//gr;
+    die "Name the device (for example \"Dana's iPhone\").\n" unless length $label;
+    die "The name is too long (80 characters at most).\n" if length $label > 80;
+    my $n = $self->db->query('SELECT count(*) FROM calendar.app_passwords WHERE lower(user_email) = ? AND revoked_at IS NULL', _norm($email))->array->[0];
+    die "That is 20 devices already; revoke one first.\n" if $n >= 20;
+    my $secret = _new_secret();
+    my $salt   = _random_hex(16);
+    my $row = $self->db->query(
+        'INSERT INTO calendar.app_passwords (user_email, label, salt, secret_hash) VALUES (?, ?, ?, ?) RETURNING id, label, created_at, last_used_at, last_used_agent',
+        _norm($email), $label, $salt, _secret_hash($salt, $secret))->hash;
+    $row->{secret} = join '-', ($secret =~ /.{4}/g);
+    return $row;
+}
+
+sub revoke_app_password ($self, $email, $id) {
+    return 0 unless defined $id && $id =~ /\A\d{1,18}\z/;
+    my $r = $self->db->query('UPDATE calendar.app_passwords SET revoked_at = NOW() WHERE id = ? AND lower(user_email) = ? AND revoked_at IS NULL RETURNING id', $id, _norm($email))->hash;
+    return $r ? 1 : 0;
+}
+
+# The live password the secret opens for this account, or undef. Every one of
+# the account's is tried (a phone says nothing about which it holds), each
+# with a constant-time comparison.
+sub verify_app_password ($self, $email, $secret) {
+    my $norm = _norm_secret($secret);
+    return undef unless length($norm) >= 16 && length(_norm($email));
+    my $hit;
+    for my $r (@{ $self->db->query('SELECT * FROM calendar.app_passwords WHERE lower(user_email) = ? AND revoked_at IS NULL', _norm($email))->hashes->to_array }) {
+        $hit = $r if Mojo::Util::secure_compare(_secret_hash($r->{salt}, $norm), $r->{secret_hash});
+    }
+    return $hit;
+}
+
+# Which device is alive: stamped at most once in five minutes per password.
+sub touch_app_password ($self, $id, $agent = undef) {
+    $agent = substr((($agent // '') =~ s/[\x00-\x1f\x7f]//gr), 0, 200);
+    eval { $self->db->query(q{UPDATE calendar.app_passwords SET last_used_at = NOW(), last_used_agent = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < NOW() - INTERVAL '5 minutes')}, $agent, $id) };
+    return 1;
+}
+
+# The calendar's change token: the largest change_seq among its events,
+# deleted ones included (migration 009 stamps it on every change to an event
+# or one of its parts). 0 for a calendar with no events yet.
+sub sync_seq ($self, $cal_id) {
+    return $self->db->query('SELECT COALESCE(MAX(change_seq), 0) FROM calendar.events WHERE calendar_id = ?', $cal_id)->array->[0];
+}
+
+# Every event of a calendar whose change_seq is past $since, live or deleted,
+# oldest change first: what a sync-collection REPORT answers.
+sub events_changed_since ($self, $cal_id, $since) {
+    return $self->db->query('SELECT id, uid, change_seq, deleted_at FROM calendar.events WHERE calendar_id = ? AND change_seq > ? ORDER BY change_seq', $cal_id, $since // 0)->hashes->to_array;
+}
+
+# A calendar's live events as CalDAV objects: all of them, or those that could
+# have an occurrence in [window_start, window_end) (instances()' own test).
+sub dav_events ($self, $cal_id, %w) {
+    if ($w{window_start} && $w{window_end}) {
+        my $wspg = $w{window_start}->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00');
+        my $wepg = $w{window_end}->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00');
+        return $self->db->query(
+            q{SELECT * FROM calendar.events WHERE calendar_id = ? AND deleted_at IS NULL AND starts_at < ?
+                AND ((rrule IS NULL AND ends_at > ?) OR (rrule IS NOT NULL AND (recurrence_end IS NULL OR recurrence_end >= ?))) ORDER BY starts_at, id},
+            $cal_id, $wepg, $wspg, $wspg)->hashes->to_array;
+    }
+    return $self->db->query('SELECT * FROM calendar.events WHERE calendar_id = ? AND deleted_at IS NULL ORDER BY starts_at, id', $cal_id)->hashes->to_array;
+}
+
+sub event_in_calendar_by_uid ($self, $cal_id, $uid) {
+    return undef unless defined $uid && length $uid && defined $cal_id;
+    return $self->db->query('SELECT * FROM calendar.events WHERE calendar_id = ? AND uid = ? AND deleted_at IS NULL', $cal_id, $uid)->hash;
+}
+# The same UID in the trash (of one calendar, or of any with $cal_id undef):
+# a phone putting back what was deleted.
+sub trashed_event_by_uid ($self, $cal_id, $uid) {
+    return undef unless defined $uid && length $uid;
+    return $self->db->query('SELECT * FROM calendar.events WHERE uid = ? AND deleted_at IS NOT NULL AND (?::bigint IS NULL OR calendar_id = ?)', $uid, $cal_id, $cal_id)->hash;
+}
+# A phone moves an event between calendars by PUTting it into the other one
+# (same UID) and deleting the old copy; here that is one row changing hands.
+sub move_event_to_calendar ($self, $event_id, $cal_id) {
+    $self->db->query('UPDATE calendar.events SET calendar_id = ?, updated_at = NOW() WHERE id = ?', $cal_id, $event_id);
+    return 1;
+}
+
+# A PUT replaces the whole object, its changed and cancelled occurrences with
+# it; the file's own come back through _write_exception afterwards.
+sub clear_exceptions ($self, $event_id) {
+    my $db = $self->db;
+    $db->query('DELETE FROM calendar.event_exceptions WHERE event_id = ?', $event_id);
+    $self->_clear_reminder_queue($db, $event_id, 'pending');
+    return 1;
+}
+
+# One event in the shape ICS::masters_ics takes: the rule, its cancelled dates
+# and changed occurrences, its reminders as alarms (what the export and a
+# CalDAV object share).
+sub masters_entry ($self, $e) {
+    my %x = (uid => $e->{uid}, title => $e->{title}, description => $e->{description}, location => $e->{location},
+        all_day => $e->{all_day} ? 1 : 0, start => $self->event_start($e), end => $self->event_end($e),
+        created => _dt($e->{created_at}), updated => _dt($e->{updated_at}), rrule => $e->{rrule},
+        (defined $e->{sequence} ? (sequence => $e->{sequence}) : ()),
+        alarms => [ map { { minutes => $_->{minutes_before} + 0 } } @{ $self->reminders_for($e->{id}) } ]);
+    if ($e->{rrule}) { my ($ex, $ov) = $self->series_parts($e); $x{exdates} = $ex; $x{overrides} = $ov }
+    return \%x;
+}
+
+# A calendar by the segment a CalDAV client addresses it with: the name it
+# made the collection under (MKCALENDAR), else its number. The viewer's own
+# calendar wins a tie between two owners' names.
+sub calendar_by_dav_name ($self, $email, $seg) {
+    return undef unless defined $seg && length $seg && length $seg <= 128;
+    my $row = $self->db->query('SELECT * FROM calendar.calendars WHERE dav_name = ? AND deleted_at IS NULL ORDER BY (lower(owner_email) = ?) DESC, id LIMIT 1', $seg, _norm($email))->hash;
+    return $row if $row;
+    return ($seg =~ /\A\d{1,18}\z/) ? $self->calendar($seg) : undef;
+}
+sub dav_segment ($cal) { return (defined $cal->{dav_name} && length $cal->{dav_name}) ? $cal->{dav_name} : "$cal->{id}" }
+sub set_dav_name ($self, $cal_id, $name) {
+    $self->db->query('UPDATE calendar.calendars SET dav_name = ? WHERE id = ?', $name, $cal_id);
+    return 1;
 }
 
 # ------------------------------------------------------------------- shares

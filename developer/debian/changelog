@@ -1,3 +1,9 @@
+homelab-developer (0.1.12) unstable; urgency=medium
+
+  * The calendar's CalDAV devices (post-cutover #84): list, add, revoke.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 17 Nov 2026 00:02:19 -0600
+
 homelab-developer (0.1.11) unstable; urgency=medium
 
   * The search ability answers a `calendar` object (post-cutover #90):

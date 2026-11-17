@@ -2,7 +2,7 @@ package Homelab::Calendar::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
 use Mojo::URL;
-use Mojo::Util qw(secure_compare);
+use Mojo::Util qw(secure_compare b64_decode);
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
@@ -190,6 +190,34 @@ sub startup ($self) {
         return 0;
     });
 
+    # CalDAV (#84): HTTP Basic with the account's address and an APP PASSWORD
+    # (Settings, Devices; Model::verify_app_password). Never the SSO password
+    # and never a Bearer token: a phone keeps this credential for years, so
+    # it is one that opens only the calendar and can be revoked alone. On
+    # success the request acts as that account for every helper that reads
+    # the stash; otherwise a 401 with the challenge, and 0.
+    $self->helper(dav_login => sub ($c) {
+        my $auth = $c->req->headers->authorization // '';
+        if ($auth =~ /\ABasic\s+([A-Za-z0-9+\/=]+)\s*\z/i) {
+            my ($user, $secret) = split /:/, (b64_decode($1) // ''), 2;
+            if (defined $user && defined $secret && length $user) {
+                if (my $row = $self->model->verify_app_password($user, $secret)) {
+                    $c->stash('calendar.session_email' => lc $row->{user_email});
+                    $c->stash('calendar.bearer' => 1);
+                    $c->stash('calendar.dav_password_id' => $row->{id});
+                    $self->model->touch_app_password($row->{id}, $c->req->headers->user_agent);
+                    return 1;
+                }
+                $self->log->info('caldav: sign-in refused for ' . lc($user) . ' from ' . ($c->tx->remote_address // '?'));
+            }
+        }
+        my $host = Mojo::URL->new($self->public_base_url)->host // 'calendar';
+        $c->res->headers->www_authenticate(qq{Basic realm="$host: your address and an app password from Settings, Devices", charset="UTF-8"});
+        $c->res->headers->header(DAV => '1, 3, calendar-access');
+        $c->render(text => "Sign in with your address and an app password made in the calendar's Settings under Devices.\n", status => 401);
+        return 0;
+    });
+
     # The zone a viewer sees times in: what the page asked for, else the
     # account's own (phase 2), else this app's saved preference, else the
     # default.
@@ -324,6 +352,30 @@ sub startup ($self) {
     # token is the capability. ?answer= records an answer in one tap.
     $r->get('/i/<token>.ics' => $tok => [format => 0])          ->to('public#rsvp_page', feed => 1);
     $r->any([qw(GET POST)] => '/i/:token' => $tok => [format => 0]) ->to('public#rsvp_page', feed => 0);
+
+    # CalDAV (#84; Controller::Dav): the discovery path, the root a phone asks
+    # of the site itself, and the tree under /dav/, every method of it. The
+    # sign-in is an app password over HTTP Basic (dav_login); OPTIONS answers
+    # before any sign-in, as the protocol has it. Format detection stays off:
+    # addresses have dots and objects end in .ics.
+    $r->any('/.well-known/caldav' => [format => 0])->to('dav#well_known');
+    $r->any([qw(PROPFIND OPTIONS)] => '/')->to('dav#root_alias');
+    my $dav = $r->under('/dav' => sub ($c) { return 1 if uc $c->req->method eq 'OPTIONS'; return $c->dav_login });
+    $dav->any('/'                                       => [format => 0])->to('dav#root');
+    $dav->any('/principals'                             => [format => 0])->to('dav#principals');
+    $dav->any('/principals/#email'                      => [format => 0])->to('dav#principal');
+    $dav->any('/calendars'                              => [format => 0])->to('dav#homes');
+    $dav->any('/calendars/#email'                       => [format => 0])->to('dav#home');
+    $dav->any('/calendars/#email/#cal'                  => [format => 0])->to('dav#calendar');
+    $dav->any('/calendars/#email/#cal/#obj'             => [format => 0])->to('dav#object');
+    # The app passwords themselves: the Settings page's Devices panel, and
+    # homelab-cli through the gateway.
+    $r->get('/api/devices')                                   ->to('api#devices');
+    $r->post('/api/devices')                                  ->to('api#device_create');
+    $r->post('/api/devices/:id/revoke' => [id => qr/\d+/])    ->to('api#device_revoke');
+    $r->get('/internal/v1/calendar/devices')                                ->to('api#internal_devices');
+    $r->post('/internal/v1/calendar/devices')                               ->to('api#internal_device_create');
+    $r->post('/internal/v1/calendar/devices/:id/revoke' => [id => qr/\d+/]) ->to('api#internal_device_revoke');
 
     return;
 }

@@ -165,6 +165,34 @@
       </div>
     </section>
 
+    %# CalDAV (#84): one app password per device, shown once. The phone signs
+    %# in with the address and that password; the SSO password never leaves
+    %# the sign-in page.
+    <section class="panel" id="devices-panel">
+      <div class="panel__head"><h2 class="panel__title">Devices (CalDAV)</h2></div>
+      <div class="panel__body stack">
+        <p class="text-muted">Your phone or desktop calendar app can keep this calendar both ways. It signs in with your address and an <strong>app password</strong> made here, one per device, shown once. Server: <code><%= $dav_host %></code>, user name: <code><%= $me %></code>.</p>
+        <p class="text-muted">iPhone or iPad: Settings &rarr; Apps &rarr; Calendar &rarr; Calendar Accounts &rarr; Add Account &rarr; Other &rarr; Add CalDAV Account. Android: the DAVx&#x2075; app (free from F-Droid) with the server address. Thunderbird: New Calendar &rarr; On the Network, with your address, and it finds the rest.</p>
+        <table class="table" id="s-devices">
+          <thead><tr><th>Device</th><th>Added</th><th>Last used</th><th></th></tr></thead>
+          <tbody>
+% for my $d (@$devices) {
+            <tr data-id="<%= $d->{id} %>"><td><%= $d->{label} %></td><td><%= $d->{created} %></td><td title="<%= $d->{agent} %>"><%= $d->{last_used} %></td><td><button type="button" class="btn btn-sm btn-danger s-device-revoke">Revoke</button></td></tr>
+% }
+            <tr class="s-devices-none<%= @$devices ? ' hide' : '' %>"><td colspan="4" class="text-muted">No devices yet.</td></tr>
+          </tbody>
+        </table>
+        <div class="form-row"><label class="form-label" for="s-device-label">New device</label>
+          <div class="devices-new"><input class="form-input" id="s-device-label" maxlength="80" placeholder="e.g. Dana's iPhone"><button type="button" class="btn btn-primary" id="s-device-add">Make an app password</button></div>
+          <p class="form-hint">Name the device so you know which one to revoke later.</p></div>
+        <div id="s-device-new" class="stack hide">
+          <p><strong>Enter this on the device now.</strong> It will not be shown again.</p>
+          <p><code id="s-device-secret" style="font-size: var(--app-lg); letter-spacing: 0.08em; user-select: all"></code></p>
+          <p class="text-muted">Server <code><%= $dav_host %></code> · user name <code><%= $me %></code> · password: the code above (dashes optional).</p>
+        </div>
+      </div>
+    </section>
+
     <p class="form-error hide" id="s-error"></p>
     <div class="form-actions"><a class="btn" href="/">Back to the calendar</a></div>
   </div>
@@ -231,6 +259,41 @@
   $('s-save-defaults').addEventListener('click', function () {
     put('/api/prefs', { default_reminder_minutes: +$('s-def-reminder').value, all_day_reminder_hour: +$('s-def-hour').value, default_duration_minutes: +$('s-def-duration').value, date_format: $('s-def-date').value })
       .then(function () { say('Saved.', 'ok'); }).catch(function (e) { say(e.message, 'error'); });
+  });
+  // #84: devices (app passwords for CalDAV). The secret is shown once, built
+  // into the page as text.
+  function post(url, body) {
+    return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }, body: JSON.stringify(body || {}) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || ('Request failed (' + r.status + ')')); return j; }); });
+  }
+  function cell(text) { var td = document.createElement('td'); td.textContent = text; return td; }
+  var devAdd = $('s-device-add'), devLabel = $('s-device-label'), devTable = $('s-devices');
+  if (devAdd) devAdd.addEventListener('click', function () {
+    var label = devLabel.value.trim();
+    if (!label) { say('Name the device first.', 'error'); devLabel.focus(); return; }
+    devAdd.disabled = true;
+    post('/api/devices', { label: label }).then(function (d) {
+      $('s-device-secret').textContent = d.secret;
+      $('s-device-new').classList.remove('hide');
+      var tr = document.createElement('tr'); tr.setAttribute('data-id', d.id);
+      tr.appendChild(cell(d.label)); tr.appendChild(cell('just now')); tr.appendChild(cell('never'));
+      var td = document.createElement('td'), b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn btn-sm btn-danger s-device-revoke'; b.textContent = 'Revoke'; td.appendChild(b); tr.appendChild(td);
+      var none = devTable.querySelector('.s-devices-none');
+      devTable.querySelector('tbody').insertBefore(tr, none); none.classList.add('hide');
+      devLabel.value = '';
+      say('Made. Enter the code on the device now; it is shown only once.', 'ok');
+    }).catch(function (e) { say(e.message, 'error'); }).then(function () { devAdd.disabled = false; });
+  });
+  if (devTable) devTable.addEventListener('click', function (ev) {
+    var b = ev.target.closest('.s-device-revoke'); if (!b) return;
+    var tr = b.closest('tr'), id = tr.getAttribute('data-id'), name = tr.firstElementChild.textContent;
+    if (!confirm('Revoke "' + name + '"? That device stops syncing until it is set up again.')) return;
+    post('/api/devices/' + encodeURIComponent(id) + '/revoke').then(function () {
+      tr.remove();
+      if (!devTable.querySelector('tbody tr[data-id]')) devTable.querySelector('.s-devices-none').classList.remove('hide');
+      say('Revoked.', 'ok');
+    }).catch(function (e) { say(e.message, 'error'); });
   });
 })();
 </script>

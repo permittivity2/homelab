@@ -63,7 +63,17 @@ sub settings ($c) {
         ai_available => $c->app->ai->configured,
         account_zone => $c->stash('calendar.account_zone'),
         csrf     => $c->csrf_token,
+        # CalDAV (#84): the devices (app passwords) and what to type into one.
+        devices  => [ map { _device_row($_, $c->viewer_zone($prefs)) } @{ $model->app_passwords_for($me) } ],
+        dav_host => (Mojo::URL->new($c->app->public_base_url)->host // ''),
     );
+}
+
+# One app password for the Devices table: when it was made and last used, as
+# the viewer reads dates.
+sub _device_row ($d, $zone) {
+    my $when = sub ($ts) { return 'never' unless defined $ts && length $ts; my $dt = eval { Homelab::Calendar::Model::_dt($ts, $zone) } or return ''; return $dt->strftime('%b %e, %Y, %l:%M %p') =~ s/\s+/ /gr };
+    return { id => $d->{id}, label => $d->{label}, created => $when->($d->{created_at}), last_used => $when->($d->{last_used_at}), agent => ($d->{last_used_agent} // '') };
 }
 
 # GET /m/:token -- the "Add to calendar" link from an email: the calendar page
