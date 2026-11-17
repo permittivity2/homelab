@@ -7,14 +7,19 @@
 %# preferences, the zones, the CSRF token for every write.
 <div class="app__body">
   <nav class="sidenav cal-side" id="cal-side" aria-label="Calendars">
-    <div class="form-actions" style="padding: 0 var(--space-3)">
+    %# 0.3.2: on a phone this sidebar is a drawer (see the layout's CSS); the
+    %# head row with its close button shows only there.
+    <div class="cal-side__head"><span class="cal-side__title">Calendars</span><button type="button" class="btn btn-ghost btn-sm" id="side-close" aria-label="Close the calendar list">&times;</button></div>
+    %# New event, search and suggestions have twins in the phone's action row,
+    %# so the drawer hides these three (.cal-side__twin) and keeps quick add.
+    <div class="form-actions cal-side__twin" style="padding: 0 var(--space-3)">
       <button type="button" class="btn btn-primary" id="btn-new-event" style="width: 100%">New event</button>
     </div>
     %# 0.2.0: one typed line becomes a draft (Enter), and a search box (/ focuses it).
     <div class="quick-add"><label class="sr-only" for="quick-add">Quick add</label><input class="form-input" id="quick-add" placeholder="Quick add: Dentist Thu 2pm at Delta Dental" autocomplete="off" title="Type an event in words and press Enter"></div>
-    <div class="quick-add"><label class="sr-only" for="q">Search events</label><input class="form-input" type="search" id="q" placeholder="Search events" autocomplete="off" title="Press / to search; Enter to run it"></div>
+    <div class="quick-add cal-side__twin"><label class="sr-only" for="q">Search events</label><input class="form-input" type="search" id="q" placeholder="Search events" autocomplete="off" title="Press / to search; Enter to run it"></div>
     %# Suggestions (#80): proposals made as email arrived, waiting to be saved.
-    <div class="form-actions hide" id="sugg-wrap" style="padding: 0 var(--space-3)">
+    <div class="form-actions hide cal-side__twin" id="sugg-wrap" style="padding: 0 var(--space-3)">
       <button type="button" class="btn" id="btn-suggestions" style="width: 100%">Suggestions (<span id="sugg-count">0</span>)</button>
     </div>
     <div class="sidenav__group">My calendars</div>
@@ -30,9 +35,19 @@
     <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-trash">Deleted events</button></div>
     <p class="muted-small" id="zone-note" style="padding: var(--space-2) var(--space-3) 0"></p>
   </nav>
+  <div class="cal-side-backdrop" id="side-backdrop"></div>
   <main class="app__main">
-    <div class="toolbar" style="margin-bottom: var(--space-2)">
-      <button type="button" class="btn btn-sm" id="side-toggle" aria-controls="cal-side" aria-expanded="true">Calendars</button>
+    %# 0.3.2: the action row, phones only (the sidebar carries the same
+    %# controls on a wide screen): the drawer, search, the suggestions pill
+    %# when mail has proposed something, and a new event.
+    <div class="toolbar cal-actions" id="cal-actions">
+      <button type="button" class="btn btn-sm" id="side-toggle" aria-controls="cal-side" aria-expanded="false"><span aria-hidden="true">&#9776;</span> Calendars</button>
+      <button type="button" class="btn btn-sm" id="btn-search-m">Search</button>
+      <span class="toolbar__spacer"></span>
+      <button type="button" class="btn btn-sm btn-primary" id="btn-new-event-m">+ New event</button>
+      %# Last on purpose: when the row is full the pill wraps to a second line
+      %# by itself and New event stays on the first (seen live on 0.3.2).
+      <button type="button" class="btn btn-sm hide" id="btn-suggestions-m"><span id="sugg-count-m">0</span> <span id="sugg-word-m">suggestions</span></button>
     </div>
     <div id="calendar"></div>
   </main>
@@ -319,6 +334,9 @@
 <div class="modal" id="search-modal" role="dialog" aria-modal="true" aria-labelledby="search-h">
   <div class="modal__head"><h2 id="search-h" class="panel__title">Search</h2></div>
   <div class="modal__body stack">
+    %# 0.3.2: the box lives in the dialog too, so a phone (no sidebar on
+    %# screen) can search; Enter runs it, like the sidebar's.
+    <div class="form-row"><label class="sr-only" for="q2">Search events</label><input class="form-input" type="search" id="q2" placeholder="Search events" autocomplete="off" title="Type at least two letters and press Enter"></div>
     <ul class="share-list search-results" id="search-list"></ul>
     <p class="text-muted hide" id="search-none">Nothing matches.</p>
   </div>

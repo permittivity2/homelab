@@ -82,11 +82,38 @@
   .cal-item:hover .cal-more, .cal-item:focus-within .cal-more { opacity: 1; }
   @media (pointer: coarse) { .cal-item .cal-more { opacity: 1; } }
   .swatch { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: var(--radius-sm); flex: none; }
-  #side-toggle { display: none; }
+  /* 0.3.2: phones and narrow windows (the shared theme's own 860px
+     breakpoint). The theme turns every sidebar into one sideways-scrolling
+     strip with its headings hidden, which suits myaccount's short tab list
+     and made an unreadable row of this tool panel (a button, two text
+     boxes, the tick list, settings; Gardner, 2026-11-16). Here the sidebar
+     is a drawer instead, drive's folder-drawer shape: it keeps its column
+     and headings, slides in over the grid, dims it, and closes on a tap
+     outside, the x, or Escape. The action row above the grid carries what
+     you reach for while looking at the grid. Both are display:none on a
+     wide screen, so nothing is invisible-but-clickable there. */
+  .cal-actions, .cal-side__head, .cal-side-backdrop { display: none; }
+  body.cal-side-open { overflow: hidden; }
   @media (max-width: 860px) {
-    #side-toggle { display: inline-flex; }
-    .cal-side { border-right: 0; border-bottom: 1px solid var(--border); width: auto; flex-basis: auto; }
-    .cal-side.hide { display: none; }
+    .cal-actions { display: flex; margin-bottom: var(--space-2); }
+    .cal-actions .btn { min-height: 44px; }
+    .cal-actions #btn-suggestions-m { margin-left: auto; }   /* right-aligned on its own line */
+    .cal-side {
+      position: fixed; top: 0; left: 0; bottom: 0; width: 84vw; max-width: 320px; z-index: var(--z-overlay);
+      flex-direction: column; gap: var(--space-2); overflow-y: auto; overflow-x: hidden;
+      background: var(--surface); border-right: 1px solid var(--border-strong); border-bottom: 0;
+      padding: var(--space-3) var(--space-2) var(--space-8);
+      transform: translateX(-100%); transition: transform 0.2s ease;
+    }
+    .cal-side.open { transform: translateX(0); box-shadow: 2px 0 16px rgba(0, 0, 0, 0.6); }
+    .cal-side .sidenav__group { display: block; }
+    .cal-side .cal-side__twin { display: none; }
+    .cal-side__head { display: flex; align-items: center; justify-content: space-between; padding: 0 var(--space-1) 0 var(--space-3); }
+    .cal-side__title { font-size: var(--app-md); font-weight: var(--weight-semibold); }
+    .cal-side__head .btn { min-width: 44px; min-height: 44px; font-size: 1.4rem; }
+    .cal-side-backdrop.open { display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); z-index: calc(var(--z-overlay) - 1); }
+    .cal-side .btn, .cal-side .form-input { min-height: 44px; }
+    .cal-item { min-height: 44px; padding: var(--space-2) var(--space-3); }
   }
 
   /* The editor. The modal is a flex column so a long form scrolls INSIDE

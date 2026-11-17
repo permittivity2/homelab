@@ -141,6 +141,20 @@ applies them. Free/busy for accounts here (`GET /api/freebusy`): bare busy
 intervals from the person's own calendars, no titles. No counter-proposals (by
 decision, 2026-11-15; maybe later).
 
+## The page on a phone (0.3.2)
+
+Under the shared theme's 860px breakpoint the sidebar is a drawer (`#cal-side`
+with class `open`, backdrop `#side-backdrop`), not the theme's sideways strip:
+it keeps its column and headings, slides in over the grid, and closes on a tap
+outside, the x, or Escape. The action row `#cal-actions` above the grid is
+phone-only and carries twins of the sidebar's controls: the drawer toggle,
+Search (the search dialog has its own box, `#q2`), the suggestions pill while
+there are any, and New event. The sidebar's own New event, search box and
+Suggestions button are hidden in the drawer (`.cal-side__twin`). The row, the
+drawer head and the backdrop are `display: none` on a wide screen, so nothing
+there is invisible but clickable. The breakpoint is the theme's, on purpose:
+the drawer takes over exactly where the strip would have appeared.
+
 ## Install
 
 Pool on prod-homelab50/51/52 via `install-orchestrators/calendar-orchestrate.sh`

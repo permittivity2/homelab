@@ -285,11 +285,28 @@ var Cal = (function () {
       var b = e.target.closest('[data-edit-cal]');
       if (b) openCalendarEditor(state.byId[b.getAttribute('data-edit-cal')]);
     });
-    $('side-toggle').addEventListener('click', function () {
-      var side = $('cal-side'), hidden = side.classList.toggle('hide');
-      this.setAttribute('aria-expanded', hidden ? 'false' : 'true');
-    });
-    if (narrow()) { $('cal-side').classList.add('hide'); $('side-toggle').setAttribute('aria-expanded', 'false'); }
+    // --- the drawer (0.3.2): on a phone the sidebar slides in over the grid.
+    // Closed by the CSS until opened; never opened on a wide screen (the
+    // toggle is display:none there), and closed again if the window grows.
+    var side = $('cal-side'), sideBackdrop = $('side-backdrop');
+    function sideOpen(on) {
+      side.classList.toggle('open', on); sideBackdrop.classList.toggle('open', on);
+      document.body.classList.toggle('cal-side-open', on);
+      $('side-toggle').setAttribute('aria-expanded', on ? 'true' : 'false');
+      if (on) $('side-close').focus(); else $('side-toggle').focus();
+    }
+    function sideIsOpen() { return side.classList.contains('open'); }
+    $('side-toggle').addEventListener('click', function () { sideOpen(!sideIsOpen()); });
+    $('side-close').addEventListener('click', function () { sideOpen(false); });
+    sideBackdrop.addEventListener('click', function () { sideOpen(false); });
+    // A button or link in the drawer opens something else (the editor, a
+    // dialog, the settings page): the drawer gets out of the way first. The
+    // ticks and the text boxes keep it open.
+    side.addEventListener('click', function (e) { if (sideIsOpen() && e.target.closest('.btn, .cal-more, a[href]')) sideOpen(false); });
+    window.addEventListener('resize', function () { if (sideIsOpen() && window.innerWidth > 860) sideOpen(false); });
+    // The action row above the grid: twins of the sidebar's controls.
+    $('btn-new-event-m').addEventListener('click', function () { newEventNow(); });
+    $('btn-search-m').addEventListener('click', function () { openSearch(''); });
 
     // --- the editor ---
     var ev = {
@@ -911,6 +928,10 @@ var Cal = (function () {
         var list = r.suggestions || [];
         $('sugg-count').textContent = list.length;
         $('sugg-wrap').classList.toggle('hide', !list.length);
+        // The pill in the phone's action row: there only while there is something waiting.
+        $('sugg-count-m').textContent = list.length;
+        $('sugg-word-m').textContent = list.length === 1 ? 'suggestion' : 'suggestions';
+        $('btn-suggestions-m').classList.toggle('hide', !list.length);
         return list;
       }).catch(function () { return []; });
     }
@@ -927,10 +948,12 @@ var Cal = (function () {
           + '<button type="button" class="btn btn-sm btn-danger" data-sugg-dismiss="' + esc(s.token) + '">Dismiss</button></li>';
       }).join('');
     }
-    $('btn-suggestions').addEventListener('click', function () {
+    function openSuggestions() {
       showError('sugg-error', '');
       loadSuggestions().then(function (list) { renderSuggestions(list); openModal('sugg-modal'); });
-    });
+    }
+    $('btn-suggestions').addEventListener('click', openSuggestions);
+    $('btn-suggestions-m').addEventListener('click', openSuggestions);
     $('sugg-list').addEventListener('click', function (e) {
       var s = e.target.closest('[data-sugg-save]'), d = e.target.closest('[data-sugg-dismiss]');
       var tok = s ? s.getAttribute('data-sugg-save') : d ? d.getAttribute('data-sugg-dismiss') : null;
@@ -1017,7 +1040,7 @@ var Cal = (function () {
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) { if (e.key === 'Escape') e.target.blur(); return; }
       if (document.querySelector('.modal.open, .modal[open]')) return;
       var k = e.key;
-      if (k === 'Escape') { hidePeek(); return; }
+      if (k === 'Escape') { if (sideIsOpen()) sideOpen(false); else hidePeek(); return; }
       if (k === 'n') newEventNow(); else if (k === 't') fc.today(); else if (k === 'ArrowLeft' || k === 'j') fc.prev(); else if (k === 'ArrowRight' || k === 'k') fc.next();
       else if (k === 'd') fc.changeView('timeGridDay'); else if (k === 'w') fc.changeView('timeGridWeek'); else if (k === 'm') fc.changeView('dayGridMonth'); else if (k === 'a') fc.changeView('listWeek');
       else if (k === '/') $('q').focus(); else if (k === '?') toast('Keys: n new event, t today, arrows move, d/w/m/a views, / search, Esc close.', 'ok'); else return;
@@ -1041,10 +1064,21 @@ var Cal = (function () {
     });
 
     // --- search (0.2.0) ---
+    // The dialog has its own box (0.3.2) so a phone can search; the
+    // sidebar's box still runs a search and opens the dialog with the term.
+    function openSearch(q) {
+      $('q2').value = q || '';
+      if (q) return runSearch(q);
+      $('search-h').textContent = 'Search';
+      $('search-list').innerHTML = '';
+      $('search-none').classList.add('hide');
+      openModal('search-modal');
+    }
     function runSearch(q) {
       return api('GET', '/api/search?q=' + encodeURIComponent(q)).then(function (r) {
         var list = (r && r.events) || [];
         $('search-h').textContent = 'Search: ' + q;
+        $('q2').value = q;
         $('search-none').classList.toggle('hide', list.length > 0);
         $('search-list').innerHTML = list.map(function (e) {
           var when = e.all_day ? fmtRange(e.start + 'T00:00:00', e.end + 'T00:00:00', true, h24) : fmtRange(e.start, e.end, false, h24);
@@ -1055,6 +1089,7 @@ var Cal = (function () {
       }).catch(function (err) { toast(err.message, 'error'); });
     }
     $('q').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var q = this.value.trim(); if (q.length >= 2) runSearch(q); } });
+    $('q2').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var q = this.value.trim(); if (q.length >= 2) runSearch(q); } });
     $('search-list').addEventListener('click', function (e) {
       var b = e.target.closest('[data-open-event]'); if (!b) return;
       closeModal('search-modal'); fetchAndOpen(b.getAttribute('data-open-event'), null);

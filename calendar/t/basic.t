@@ -259,6 +259,21 @@ for my $p ('/c/' . ('a' x 64), '/c/' . ('a' x 64) . '.ics', '/c/' . ('a' x 64) .
       ->content_like(qr/Open in my calendar here/, '... an account here is pointed at its own calendar');
     $t->get_ok('/t/rsvp_cancelled')->status_is(200)->content_like(qr/This event was cancelled by o\@example\.test/, 'a cancelled event says so')
       ->content_unlike(qr/Are you coming\?/, '... and asks nothing')->content_like(qr/Download the cancellation/, '... but offers the CANCEL .ics');
+    # The page itself (0.3.2): what the phone layout hangs on is in the markup
+    # and the layout, so a renamed id cannot quietly leave a dead button.
+    $app->routes->get('/t/index_markup' => sub ($c) { $c->render(template => 'index', boot => '{}') });
+    $t->get_ok('/t/index_markup')->status_is(200)
+      ->element_exists('#cal-actions #side-toggle[aria-controls="cal-side"]', 'the action row has the drawer toggle')
+      ->element_exists('#cal-actions #btn-search-m', '... search')
+      ->element_exists('#cal-actions #btn-new-event-m', '... and new event')
+      ->element_exists('#cal-actions #btn-suggestions-m.hide', '... with the suggestions pill hidden until there are any')
+      ->element_exists('#cal-side .cal-side__head #side-close', 'the drawer has its close button')
+      ->element_exists('#side-backdrop.cal-side-backdrop', '... and a backdrop')
+      ->element_exists('#cal-side .cal-side__twin #btn-new-event', 'the sidebar\'s new event is marked as a twin (hidden in the drawer)')
+      ->element_exists('#cal-side .cal-side__twin #q', '... so is its search box')
+      ->element_exists('#search-modal #q2', 'the search dialog has its own box')
+      ->content_like(qr/\.cal-side\.open \{ transform: translateX\(0\)/, 'the layout carries the drawer rule')
+      ->content_like(qr/\.cal-actions, \.cal-side__head, \.cal-side-backdrop \{ display: none; \}/, '... and hides the phone pieces on a wide screen');
 }
 
 # --- the vendored bundle and the chrome ---

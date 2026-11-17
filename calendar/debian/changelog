@@ -1,3 +1,22 @@
+homelab-calendar (0.3.3) unstable; urgency=medium
+
+  * The phone's suggestions pill comes last in the action row, so when the
+    row is full it wraps to a second line by itself and New event stays on
+    the first (seen live on 0.3.2 with seven suggestions waiting).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 19:29:22 -0600
+
+homelab-calendar (0.3.2) unstable; urgency=medium
+
+  * The page on a phone (post-cutover #86): the sidebar is a drawer that
+    slides in over the grid, with its headings kept and 44px rows (the shared
+    theme's narrow-screen rule had made one sideways-scrolling strip of it);
+    an action row above the grid carries the drawer, Search, a suggestions
+    pill while there are any, and New event; the search dialog has its own
+    box so a phone can search. Nothing changes on a wide screen.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 19:24:53 -0600
+
 homelab-calendar (0.3.1) unstable; urgency=medium
 
   * The row a time change hands back (the editor's and the CLI's JSON) now
