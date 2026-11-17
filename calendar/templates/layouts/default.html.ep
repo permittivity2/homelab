@@ -90,7 +90,8 @@
   .devices-new { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .devices-new .form-input { flex: 1 1 12rem; min-width: 0; }
   #s-devices { width: 100%; }
-  #s-devices th, #s-devices td { padding: var(--space-2); vertical-align: top; overflow-wrap: anywhere; }
+  #s-devices th, #s-devices td { padding: var(--space-2); vertical-align: top; }
+  #s-devices td { overflow-wrap: anywhere; }
   #s-device-secret { overflow-wrap: anywhere; display: inline-block; }
   .fc .fc-daygrid-dot-event .fc-event-time { flex-shrink: 0; }   /* the time is the point of a phone's month cell: it never shrinks; the title takes the cut (0.4.2) */
   @media print {

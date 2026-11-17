@@ -1,3 +1,10 @@
+homelab-calendar (0.5.2) unstable; urgency=medium
+
+  * Settings, Devices: the table headings no longer break mid-word on a
+    phone (templates only).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 17 Nov 2026 00:09:38 -0600
+
 homelab-calendar (0.5.1) unstable; urgency=medium
 
   * Settings, Devices: on a phone the name box and its button wrap and the
