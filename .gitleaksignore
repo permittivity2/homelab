@@ -24,3 +24,10 @@ aeb9d6f358079f004c2d0a866030af68328fb69e:invite/t/setup.t:generic-api-key:30
 # api/t/login-client-ip.t's test JWT secret, the same false positive; the
 # current tree derives it (join of a repeated string). Retires the one hit.
 0dadddc9bbc7f0a044a4b03b9c919f8be8a95f19:api/t/login-client-ip.t:generic-api-key:28
+
+# #84 (2026-11-17): two made-up app passwords in documentation and a test,
+# the shape a real one has (xxxx-xxxx-... from a 32-symbol alphabet) and
+# nothing more: the example in the developer reference and the fake the
+# CLI test feeds its mock. Neither opens anything.
+e3ce8de5c70744c5fecfb42a5bedcc20294873e3:developer/reference/calendar.yml:generic-api-key:1169
+e3ce8de5c70744c5fecfb42a5bedcc20294873e3:cli/tests/test_calendar_devices.py:generic-api-key:46
