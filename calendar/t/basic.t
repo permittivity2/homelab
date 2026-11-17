@@ -271,7 +271,13 @@ for my $p ('/c/' . ('a' x 64), '/c/' . ('a' x 64) . '.ics', '/c/' . ('a' x 64) .
       ->element_exists('#side-backdrop.cal-side-backdrop', '... and a backdrop')
       ->element_exists('#cal-side .cal-side__twin #btn-new-event', 'the sidebar\'s new event is marked as a twin (hidden in the drawer)')
       ->element_exists('#cal-side .cal-side__twin #q', '... so is its search box')
-      ->element_exists('#search-modal #q2', 'the search dialog has its own box')
+      ->element_exists('#search-modal form#search-form #q2[enterkeyhint="search"]', 'the search dialog has its own box, in a form')
+      ->element_exists('#search-form button[type="submit"]', '... with a Search button (0.4.0: Done used to be the only one, and it closed the dialog)')
+      ->element_exists('#search-modal #search-related', '... and a place for the events related by meaning')
+      ->element_exists('#zone-modal #zone-local', 'the zone dialog offers Local')
+      ->element_exists('#zone-modal #zone-select', '... and a fixed zone')
+      ->element_exists('#ev-form #ev-pin', 'the editor can pin an event to its zone')
+      ->element_exists('#ev-form #ev-zone-from-place', '... and read the zone off the address')
       ->content_like(qr/\.cal-side\.open \{ transform: translateX\(0\)/, 'the layout carries the drawer rule')
       ->content_like(qr/\.cal-actions, \.cal-side__head, \.cal-side-backdrop \{ display: none; \}/, '... and hides the phone pieces on a wide screen');
 }

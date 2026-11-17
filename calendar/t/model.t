@@ -108,6 +108,34 @@ is scalar @{ $m->reminders_for($ev->{id}) }, 2, '... with its reminders';
 is $m->search_events($alice, 'dent')->[0]{id}, $ev->{id}, 'search finds the dentist by title';
 is $m->search_events($alice, 'delta')->[0]{id}, $ev->{id}, '... and by place';
 is scalar @{ $m->search_events($alice, 'nothing-like-this') }, 0, '... and nothing else';
+# 0.4.0 (#87): every typed word must match somewhere; punctuation at the
+# ends is ignored; a person asked to the event is searchable too.
+is $m->search_events($alice, 'dent delta')->[0]{id}, $ev->{id}, 'two words, one in the title and one in the place';
+is scalar @{ $m->search_events($alice, 'dent nowhere') }, 0, '... a word found nowhere is a miss';
+is $m->search_events($alice, 'Dent.')->[0]{id}, $ev->{id}, 'punctuation at the ends is ignored';
+{
+    my $r = $m->add_attendees($ev, ['Carol Quartz <carol@example.com>']);
+    is $m->search_events($alice, 'quartz')->[0]{id}, $ev->{id}, 'a guest\'s name finds the event';
+    is $m->search_events($alice, 'carol@example')->[0]{id}, $ev->{id}, '... and so does their address';
+    $m->remove_attendee($ev, $r->{added}[0]);
+}
+ok scalar(grep { $_->{id} == $ev->{id} } @{ $m->search_candidates($alice) }), 'the candidates for search by meaning include it';
+# 0.4.0 (#89): pinned, and times given in another zone move the instant but keep the event\'s zone.
+{
+    my $p = $m->create_event($cal, $alice, { title => 'Hair', start => '2026-12-01T13:30:00', end => '2026-12-01T14:30:00', timezone => 'America/Chicago', pinned => 1 });
+    ok $p->{pinned}, 'an event can be pinned to its zone';
+    my $moved = $m->update_event($p, { start => '2026-12-01T09:00:00', end => '2026-12-01T10:00:00', times_zone => 'America/Denver' });
+    is $moved->{timezone}, 'America/Chicago', 'a clock given in another zone (a drag on a phone in Denver) leaves the event in its own zone';
+    is $m->event_start($moved)->set_time_zone('America/Chicago')->strftime('%H:%M'), '10:00', '... at the instant that clock meant (9:00 Denver = 10:00 Chicago)';
+    ok $moved->{pinned}, '... and still pinned';
+    ok !$m->update_event($moved, { pinned => 0 })->{pinned}, 'unpinned again';
+    $m->delete_event($moved);
+}
+# 0.4.0 (#88): the zone the device last reported, for mail; only a real zone is kept.
+is $m->save_prefs($alice, { device_zone => 'America/Denver' })->{device_zone}, 'America/Denver', 'the device zone is kept';
+eval { $m->save_prefs($alice, { device_zone => 'Mars/Olympus' }) };
+like $@, qr/Unknown time zone/, '... and a made-up one is refused';
+is $m->save_prefs($alice, { timezone => '' })->{timezone}, undef, 'an empty zone means Local';
 is $m->similar_events($alice, ' dentist ', dt(year => 2026, month => 11, day => 20, hour => 9))->[0]{id}, $ev->{id}, 'a likely duplicate: same title, same day';
 is scalar @{ $m->similar_events($alice, 'Dentist', dt(year => 2026, month => 11, day => 25)) }, 0, '... not another day';
 my $cal2 = $m->create_calendar($alice, name => 'Second');

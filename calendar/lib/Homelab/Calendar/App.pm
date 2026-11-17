@@ -193,12 +193,17 @@ sub startup ($self) {
     # The zone a viewer sees times in: what the page asked for, else the
     # account's own (phase 2), else this app's saved preference, else the
     # default.
+    # Since 0.4.0 (#88) the order is: what the request asks for (the page sends
+    # the zone it shows, Local or fixed), the calendar's own fixed choice, the
+    # device's zone the browser last reported, the account's zone from My
+    # Account (a fallback for mail, not an override), the default.
     $self->helper(viewer_zone => sub ($c, $prefs = undef) {
         my $q = $c->param('timeZone') // $c->param('timezone');
         return $q if defined $q && validate_zone($q);
+        return $prefs->{timezone} if $prefs && defined $prefs->{timezone} && validate_zone($prefs->{timezone});
+        return $prefs->{device_zone} if $prefs && defined $prefs->{device_zone} && validate_zone($prefs->{device_zone});
         my $acct = $c->stash('calendar.account_zone');
         return $acct if defined $acct && validate_zone($acct);
-        return $prefs->{timezone} if $prefs && defined $prefs->{timezone} && validate_zone($prefs->{timezone});
         return $self->default_zone;
     });
 
@@ -248,6 +253,7 @@ sub startup ($self) {
     $r->post('/internal/v1/calendar/events/:id/shares' => [id => qr/\d+/])   ->to('api#internal_event_share_create');
     $r->get('/internal/v1/calendar/trash')                                   ->to('api#internal_trash');
     $r->get('/internal/v1/calendar/search')                                  ->to('api#internal_search');
+    $r->post('/internal/v1/calendar/zone-for-place')                         ->to('api#internal_zone_for_place');
     $r->post('/internal/v1/calendar/calendars')                              ->to('api#internal_calendar_create');
     $r->get('/internal/v1/calendar/calendars/:id/shares' => [id => qr/\d+/]) ->to('api#internal_calendar_shares');
     $r->post('/internal/v1/calendar/calendars/:id/shares' => [id => qr/\d+/])->to('api#internal_calendar_share_create');
@@ -278,6 +284,7 @@ sub startup ($self) {
     $r->get('/api/trash')                     ->to('api#trash');
     $r->post('/api/events/:id/restore' => [id => qr/\d+/])    ->to('api#restore_event');
     $r->get('/api/search')                    ->to('api#search');
+    $r->post('/api/zone-for-place')           ->to('api#zone_for_place');     # #89: the zone of an address, by the AI
     $r->post('/api/quick-add')                ->to('api#quick_add');
     $r->put('/api/calendars/:id/position' => [id => qr/\d+/]) ->to('api#move_calendar');
     $r->get('/api/events/:id' => [id => qr/\d+/])             ->to('api#event');

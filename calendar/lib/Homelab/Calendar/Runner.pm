@@ -234,7 +234,13 @@ sub send_reminder ($self, $row) {
         @{ $m->instances(events => [$event], window_start => $rid->clone->subtract(days => 2), window_end => $rid->clone->add(days => 2)) };
     die "occurrence no longer exists\n" unless $inst;
     my $prefs = $m->prefs($row->{recipient});
-    my $zone  = (defined $prefs->{timezone} && validate_zone($prefs->{timezone})) ? $prefs->{timezone} : $event->{timezone};
+    # The clock the mail is written in (#88/#89): a pinned event's own zone;
+    # otherwise the fixed zone the person chose, else the zone their device
+    # last reported (Local), else the event's own.
+    my $zone  = $event->{pinned} ? $event->{timezone}
+              : (defined $prefs->{timezone} && validate_zone($prefs->{timezone})) ? $prefs->{timezone}
+              : (defined $prefs->{device_zone} && validate_zone($prefs->{device_zone})) ? $prefs->{device_zone}
+              : $event->{timezone};
     my $rem   = $m->reminder_by_id($row->{reminder_id}) // {};
     my $s_loc = $inst->{start}->clone->set_time_zone($zone);
     # A deep link: the page opens on the day with this event highlighted (0.2.0).

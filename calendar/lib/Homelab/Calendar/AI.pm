@@ -40,7 +40,7 @@ my $CANON = JSON::PP->new->canonical(1)->utf8(1);
 
 my $SYSTEM = <<'PROMPT';
 You turn one email into one calendar event. Answer with a single JSON object and nothing else, with exactly these keys:
-"title" (short, no "Re:"), "all_day" (true/false), "start" ("YYYY-MM-DDTHH:MM:SS" wall-clock time in the given time zone, or "YYYY-MM-DD" when all_day), "end" (same form; for all_day the day AFTER the last day), "location" (string or null), "description" (one or two sentences from the email that matter for the event, or null), "confidence" ("high", "medium" or "low"), "note" (one short sentence on what was unclear, or null),
+"title" (short, no "Re:"), "all_day" (true/false), "start" ("YYYY-MM-DDTHH:MM:SS" wall-clock time as written in the email, or "YYYY-MM-DD" when all_day), "end" (same form; for all_day the day AFTER the last day), "location" (string or null), "timezone" (the IANA time zone the email's times are in: the zone of the location when the email gives a place whose zone is clear from a city, state, postcode or country, e.g. "America/Chicago" for Overland Park, KS; otherwise the given time zone), "description" (one or two sentences from the email that matter for the event, or null), "confidence" ("high", "medium" or "low"), "note" (one short sentence on what was unclear, or null),
 "research" (an object: "worth_it" true only when the email names something a web search could add facts about -- a venue, a team, a public event, an organisation -- and the facts would help the event (an address, who is playing, a schedule); "about" a few words naming that thing, e.g. "McCool Field, Cleveland MS"; "query" the single best web search to run; all three null when worth_it is false).
 Rules: use the email's own dates and times; resolve relative words ("Friday", "tomorrow") against the reference date given; if no time is given, make it all_day; never invent a place; if the email contains no event at all, still answer with your best single guess and confidence "low".
 PROMPT
@@ -159,6 +159,109 @@ sub research_p ($self, %a) {
         ->catch(sub ($e) { { ok => 0, error => 'the AI service could not be reached: ' . ($e // '') } });
 }
 
+# --- search by meaning (#87) -------------------------------------------------
+#
+# "doctor" should find the infusion at the hospital. The literal search cannot;
+# the model can, given the words and a short list of the person's events.
+# Blocking only: it runs inside the search request.
+
+my $RELATE_SYSTEM = <<'PROMPT';
+You help someone find events in their own calendar. You get what they typed and a list of their events, one per line: "id | date | title | place | notes". Answer with a single JSON object and nothing else: {"matches": [{"id": N, "why": "..."}]}.
+List only events a reasonable person would consider relevant to what they typed by MEANING, not spelling: "doctor" matches a hospital infusion, a dentist or a physical; "car" matches an oil change or an inspection; a person's first name matches events with that person; "trip" matches a flight or a hotel. Most relevant first, at most 10. Exact word matches are already shown to the person, so you may leave them out. "why" is at most eight plain words saying what links the event to the search. When nothing is related, answer {"matches": []}.
+PROMPT
+
+sub _relate_request ($self, %a) {
+    my $zone = validate_zone($a{zone} // '') ? $a{zone} : 'America/Chicago';
+    my @lines;
+    for my $e (@{ $a{candidates} // [] }) {
+        my $when = $e->{when} // '';
+        my $notes = _str($e->{description}, 160) // '';
+        push @lines, join(' | ', $e->{id}, $when, _str($e->{title}, 120) // '', _str($e->{location}, 120) // '', $notes);
+        last if @lines >= 300;
+    }
+    my $user = "Time zone: $zone\nReference date and time: " . _ref($zone, $a{now}) . "\nSearch: " . (_str($a{query}, 200) // '')
+             . "\n\nEvents:\n" . join("\n", @lines);
+    my $payload = $CANON->encode({
+        model => $self->model, max_tokens => 600,
+        system => [ { type => 'text', text => $RELATE_SYSTEM, cache_control => { type => 'ephemeral' } } ],
+        messages => [ { role => 'user', content => $user } ],
+    });
+    my $tag = $self->consent_name . ':search:' . substr($a{consent_sha} // '', 0, 16);
+    return ($self->_url, $self->_headers($tag, $a{account_key}), $payload);
+}
+
+sub _parse_relate ($self, $res, $allowed) {
+    my $err = $self->_service_error($res);
+    return $err if $err;
+    my $body = eval { $res->json } // {};
+    my $text_out = join '', map { $_->{text} // '' } grep { ref $_ eq 'HASH' && ($_->{type} // '') eq 'text' } @{ $body->{content} // [] };
+    my ($json) = $text_out =~ /(\{.*\})/s;
+    my $p = $json ? eval { decode_json($json) } : undef;
+    return { ok => 0, error => 'the AI answer was not usable', raw => substr($text_out, 0, 500) } unless ref $p eq 'HASH' && ref $p->{matches} eq 'ARRAY';
+    my (@out, %seen);
+    for my $m (@{ $p->{matches} }) {
+        next unless ref $m eq 'HASH' && defined $m->{id} && !ref $m->{id} && $m->{id} =~ /\A\d+\z/;
+        next unless $allowed->{ $m->{id} } && !$seen{ $m->{id} }++;    # only ids it was shown, once each
+        push @out, { id => $m->{id} + 0, why => _str($m->{why}, 80) // '' };
+        last if @out >= 10;
+    }
+    return { ok => 1, matches => \@out, model => $body->{model}, usage => $body->{usage} };
+}
+
+# relate(%args) -> { ok => 1, matches => [ { id, why } ] } or { ok => 0, error }
+#   query, candidates => [ { id, when, title, location, description } ], zone, now, consent_sha, account_key
+sub relate ($self, %a) {
+    return { ok => 0, error => 'AI search is not configured on this calendar' } unless $self->configured;
+    return { ok => 1, matches => [] } unless @{ $a{candidates} // [] };
+    my ($url, $h, $payload) = $self->_relate_request(%a);
+    my $tx = eval { $self->ua->post($url, $h, $payload) };
+    return $self->_transport_error($tx) // $self->_parse_relate($tx->res, { map { $_->{id} => 1 } @{ $a{candidates} } });
+}
+
+# --- the zone of a place (#89) ----------------------------------------------
+#
+# "11849 College Blvd, Overland Park, KS 66210" is Central time. The model
+# knows that for any address or town a person would type; it is a guess and
+# is shown as one.
+
+my $ZONE_SYSTEM = <<'PROMPT';
+You name the time zone of a place. You get an address, a town, a venue or a region as a person typed it into a calendar's location field. Answer with a single JSON object and nothing else: {"timezone": "...", "confidence": "high" | "medium" | "low", "place": "..."}.
+"timezone" is the IANA zone the place keeps (e.g. "America/Chicago", "America/Denver", "Europe/Berlin"), or null when the text does not name a place on Earth clearly enough (a room number, a web link, "home"). "place" is the place as you understood it, in at most six words. Use "low" when you had to guess between zones (a state split between two, a town name found in several places).
+PROMPT
+
+sub _zone_request ($self, %a) {
+    my $user = "Location field: " . (_str($a{place}, 300) // '') . "\nThe person's own zone, for context only: " . ($a{zone} // '');
+    my $payload = $CANON->encode({
+        model => $self->model, max_tokens => 200,
+        system => [ { type => 'text', text => $ZONE_SYSTEM, cache_control => { type => 'ephemeral' } } ],
+        messages => [ { role => 'user', content => $user } ],
+    });
+    my $tag = $self->consent_name . ':zone:' . substr($a{consent_sha} // '', 0, 16);
+    return ($self->_url, $self->_headers($tag, $a{account_key}), $payload);
+}
+
+sub _parse_zone ($self, $res) {
+    my $err = $self->_service_error($res);
+    return $err if $err;
+    my $body = eval { $res->json } // {};
+    my $text_out = join '', map { $_->{text} // '' } grep { ref $_ eq 'HASH' && ($_->{type} // '') eq 'text' } @{ $body->{content} // [] };
+    my ($json) = $text_out =~ /(\{.*\})/s;
+    my $p = $json ? eval { decode_json($json) } : undef;
+    return { ok => 0, error => 'the AI answer was not usable', raw => substr($text_out, 0, 500) } unless ref $p eq 'HASH';
+    my $zone = (defined $p->{timezone} && !ref $p->{timezone} && validate_zone($p->{timezone})) ? $p->{timezone} : undef;
+    return { ok => 1, timezone => $zone, confidence => (($p->{confidence} // '') =~ /^(high|medium|low)$/) ? $1 : 'low',
+             place => _str($p->{place}, 80), model => $body->{model}, usage => $body->{usage} };
+}
+
+# zone_for_place(%args) -> { ok => 1, timezone => 'America/Chicago' | undef, confidence, place } or { ok => 0, error }
+#   place, zone (the viewer's), consent_sha, account_key
+sub zone_for_place ($self, %a) {
+    return { ok => 0, error => 'AI is not configured on this calendar' } unless $self->configured;
+    my ($url, $h, $payload) = $self->_zone_request(%a);
+    my $tx = eval { $self->ua->post($url, $h, $payload) };
+    return $self->_transport_error($tx) // $self->_parse_zone($tx->res);
+}
+
 # --- shared ----------------------------------------------------------------
 
 sub _transport_error ($self, $tx) {
@@ -213,6 +316,10 @@ sub _sanitise ($p, $zone) {
         $o{$k} = $dt ? ($o{all_day} ? $dt->ymd : $dt->strftime('%Y-%m-%dT%H:%M:%S')) : undef;
     }
     $o{location}    = (defined $p->{location} && !ref $p->{location} && length $p->{location}) ? substr($p->{location}, 0, 500) : undef;
+    # The zone the times are in (#89): the place's when the email names one,
+    # so a Kansas appointment read in Montana lands at the right instant.
+    # Only a real zone gets through; anything else means "the given one".
+    $o{timezone}    = (defined $p->{timezone} && !ref $p->{timezone} && validate_zone($p->{timezone})) ? $p->{timezone} : undef;
     $o{description} = (defined $p->{description} && !ref $p->{description} && length $p->{description}) ? substr($p->{description}, 0, 2000) : undef;
     $o{confidence}  = (($p->{confidence} // '') =~ /^(high|medium|low)$/) ? $1 : 'low';
     $o{note}        = (defined $p->{note} && !ref $p->{note} && length $p->{note}) ? substr($p->{note}, 0, 300) : undef;

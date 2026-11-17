@@ -35,9 +35,40 @@ it ignores offsets on the strings it reads. So the page and the server speak
 **offset-less wall-clock strings plus a zone name** (`2026-11-14T09:00:00`,
 `timezone: America/Chicago`; all-day `2026-11-14`), and the server does every
 conversion. `GET /api/events` renders occurrences in the zone the page asks for
-(`timeZone=`), which is the account's zone when homelab-api carries one (phase
-2 of the plan), else this app's saved preference (the browser's zone, saved on
-the first visit), else `calendar.default_timezone`.
+(`timeZone=`).
+
+**The viewer's zone (0.4.0, #88) is Local by default:** the zone of the device
+the page is looked at from, as the browser reports it (a phone sets its clock
+from where it is, so a drive from Montana into Kansas moves the grid to
+Central on the next load, or when the tab is next looked at). A fixed zone can
+be chosen in Settings or from the zone code after the view switcher
+(`user_prefs.timezone`; NULL = Local). The page reports the device's zone
+(`user_prefs.device_zone`) so mail written while nobody is looking (reminders)
+uses it. The server's `viewer_zone` order: the request's `timeZone`, the fixed
+preference, the device zone, the zone from My Account, the default. No IP
+geolocation anywhere: the device already knows.
+
+**Every event keeps its own zone** (`events.timezone`, the zone it was made in:
+the address's when the AI read one off the email, #89), and since 0.4.0 an
+update without `timezone` leaves it alone; `times_zone` says which zone the
+wall clocks in the body are written in (a drag in a grid shown in another
+zone), and the editor shows an existing event's clocks in the event's own zone.
+**Pinned** (`events.pinned`) is display only: the chip keeps its true slot in
+the viewer's zone but reads its own zone's clock, "1:30 PM CST" with a pin
+mark, in every view; the peek says both clocks. `event_zone_start` /
+`event_zone_end` carry the event-zone clocks in the JSON.
+
+## Search (0.2.0, 0.4.0)
+
+`GET /api/search?q=` matches every typed word against title, place, notes and
+the people invited, over the account's calendars, the calendars shared with it
+and the single events shared with it. With `related=1` and the AI consent on,
+`Homelab::Calendar::AI::relate` ranks the account's events of the last six and
+next eighteen months by meaning ("doctor" finds the infusion at the hospital),
+and the answer carries `related` with a `why` per hit; the page asks for the
+literal part first and the related part second, the CLI asks for both.
+`POST /api/zone-for-place` is the AI reading the zone off an address, for the
+editor's "From the address" button.
 
 ## Routes
 

@@ -16,6 +16,8 @@ sub index ($c) {
     my $prefs = $model->prefs($me);
     my $zone  = $c->viewer_zone($prefs);
     $model->ensure_default_calendar($me, $zone);
+    require Homelab::Calendar::Consent;
+    my $consent = Homelab::Calendar::Consent::state_for($model->db, $me);
     return $c->render(
         template => 'index',
         prefs    => $prefs,
@@ -26,6 +28,8 @@ sub index ($c) {
             default_zone  => $c->app->default_zone,
             public_base   => $c->app->public_base_url,
             csrf          => $c->csrf_token,
+            # 0.4.0: whether the AI may be asked (search by meaning, the zone of an address).
+            ai            => { available => ($c->app->ai->configured ? \1 : \0), enabled => (($c->app->ai->configured && $consent->{enabled}) ? \1 : \0) },
         }),
     );
 }

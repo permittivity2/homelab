@@ -12,15 +12,18 @@
       <div class="panel__body stack">
         <div class="form-row">
           <label class="form-label" for="s-zone">Time zone</label>
+          %# 0.4.0 (#88): Local is the default. The page follows the device it is
+          %# looking from; a fixed zone stays put wherever the person goes.
+          % my $fixed = $prefs->{timezone};
           <select class="form-select" id="s-zone">
+            <option value=""<%= $fixed ? '' : ' selected' %>>Local: this device's time zone<%= $zone && !$fixed ? " (now " . ($zone =~ s/_/ /gr) . ")" : '' %></option>
             % for my $z (@$zones) {
-            <option value="<%= $z %>"<%= $z eq $zone ? ' selected' : '' %>><%= $z =~ s/_/ /gr %></option>
+            <option value="<%= $z %>"<%= ($fixed // '') eq $z ? ' selected' : '' %>><%= $z =~ s/_/ /gr %></option>
             % }
           </select>
+          <p class="form-hint">Local follows the device you are looking from, as its clock reports it: a phone that crosses into another zone shows its events in that zone after a refresh. Pick a zone to keep the calendar in it wherever you are. An event can also be pinned to its own zone in the editor.</p>
           % if ($account_zone) {
-          <p class="form-hint">Your account's time zone is set in My Account; this only changes how this calendar shows times.</p>
-          % } else {
-          <p class="form-hint">Events are shown and entered in this zone.</p>
+          <p class="form-hint">The zone in My Account is used only for mail sent before any device of yours has been seen.</p>
           % }
         </div>
         <div class="form-grid">

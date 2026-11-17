@@ -684,8 +684,15 @@ class Client:
     def calendar_trash(self, token):
         return self._request("GET", "/api/v1/calendar/trash", headers=self._auth(token))
 
-    def calendar_search(self, token, q):
-        return self._request("GET", "/api/v1/calendar/search", headers=self._auth(token), params={"q": q})
+    def calendar_search(self, token, q, related=True):
+        """The words, and with related (the default) also the events the AI finds related by meaning (calendar 0.4.0)."""
+        params = {"q": q}
+        if related:
+            params["related"] = 1
+        return self._request("GET", "/api/v1/calendar/search", headers=self._auth(token), params=params)
+
+    def calendar_zone_for_place(self, token, place):
+        return self._request("POST", "/api/v1/calendar/zone-for-place", headers=self._auth(token), json={"place": place})
 
     def calendar_create_calendar(self, token, body):
         return self._request("POST", "/api/v1/calendar/calendars", headers=self._auth(token), json=body)

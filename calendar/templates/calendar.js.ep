@@ -186,7 +186,12 @@ var Cal = (function () {
     csrf = cfg.csrf;
     setDateFormat(cfg.prefs.date_format);
     var h24 = (cfg.prefs.time_format === '24h');
-    var zone = cfg.account_zone || cfg.prefs.timezone || browserZone() || cfg.default_zone;
+    // The viewer's zone (0.4.0, #88): a fixed choice in Settings, else Local:
+    // the device's own zone as the browser reports it (a phone sets that from
+    // where it is). The zone from My Account is only the server's fallback
+    // for mail sent before any device of the person's has been seen.
+    var localMode = !cfg.prefs.timezone;
+    var zone = cfg.prefs.timezone || browserZone() || cfg.prefs.device_zone || cfg.account_zone || cfg.default_zone;
     var state = { calendars: [], byId: {}, prefs: cfg.prefs, zone: zone, calendar: null, editing: null, shareTarget: null, skipDup: false };
     // A deep link (0.2.0): /?date=2026-11-20&event=22[&rid=...] opens on that
     // day with the event highlighted and its editor open.
@@ -195,20 +200,27 @@ var Cal = (function () {
     if (link.date && !/^\d{4}-\d{2}-\d{2}$/.test(link.date)) link.date = null;
     if (link.event && !/^\d+$/.test(link.event)) link.event = null;
 
-    // The zone was never saved: keep the browser's as this account's, so the
-    // phone and the laptop agree from the first visit.
-    if (!cfg.account_zone && !cfg.prefs.timezone && browserZone()) {
-      api('PUT', '/api/prefs', { timezone: browserZone() }).then(function (p) { state.prefs = p; }).catch(function () {});
+    // Local: tell the server which zone this device keeps, when it changed,
+    // so reminders sent while nobody is looking are written in it.
+    function reportDeviceZone() {
+      var bz = browserZone();
+      if (!bz || bz === state.prefs.device_zone) return;
+      api('PUT', '/api/prefs', { device_zone: bz }).then(function (p) { state.prefs = p; }).catch(function () {});
     }
-    $('zone-note').textContent = 'Times in ' + zone.replace(/_/g, ' ');
+    if (localMode) reportDeviceZone();
+    function zoneWords(z) { return z.replace(/_/g, ' '); }
+    function zoneNote() { $('zone-note').textContent = 'Times in ' + zoneWords(zone) + (localMode ? ' (this device)' : ''); }
+    zoneNote();
 
     var fc = new FullCalendar.Calendar($('calendar'), {
       timeZone: zone,
       initialView: initialViewFor(storedView(), narrow(), cfg.prefs.default_view),
       initialDate: link.date || undefined,
       scrollTime: pad(Math.max(0, new Date().getHours() - 1)) + ':00:00',   // the week opens near now, not at 6 AM
-      datesSet: function (arg) { rememberView(arg.view.type); },
-      headerToolbar: { start: 'prev,next today', center: 'title', end: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek' },
+      datesSet: function (arg) { rememberView(arg.view.type); paintZonePill(); },
+      // The zone code after the view switcher (#88): "CST", a tap opens the zone dialog.
+      customButtons: { zone: { text: zoneAbbr(zone), click: function () { openZoneDialog(); } } },
+      headerToolbar: { start: 'prev,next today', center: 'title', end: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek zone' },
       buttonText: { today: 'Today', month: 'Month', week: 'Week', day: 'Day', list: 'Agenda' },
       firstDay: +cfg.prefs.week_start || 0,
       height: 'auto',
@@ -236,10 +248,94 @@ var Cal = (function () {
         if (p.location) bits.push(p.location);
         if (p.is_recurring) bits.push('repeats');
         if (p.permission === 'read') bits.push('read-only');
+        // Pinned (#89): the chip keeps its true slot in the viewer's zone but
+        // reads its own zone's clock, "1:30 PM CST", with a pin mark.
+        if (p.pinned && !arg.event.allDay && p.event_zone_start) {
+          var label = pinnedLabel(p, arg.view.type);
+          var t = arg.el.querySelector('.fc-event-time');
+          if (t) { t.textContent = label; t.insertAdjacentHTML('afterbegin', '<span class="ev-pin" aria-hidden="true">&#128204;</span>'); }
+          else if (arg.view.type === 'listWeek') { var lt = arg.el.querySelector('.fc-list-event-time'); if (lt) lt.innerHTML = '<span class="ev-pin" aria-hidden="true">&#128204;</span>' + esc(label); }
+          var dot = arg.el.querySelector('.fc-daygrid-event-dot'); if (dot) dot.classList.add('hide');
+          bits.push('pinned to ' + zoneWords(p.timezone));
+        }
         if (bits.length) arg.el.title = arg.event.title + ' - ' + bits.join(', ');
       }
     });
     fc.render();
+    paintZonePill();
+
+    // --- the viewer's zone (0.4.0, #88) ---
+    // "CST" for America/Chicago today, by the browser's own tables; the zone
+    // name when it has no code (some zones only have "GMT+1").
+    function zoneAbbr(z, when) {
+      try {
+        // A wall clock in z, read as if UTC, is within hours of the true
+        // instant: near enough to pick the right code (CST or CDT) for that day.
+        var d = when ? parseWall(when) : null;
+        var parts = new Intl.DateTimeFormat('en-US', { timeZone: z, timeZoneName: 'short' }).formatToParts(d || new Date());
+        var p = parts.filter(function (x) { return x.type === 'timeZoneName'; })[0];
+        return p && p.value ? p.value : z;
+      } catch (e) { return z; }
+    }
+    function zoneLongName(z) {
+      try {
+        var parts = new Intl.DateTimeFormat('en-US', { timeZone: z, timeZoneName: 'long' }).formatToParts(new Date());
+        var p = parts.filter(function (x) { return x.type === 'timeZoneName'; })[0];
+        return p && p.value ? p.value : zoneWords(z);
+      } catch (e) { return zoneWords(z); }
+    }
+    function paintZonePill() {
+      var b = $('calendar').querySelector('.fc-zone-button'); if (!b) return;
+      b.textContent = zoneAbbr(zone);
+      b.title = zoneLongName(zone) + ' (' + zoneWords(zone) + '), ' + (localMode ? 'following this device' : 'fixed') + '. Tap to change.';
+      b.setAttribute('aria-label', 'Time zone: ' + zoneLongName(zone) + (localMode ? ', following this device' : ', fixed'));
+      b.classList.toggle('is-fixed', !localMode);
+    }
+    // The grid, the note and the pill follow a new zone; nothing is reloaded.
+    function setZone(z, isLocal) {
+      if (!z) return;
+      localMode = !!isLocal; zone = z; state.zone = z;
+      fc.setOption('timeZone', z);
+      fc.refetchEvents();
+      zoneNote(); paintZonePill();
+    }
+    function openZoneDialog() {
+      showError('zone-error', '');
+      $('zone-local').checked = localMode; $('zone-fixed').checked = !localMode;
+      $('zone-local-now').textContent = browserZone() ? '(now ' + zoneLongName(browserZone()) + ', ' + zoneAbbr(browserZone()) + ')' : '';
+      fillZones($('zone-select'), localMode ? (browserZone() || zone) : zone);
+      openModal('zone-modal');
+    }
+    $('zone-select').addEventListener('change', function () { $('zone-fixed').checked = true; });
+    $('zone-save').addEventListener('click', function () {
+      var fixed = $('zone-fixed').checked ? $('zone-select').value : '';
+      api('PUT', '/api/prefs', { timezone: fixed }).then(function (p) {
+        state.prefs = p;
+        closeModal('zone-modal');
+        if (fixed) setZone(fixed, false);
+        else { setZone(browserZone() || p.device_zone || cfg.default_zone, true); reportDeviceZone(); }
+        toast('Times now shown in ' + zoneLongName(zone) + ' (' + zoneAbbr(zone) + ')' + (localMode ? ', following this device.' : '.'), 'ok');
+      }).catch(function (err) { showError('zone-error', err.message); });
+    });
+    // On the move (#88): the phone crossed into another zone while the page
+    // was open; when the person comes back to it, follow.
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState !== 'visible' || !localMode) return;
+      var bz = browserZone();
+      if (bz && bz !== zone) { setZone(bz, true); reportDeviceZone(); toast('Times now shown in ' + zoneLongName(bz) + ' (' + zoneAbbr(bz) + ').', 'ok'); }
+    });
+    // A pinned event's label (#89): its own clock and zone code, short in the
+    // month grid ("1:30pm CST"), fuller elsewhere ("1:30 PM CST").
+    function pinnedLabel(p, viewType) {
+      var t = fmtTime(p.event_zone_start, h24), code = zoneAbbr(p.timezone, p.event_zone_start);
+      if (viewType === 'dayGridMonth') {
+        if (!h24) t = t.replace(' AM', 'am').replace(' PM', 'pm');
+        // A phone's month cell has no room for the code: the pin mark says
+        // "its own zone", the tap says which (seen live, 0.4.0).
+        if (narrow()) return t;
+      }
+      return t + ' ' + code;
+    }
 
     function defaultCalendarId() {
       var d = state.calendars.filter(function (c) { return c.permission === 'owner' && c.is_default; })[0]
@@ -314,7 +410,8 @@ var Cal = (function () {
       sd: $('ev-start-date'), st: $('ev-start-time'), ed: $('ev-end-date'), et: $('ev-end-time'),
       repeat: $('ev-repeat'), interval: $('ev-interval'), byday: $('ev-byday'), monthlyBy: $('ev-monthly-by'),
       ends: $('ev-ends'), count: $('ev-count'), until: $('ev-until'), loc: $('ev-location'), desc: $('ev-desc'), colors: $('ev-colors'),
-      reminders: $('ev-reminders'), zoneSel: $('ev-zone'), shareWith: $('ev-share-with')
+      reminders: $('ev-reminders'), zoneSel: $('ev-zone'), shareWith: $('ev-share-with'),
+      pin: $('ev-pin'), zoneMore: $('ev-zone-more'), zoneFromPlace: $('ev-zone-from-place'), zoneGuess: $('ev-zone-guess')
     };
     // Reminders (#79; several since 0.2.0): up to three rows, each minutes
     // before the start and a channel. A new event starts with the account's
@@ -469,8 +566,30 @@ var Cal = (function () {
     ev.sd.addEventListener('change', shiftEnd); ev.st.addEventListener('change', shiftEnd);
     // The zone the form's wall clocks are read in (0.2.0): the viewer's unless
     // changed under "More" (a trip, a call across zones).
-    function syncZoneHint() { $('ev-zone-hint').textContent = 'Times in ' + (ev.zoneSel.value || zone).replace(/_/g, ' ') + '.'; }
-    ev.zoneSel.addEventListener('change', syncZoneHint);
+    function syncZoneHint() {
+      var z = ev.zoneSel.value || zone;
+      $('ev-zone-hint').textContent = 'Times in ' + zoneWords(z) + (ev.pin.checked ? ', pinned' : '') + '.';
+      $('ev-zone-summary').textContent = 'More: time zone' + (z !== zone ? ' (' + zoneAbbr(z) + ')' : '') + (ev.pin.checked ? ', pinned' : '');
+      var ex = (ev.sd.value && ev.st.value) ? fmtTime(ev.sd.value + 'T' + ev.st.value + ':00', h24) : '';
+      $('ev-pin-example').textContent = (ex || (h24 ? '13:30' : '1:30 PM')) + ' ' + zoneAbbr(z, ev.sd.value && ev.st.value ? ev.sd.value + 'T' + ev.st.value + ':00' : null);
+      // The AI can read the zone off the address in Location (#89).
+      ev.zoneFromPlace.classList.toggle('hide', !(cfg.ai && cfg.ai.enabled) || !ev.loc.value.trim() || ev.zoneSel.disabled);
+    }
+    ev.zoneSel.addEventListener('change', function () { ev.zoneGuess.classList.add('hide'); syncZoneHint(); });
+    ev.pin.addEventListener('change', syncZoneHint);
+    ev.st.addEventListener('change', syncZoneHint);
+    ev.loc.addEventListener('input', syncZoneHint);
+    ev.zoneFromPlace.addEventListener('click', function () {
+      var place = ev.loc.value.trim(); if (!place) return;
+      ev.zoneFromPlace.disabled = true; ev.zoneGuess.textContent = 'Asking…'; ev.zoneGuess.classList.remove('hide');
+      api('POST', '/api/zone-for-place', { place: place }).then(function (r) {
+        ev.zoneFromPlace.disabled = false;
+        if (!r.timezone) { ev.zoneGuess.textContent = 'That does not read as a place with a time zone.'; return; }
+        fillZones(ev.zoneSel, r.timezone);
+        ev.zoneGuess.textContent = zoneLongName(r.timezone) + ' (' + zoneAbbr(r.timezone) + '), read from ' + (r.place || 'the address') + ' by the AI, ' + (r.confidence || 'low') + ' confidence. Check it.';
+        syncZoneHint();
+      }).catch(function (err) { ev.zoneFromPlace.disabled = false; ev.zoneGuess.textContent = err.message; });
+    });
     // The Map link follows the location field.
     function syncMap() { var u = mapsUrl(ev.loc.value); var a = $('ev-map'); a.href = u || '#'; a.classList.toggle('hide', !u); }
     ev.loc.addEventListener('input', syncMap);
@@ -498,7 +617,11 @@ var Cal = (function () {
       fillCalendarSelect(data.calendar_id, existing ? data.calendar_id : null);
       var allDay = occ ? occ.all_day : !!data.all_day;
       ev.allday.checked = allDay; ev.st.disabled = ev.et.disabled = allDay || !!ro;
-      var s = (occ || data).start, e = (occ || data).end;
+      // An existing event's clocks are shown in its OWN zone (0.4.0), so saving
+      // from a phone in another zone keeps the zone it was made in.
+      var src = occ || data;
+      var ownZone = (existing && !allDay && src.event_zone_start && data.event_timezone) ? data.event_timezone : null;
+      var s = ownZone ? src.event_zone_start : src.start, e = ownZone ? src.event_zone_end : src.end;
       if (allDay) { ev.sd.value = s.slice(0, 10); ev.ed.value = addDays(e.slice(0, 10) + 'T00:00:00', -1).slice(0, 10); ev.st.value = '09:00'; ev.et.value = '10:00'; }
       else { var a = splitWall(s), b = splitWall(e); ev.sd.value = a.date; ev.st.value = a.time; ev.ed.value = b.date; ev.et.value = b.time; }
       var rep = existing ? data.repeat : null;
@@ -514,8 +637,15 @@ var Cal = (function () {
       // event starts with the account's default.
       setReminders(existing ? (data.reminders || []) : [{ minutes_before: defaultReminderMinutes(), channel: 'email' }]);
       // The form's times are in the viewer's zone (an existing event's were
-      // converted to it); the select under "More" lets another be chosen.
-      fillZones(ev.zoneSel, zone); syncZoneHint();
+      // converted to it); the select under "More" lets another be chosen. A
+      // new event made from an email or a proposal may bring its own zone
+      // (#89: the address's); a pinned event keeps its pin.
+      fillZones(ev.zoneSel, ownZone ? ownZone : (!existing && data.timezone) ? data.timezone : zone);
+      ev.pin.checked = !!data.pinned;
+      ev.zoneGuess.classList.add('hide');
+      ev.zoneMore.open = !!(data.pinned || (!existing && data.timezone && data.timezone !== zone));
+      if (!existing && data.timezone && data.timezone !== zone) { ev.zoneGuess.textContent = zoneLongName(data.timezone) + ' (' + zoneAbbr(data.timezone) + '), read from the email\'s address by the AI. Check it.'; ev.zoneGuess.classList.remove('hide'); }
+      syncZoneHint();
       $('ev-share-wrap').classList.toggle('hide', !!existing); ev.shareWith.value = '';
       // The people asked (#85): the owner edits the list, others see it; an
       // invited viewer answers here. A new event's list starts empty.
@@ -569,6 +699,7 @@ var Cal = (function () {
         reminders: remindersValue()
       };
       if (ev.zoneSel.value) body.timezone = ev.zoneSel.value;
+      body.pinned = ev.pin.checked;
       if (!body.start) { showError('ev-error', 'Give the event a start.'); return; }
       if (body.repeat === undefined) delete body.repeat;
       var editing = state.editing;
@@ -657,7 +788,9 @@ var Cal = (function () {
       var start = e.allDay ? wallDate(e.start) : wall(e.start);
       var endDate = e.end || new Date(e.start.getTime() + (e.allDay ? 86400000 : 3600000));
       var end = e.allDay ? wallDate(endDate) : wall(endDate);
-      var body = { start: start, end: end, all_day: e.allDay, timezone: zone };
+      // times_zone, not timezone (0.4.0): the dropped clock is read in the
+      // grid's zone, but the event keeps its own zone (and its pin).
+      var body = { start: start, end: end, all_day: e.allDay, times_zone: zone };
       var p2 = (p.is_recurring && p.recurrence_id)
         ? askScope('Move repeating event', 'This event repeats. Which occurrences should move?', true).then(function (scope) { if (!scope) throw { cancelled: true }; body.scope = scope; body.recurrence_id = p.recurrence_id; })
         : Promise.resolve();
@@ -778,7 +911,14 @@ var Cal = (function () {
       }
       if (p.location) ev.loc.value = p.location;
       if (p.description) ev.desc.value = p.description;
-      updateRepeatUI(); syncMap();
+      // The zone the email's times are in (#89), when the AI read one off the
+      // place: the form's clocks are then that zone's, shown as a guess.
+      if (p.timezone && p.timezone !== (ev.zoneSel.value || zone)) {
+        fillZones(ev.zoneSel, p.timezone); ev.zoneMore.open = true;
+        ev.zoneGuess.textContent = zoneLongName(p.timezone) + ' (' + zoneAbbr(p.timezone) + '), read from the email\'s address by the AI. Check it.';
+        ev.zoneGuess.classList.remove('hide');
+      }
+      updateRepeatUI(); syncMap(); syncZoneHint();
     }
     // "Find out more" (#78): the proposal says whether a web search could
     // add facts; a line offers it; facts come back to pick from.
@@ -888,7 +1028,7 @@ var Cal = (function () {
     // A new event from the email: the plain guess pre-fills, the proposal (if any) replaces it.
     function openNewFromMail() {
       var g = mailLink.guess || {};
-      openEditor({ calendar_id: defaultCalendarId(), all_day: !!g.all_day, start: g.start, end: g.end, title: g.title, location: g.location, description: '' });
+      openEditor({ calendar_id: defaultCalendarId(), all_day: !!g.all_day, start: g.start, end: g.end, title: g.title, location: g.location, description: '', timezone: g.timezone });
       showMailPanel(g, false);
     }
     // The link was used before (#81): say so first, and offer the event made
@@ -996,7 +1136,16 @@ var Cal = (function () {
       if (g && g.total) guests = '<p class="muted-small">' + g.total + ' invited: ' + [[g.accepted, 'yes'], [g.tentative, 'maybe'], [g.declined, 'no'], [g.waiting, 'waiting']].filter(function (x) { return x[0]; }).map(function (x) { return x[0] + ' ' + x[1]; }).join(', ') + '</p>';
       var rsvp = p.my_status ? '<p class="muted-small">Are you coming? ' + ['accepted', 'tentative', 'declined'].map(function (s) {
         return '<button type="button" class="btn btn-sm' + (p.my_status === s ? ' btn-primary' : '') + '" data-peek-rsvp="' + s + '">' + { accepted: 'Yes', tentative: 'Maybe', declined: 'No' }[s] + '</button>'; }).join(' ') + '</p>' : '';
-      peekBox.innerHTML = '<h3>' + esc(e.title) + '</h3><p>' + esc(when) + (p.is_recurring ? ' (repeats)' : '') + '</p>'
+      // #89: a pinned event says both clocks; an unpinned one from another zone says its own.
+      var zoneLine = '';
+      if (!e.allDay && p.event_zone_start && p.timezone && p.timezone !== zone) {
+        var own = fmtTime(p.event_zone_start, h24) + ' ' + zoneAbbr(p.timezone, p.event_zone_start);
+        zoneLine = p.pinned ? '<p class="muted-small">&#128204; Pinned to ' + esc(zoneLongName(p.timezone)) + ': ' + esc(own) + ' (' + esc(fmtTime(s, h24)) + ' where you are)</p>'
+                            : '<p class="muted-small">' + esc(own) + ' in the event\'s own zone (' + esc(zoneLongName(p.timezone)) + ')</p>';
+      } else if (p.pinned && !e.allDay) {
+        zoneLine = '<p class="muted-small">&#128204; Pinned to ' + esc(zoneLongName(p.timezone)) + '</p>';
+      }
+      peekBox.innerHTML = '<h3>' + esc(e.title) + '</h3><p>' + esc(when) + (p.is_recurring ? ' (repeats)' : '') + '</p>' + zoneLine
         + (p.location ? '<p>' + esc(p.location) + '</p>' : '') + (cal ? '<p class="muted-small">' + esc(cal.name) + (p.permission === 'read' ? ', read-only' : '') + '</p>' : '')
         + guests + rsvp
         + '<div class="form-actions"><button type="button" class="btn btn-sm btn-primary" data-peek="edit">' + (p.permission === 'read' ? 'Open' : 'Edit') + '</button>'
@@ -1066,31 +1215,63 @@ var Cal = (function () {
     // --- search (0.2.0) ---
     // The dialog has its own box (0.3.2) so a phone can search; the
     // sidebar's box still runs a search and opens the dialog with the term.
+    // 0.4.0 (#87): the words first, at once; then, with AI on, the events
+    // related by meaning ("doctor" finds the infusion at the hospital).
     function openSearch(q) {
       $('q2').value = q || '';
       if (q) return runSearch(q);
       $('search-h').textContent = 'Search';
       $('search-list').innerHTML = '';
-      $('search-none').classList.add('hide');
+      ['search-none', 'search-related-wait', 'search-related-wrap'].forEach(function (id) { $(id).classList.add('hide'); });
       openModal('search-modal');
     }
+    function searchItem(e) {
+      var when = e.all_day ? fmtRange(e.start + 'T00:00:00', e.end + 'T00:00:00', true, h24) : fmtRange(e.start, e.end, false, h24);
+      return '<li><span class="share-who">' + esc(e.title) + ' <span class="muted-small">' + esc(when) + (e.is_recurring ? ', repeats' : '') + (e.location ? ', ' + esc(e.location) : '') + ' (' + esc(e.calendar.name) + ')</span>'
+        + (e.why ? '<br><span class="why">' + esc(e.why) + '</span>' : '') + '</span>'
+        + '<button type="button" class="btn btn-sm btn-primary" data-open-event="' + e.id + '">Open</button></li>';
+    }
+    var searchSeq = 0;
     function runSearch(q) {
+      var seq = ++searchSeq;
+      $('q2').blur();   // the phone keyboard drops, so the answer is in view
       return api('GET', '/api/search?q=' + encodeURIComponent(q)).then(function (r) {
+        if (seq !== searchSeq) return;
         var list = (r && r.events) || [];
         $('search-h').textContent = 'Search: ' + q;
         $('q2').value = q;
         $('search-none').classList.toggle('hide', list.length > 0);
-        $('search-list').innerHTML = list.map(function (e) {
-          var when = e.all_day ? fmtRange(e.start + 'T00:00:00', e.end + 'T00:00:00', true, h24) : fmtRange(e.start, e.end, false, h24);
-          return '<li><span class="share-who">' + esc(e.title) + ' <span class="muted-small">' + esc(when) + (e.is_recurring ? ', repeats' : '') + (e.location ? ', ' + esc(e.location) : '') + ' (' + esc(e.calendar.name) + ')</span></span>'
-            + '<button type="button" class="btn btn-sm btn-primary" data-open-event="' + e.id + '">Open</button></li>';
-        }).join('');
+        $('search-list').innerHTML = list.map(searchItem).join('');
+        $('search-related-wrap').classList.add('hide'); $('search-related').innerHTML = ''; $('search-related-note').classList.add('hide');
         openModal('search-modal');
+        if (r.ai && r.ai.enabled) {
+          $('search-related-wait').classList.remove('hide');
+          api('GET', '/api/search?related=1&q=' + encodeURIComponent(q)).then(function (r2) {
+            if (seq !== searchSeq) return;
+            $('search-related-wait').classList.add('hide');
+            var rel = (r2 && r2.related) || [];
+            if (rel.length || r2.related_note) {
+              $('search-related').innerHTML = rel.map(searchItem).join('');
+              $('search-related-note').textContent = r2.related_note || '';
+              $('search-related-note').classList.toggle('hide', !r2.related_note);
+              $('search-related-wrap').classList.remove('hide');
+            }
+          }).catch(function () { if (seq === searchSeq) $('search-related-wait').classList.add('hide'); });
+        } else if (r.ai && r.ai.available) {
+          $('search-related-note').textContent = 'Turn on AI in Settings to also find events by meaning.';
+          $('search-related-note').classList.remove('hide'); $('search-related-wrap').classList.remove('hide');
+        }
       }).catch(function (err) { toast(err.message, 'error'); });
     }
     $('q').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var q = this.value.trim(); if (q.length >= 2) runSearch(q); } });
-    $('q2').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); var q = this.value.trim(); if (q.length >= 2) runSearch(q); } });
-    $('search-list').addEventListener('click', function (e) {
+    $('search-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var q = $('q2').value.trim();
+      if (q.length < 2) { $('search-none').textContent = 'Type at least two letters.'; $('search-none').classList.remove('hide'); return; }
+      $('search-none').textContent = 'Nothing matches those words.';
+      runSearch(q);
+    });
+    $('search-modal').addEventListener('click', function (e) {
       var b = e.target.closest('[data-open-event]'); if (!b) return;
       closeModal('search-modal'); fetchAndOpen(b.getAttribute('data-open-event'), null);
     });

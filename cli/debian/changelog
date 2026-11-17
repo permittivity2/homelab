@@ -1,3 +1,12 @@
+homelab-cli (0.7.2) unstable; urgency=medium
+
+  * calendar search also prints the events the AI finds related by meaning
+    (--no-related for the words only); calendar add --pin and edit --pin /
+    --unpin; show says an event's own zone and pin; calendar zone-for-place
+    (calendar 0.4.0, post-cutover #87-#89).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 20:54:03 -0600
+
 homelab-cli (0.7.1) unstable; urgency=medium
 
   * calendar (post-cutover #85, invitations): attendees, invite, uninvite,

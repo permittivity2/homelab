@@ -1,3 +1,10 @@
+homelab-developer (0.1.10) unstable; urgency=medium
+
+  * Calendar reference: search by meaning (related), the zone of a place,
+    pinned events and times_zone, Local as the default zone (calendar 0.4.0).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 20:54:03 -0600
+
 homelab-developer (0.1.9) unstable; urgency=medium
 
   * Reference: the calendar's invitation routes (post-cutover #85): who is

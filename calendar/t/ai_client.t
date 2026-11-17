@@ -36,7 +36,18 @@ post '/internal/v1/ai/messages' => sub ($c) {
             usage => { input_tokens => 900, output_tokens => 200, server_tool_use => { web_search_requests => 2 } } });
         return;
     }
+    # Search by meaning (#87) and the zone of a place (#89): told apart by the system prompt.
+    my $sys = $req->{system}[0]{text} // '';
+    if ($sys =~ /find events in their own calendar/) {
+        my $ans = $req->{messages}[0]{content} =~ /GARBAGE/ ? 'no idea' : '{"matches":[{"id":2,"why":"a hospital visit"},{"id":99,"why":"never shown"},{"id":2,"why":"again"}]}';
+        return $c->render(json => { id => 'msg_3', model => 'claude-haiku-5-5', content => [ { type => 'text', text => $ans } ], usage => { input_tokens => 300, output_tokens => 40 } });
+    }
+    if ($sys =~ /name the time zone of a place/) {
+        my $ans = $req->{messages}[0]{content} =~ /NOWHERE/ ? '{"timezone":null,"confidence":"low","place":null}' : '{"timezone":"America/Chicago","confidence":"high","place":"Overland Park, KS"}';
+        return $c->render(json => { id => 'msg_4', model => 'claude-haiku-5-5', content => [ { type => 'text', text => $ans } ], usage => { input_tokens => 80, output_tokens => 20 } });
+    }
     my $answer = $req->{messages}[0]{content} =~ /GARBAGE/ ? 'I cannot help with that.'
+        : $req->{messages}[0]{content} =~ /KANSAS/ ? '{"title":"Hair","all_day":false,"start":"2026-11-16T13:30:00","end":"2026-11-16T14:30:00","location":"11849 College Blvd, Overland Park, KS 66210","timezone":"America/Chicago","confidence":"high","note":null}'
         : 'Here you go: {"title":"Dentist","all_day":false,"start":"2026-11-20T15:30:00","end":"2026-11-20T16:30:00","location":"Main St office","description":"Bring the insurance card.","confidence":"high","note":null,"evil":"ignored","research":{"worth_it":true,"about":"Main St dental office","query":"Main St dental office Cleveland hours"}}';
     $c->render(json => { id => 'msg_1', model => 'claude-haiku-5-5', content => [ { type => 'text', text => $answer } ], usage => { input_tokens => 120, output_tokens => 60 } });
 };
@@ -58,7 +69,7 @@ ok $ai->configured, 'configured with a service URL and token';
 $r = $ai->propose(%mail);
 ok $r->{ok}, 'a proposal comes back' or diag explain $r;
 is_deeply $r->{proposal}, { title => 'Dentist', all_day => 0, start => '2026-11-20T15:30:00', end => '2026-11-20T16:30:00',
-    location => 'Main St office', description => 'Bring the insurance card.', confidence => 'high', note => undef,
+    location => 'Main St office', description => 'Bring the insurance card.', confidence => 'high', note => undef, timezone => undef,
     research => { worth_it => 1, about => 'Main St dental office', query => 'Main St dental office Cleveland hours' } },
     'only the editor\'s fields, in its shapes (the stray key dropped, the JSON found inside prose), plus the research hint';
 is $r->{model}, 'claude-haiku-5-5', 'the model that answered';
@@ -108,5 +119,30 @@ ok $r->{ok} && !@{ $r->{facts} }, 'nothing found: ok with no facts' or diag expl
 like $r->{summary}, qr/No page/, '... and the summary says so';
 $r = $ai->research(%rq, text => 'SEARCHCAP');
 like $r->{error}, qr/web-search budget/, 'the search budget 429 is explained as such';
+
+# --- 0.4.0: the zone read off the email's address, search by meaning, the zone of a place ---
+$r = $ai->propose(%mail, text => 'KANSAS: your appointment is Monday 1:30 PM at 11849 College Blvd, Overland Park, KS 66210');
+ok $r->{ok}, 'a proposal with a place' or diag explain $r;
+is $r->{proposal}{timezone}, 'America/Chicago', '... carries the zone the AI read off the address';
+is $r->{proposal}{location}, '11849 College Blvd, Overland Park, KS 66210', '... and the address';
+
+my @cands = ({ id => 1, when => '2026-11-20 15:30', title => 'Dentist' }, { id => 2, when => '2026-12-01 08:30', title => 'Infusion', location => q{St Luke's Hospital} });
+$r = $ai->relate(query => 'doctor', candidates => \@cands, zone => 'America/Chicago', now => $now, consent_sha => ('a' x 64), account_key => 'me@example.test');
+ok $r->{ok}, 'related events come back' or diag explain $r;
+is_deeply $r->{matches}, [ { id => 2, why => 'a hospital visit' } ], '... only ids it was shown, once each';
+my $rel = (map { decode_json($_) } split /\n/, $seen->slurp)[-1];
+is $rel->{headers}{'X-Homelab-Consent'} // $rel->{headers}{'x-homelab-consent'}, 'calendar:search:' . ('a' x 16), '... under the search consent tag';
+like decode_json($rel->{body})->{messages}[0]{content}, qr/Search: doctor.*2 \| 2026-12-01 08:30 \| Infusion \| St Luke's Hospital/s, '... with the events as lines';
+is_deeply $ai->relate(query => 'x', candidates => [], zone => 'America/Chicago', now => $now), { ok => 1, matches => [] }, 'no candidates: no call';
+$r = $ai->relate(query => 'GARBAGE', candidates => \@cands, zone => 'America/Chicago', now => $now);
+is $r->{ok}, 0, 'an unusable answer is an error';
+
+$r = $ai->zone_for_place(place => '11849 College Blvd, Overland Park, KS 66210', zone => 'America/Denver', consent_sha => ('a' x 64), account_key => 'me@example.test');
+ok $r->{ok}, 'the zone of a place' or diag explain $r;
+is $r->{timezone}, 'America/Chicago', '... is Central for Overland Park';
+is $r->{confidence}, 'high', '... with its confidence';
+is $r->{place}, 'Overland Park, KS', '... and the place as read';
+$r = $ai->zone_for_place(place => 'NOWHERE room 4', zone => 'America/Denver');
+ok $r->{ok} && !defined $r->{timezone}, 'a non-place: ok with no zone' or diag explain $r;
 
 done_testing;

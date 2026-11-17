@@ -70,6 +70,22 @@
   .quick-add input { width: 100%; }
   .fc .fc-event.is-linked { box-shadow: 0 0 0 3px var(--silver-bright); }
   .search-results li { display: flex; gap: var(--space-2); align-items: center; }
+  /* 0.4.0 (#87): the search form in the dialog; the related list's reasons. */
+  .search-form { display: flex; gap: var(--space-2); align-items: center; }
+  .search-form .form-input { flex: 1 1 auto; min-width: 0; }
+  .search-results .why { color: var(--text-muted); font-size: var(--app-sm); }
+  /* 0.4.0 (#88): the zone code after the view switcher is a FullCalendar
+     custom button; it reads as a pill and opens the zone dialog. */
+  .fc .fc-zone-button { font-family: inherit; letter-spacing: 0.04em; text-transform: none; }
+  .fc .fc-zone-button.is-fixed { border-style: dashed; }
+  /* 0.4.0 (#89): a pinned event shows its own zone's clock. */
+  .ev-pin { display: inline-block; margin-right: 0.2em; font-size: 0.9em; line-height: 1; }
+  .fc .fc-daygrid-event .ev-pin { margin-right: 0.3em; }
+  /* A month cell's one-day chip clips at its own edge instead of running
+     into the next day (a long time label did, live on a phone, 0.4.1). The
+     multi-day bars are block events, not dot events, so they still span. */
+  .fc .fc-daygrid-dot-event { overflow: hidden; }
+  .fc .fc-daygrid-dot-event .fc-event-time { overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; min-width: 0; }
   @media print {
     .sidenav, .toolbar, .modal, .undo-toast, .peek, header, nav, .fc .fc-toolbar .fc-button-group, .fc .fc-today-button, .fc .fc-prev-button, .fc .fc-next-button { display: none !important; }
     .app__main { padding: 0; }

@@ -23,7 +23,7 @@ has 'pg';
 has uid_domain => 'calendar.example';
 has default_zone => 'America/Chicago';
 
-my @EVENT_FIELDS = qw(title description location all_day starts_at ends_at start_date end_date timezone rrule recurrence_end color);
+my @EVENT_FIELDS = qw(title description location all_day starts_at ends_at start_date end_date timezone rrule recurrence_end color pinned);
 
 sub db ($self) { return $self->pg->db }
 
@@ -247,6 +247,11 @@ sub _event_values ($self, $input, $base = undef, $default_zone = undef) {
     my $zone = $input->{timezone} // $base->{timezone} // $default_zone // $self->default_zone;
     die "Unknown time zone '$zone'.\n" unless validate_zone($zone);
     $v{timezone} = $zone;
+    # 0.4.0 (#89): the zone the wall clocks given here are written in, when it
+    # is not the event's own (a drag in a grid shown in another zone). The
+    # event keeps its zone; only the instant moves.
+    my $tz_in = $input->{times_zone} // $zone;
+    die "Unknown time zone '$tz_in'.\n" unless validate_zone($tz_in);
 
     for my $k (qw(title description location color)) {
         $v{$k} = exists $input->{$k} ? $input->{$k} : $base->{$k};
@@ -261,17 +266,21 @@ sub _event_values ($self, $input, $base = undef, $default_zone = undef) {
 
     my $all_day = exists $input->{all_day} ? ($input->{all_day} ? 1 : 0) : ($base ? ($base->{all_day} ? 1 : 0) : 0);
     $v{all_day} = $all_day;
+    # Pinned (#89): show this event in its own zone wherever the viewer is. Display only.
+    $v{pinned} = exists $input->{pinned} ? ($input->{pinned} ? 1 : 0) : ($base ? ($base->{pinned} ? 1 : 0) : 0);
 
     my ($start, $end);
     if (defined $input->{start} && length $input->{start}) {
-        $start = parse_wall($input->{start}, $zone) or die "The start must look like 2026-11-14T09:00:00.\n";
+        $start = parse_wall($input->{start}, $tz_in) or die "The start must look like 2026-11-14T09:00:00.\n";
+        $start->set_time_zone($zone) if $tz_in ne $zone;
     }
     elsif ($base) {
         $start = $self->event_start($base)->set_time_zone($zone);
     }
     die "Give the event a start.\n" unless $start;
     if (defined $input->{end} && length $input->{end}) {
-        $end = parse_wall($input->{end}, $zone) or die "The end must look like 2026-11-14T10:00:00.\n";
+        $end = parse_wall($input->{end}, $tz_in) or die "The end must look like 2026-11-14T10:00:00.\n";
+        $end->set_time_zone($zone) if $tz_in ne $zone;
     }
     elsif ($base && !(defined $input->{start} && length $input->{start})) {
         $end = $self->event_end($base)->set_time_zone($zone);
@@ -348,7 +357,7 @@ sub update_event ($self, $event, $input, %o) {
     # moves the series by the same amount: the master's start shifts by the
     # difference between that occurrence and where it was dropped.
     my %in = %$input;
-    my $zone = $in{timezone} // $event->{timezone};
+    my $zone = $in{times_zone} // $in{timezone} // $event->{timezone};   # the zone the dropped clock is written in
     if ($rid && defined $in{start} && length $in{start}) {
         my $new_start = parse_wall($in{start}, $zone) or die "The start must look like 2026-11-14T09:00:00.\n";
         my $old = $rid->clone->set_time_zone($zone);
@@ -1090,18 +1099,61 @@ sub restore_event ($self, $id) {
 
 # --- search (0.2.0): events of the account's calendars whose title, place or
 # notes contain the text, the ones nearest to now first.
-sub search_events ($self, $email, $q, $limit = 50) {
+# What an account may search (#87): its calendars, the calendars shared with
+# it, and the single events shared with it (an invitation is one of those).
+# Returns (\@calendar_ids, \@event_ids, \%calendar_name).
+sub _search_scope ($self, $email) {
     my $cals = $self->calendars_for($email);
     my @all = (@{ $cals->{own} }, @{ $cals->{shared} });
-    return [] unless @all && defined $q && $q =~ /\S/;
-    my $like = '%' . ($q =~ s/\A\s+|\s+\z//gr =~ s/([%_\\])/\\$1/gr) . '%';
     my %name = map { $_->{id} => $_->{name} } @all;
+    my %cal_id = map { $_->{id} => 1 } @all;
+    my @event_ids = sort { $a <=> $b } keys %{ { map { $_->{event_id} => 1 } @{ $self->viewer_event_shares($email) } } };
+    for my $id (@event_ids) {
+        my $e = $self->event($id) or next;
+        next if $cal_id{ $e->{calendar_id} } || $name{ $e->{calendar_id} };
+        my $c = $self->calendar($e->{calendar_id});
+        $name{ $e->{calendar_id} } = $c ? $c->{name} : '';
+    }
+    return ([ sort { $a <=> $b } keys %cal_id ], \@event_ids, \%name);
+}
+
+# The literal search: every typed word must appear somewhere in the title,
+# the place, the notes, or the name or address of someone invited ("hair cut"
+# still finds "Haircut"; a person's name finds the events they were asked
+# to). Nearest to now first.
+sub search_events ($self, $email, $q, $limit = 50) {
+    my ($cal_ids, $event_ids, $name) = $self->_search_scope($email);
+    return [] unless (@$cal_ids || @$event_ids) && defined $q && $q =~ /\S/;
+    my @words = grep { length } map { s/\A[[:punct:]]+|[[:punct:]]+\z//gr } split /\s+/, $q =~ s/\A\s+|\s+\z//gr;
+    @words = ($q =~ s/\A\s+|\s+\z//gr) unless @words;
+    my (@where, @bind);
+    for my $w (@words) {
+        my $like = '%' . ($w =~ s/([%_\\])/\\$1/gr) . '%';
+        push @where, q{(e.title ILIKE ? OR e.location ILIKE ? OR e.description ILIKE ?
+            OR EXISTS (SELECT 1 FROM calendar.event_attendees a WHERE a.event_id = e.id AND (a.email ILIKE ? OR a.name ILIKE ?)))};
+        push @bind, ($like) x 5;
+    }
     my $rows = $self->db->query(
-        q{SELECT * FROM calendar.events WHERE calendar_id = ANY(?) AND deleted_at IS NULL
-           AND (title ILIKE ? OR location ILIKE ? OR description ILIKE ?)
-         ORDER BY abs(extract(epoch FROM (starts_at - NOW()))) LIMIT ?}, [ map { $_->{id} } @all ], $like, $like, $like, $limit,
+        q{SELECT e.* FROM calendar.events e WHERE (e.calendar_id = ANY(?) OR e.id = ANY(?)) AND e.deleted_at IS NULL AND }
+        . join(' AND ', @where) . q{ ORDER BY abs(extract(epoch FROM (e.starts_at - NOW()))) LIMIT ?},
+        $cal_ids, $event_ids, @bind, $limit,
     )->hashes->to_array;
-    $_->{calendar_name} = $name{ $_->{calendar_id} } for @$rows;
+    $_->{calendar_name} = $name->{ $_->{calendar_id} } for @$rows;
+    return $rows;
+}
+
+# The events the AI may be asked to rank for a search by meaning (#87): what
+# the account sees from six months back to eighteen months ahead, nearest
+# first, a few hundred at most, with only the fields that carry meaning.
+sub search_candidates ($self, $email, $limit = 300) {
+    my ($cal_ids, $event_ids, $name) = $self->_search_scope($email);
+    return [] unless @$cal_ids || @$event_ids;
+    my $rows = $self->db->query(
+        q{SELECT e.* FROM calendar.events e WHERE (e.calendar_id = ANY(?) OR e.id = ANY(?)) AND e.deleted_at IS NULL
+            AND e.starts_at > NOW() - INTERVAL '6 months' AND e.starts_at < NOW() + INTERVAL '18 months'
+          ORDER BY abs(extract(epoch FROM (e.starts_at - NOW()))) LIMIT ?}, $cal_ids, $event_ids, $limit,
+    )->hashes->to_array;
+    $_->{calendar_name} = $name->{ $_->{calendar_id} } for @$rows;
     return $rows;
 }
 
@@ -1552,7 +1604,7 @@ sub apply_itip_reply ($self, $row) {
 
 # -------------------------------------------------------------------- prefs
 
-my %PREF_DEFAULTS = (timezone => undef, week_start => 0, time_format => '12h', default_view => 'month', show_shared_events => 1,
+my %PREF_DEFAULTS = (timezone => undef, device_zone => undef, week_start => 0, time_format => '12h', default_view => 'month', show_shared_events => 1,
     # 0.2.0 (#83): the defaults that were hard-coded, and two reminder switches.
     default_reminder_minutes => 10, all_day_reminder_hour => 9, default_duration_minutes => 60, date_format => 'mdy',
     remind_shared => 1, webhook_url => undef);
@@ -1570,6 +1622,13 @@ sub save_prefs ($self, $email, $f) {
     if (exists $f->{timezone}) {
         die "Unknown time zone '$f->{timezone}'.\n" if defined $f->{timezone} && length $f->{timezone} && !validate_zone($f->{timezone});
         $v{timezone} = (defined $f->{timezone} && length $f->{timezone}) ? $f->{timezone} : undef;
+    }
+    # The device's zone (#88): what the browser last reported, for mail written
+    # while nobody is looking. Only kept when it is a real zone.
+    if (exists $f->{device_zone}) {
+        die "Unknown time zone '$f->{device_zone}'.\n" if defined $f->{device_zone} && length $f->{device_zone} && !validate_zone($f->{device_zone});
+        $v{device_zone} = (defined $f->{device_zone} && length $f->{device_zone}) ? $f->{device_zone} : undef;
+        $v{device_zone_at} = DateTime->now(time_zone => 'UTC')->strftime('%Y-%m-%d %H:%M:%S+00');
     }
     if (exists $f->{week_start}) {
         die "week_start must be 0 (Sunday), 1 (Monday) or 6 (Saturday).\n" unless defined $f->{week_start} && $f->{week_start} =~ /\A[016]\z/;

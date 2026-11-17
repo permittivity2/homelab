@@ -1750,6 +1750,8 @@ def _calendar_marks(ev):
     marks = []
     if ev.get("is_recurring"):
         marks.append("repeats")
+    if ev.get("pinned"):
+        marks.append("pinned " + (ev.get("event_timezone") or ""))
     if ev.get("shared_event"):
         marks.append("shared")
     if ev.get("permission") == "read":
@@ -1820,6 +1822,12 @@ def _print_event(ev, h24=False):
     cal = (ev.get("calendar") or {}).get("name")
     print(f"{ev.get('title')}  (id {ev.get('id')}" + (f", occurrence {occ.get('recurrence_id')}" if occ else "") + ")")
     print(f"  When:      {_calendar_when(occ or ev, h24)}" + (f"  ({ev.get('timezone')})" if ev.get("timezone") else ""))
+    # Its own zone (calendar 0.4.0): said when it differs from yours or the event is pinned to it.
+    ez = ev.get("event_timezone")
+    if ez and (ev.get("pinned") or ez != ev.get("timezone")):
+        own = (occ or ev).get("event_zone_start")
+        print(f"  Zone:      {ez}" + (f", there {_clock_s(own, h24)}" if own and not ev.get("all_day") else "")
+              + ("  (pinned: shows this zone's clock wherever you are)" if ev.get("pinned") else ""))
     if ev.get("location"):
         print(f"  Where:     {ev['location']}")
     if cal:
@@ -2086,6 +2094,8 @@ def cmd_calendar_add(args):
             body[key] = value
     if getattr(args, "invite", None):
         body["attendees"] = args.invite
+    if getattr(args, "pin", False):
+        body["pinned"] = True
     rrule = args.repeat or _build_rrule(getattr(args, "freq", None), getattr(args, "every", None), getattr(args, "count", None),
                                         getattr(args, "until", None), getattr(args, "on", None), bool(args.all_day))
     if rrule:
@@ -2189,6 +2199,10 @@ def cmd_calendar_edit(args):
                        ("description", args.description), ("timezone", args.timezone), ("calendar_id", args.calendar)):
         if value is not None:
             body[key] = value
+    if getattr(args, "pin", False):
+        body["pinned"] = True
+    elif getattr(args, "unpin", False):
+        body["pinned"] = False
     if args.all_day:
         body["all_day"] = True
     elif args.timed:
@@ -2291,17 +2305,49 @@ def cmd_calendar_search(args):
         return 1
     q = " ".join(args.text).strip()
     try:
-        result = _client(args).calendar_search(session["token"], q)
+        result = _client(args).calendar_search(session["token"], q, related=not getattr(args, "no_related", False))
     except ApiError as e:
         _emit_error(args, f"Search failed: {e.message}")
         return 1
     if _emit(args, result):
         return 0
     events = result.get("events") or []
-    if not events:
-        print(f"(nothing matches \"{q}\")")
+    related = result.get("related") or []
+    note = result.get("related_note")
+    if not events and not related:
+        print(f"(nothing matches \"{q}\")" + (f"; {note}" if note else ""))
         return 0
-    _print_grouped(events)
+    if events:
+        _print_grouped(events)
+    else:
+        print(f"(no event has the words \"{q}\")")
+    # Related by meaning (calendar 0.4.0): the AI's picks, each with its reason.
+    if related:
+        print("\nRelated by meaning:")
+        rows = [[_calendar_day(ev.get("start")), _calendar_span(ev), ev.get("title") or "(no title)", ev.get("location") or "",
+                 ev.get("why") or "", ev.get("id")] for ev in related]
+        _print_table(["DAY", "WHEN", "TITLE", "WHERE", "WHY", "ID"], rows)
+    elif note:
+        print(f"\n{note}")
+    return 0
+
+
+def cmd_calendar_zone_for_place(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    place = " ".join(args.place).strip()
+    try:
+        result = _client(args).calendar_zone_for_place(session["token"], place)
+    except ApiError as e:
+        _emit_error(args, f"Could not place that: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    if not result.get("timezone"):
+        print(f"That does not read as a place with a time zone: {place}")
+        return 1
+    print(f"{result['timezone']}  ({result.get('place') or place}; {result.get('confidence', 'low')} confidence, an AI reading)")
     return 0
 
 
@@ -3629,11 +3675,15 @@ def build_parser():
     repeat_flags(p)
     p.add_argument("--share-with", metavar="EMAIL", help="Share the new event (read-only) with one address")
     p.add_argument("--invite", action="append", metavar="EMAIL", help="Invite this person (repeat for several); each gets an email with Yes / Maybe / No")
+    p.add_argument("--pin", action="store_true", help="Pin it to its time zone: it shows that zone's clock wherever you are")
     p.set_defaults(func=cmd_calendar_add)
 
     p = calendar_sub.add_parser("edit", help="Change an event: give only what changes")
     p.add_argument("event_id")
     p.add_argument("--title")
+    pin = p.add_mutually_exclusive_group()
+    pin.add_argument("--pin", action="store_true", help="Pin it to its time zone (shows that zone's clock wherever you are)")
+    pin.add_argument("--unpin", action="store_true", help="Show it in your own zone again")
     p.add_argument("--start", metavar="WHEN", help="2026-11-20T14:30, or a date for all-day")
     p.add_argument("--end", metavar="WHEN")
     g = p.add_mutually_exclusive_group()
@@ -3667,9 +3717,14 @@ def build_parser():
     p = calendar_sub.add_parser("trash", help="Events deleted in the last 30 days")
     p.set_defaults(func=cmd_calendar_trash)
 
-    p = calendar_sub.add_parser("search", help="Find events whose title, place or notes contain the words")
+    p = calendar_sub.add_parser("search", help="Find events by their words and, with AI on, by meaning (\"doctor\" finds the hospital visit)")
     p.add_argument("text", nargs="+")
+    p.add_argument("--no-related", action="store_true", help="The words only; skip the AI's related events")
     p.set_defaults(func=cmd_calendar_search)
+
+    p = calendar_sub.add_parser("zone-for-place", help="The time zone of an address or town, read by the AI (a guess, with its confidence)")
+    p.add_argument("place", nargs="+")
+    p.set_defaults(func=cmd_calendar_zone_for_place)
 
     p = calendar_sub.add_parser(
         "export",

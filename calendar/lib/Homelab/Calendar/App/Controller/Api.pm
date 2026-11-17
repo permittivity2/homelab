@@ -90,6 +90,11 @@ sub _fc_event ($inst, $zone, $permission, $detail = 'full') {
             is_exception => ($inst->{is_exception} ? \1 : \0),
             ($busy ? () : (description => $inst->{description}, location => $inst->{location})),
             uid => $inst->{uid}, timezone => $inst->{event}{timezone},
+            # Pinned (#89): the page labels the event with its own zone's clock;
+            # the slot stays at the true instant in the viewer's zone.
+            pinned => ($inst->{event}{pinned} ? \1 : \0),
+            ($all_day ? () : (event_zone_start => wall_string($inst->{start}->clone->set_time_zone($inst->{event}{timezone})),
+                              event_zone_end   => wall_string($inst->{end}->clone->set_time_zone($inst->{event}{timezone})))),
         },
     };
 }
@@ -289,6 +294,10 @@ sub _event_json ($c, $event, $cal, $zone, $rid = undef) {
         all_day => ($event->{all_day} ? \1 : \0), event_timezone => $event->{timezone}, timezone => $zone,
         start => $event->{all_day} ? $start->ymd : wall_string($start->clone->set_time_zone($zone)),
         end   => $event->{all_day} ? $end->ymd   : wall_string($end->clone->set_time_zone($zone)),
+        # #89: the same clocks in the event's own zone, and whether it is pinned to it.
+        pinned => ($event->{pinned} ? \1 : \0),
+        event_zone_start => $event->{all_day} ? $start->ymd : wall_string($start->clone->set_time_zone($event->{timezone})),
+        event_zone_end   => $event->{all_day} ? $end->ymd   : wall_string($end->clone->set_time_zone($event->{timezone})),
         rrule => $event->{rrule}, repeat => ($event->{rrule} ? parse_rrule($event->{rrule}, $event->{timezone}) : undef),
         color => $event->{color}, permission => $event->{permission}, is_recurring => ($event->{rrule} ? \1 : \0),
         created_by_email => $event->{created_by_email},
@@ -318,6 +327,8 @@ sub _event_json ($c, $event, $cal, $zone, $rid = undef) {
                 all_day => ($inst->{all_day} ? \1 : \0),
                 start => $inst->{all_day} ? $inst->{start}->ymd : wall_string($inst->{start}->clone->set_time_zone($zone)),
                 end   => $inst->{all_day} ? $inst->{end}->ymd   : wall_string($inst->{end}->clone->set_time_zone($zone)),
+                ($inst->{all_day} ? () : (event_zone_start => wall_string($inst->{start}->clone->set_time_zone($event->{timezone})),
+                                          event_zone_end   => wall_string($inst->{end}->clone->set_time_zone($event->{timezone})))),
                 title => $inst->{title}, description => $inst->{description}, location => $inst->{location}, color => $inst->{color},
             };
         }
@@ -335,10 +346,16 @@ sub event ($c) {
 # The editor's fields, picked out of the body. 'repeat' is a form (see
 # Recurrence::build_rrule) or null; 'timezone' names the zone the wall clocks
 # are in (the viewer's, normally).
-sub _event_input ($c, $b, $zone) {
+sub _event_input ($c, $b, $zone, $creating = 1) {
     my %in;
-    for my $k (qw(title description location color all_day start end repeat)) { $in{$k} = $b->{$k} if exists $b->{$k} }
-    $in{timezone} = (defined $b->{timezone} && validate_zone($b->{timezone})) ? $b->{timezone} : $zone;
+    for my $k (qw(title description location color all_day start end repeat pinned)) { $in{$k} = $b->{$k} if exists $b->{$k} }
+    # The event's zone: the body's; on create, the viewer's when left out. On an
+    # update without one the event keeps its own (0.4.0: a drag in a grid shown
+    # in Montana must not re-zone a Kansas appointment). times_zone says which
+    # zone the wall clocks in the body are written in; the viewer's by default.
+    if (defined $b->{timezone} && validate_zone($b->{timezone})) { $in{timezone} = $b->{timezone} }
+    elsif ($creating) { $in{timezone} = $zone }
+    $in{times_zone} = (defined $b->{times_zone} && validate_zone($b->{times_zone})) ? $b->{times_zone} : ($in{timezone} // $zone);
     return \%in;
 }
 
@@ -647,7 +664,7 @@ sub update_event ($c) {
         if $scope ne 'all' && $event->{rrule} && !$rid;
     # The editor sends the whole list of people asked (#85); only the owner may change it.
     return _fail($c, 403, 'Only the calendar\'s owner can change who is invited.') if exists $b->{attendees} && !may_manage($event->{permission});
-    my $row = _try($c, sub { $m->update_event($event, _event_input($c, $b, $zone), scope => $scope, recurrence_id => $rid) }) or return;
+    my $row = _try($c, sub { $m->update_event($event, _event_input($c, $b, $zone, 0), scope => $scope, recurrence_id => $rid) }) or return;
     $row->{permission} = $event->{permission};
     # The reminder belongs to the event (or, after a split, to the new series).
     _apply_reminders($c, $m, $row->{id}, $b) or return;
@@ -672,7 +689,7 @@ sub _suggestion_json ($c, $row, $zone) {
     return {
         token => $row->{token}, subject => $row->{subject}, from => $row->{from_addr}, received_at => $row->{created_at},
         proposed_at => $row->{proposed_at}, zone => $zone,
-        proposal => { map { $_ => $p->{$_} } qw(title all_day start end location description confidence note) },
+        proposal => { map { $_ => $p->{$_} } qw(title all_day start end location description confidence note timezone) },
         facts => (ref $row->{facts} eq 'HASH' ? scalar @{ $row->{facts}{facts} // [] } : 0),
         open_url => $c->app->public_base_url . "/m/$row->{token}",
     };
@@ -699,8 +716,11 @@ sub save_suggestion ($c) {
     my $cal = $m->ensure_default_calendar($me, $zone);
     my $p = $link->{proposal};
     # The proposal's wall clocks are in the zone it was made in (the account's
-    # at the time); the event carries its own zone, so that is what we pass.
-    my $pzone = (defined $p->{zone} && validate_zone($p->{zone})) ? $p->{zone} : $zone;
+    # at the time), unless the email named a place whose zone the AI read
+    # (#89: a Kansas appointment is Central wherever it was read); the event
+    # carries its own zone, so that is what we pass.
+    my $pzone = (defined $p->{timezone} && validate_zone($p->{timezone})) ? $p->{timezone}
+              : (defined $p->{zone} && validate_zone($p->{zone})) ? $p->{zone} : $zone;
     my $event = _try($c, sub { $m->create_event($cal, $me, {
         title => (length($p->{title} // '') ? $p->{title} : ($link->{subject} // 'Event from email')),
         all_day => ($p->{all_day} ? 1 : 0), start => $p->{start}, end => $p->{end}, timezone => $pzone,
@@ -1319,23 +1339,73 @@ sub restore_event ($c) {
 }
 
 # GET /api/search?q= -- events whose title, place or notes contain the text.
+sub _search_hit ($c, $m, $e, $zone) {
+    my $s = $m->event_start($e)->clone->set_time_zone($zone);
+    return {
+        id => $e->{id} + 0, title => $e->{title}, location => $e->{location}, all_day => ($e->{all_day} ? \1 : \0),
+        start => wall_string($s, $e->{all_day}), end => wall_string($m->event_end($e)->clone->set_time_zone($zone), $e->{all_day}),
+        is_recurring => ($e->{rrule} ? \1 : \0), calendar => { id => $e->{calendar_id} + 0, name => $e->{calendar_name} },
+        url => $c->app->public_base_url . '/?date=' . $s->ymd . '&event=' . $e->{id},
+    };
+}
+
+# GET /api/search?q=...[&related=1] -- the events whose words match, and with
+# related=1 (#87) also the ones the AI finds related by meaning ("doctor" ->
+# the infusion at the hospital), when the account has AI on. The literal
+# part is instant; the related part is one model call, so the page asks for
+# it second and the CLI asks for both at once.
 sub search ($c) {
     my $me = $c->require_login or return;
     my $m = _model($c);
     my $zone = $c->viewer_zone($m->prefs($me));
     my $q = ($c->param('q') // '') =~ s/\A\s+|\s+\z//gr;
     return _fail($c, 400, 'Type at least two characters.') if length $q < 2;
-    my @out;
-    for my $e (@{ $m->search_events($me, $q) }) {
-        my $s = $m->event_start($e)->clone->set_time_zone($zone);
-        push @out, {
-            id => $e->{id} + 0, title => $e->{title}, location => $e->{location}, all_day => ($e->{all_day} ? \1 : \0),
-            start => wall_string($s, $e->{all_day}), end => wall_string($m->event_end($e)->clone->set_time_zone($zone), $e->{all_day}),
-            is_recurring => ($e->{rrule} ? \1 : \0), calendar => { id => $e->{calendar_id} + 0, name => $e->{calendar_name} },
-            url => $c->app->public_base_url . '/?date=' . $s->ymd . '&event=' . $e->{id},
-        };
+    my @out = map { _search_hit($c, $m, $_, $zone) } @{ $m->search_events($me, $q) };
+    my $consent = Homelab::Calendar::Consent::state_for($m->db, $me);
+    my $ai_on = ($c->app->ai->configured && $consent->{enabled}) ? 1 : 0;
+    my %res = (q => $q, events => \@out, ai => { available => ($c->app->ai->configured ? \1 : \0), enabled => ($ai_on ? \1 : \0) });
+    if ($c->param('related')) {
+        if (!$ai_on) {
+            $res{related} = [];
+            $res{related_note} = $c->app->ai->configured ? 'Turn on AI in Settings to also find events by meaning.' : 'Search by meaning is not available on this calendar.';
+        }
+        else {
+            my %literal = map { $_->{id} => 1 } @out;
+            my $cands = $m->search_candidates($me);
+            my %by_id = map { $_->{id} => $_ } @$cands;
+            my $r = $c->app->ai->relate(
+                query => $q, zone => $zone, now => DateTime->now(time_zone => $zone), consent_sha => $consent->{sha}, account_key => $me,
+                candidates => [ map { { id => $_->{id}, title => $_->{title}, location => $_->{location}, description => $_->{description},
+                                        when => $m->event_start($_)->clone->set_time_zone($zone)->strftime($_->{all_day} ? '%Y-%m-%d' : '%Y-%m-%d %H:%M') } } @$cands ],
+            );
+            if ($r->{ok}) {
+                $res{related} = [ map { { %{ _search_hit($c, $m, $by_id{ $_->{id} }, $zone) }, why => $_->{why} } }
+                                  grep { $by_id{ $_->{id} } && !$literal{ $_->{id} } } @{ $r->{matches} } ];
+            }
+            else { $res{related} = []; $res{related_note} = $r->{error} // 'The AI could not look for related events just now.' }
+        }
     }
-    return $c->render(json => { q => $q, events => \@out });
+    return $c->render(json => \%res);
+}
+
+# POST /api/zone-for-place { place } -- the IANA zone of an address or town,
+# by the AI (#89): "11849 College Blvd, Overland Park, KS" -> America/Chicago.
+# A guess, answered with its confidence; the editor shows it as one. Behind
+# the same AI consent as proposals.
+sub zone_for_place ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $m = _model($c);
+    my $b = _body($c);
+    my $place = (defined $b->{place} && !ref $b->{place}) ? ($b->{place} =~ s/\A\s+|\s+\z//gr) : '';
+    return _fail($c, 400, 'Give a place.') unless length $place >= 2;
+    return _fail($c, 503, 'AI is not available on this calendar.') unless $c->app->ai->configured;
+    my $consent = Homelab::Calendar::Consent::state_for($m->db, $me);
+    return _fail($c, 403, 'Turn on AI in Settings (and agree to the notice) first.') unless $consent->{enabled};
+    my $zone = $c->viewer_zone($m->prefs($me));
+    my $r = $c->app->ai->zone_for_place(place => $place, zone => $zone, consent_sha => $consent->{sha}, account_key => $me);
+    return _fail($c, 502, $r->{error} // 'The AI could not place that.') unless $r->{ok};
+    return $c->render(json => { place => $r->{place}, timezone => $r->{timezone}, confidence => $r->{confidence} });
 }
 
 # POST /api/quick-add { text } -- a draft from one typed line ("Dentist
@@ -1405,6 +1475,7 @@ sub internal_event_shares        ($c) { my $me = $c->authenticated_email_any or 
 sub internal_event_share_create  ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return create_event_share($c) }
 sub internal_trash               ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return trash($c) }
 sub internal_search              ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return search($c) }
+sub internal_zone_for_place      ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return zone_for_place($c) }
 sub internal_calendar_create     ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return create_calendar($c) }
 sub internal_calendar_shares     ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return calendar_shares($c) }
 sub internal_calendar_share_create ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return create_calendar_share($c) }

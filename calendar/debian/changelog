@@ -1,3 +1,38 @@
+homelab-calendar (0.4.1) unstable; urgency=medium
+
+  * A pinned event's month-cell label drops the zone code on a phone (the pin
+    mark stays; the tap says the zone), and a one-day chip clips at its own
+    cell instead of running into the next day (seen live on 0.4.0).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 21:02:23 -0600
+
+homelab-calendar (0.4.0) unstable; urgency=medium
+
+  * Search (post-cutover #87): the dialog is a form with a Search button and
+    the keyboard's Go key runs it (the only button was Done, which closed it:
+    found by Gardner on Android); every typed word must match, in the title,
+    the place, the notes or the people invited, over calendars, shared
+    calendars and single events shared with you; with AI on, "related by
+    meaning" follows (relate: "doctor" finds the infusion at the hospital),
+    on the page, in the API (related=1) and in the CLI.
+  * Local time zone (#88): every account's zone is Local, the device's own as
+    the browser reports it (migration 008 clears the zones the page itself had
+    saved on first visits); a fixed zone stays available in Settings and from
+    the zone code ("CST") after the view switcher, which opens the zone dialog;
+    the page follows the device when the tab is next looked at and reports
+    the device's zone so reminders are written in it; the zone from My Account
+    is only the mail fallback now, not an override.
+  * Pinned events and the zone of a place (#89): an event can be pinned to
+    its own zone and then reads that zone's clock wherever you are ("1:30 PM
+    CST" with a pin mark, in every view; the peek says both clocks); an update
+    without a zone keeps the event's own (a drag in a grid shown in Montana no
+    longer re-zones a Kansas appointment: times_zone); the editor shows an
+    existing event's clocks in its own zone; mail proposals carry the zone the
+    AI read off the email's address, and the editor's "From the address" asks
+    the AI for it (zone-for-place).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 20:54:03 -0600
+
 homelab-calendar (0.3.3) unstable; urgency=medium
 
   * The phone's suggestions pill comes last in the action row, so when the

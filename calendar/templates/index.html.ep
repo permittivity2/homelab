@@ -197,10 +197,17 @@
       </div>
       %# 0.2.0: the zone the times above are read in (a trip, a call across zones).
       <div class="span2">
-        <details>
-          <summary class="muted-small">More: time zone</summary>
+        <details id="ev-zone-more">
+          <summary class="muted-small" id="ev-zone-summary">More: time zone</summary>
           <label class="form-label" for="ev-zone" style="margin-top: var(--space-2)">The times above are in</label>
-          <select class="form-select" id="ev-zone"></select>
+          <div class="time-row">
+            <select class="form-select" id="ev-zone"></select>
+            %# #89: the zone of the address in Location, by the AI (shown as a guess).
+            <button type="button" class="btn btn-sm hide" id="ev-zone-from-place" title="Read the time zone from the address in Location">From the address</button>
+          </div>
+          <p class="muted-small hide" id="ev-zone-guess"></p>
+          %# #89: pinned = this event shows its own zone's clock wherever you are.
+          <label class="check" style="margin-top: var(--space-2)"><input type="checkbox" id="ev-pin"> <span>Pin to this time zone: it reads <span id="ev-pin-example"></span> wherever you are</span></label>
         </details>
       </div>
     </div>
@@ -335,12 +342,39 @@
   <div class="modal__head"><h2 id="search-h" class="panel__title">Search</h2></div>
   <div class="modal__body stack">
     %# 0.3.2: the box lives in the dialog too, so a phone (no sidebar on
-    %# screen) can search; Enter runs it, like the sidebar's.
-    <div class="form-row"><label class="sr-only" for="q2">Search events</label><input class="form-input" type="search" id="q2" placeholder="Search events" autocomplete="off" title="Type at least two letters and press Enter"></div>
+    %# screen) can search. 0.4.0 (#87): a real form with a Search button, so
+    %# the phone keyboard's Go key and a tap both run it (the only button
+    %# used to be Done, which closed the dialog: found by Gardner on Android).
+    <form id="search-form" class="search-form" autocomplete="off">
+      <label class="sr-only" for="q2">Search events</label>
+      <input class="form-input" type="search" id="q2" placeholder="Search events" autocomplete="off" enterkeyhint="search" title="Type at least two letters">
+      <button type="submit" class="btn btn-primary" id="search-go">Search</button>
+    </form>
+    <p class="text-muted hide" id="search-none">Nothing matches those words.</p>
     <ul class="share-list search-results" id="search-list"></ul>
-    <p class="text-muted hide" id="search-none">Nothing matches.</p>
+    %# Related by meaning (#87): the AI's picks, after the literal ones.
+    <p class="muted-small hide" id="search-related-wait">Looking for related events&hellip;</p>
+    <div class="hide" id="search-related-wrap">
+      <p class="form-label" style="margin-top: var(--space-2)">Related</p>
+      <ul class="share-list search-results" id="search-related"></ul>
+      <p class="muted-small hide" id="search-related-note"></p>
+    </div>
   </div>
-  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-modal-close>Done</button></div>
+  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-modal-close>Close</button></div>
+</div>
+
+%# The viewer's zone (#88): Local (this device) or a fixed zone. Opened from
+%# the code after the view switcher.
+<div class="modal" id="zone-modal" role="dialog" aria-modal="true" aria-labelledby="zone-h">
+  <div class="modal__head"><h2 id="zone-h" class="panel__title">Time zone</h2></div>
+  <div class="modal__body stack">
+    <label class="check"><input type="radio" name="zone-mode" id="zone-local" value="local"> <span>Local: follow this device <span class="muted-small" id="zone-local-now"></span></span></label>
+    <p class="muted-small" style="margin: 0 0 0 1.6rem">A phone that crosses into another zone shows its events in that zone.</p>
+    <label class="check"><input type="radio" name="zone-mode" id="zone-fixed" value="fixed"> <span>Fixed:</span></label>
+    <div style="margin-left: 1.6rem"><label class="sr-only" for="zone-select">Fixed zone</label><select class="form-select" id="zone-select"></select></div>
+    <p class="form-error hide" id="zone-error"></p>
+  </div>
+  <div class="modal__foot"><button type="button" class="btn" data-modal-close>Cancel</button><span class="spacer"></span><button type="button" class="btn btn-primary" id="zone-save">Save</button></div>
 </div>
 
 <div class="modal" id="dup-modal" role="dialog" aria-modal="true" aria-labelledby="dup-h">

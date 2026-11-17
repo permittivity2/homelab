@@ -266,8 +266,44 @@ def test_restore_and_trash(capsys):
 def test_search_groups_hits(capsys):
     with patch("requests.request", return_value=_resp(200, {"q": "dentist", "events": LIST["events"]})) as req:
         assert main(["calendar", "search", "dentist", "soon"]) == 0
-    assert req.call_args.kwargs["params"] == {"q": "dentist soon"}
+    assert req.call_args.kwargs["params"] == {"q": "dentist soon", "related": 1}
     assert "Dentist" in capsys.readouterr().out
+
+
+def test_search_prints_related_by_meaning(capsys):
+    related = [dict(LIST["events"][0], id=42, title="Infusion", location="St Luke's", why="a hospital visit")]
+    body = {"q": "doctor", "events": [], "related": related, "ai": {"available": True, "enabled": True}}
+    with patch("requests.request", return_value=_resp(200, body)) as req:
+        assert main(["calendar", "search", "doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "Related by meaning" in out and "Infusion" in out and "a hospital visit" in out
+    assert req.call_args.kwargs["params"] == {"q": "doctor", "related": 1}
+    with patch("requests.request", return_value=_resp(200, {"q": "doctor", "events": [], "related": [], "related_note": "Turn on AI in Settings to also find events by meaning."})) as req:
+        assert main(["calendar", "search", "doctor", "--no-related"]) == 0
+    assert req.call_args.kwargs["params"] == {"q": "doctor"}
+    assert "nothing matches" in capsys.readouterr().out
+
+
+def test_add_and_edit_pin(capsys):
+    ev = dict(LIST["events"][0], pinned=True, event_timezone="America/Chicago", timezone="America/Denver", event_zone_start="2026-11-20T15:30:00")
+    with patch("requests.request", return_value=_resp(201, ev)) as req:
+        assert main(["calendar", "add", "Hair", "--start", "2026-12-01T13:30", "--timezone", "America/Chicago", "--pin"]) == 0
+    assert req.call_args.kwargs["json"]["pinned"] is True and req.call_args.kwargs["json"]["timezone"] == "America/Chicago"
+    capsys.readouterr()
+    with patch("requests.request", return_value=_resp(200, ev)):
+        assert main(["calendar", "show", "7"]) == 0
+    out = capsys.readouterr().out
+    assert "Zone:      America/Chicago, there 3:30 PM" in out and "pinned" in out
+    with patch("requests.request", return_value=_resp(200, dict(ev, pinned=False))) as req:
+        assert main(["calendar", "edit", "7", "--unpin"]) == 0
+    assert req.call_args.kwargs["json"] == {"pinned": False}
+
+
+def test_zone_for_place(capsys):
+    with patch("requests.request", return_value=_resp(200, {"timezone": "America/Chicago", "confidence": "high", "place": "Overland Park, KS"})) as req:
+        assert main(["calendar", "zone-for-place", "11849", "College", "Blvd,", "Overland", "Park,", "KS"]) == 0
+    assert req.call_args.kwargs["json"] == {"place": "11849 College Blvd, Overland Park, KS"}
+    assert "America/Chicago" in capsys.readouterr().out
 
 
 def test_calendars_create_posts_the_name(capsys):
