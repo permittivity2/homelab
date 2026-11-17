@@ -1,3 +1,10 @@
+homelab-calendar (0.4.2) unstable; urgency=medium
+
+  * In a phone's month cell the time never shrinks (0.4.1 let it, so "9:00am"
+    read "9:" with the title beside it); the title takes the cut, as before.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Mon, 16 Nov 2026 21:06:43 -0600
+
 homelab-calendar (0.4.1) unstable; urgency=medium
 
   * A pinned event's month-cell label drops the zone code on a phone (the pin

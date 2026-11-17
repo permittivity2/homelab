@@ -85,7 +85,7 @@
      into the next day (a long time label did, live on a phone, 0.4.1). The
      multi-day bars are block events, not dot events, so they still span. */
   .fc .fc-daygrid-dot-event { overflow: hidden; }
-  .fc .fc-daygrid-dot-event .fc-event-time { overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; min-width: 0; }
+  .fc .fc-daygrid-dot-event .fc-event-time { flex-shrink: 0; }   /* the time is the point of a phone's month cell: it never shrinks; the title takes the cut (0.4.2) */
   @media print {
     .sidenav, .toolbar, .modal, .undo-toast, .peek, header, nav, .fc .fc-toolbar .fc-button-group, .fc .fc-today-button, .fc .fc-prev-button, .fc .fc-next-button { display: none !important; }
     .app__main { padding: 0; }
