@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MailMasker - non-cloud email, email solutions for your own domain, and file storage and sharing. By invite only.">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="MailMasker">
+  <meta property="og:description" content="A non-cloud way to have email, provide email solutions for your own domain, and store and share files. By invite only.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://www.mailmasker.org/">
+
+  <title>MailMasker</title>
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
+
+  <!-- Stylesheet (shared Silver Linings design system + page overrides) -->
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/mailmasker.css">
+
+  <!-- The app launcher behaves exactly as in every mailmasker app: the fleet's shared
+       shell script (homelab-webtheme) opens and closes the panel by the button's
+       data-menu id, on Escape and on a tap outside. Without script, the plain row
+       of links in <noscript> below stands in for it. -->
+  <script src="https://static.mailmasker.org/theme/v1/shell.js" defer></script>
+  <noscript><style>.launcher { display: none; }</style></noscript>
+</head>
+<body>
+
+  <!-- Header: the logo and the app launcher (the dotted grid; every mailmasker site
+       as a tile, alphabetical), the same launcher the apps carry in their top bar. -->
+  <header class="header">
+    <div class="container header__container">
+      <a href="/" aria-label="MailMasker home">
+        <img src="/images/logo.svg" alt="Silver Linings" class="header__logo">
+      </a>
+      <noscript>
+        <nav class="nav" aria-label="Mailmasker sites">
+          <ul class="nav__list">
+            <li><a href="https://myaccount.mailmasker.org/" class="nav__link">Account</a></li>
+            <li><a href="https://calendar.mailmasker.org/" class="nav__link">Calendar</a></li>
+            <li><a href="https://drive.mailmasker.org/" class="nav__link">Drive</a></li>
+            <li><a href="https://mail.mailmasker.org/" class="nav__link">Email</a></li>
+            <li><a href="https://notes.mailmasker.org/" class="nav__link">Notes</a></li>
+            <li><a href="https://search.mailmasker.org/" class="nav__link">Search</a></li>
+          </ul>
+        </nav>
+      </noscript>
+      <div class="launcher">
+        <button class="launcher-btn" type="button" data-menu="homelab-app-launcher"
+                aria-expanded="false" aria-haspopup="true" aria-label="Mailmasker sites" title="Mailmasker sites">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>
+        </button>
+        <div class="menu launcher__panel" id="homelab-app-launcher" role="menu" aria-label="Mailmasker sites">
+          <div class="launcher__grid">
+            <a class="launcher__tile" role="menuitem" href="https://myaccount.mailmasker.org/"><svg class="launcher__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6"/></svg><span class="launcher__label">Account</span></a>
+            <a class="launcher__tile" role="menuitem" href="https://calendar.mailmasker.org/"><svg class="launcher__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span class="launcher__label">Calendar</span></a>
+            <a class="launcher__tile" role="menuitem" href="https://drive.mailmasker.org/"><svg class="launcher__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l6 10-3 6H6l-3-6z"/><path d="M3 14h18M9 4l-3 10M15 4l3 10"/></svg><span class="launcher__label">Drive</span></a>
+            <a class="launcher__tile" role="menuitem" href="https://mail.mailmasker.org/"><svg class="launcher__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg><span class="launcher__label">Email</span></a>
+            <a class="launcher__tile" role="menuitem" href="https://notes.mailmasker.org/"><svg class="launcher__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l5 5v13H6z"/><path d="M14 3v6h6M9 13h6M9 17h6"/></svg><span class="launcher__label">Notes</span></a>
+            <a class="launcher__tile" role="menuitem" href="https://search.mailmasker.org/"><svg class="launcher__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="launcher__label">Search</span></a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- Hero -->
+    <section id="hero" class="hero">
+      <div class="hero__content">
+        <img src="/images/logo.svg" alt="Silver Linings" class="hero__logo">
+        <h1 class="hero__headline">Thank you for coming to MailMasker.</h1>
+        <p class="hero__subheading">
+          MailMasker is a non-cloud way to have email, to provide email solutions
+          for your own domain, and to store and share files.
+        </p>
+        <p class="hero__note">MailMasker is by invite only.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer__content">
+        <p class="footer__text">
+          MailMasker is a product of
+          <a href="https://silverlinings.llc/" class="footer__link">Silver Linings,&nbsp;LLC</a>.
+        </p>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

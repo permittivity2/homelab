@@ -1,0 +1,36 @@
+<svg width="240" height="80" viewBox="0 0 240 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Subtle glow filter for silver elements -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Silver arc - the "lining" breaking through darkness -->
+  <path d="M 10 40 Q 35 10, 60 40" stroke="#e8e8e8" stroke-width="1.5" fill="none" opacity="0.4" filter="url(#glow)"/>
+
+  <!-- "S" letter -->
+  <path d="M 25 50 Q 25 35, 40 35 Q 55 35, 55 45 Q 55 55, 40 55 Q 25 55, 25 70 Q 25 85, 40 85 Q 55 85, 55 75"
+        stroke="#c0c0c0" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- "L" letter -->
+  <path d="M 70 35 L 70 85 L 95 85"
+        stroke="#c0c0c0" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Thin arc accent wrapping around -->
+  <path d="M 15 75 Q 40 90, 65 75" stroke="#e8e8e8" stroke-width="1" fill="none" opacity="0.3" filter="url(#glow)"/>
+
+  <!-- Wordmark: SILVER LININGS -->
+  <text x="110" y="48" font-family="'Inter', -apple-system, BlinkMacSystemFont, sans-serif"
+        font-size="18" font-weight="500" fill="#c0c0c0" letter-spacing="2">
+    SILVER
+  </text>
+  <text x="110" y="70" font-family="'Inter', -apple-system, BlinkMacSystemFont, sans-serif"
+        font-size="18" font-weight="300" fill="#a0a0a0" letter-spacing="2">
+    LININGS
+  </text>
+</svg>

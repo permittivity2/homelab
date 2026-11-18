@@ -1,0 +1,104 @@
+/* MailMasker - page-specific overrides layered on the shared Silver Linings
+   design system (css/style.css). Kept separate so style.css stays a verbatim
+   copy of the silverlinings.llc stylesheet and can be re-synced cleanly. */
+
+/* Single-screen landing page: leave room for the sticky header so the hero
+   content sits optically centred, and pull the footer up (style.css sets a
+   large margin-top intended for long multi-section pages). */
+.hero {
+  min-height: calc(100vh - 160px);
+}
+
+.footer {
+  margin-top: var(--space-8);
+}
+
+/* "By invite only" - quieter than the subheading, sits just under it. */
+.hero__note {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-light);
+  color: var(--text-muted);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  margin-top: var(--space-6);
+}
+
+/* The footer link is the only link down there; give it the silver treatment
+   rather than style.css's muted footer-nav look. */
+.footer__text .footer__link {
+  color: var(--silver-medium);
+  border-bottom: 1px solid rgba(192, 192, 192, 0.3);
+  transition: color var(--transition-base), border-color var(--transition-base);
+}
+.footer__text .footer__link:hover,
+.footer__text .footer__link:focus-visible {
+  color: var(--silver-bright);
+  border-bottom-color: var(--silver-bright);
+}
+
+/* The app launcher (post-cutover #95): the dotted button at the right of the
+   header and its panel of tiles, one per mailmasker site, alphabetical. Same
+   markup, icons and sites as homelab-webtheme's header (#94), written in this
+   page's own variables because the page does not load the theme stylesheet.
+   The panel is a .menu: the theme's shell.js toggles `open` on it. */
+.launcher { position: relative; }
+.launcher-btn {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center;
+  border: 1px solid transparent;
+  color: var(--silver-medium);
+  transition: background var(--transition-base), border-color var(--transition-base), color var(--transition-base);
+}
+.launcher-btn:hover,
+.launcher-btn[aria-expanded="true"] {
+  background: rgba(192, 192, 192, 0.1);
+  border-color: rgba(192, 192, 192, 0.2);
+  color: var(--silver-bright);
+}
+.launcher-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.menu {
+  position: absolute; right: 0; top: calc(100% + var(--space-2));
+  z-index: var(--z-dropdown);
+  background: var(--black-secondary);
+  border: 1px solid rgba(192, 192, 192, 0.2);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  display: none;
+}
+.menu.open { display: block; }
+.launcher__panel {
+  width: min(328px, calc(100vw - 2 * var(--container-padding)));
+  padding: var(--space-3);
+}
+.launcher__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+.launcher__tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--space-2);
+  min-height: 88px; padding: var(--space-3) var(--space-2);
+  border-radius: var(--radius-md);
+  border-bottom: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm); font-weight: var(--weight-medium);
+  transition: background var(--transition-base), color var(--transition-base);
+}
+.launcher__tile:hover,
+.launcher__tile:focus-visible {
+  background: rgba(192, 192, 192, 0.1);
+  color: var(--silver-bright);
+  border-bottom: 0;
+}
+.launcher__icon { width: 28px; height: 28px; color: var(--silver-medium); }
+.launcher__tile:hover .launcher__icon,
+.launcher__tile:focus-visible .launcher__icon { color: var(--silver-bright); }
+.launcher__label { line-height: 1.2; text-align: center; }
+
+/* Without script the <noscript> row of six links shows instead; let it wrap
+   on a phone (style.css's row was made for four). */
+.nav__list { flex-wrap: wrap; justify-content: flex-end; }

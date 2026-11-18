@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg version="1.2" baseProfile="tiny-ps" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <title>Silver Linings</title>
+  <rect x="0" y="0" width="120" height="120" fill="#14161c"/>
+  <path d="M 25 50 Q 25 35, 40 35 Q 55 35, 55 45 Q 55 55, 40 55 Q 25 55, 25 70 Q 25 85, 40 85 Q 55 85, 55 75" fill="none" stroke="#c0c0c0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 70 35 L 70 85 L 95 85" fill="none" stroke="#c0c0c0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
