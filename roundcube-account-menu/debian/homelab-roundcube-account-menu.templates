@@ -22,3 +22,13 @@ Description: URL of the brand logo to show above Roundcube's task rail:
  means a rebrand changes one file and every app -- webmail included --
  picks it up, with no package rebuild. Set to the empty string to leave
  Roundcube's own logo alone.
+
+Template: homelab-roundcube-account-menu/favicon_url
+Type: string
+Default: https://static.mailmasker.org/theme/v1/favicon.svg
+Description: URL of the tab icon (favicon) for Roundcube's pages:
+ Written into config.inc.php's $config['skin_logo'] as its '[favicon]'
+ entry, which Roundcube emits as the page's <link rel="shortcut icon">
+ with no skin-template edit. The default is the Silver Linings mark
+ every other mailmasker site shows, served from the shared asset host.
+ Set to the empty string to keep Roundcube's own icon.

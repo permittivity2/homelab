@@ -81,17 +81,25 @@ navigates to the account app rather than doing nothing.
 
 ## Config
 
-Two debconf values, written to `config.inc.php`:
+Three debconf values, written to `config.inc.php`:
 
 - `homelab-roundcube-account-menu/myaccount_url` →
   `$config['account_menu_url']` (default
   `https://myaccount.mailmasker.org`). The public, browser-reachable
   vhost of the account app. Set it to the test host
   (`https://myaccount.test.mailmasker.org`) in the test environment.
-- `homelab-roundcube-account-menu/logo_url` → `$config['skin_logo']`
-  (default `https://static.mailmasker.org/theme/v1/logo.svg`, the same
-  asset `homelab-webtheme` serves to drive and myaccount). Set it empty
-  to leave Roundcube's own logo alone.
+- `homelab-roundcube-account-menu/logo_url` → the `'*'` entry of
+  `$config['skin_logo']` (default
+  `https://static.mailmasker.org/theme/v1/logo.svg`, the same asset
+  `homelab-webtheme` serves to drive and myaccount). Set it empty to leave
+  Roundcube's own logo alone.
+- `homelab-roundcube-account-menu/favicon_url` → the `'[favicon]'` entry of
+  `$config['skin_logo']` (default
+  `https://static.mailmasker.org/theme/v1/favicon.svg`, the theme's tab
+  icon; post-cutover #96). Roundcube emits it as the page's
+  `<link rel="shortcut icon">`; with the plain-string form Roundcube used
+  the logo as the favicon too (a white smudge at tab size). Set it empty
+  to fall back to that behaviour.
 
 ## Install / upgrade safety
 

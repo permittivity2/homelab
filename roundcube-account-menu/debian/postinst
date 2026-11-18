@@ -49,6 +49,9 @@ case "$1" in
         RET=""
         db_get homelab-roundcube-account-menu/logo_url || true
         LOGO_URL="$RET"
+        RET=""
+        db_get homelab-roundcube-account-menu/favicon_url || true
+        FAVICON_URL="$RET"
 
         # Mandatory symlink, not a copy -- Roundcube's plugin loader only
         # resolves against /var/lib/roundcube/plugins/, not the $SHARE_DIR
@@ -109,22 +112,35 @@ case "$1" in
             exit 0
         fi
 
-        # Brand logo above the task rail. $config['skin_logo'] is a
-        # supported core option (rcmail_output_html::get_template_logo) --
-        # NOT a skin edit -- so a Roundcube upgrade cannot undo it. An
-        # absolute URL is fine: the <img src> is emitted verbatim, and
-        # pointing it at the shared asset host means a rebrand needs no
+        # Brand logo above the task rail, and the tab icon (#96).
+        # $config['skin_logo'] is a supported core option
+        # (rcmail_output_html::get_template_logo) -- NOT a skin edit -- so a
+        # Roundcube upgrade cannot undo it; its array form takes a '[favicon]'
+        # entry too, which the page emits as its <link rel="shortcut icon">.
+        # With the plain-string form Roundcube used the LOGO as the favicon
+        # as well, so the tab showed the wordmark squeezed into 16px (a white
+        # smudge), while every other mailmasker site shows the Silver Linings
+        # mark. Absolute URLs are fine: both are emitted verbatim,
+        # and pointing them at the shared asset host means a rebrand needs no
         # rebuild of this package. Same idempotent replace-or-append as
-        # account_menu_url above.
-        if [ -n "$LOGO_URL" ]; then
-            if grep -q "skin_logo" "$RC_CONFIG"; then
-                sed -i "s#\$config\['skin_logo'\] = '[^']*';#\$config['skin_logo'] = '$LOGO_URL';#" "$RC_CONFIG"
+        # account_menu_url above; the replace matches the whole line, so the
+        # plain-string form older releases wrote is upgraded in place.
+        if [ -n "$LOGO_URL" ] || [ -n "$FAVICON_URL" ]; then
+            SKIN_LOGO=""
+            [ -n "$LOGO_URL" ] && SKIN_LOGO="'*' => '$LOGO_URL'"
+            if [ -n "$FAVICON_URL" ]; then
+                [ -n "$SKIN_LOGO" ] && SKIN_LOGO="$SKIN_LOGO, "
+                SKIN_LOGO="$SKIN_LOGO'[favicon]' => '$FAVICON_URL'"
+            fi
+            SKIN_LOGO_LINE="\$config['skin_logo'] = [$SKIN_LOGO];"
+            if grep -q "^[\$]config\['skin_logo'\]" "$RC_CONFIG"; then
+                sed -i "s#^[\$]config\['skin_logo'\] = .*;\$#$SKIN_LOGO_LINE#" "$RC_CONFIG"
             else
                 {
                     echo ""
                     echo "// Added by homelab-roundcube-account-menu's postinst -- do not hand-edit,"
                     echo "// use dpkg-reconfigure homelab-roundcube-account-menu instead."
-                    echo "\$config['skin_logo'] = '$LOGO_URL';"
+                    echo "$SKIN_LOGO_LINE"
                 } >> "$RC_CONFIG"
             fi
 
@@ -151,7 +167,10 @@ case "$1" in
         echo "plugin:  $RC_PLUGIN_DIR -> $OWN_PLUGIN_DIR"
         echo "config:  $RC_CONFIG (account_menu_url = $MYACCOUNT_URL)"
         if [ -n "$LOGO_URL" ]; then
-            echo "logo:    $LOGO_URL (\$config['skin_logo'])"
+            echo "logo:    $LOGO_URL (\$config['skin_logo'] '*')"
+        fi
+        if [ -n "$FAVICON_URL" ]; then
+            echo "favicon: $FAVICON_URL (\$config['skin_logo'] '[favicon]')"
         fi
         echo ""
         ;;
