@@ -1525,7 +1525,9 @@ sub metrics ($self) {
     # watchdog found a national holiday the rules do not know (alerted on).
     $m{holidays_events} = $db->query(q{SELECT count(*) FROM calendar.events e JOIN calendar.calendars c ON c.id = e.calendar_id
                                         WHERE c.kind = 'holidays' AND e.deleted_at IS NULL})->array->[0];
-    $m{holidays_through_year} = $db->query(q{SELECT COALESCE(through_year, 0) FROM calendar.holiday_runs WHERE kind = 'fill'})->array->[0] // 0;
+    # No row before the first fill (a fresh install's first seconds): 0, not a crash.
+    my $fill = $db->query(q{SELECT through_year FROM calendar.holiday_runs WHERE kind = 'fill'})->hash;
+    $m{holidays_through_year} = ($fill && defined $fill->{through_year}) ? $fill->{through_year} : 0;
     $m{holidays_unknown} = $db->query(q{SELECT COALESCE(SUM(cardinality(unknown)), 0) FROM calendar.holiday_checks
                                          WHERE ok AND year >= EXTRACT(YEAR FROM NOW())::int})->array->[0];
     return \%m;

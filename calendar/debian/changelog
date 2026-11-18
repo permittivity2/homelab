@@ -1,3 +1,10 @@
+homelab-calendar (0.6.1) unstable; urgency=medium
+
+  * /metrics no longer dies before the first holidays fill (a fresh schema has
+    no holiday_runs row yet); CI's calendar-db-tests caught it. A test guards it.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 17 Nov 2026 22:22:00 -0600
+
 homelab-calendar (0.6.0) unstable; urgency=medium
 
   * Holidays (post-cutover #92): common US holidays from RULES in the

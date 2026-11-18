@@ -32,6 +32,11 @@ sub chi ($y, $mo, $d) { return DateTime->new(year => $y, month => $mo, day => $d
 sub live ($cal_id) { return $db->query('SELECT count(*) FROM calendar.events WHERE calendar_id = ? AND deleted_at IS NULL', $cal_id)->array->[0] }
 sub seq  ($cal_id) { return $db->query('SELECT COALESCE(max(change_seq), 0) FROM calendar.events WHERE calendar_id = ?', $cal_id)->array->[0] }
 
+# --- before any fill (a fresh install's first seconds) ---------------------------
+$db->query(q{DELETE FROM calendar.holiday_runs WHERE kind = 'fill'});
+is $m->metrics->{holidays_through_year}, 0, 'the through-year metric is 0 before the first fill (CI found a crash here)';
+is $m->holidays_state($me)->{through_year}, undef, '... and the state has no year yet';
+
 # --- the calendar --------------------------------------------------------------
 my $cal = $m->ensure_holidays_calendar;
 ok $cal && $cal->{kind} eq 'holidays', 'the holidays calendar exists';
