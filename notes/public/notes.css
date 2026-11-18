@@ -155,7 +155,7 @@ body.nb-side-open { overflow: hidden; }
   .note-editor.preview-on textarea { display: none; }
   .note-editor textarea, .note-preview { min-height: 40vh; min-height: 40dvh; }
   .note-title { font-size: var(--app-lg); flex-basis: 100%; }
-  .note-list__head .btn { min-height: 44px; }
+  .note-list__head .btn { display: none; }      /* the action row above carries + New note on a phone; two of them looked wrong (0.1.1) */
   .form-grid { grid-template-columns: 1fr; }
   .form-grid .span2 { grid-column: auto; }
   .modal { max-height: calc(100vh - var(--space-4)); max-height: calc(100dvh - var(--space-4)); }

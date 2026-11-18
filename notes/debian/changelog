@@ -1,3 +1,10 @@
+homelab-notes (0.1.1) unstable; urgency=medium
+
+  * On a phone the list showed two "+ New note" buttons (the action row's and
+    the list head's); the list head's now hides there.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 18 Nov 2026 09:05:00 -0600
+
 homelab-notes (0.1.0) unstable; urgency=medium
 
   * First release (post-cutover #71): notes.<domain>. Notebooks, folders and
