@@ -183,6 +183,7 @@ homelab-cli calendar search <words> [--no-related]        (with AI on, also the 
 homelab-cli calendar add "..." --start ... --timezone America/Chicago --pin      homelab-cli calendar edit <id> --pin|--unpin
 homelab-cli calendar zone-for-place <address or town>     (the zone an address keeps, read by the AI)
 homelab-cli calendar devices [list | add "<device name>" | revoke <id>]     (app passwords for CalDAV: a phone syncs both ways with your address and one of these)
+homelab-cli calendar holidays [on | off]                                   (the built-in US holidays calendar: is it on for you; switch it; from rules in the calendar, nothing fetched)
 homelab-cli calendar export [--from <when> --to <when>] [--calendar <id>] [-o <file>]
 homelab-cli calendar import <file.ics> [--calendar <id>] [--dry-run]
 homelab-cli calendar calendars [create <name> [--color #rrggbb] [--timezone <zone>]]

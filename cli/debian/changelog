@@ -1,3 +1,10 @@
+homelab-cli (0.7.5) unstable; urgency=medium
+
+  * `calendar holidays [on|off]` (post-cutover #92): the built-in US
+    holidays calendar, on or off for your account.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 17 Nov 2026 22:09:31 -0600
+
 homelab-cli (0.7.4) unstable; urgency=medium
 
   * `calendar devices [list|add|revoke]` (post-cutover #84): the app

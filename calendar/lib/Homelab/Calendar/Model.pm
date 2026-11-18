@@ -865,6 +865,168 @@ sub set_dav_name ($self, $cal_id, $name) {
 
 # ------------------------------------------------------------------- shares
 
+# ------------------------------------------------------------ holidays (#92)
+# A built-in calendar of common US holidays. Homelab::Calendar::Holidays has
+# the rules; this is the row keeping. HOLIDAYS_OWNER is a system address
+# nobody signs in as, so the calendar is nobody's: a person's switch is a
+# read share of it to them (calendar.shares, as any calendar shared to
+# them), and nothing else about shares, CalDAV, search or the sidebar needs
+# to know it is special.
+
+our $HOLIDAYS_OWNER = 'holidays@calendar.invalid';
+our $HOLIDAYS_COLOR = '#5f9e6e';
+
+sub holidays_calendar ($self) {
+    return $self->db->query(q{SELECT * FROM calendar.calendars WHERE kind = 'holidays' AND deleted_at IS NULL})->hash;
+}
+
+sub ensure_holidays_calendar ($self) {
+    my $row = $self->holidays_calendar;
+    return $row if $row;
+    require Homelab::Calendar::Holidays;
+    # There is one of each built-in kind: undelete before making one.
+    $self->db->query(q{UPDATE calendar.calendars SET deleted_at = NULL, updated_at = NOW() WHERE kind = 'holidays'});
+    $self->db->query(
+        q{INSERT INTO calendar.calendars (owner_email, name, color, description, timezone, position, kind)
+          VALUES (?, ?, ?, ?, ?, 1000, 'holidays') ON CONFLICT (kind) WHERE kind <> 'personal' DO NOTHING},
+        $HOLIDAYS_OWNER, $Homelab::Calendar::Holidays::SET_NAME, $HOLIDAYS_COLOR,
+        'Federal holidays and their days off, common observances and the Easter days, from rules built into the calendar.',
+        $self->default_zone,
+    );
+    return $self->holidays_calendar;
+}
+
+# fill_holidays(years_ahead => 10, now => DateTime, force => 0|1)
+# The rules' rows for the years now-1 .. now+years_ahead as all-day events on
+# the holidays calendar. A row that is already there and the same is not
+# touched (no change_seq, so a phone's sync sees nothing); one the rules no
+# longer give (a year that fell out of the window, a renamed rule) goes to the
+# trash. Skipped altogether while the last fill had the same window and
+# digest, so the Runner may call this often. One process at a time.
+# Returns { ran => 0|1, reason, written, removed, from, through, calendar }.
+sub fill_holidays ($self, %o) {
+    require Homelab::Calendar::Holidays;
+    my $now  = $o{now} // DateTime->now(time_zone => $self->default_zone);
+    my $from = $now->year - 1;
+    my $to   = $now->year + ($o{years_ahead} // 10);
+    my $rows = Homelab::Calendar::Holidays::holidays_for_years($from, $to);
+    my $digest = Homelab::Calendar::Holidays::rules_digest($rows);
+    my $cal = $self->ensure_holidays_calendar or die "The holidays calendar could not be made.\n";
+    my $db = $self->db;
+    my $tx = $db->begin;
+    return { ran => 0, reason => 'busy', calendar => $cal }
+        unless $db->query('SELECT pg_try_advisory_xact_lock(hashtext(?))', 'calendar.holidays.fill')->array->[0];
+    my $last = $db->query(q{SELECT * FROM calendar.holiday_runs WHERE kind = 'fill'})->hash;
+    if (!$o{force} && $last && ($last->{digest} // '') eq $digest) {
+        $tx->commit;
+        return { ran => 0, reason => 'unchanged', from => $last->{from_year}, through => $last->{through_year}, calendar => $cal };
+    }
+    my $zone = validate_zone($cal->{timezone}) ? $cal->{timezone} : $self->default_zone;
+    my ($written, $removed) = (0, 0);
+    for my $r (@$rows) {
+        my $start = Homelab::Calendar::Recurrence::parse_wall($r->{start}, $zone) or die "holidays: bad date $r->{start}\n";
+        my $end   = Homelab::Calendar::Recurrence::parse_wall($r->{end},   $zone) or die "holidays: bad date $r->{end}\n";
+        my $res = $db->query(q{
+            INSERT INTO calendar.events AS e
+                (calendar_id, uid, created_by_email, title, description, all_day, starts_at, ends_at, start_date, end_date, timezone)
+            VALUES (?, ?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?)
+            ON CONFLICT (uid) DO UPDATE SET
+                calendar_id = EXCLUDED.calendar_id, title = EXCLUDED.title, description = EXCLUDED.description, all_day = TRUE,
+                starts_at = EXCLUDED.starts_at, ends_at = EXCLUDED.ends_at, start_date = EXCLUDED.start_date, end_date = EXCLUDED.end_date,
+                timezone = EXCLUDED.timezone, deleted_at = NULL, updated_at = NOW()
+            WHERE (e.calendar_id, e.title, e.description, e.all_day, e.start_date, e.end_date, e.timezone, e.deleted_at IS NULL)
+               IS DISTINCT FROM (EXCLUDED.calendar_id, EXCLUDED.title, EXCLUDED.description, TRUE, EXCLUDED.start_date, EXCLUDED.end_date, EXCLUDED.timezone, TRUE)
+            RETURNING id},
+            $cal->{id}, $r->{uid}, $HOLIDAYS_OWNER, $r->{title}, $r->{about},
+            $start->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00'), $end->clone->set_time_zone('UTC')->strftime('%Y-%m-%d %H:%M:%S+00'),
+            $r->{start}, $r->{end}, $zone,
+        );
+        $written += $res->rows;
+    }
+    my $gone = $db->query(
+        q{UPDATE calendar.events SET deleted_at = NOW(), updated_at = NOW() WHERE calendar_id = ? AND deleted_at IS NULL AND NOT (uid = ANY(?::text[])) RETURNING id},
+        $cal->{id}, [ map { $_->{uid} } @$rows ],
+    );
+    $removed = $gone->rows;
+    # A fill that ran means new rules or a new year: a name the watchdog found
+    # unknown is asked about again (the next check clears it when the new
+    # rules know it, or finds it still unknown).
+    $db->query('DELETE FROM calendar.holiday_checks WHERE cardinality(unknown) > 0');
+    $db->query(
+        q{INSERT INTO calendar.holiday_runs (kind, ran_at, from_year, through_year, digest, rows_written, rows_removed, note)
+          VALUES ('fill', NOW(), ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (kind) DO UPDATE SET ran_at = NOW(), from_year = EXCLUDED.from_year, through_year = EXCLUDED.through_year,
+              digest = EXCLUDED.digest, rows_written = EXCLUDED.rows_written, rows_removed = EXCLUDED.rows_removed, note = EXCLUDED.note},
+        $from, $to, $digest, $written, $removed, $o{note},
+    );
+    $tx->commit;
+    return { ran => 1, written => $written, removed => $removed, from => $from, through => $to, calendar => $cal };
+}
+
+# What Settings, the API and the CLI show: whether this person has holidays
+# on, the calendar, how many days it holds and through which year, and the
+# watchdog's last word.
+sub holidays_state ($self, $email) {
+    require Homelab::Calendar::Holidays;
+    my $cal = $self->holidays_calendar;
+    my $on = ($cal && grep { $_->{calendar_id} == $cal->{id} } @{ $self->viewer_calendar_shares($email) }) ? 1 : 0;
+    my $run = $self->db->query(q{SELECT * FROM calendar.holiday_runs WHERE kind = 'fill'})->hash // {};
+    my $events = $cal ? $self->db->query('SELECT count(*) FROM calendar.events WHERE calendar_id = ? AND deleted_at IS NULL', $cal->{id})->array->[0] : 0;
+    return {
+        on => $on, calendar => $cal, name => $Homelab::Calendar::Holidays::SET_NAME, events => $events + 0,
+        from_year => $run->{from_year}, through_year => $run->{through_year}, filled_at => $run->{ran_at},
+        check => $self->latest_holiday_check,
+    };
+}
+
+# The switch. On: a read share of the holidays calendar to this account (and
+# the sidebar tick back on, should it have been unticked before); the rows are
+# made first if the Runner has not been round yet. Off: the share revoked.
+sub set_holidays ($self, $email, $on) {
+    my $me = _norm($email);
+    die "Sign in first.\n" unless length $me;
+    if ($on) {
+        $self->fill_holidays;
+        my $cal = $self->holidays_calendar or die "The holidays calendar is not ready yet; try again in a minute.\n";
+        my @live = grep { $_->{calendar_id} == $cal->{id} } @{ $self->viewer_calendar_shares($me) };
+        $self->create_share(owner => $HOLIDAYS_OWNER, calendar_id => $cal->{id}, shared_with_email => $me, permission => 'read') unless @live;
+        $self->set_visibility($me, $cal->{id}, 1);
+    }
+    elsif (my $cal = $self->holidays_calendar) {
+        $self->revoke_share($_->{id}) for grep { $_->{calendar_id} == $cal->{id} } @{ $self->viewer_calendar_shares($me) };
+    }
+    return $self->holidays_state($me);
+}
+
+# The watchdog's record (Runner.pm, check_holidays). claim_holiday_check is
+# the race: the first process to claim a year does the asking; a year whose
+# check never finished or failed may be claimed again a day later; a year
+# checked fine is never asked about again.
+sub claim_holiday_check ($self, $year) {
+    my $r = $self->db->query(
+        q{INSERT INTO calendar.holiday_checks AS h (year, started_at) VALUES (?, NOW())
+          ON CONFLICT (year) DO UPDATE SET started_at = NOW(), checked_at = NULL, ok = NULL, note = 'retry'
+          WHERE h.ok IS DISTINCT FROM TRUE AND h.started_at < NOW() - INTERVAL '1 day'
+          RETURNING year}, $year,
+    );
+    return $r->rows ? 1 : 0;
+}
+sub holiday_check_done ($self, $year, $unknown, $note = undef) {
+    $self->db->query(q{UPDATE calendar.holiday_checks SET checked_at = NOW(), ok = TRUE, unknown = ?::text[], note = ? WHERE year = ?},
+        [ @{ $unknown // [] } ], $note, $year);
+    return 1;
+}
+sub holiday_check_failed ($self, $year, $error) {
+    $self->db->query(q{UPDATE calendar.holiday_checks SET checked_at = NOW(), ok = FALSE, note = ? WHERE year = ?}, substr($error // 'failed', 0, 500), $year);
+    return 1;
+}
+sub holiday_check ($self, $year) {
+    return $self->db->query('SELECT * FROM calendar.holiday_checks WHERE year = ?', $year)->hash;
+}
+sub latest_holiday_check ($self) {
+    return $self->db->query(q{SELECT * FROM calendar.holiday_checks WHERE ok IS NOT NULL ORDER BY checked_at DESC, year DESC LIMIT 1})->hash;
+}
+
 sub shares_for_calendar ($self, $cal_id) {
     return $self->db->query('SELECT * FROM calendar.shares WHERE calendar_id = ? AND revoked_at IS NULL ORDER BY created_at', $cal_id)->hashes->to_array;
 }
@@ -1359,6 +1521,13 @@ sub metrics ($self) {
         for @{ $db->query('SELECT job_state, count(*) AS n FROM calendar.mail_links WHERE expires_at > NOW() GROUP BY job_state')->hashes->to_array };
     $m{events}    = $db->query('SELECT count(*) FROM calendar.events WHERE deleted_at IS NULL')->array->[0];
     $m{reminders} = $db->query('SELECT count(*) FROM calendar.reminders')->array->[0];
+    # #92: the holidays calendar's rows, how far it reaches, and whether the
+    # watchdog found a national holiday the rules do not know (alerted on).
+    $m{holidays_events} = $db->query(q{SELECT count(*) FROM calendar.events e JOIN calendar.calendars c ON c.id = e.calendar_id
+                                        WHERE c.kind = 'holidays' AND e.deleted_at IS NULL})->array->[0];
+    $m{holidays_through_year} = $db->query(q{SELECT COALESCE(through_year, 0) FROM calendar.holiday_runs WHERE kind = 'fill'})->array->[0] // 0;
+    $m{holidays_unknown} = $db->query(q{SELECT COALESCE(SUM(cardinality(unknown)), 0) FROM calendar.holiday_checks
+                                         WHERE ok AND year >= EXTRACT(YEAR FROM NOW())::int})->array->[0];
     return \%m;
 }
 

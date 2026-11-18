@@ -84,6 +84,18 @@ calendar:
 #   home_url: https://mailmasker.org/
 
 # What this instance announces itself as in homelab-api's service registry.
+# Holidays (#92): the built-in US holidays calendar, filled from rules in the
+# package (nothing is fetched to show a holiday) for the years now-1 .. now+
+# years_ahead, looked at every `every` seconds by the runner. check_url is the
+# once-a-year watchdog: Nager.Date's national public holidays for this year
+# and the next, compared by name with the rules; %d is the year; 0 turns it
+# off. All optional; these are the defaults.
+holidays:
+  enabled: 1
+  years_ahead: 10
+  every: 3600
+  check_url: https://date.nager.at/api/v3/PublicHolidays/%d/US
+
 registry:
   host: 127.0.0.1
   port: 2519

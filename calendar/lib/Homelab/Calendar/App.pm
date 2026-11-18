@@ -105,6 +105,7 @@ sub startup ($self) {
             model => $self->model, ai => $self->ai, mailer => $self->mailer, log => $self->log,
             public_base_url => $self->public_base_url, default_zone => $self->default_zone,
             interval => ($run->{interval} // 30), propose_max => ($run->{ai_in_flight} // 2),
+            holidays => (ref $config->{holidays} eq 'HASH' ? $config->{holidays} : {}),
         )->start;
     }
 
@@ -376,6 +377,11 @@ sub startup ($self) {
     $r->get('/internal/v1/calendar/devices')                                ->to('api#internal_devices');
     $r->post('/internal/v1/calendar/devices')                               ->to('api#internal_device_create');
     $r->post('/internal/v1/calendar/devices/:id/revoke' => [id => qr/\d+/]) ->to('api#internal_device_revoke');
+    # Holidays (#92): the built-in US holidays calendar, on or off for this account.
+    $r->get('/api/holidays')                                  ->to('api#holidays');
+    $r->put('/api/holidays')                                  ->to('api#set_holidays');
+    $r->get('/internal/v1/calendar/holidays')                 ->to('api#internal_holidays');
+    $r->put('/internal/v1/calendar/holidays')                 ->to('api#internal_holidays_set');
 
     return;
 }

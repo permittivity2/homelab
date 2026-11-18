@@ -2518,6 +2518,46 @@ def cmd_calendar_devices(args):
     return 0
 
 
+def cmd_calendar_holidays(args):
+    """The built-in US holidays calendar (#92): whether it is on for you,
+    what it holds, the yearly check's last word; 'on' or 'off' switches it."""
+    session = _require_session(args)
+    if not session:
+        return 1
+    client = _client(args)
+    state = getattr(args, "state", None)
+    try:
+        if state in ("on", "off"):
+            result = client.calendar_set_holidays(session["token"], state == "on")
+        else:
+            result = client.calendar_holidays(session["token"])
+    except ApiError as e:
+        _emit_error(args, f"Could not {'switch' if state else 'read'} the holidays: {e.message}")
+        return 1
+    if _emit(args, result):
+        return 0
+    on = bool(result.get("on"))
+    name = result.get("name") or "US Holidays"
+    print(f"{name}: {'on' if on else 'off'}" + (" (switched just now)" if state else ""))
+    span = ""
+    if result.get("through_year"):
+        span = f", {result.get('events')} days {result.get('from_year')}-{result.get('through_year')}"
+    print(f"Federal holidays and their days off, common observances and the Easter days{span}; "
+          "from rules in the calendar, nothing fetched.")
+    chk = result.get("check")
+    if chk:
+        when = (chk.get("checked_at") or "")[:10]
+        if chk.get("ok"):
+            unknown = chk.get("unknown") or []
+            print(f"Checked against Nager.Date for {chk.get('year')} on {when}: "
+                  + (("national holidays the rules do not know: " + ", ".join(unknown)) if unknown else "nothing new."))
+        else:
+            print(f"The check against Nager.Date for {chk.get('year')} failed on {when}; it is tried again daily.")
+    if not on:
+        print("Switch on with: homelab-cli calendar holidays on")
+    return 0
+
+
 def cmd_calendar_unshare(args):
     session = _require_session(args)
     if not session:
@@ -3867,6 +3907,11 @@ def build_parser():
     pd.add_argument("device_id")
     pd.set_defaults(func=cmd_calendar_devices)
     p.set_defaults(func=cmd_calendar_devices)
+
+    # Holidays (post-cutover #92): the built-in US holidays calendar.
+    p = calendar_sub.add_parser("holidays", help="The built-in US holidays calendar: is it on for you; 'on' or 'off' switches it")
+    p.add_argument("state", nargs="?", choices=["on", "off"], help="Switch it on or off; nothing just shows")
+    p.set_defaults(func=cmd_calendar_holidays)
 
     # Invitations (post-cutover #85).
     p = calendar_sub.add_parser("attendees", help="Who is invited to an event and what each answered")

@@ -1,6 +1,9 @@
 package Homelab::Calendar::Runner;
 use Mojo::Base -base, -signatures;
 use Mojo::IOLoop;
+use Mojo::Promise;
+use Mojo::URL;
+use Mojo::UserAgent;
 use DateTime;
 use Exporter 'import';
 use Homelab::Calendar::Recurrence qw(validate_zone);
@@ -47,6 +50,12 @@ has horizon_hours   => 48;       # how far ahead occurrences are queued
 has propose_max     => 2;        # AI calls in flight per process
 has in_flight       => 0;
 has _last_err       => sub { {} };
+# #92: the holidays calendar. The config's holidays: block -- enabled (1),
+# years_ahead (10), every (seconds between looks, 3600), check_url (Nager.Date
+# with %d for the year; 0 turns the watchdog off).
+has holidays        => sub { {} };
+has ua              => sub { Mojo::UserAgent->new->connect_timeout(10)->inactivity_timeout(30)->request_timeout(30)->max_redirects(2) };
+has _holidays_next  => 0;
 
 sub start ($self) {
     # A little jitter so six processes do not all wake on the same second.
@@ -61,7 +70,63 @@ sub tick ($self) {
     $self->_guard('reminders' => sub { $self->run_reminders });
     $self->_guard('notices'   => sub { $self->run_notices });
     $self->_guard('proposals' => sub { $self->run_proposals });
+    $self->_guard('holidays'  => sub { $self->run_holidays });
     return;
+}
+
+# ------------------------------------------------------------- holidays (#92)
+
+# The built-in holidays calendar: filled from the rules on the first tick
+# after an install and looked at hourly after that (one row read when nothing
+# changed: the fill skips itself while its window and digest are the same;
+# a New Year adds a year and retires the oldest). Then the watchdog.
+sub run_holidays ($self) {
+    my $h = $self->holidays // {};
+    return if defined $h->{enabled} && !$h->{enabled};
+    return if time < $self->_holidays_next;
+    $self->_holidays_next(time + ($h->{every} // 3600));
+    my $r = $self->model->fill_holidays(years_ahead => ($h->{years_ahead} // 10));
+    $self->log->info("calendar runner: holidays $r->{from}-$r->{through} filled: $r->{written} written, $r->{removed} retired") if $r->{ran} && $self->log;
+    $self->check_holidays;
+    return;
+}
+
+# Once a year, for this year and the next: Nager.Date's national public
+# holidays, compared by name with the rules' federal set
+# (Homelab::Calendar::Holidays::unknown_national_names). A name the rules do
+# not know is kept on the year's row (Settings shows it, /metrics counts it,
+# Prometheus alerts). Asked without blocking; the first process to claim the
+# year asks, a failed fetch is retried a day later, and nothing here touches
+# the holidays shown. Returns the promises, for the tests to wait on.
+sub check_holidays ($self, $year = undef) {
+    my $h = $self->holidays // {};
+    my $url = exists $h->{check_url} ? $h->{check_url} : 'https://date.nager.at/api/v3/PublicHolidays/%d/US';
+    return [] unless defined $url && length $url && $url ne '0';
+    my $m = $self->model;
+    $year //= DateTime->now(time_zone => $self->default_zone)->year;
+    my @p;
+    for my $y ($year, $year + 1) {
+        next unless $m->claim_holiday_check($y);
+        my $u = sprintf $url, $y;
+        push @p, $self->ua->get_p($u => { Accept => 'application/json' })->then(sub ($tx) {
+            my $res = $tx->res;
+            die 'HTTP ' . ($res->code // 'no answer') . ' from ' . Mojo::URL->new($u)->host . "\n" unless $res->is_success;
+            my $rows = $res->json;
+            die "the answer is not a list of holidays\n" unless ref $rows eq 'ARRAY';
+            require Homelab::Calendar::Holidays;
+            my $unknown = Homelab::Calendar::Holidays::unknown_national_names($rows);
+            $m->holiday_check_done($y, $unknown, scalar(@$rows) . ' rows from ' . Mojo::URL->new($u)->host);
+            if ($self->log) {
+                $self->log->warn("calendar runner: holidays check $y: national public holidays the rules do not know: " . join(', ', @$unknown)) if @$unknown;
+                $self->log->info("calendar runner: holidays check $y: nothing the rules do not know") unless @$unknown;
+            }
+        })->catch(sub ($err) {
+            $err = ($err // 'failed') =~ s/\s+\z//r;
+            $m->holiday_check_failed($y, $err);
+            $self->log->warn("calendar runner: holidays check $y failed (asked again tomorrow): $err") if $self->log;
+        });
+    }
+    return \@p;
 }
 
 # ----------------------------------------------------------- invitations (#85)

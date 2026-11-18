@@ -47,6 +47,23 @@ groups:
           summary: "calendar: no node answers /metrics"
           description: "prod-homelab50/51/52: systemctl status homelab-calendar; calendar-orchestrate.sh --verify."
 
+      # The holidays watchdog (post-cutover #92) found a national public
+      # holiday in Nager.Date's list that the calendar's rules do not know.
+      # Not urgent: the holidays shown are unaffected; the package wants a new
+      # rule. Clears when a release knows the name (the fill that follows a
+      # release drops the finding and the next check records nothing).
+      - alert: CalendarHolidaysUnknown
+        expr: max(homelab_calendar_holidays_unknown) > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "calendar: {{ $value }} national holiday(s) the rules do not know"
+          description: >-
+            Settings → Holidays on calendar.mailmasker.org names them (or, on a DB
+            node: SELECT year, unknown FROM calendar.holiday_checks). Add the rule to
+            calendar/lib/Homelab/Calendar/Holidays.pm and release homelab-calendar.
+
       # The database behind the calendar did not answer the scrape's query.
       - alert: CalendarDatabaseUnreachable
         expr: max(homelab_calendar_up) == 0

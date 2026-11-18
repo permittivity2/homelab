@@ -67,6 +67,7 @@ sub _calendar_json ($cal) {
         id => $cal->{id} + 0, name => $cal->{name}, color => $cal->{color}, description => $cal->{description},
         timezone => $cal->{timezone}, is_default => ($cal->{is_default} ? \1 : \0), permission => $cal->{permission},
         visible => ($cal->{visible} ? \1 : \0), owner_email => $cal->{owner_email},
+        kind => ($cal->{kind} // 'personal'),    # #92: 'holidays' is the built-in one
     };
 }
 
@@ -1529,6 +1530,40 @@ sub device_revoke ($c) {
     _audit($c, action => 'calendar.device_revoke', resource_type => 'calendar_app_password', resource_id => $id, detail => {});
     return $c->render(json => { ok => \1, id => $id + 0 });
 }
+
+# --- holidays (#92) --------------------------------------------------------
+
+sub _holidays_json ($s) {
+    my $chk = $s->{check};
+    return {
+        on => ($s->{on} ? \1 : \0), name => $s->{name}, calendar_id => ($s->{calendar} ? $s->{calendar}{id} + 0 : undef),
+        events => ($s->{events} // 0) + 0, from_year => $s->{from_year}, through_year => $s->{through_year}, filled_at => $s->{filled_at},
+        check => ($chk ? { year => $chk->{year} + 0, checked_at => $chk->{checked_at}, ok => ($chk->{ok} ? \1 : \0),
+                           unknown => [ @{ $chk->{unknown} // [] } ], note => $chk->{note} } : undef),
+    };
+}
+
+# GET /api/holidays -- is the built-in US holidays calendar on for me, what it holds.
+sub holidays ($c) {
+    my $me = $c->require_login or return;
+    return $c->render(json => _holidays_json(_model($c)->holidays_state($me)));
+}
+
+# PUT /api/holidays {on: true|false} -- the switch.
+sub set_holidays ($c) {
+    my $me = $c->require_login or return;
+    $c->csrf_ok or return;
+    my $b = _body($c);
+    return _fail($c, 400, 'Say whether holidays are on: {"on": true} or {"on": false}.') unless exists $b->{on};
+    my $on = $b->{on} ? 1 : 0;
+    my $s = _try($c, sub { _model($c)->set_holidays($me, $on) }) or return;
+    _audit($c, action => ($on ? 'calendar.holidays_on' : 'calendar.holidays_off'), resource_type => 'calendar',
+        resource_id => ($s->{calendar} ? $s->{calendar}{id} : 0), detail => {});
+    return $c->render(json => _holidays_json($s));
+}
+
+sub internal_holidays     ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return holidays($c) }
+sub internal_holidays_set ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return set_holidays($c) }
 
 # --- preferences -----------------------------------------------------------
 

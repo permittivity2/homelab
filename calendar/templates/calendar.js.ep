@@ -351,8 +351,13 @@ var Cal = (function () {
         state.calendars.forEach(function (c) { state.byId[c.id] = c; });
         state.prefs = r.prefs;
         renderList($('own-list'), r.own);
-        renderList($('shared-list'), r.shared);
-        $('shared-head').hidden = !r.shared.length;
+        // #92: the built-in holidays calendar is shared to everyone who switched it on; it gets its own group.
+        var holidays = r.shared.filter(function (c) { return c.kind === 'holidays'; });
+        var shared = r.shared.filter(function (c) { return c.kind !== 'holidays'; });
+        renderList($('shared-list'), shared);
+        $('shared-head').hidden = !shared.length;
+        renderList($('holidays-list'), holidays);
+        $('holidays-head').hidden = !holidays.length;
         $('shared-events-item').hidden = false;
         $('shared-events-toggle').checked = !!r.prefs.show_shared_events;
       });
@@ -363,7 +368,8 @@ var Cal = (function () {
           + '<label class="check"><input type="checkbox" data-visible="' + c.id + '"' + (c.visible ? ' checked' : '') + '> '
           + '<span class="swatch" style="background:' + esc(c.color) + '"></span> <span class="cal-name">' + esc(c.name) + '</span></label>'
           + (c.permission === 'owner' ? '<button type="button" class="btn btn-ghost btn-sm cal-more" data-edit-cal="' + c.id + '" title="Settings and sharing" aria-label="Settings for ' + esc(c.name) + '">&#8942;</button>'
-                                      : '<span class="pill" title="Shared by ' + esc(c.owner_email) + '">' + (c.permission === 'edit' ? 'edit' : 'view') + '</span>')
+             : c.kind === 'holidays' ? '<a class="pill" href="/settings#holidays-panel" title="Built into the calendar; switch it off in Settings">built in</a>'
+                                     : '<span class="pill" title="Shared by ' + esc(c.owner_email) + '">' + (c.permission === 'edit' ? 'edit' : 'view') + '</span>')
           + '</div>';
       }).join('');
     }

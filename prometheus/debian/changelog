@@ -1,3 +1,11 @@
+homelab-prometheus (0.10.4) unstable; urgency=medium
+
+  * CalendarHolidaysUnknown (post-cutover #92): the calendar's yearly
+    comparison with Nager.Date found a national holiday its rules do not
+    know; warning, clears with the release that knows it.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 17 Nov 2026 22:09:31 -0600
+
 homelab-prometheus (0.10.3) unstable; urgency=medium
 
   * A calendar scrape job (homelab-calendar /metrics on :2519, three nodes,

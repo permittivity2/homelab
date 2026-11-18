@@ -115,7 +115,7 @@ metrics_checks(){
   x="$(prom /api/v1/alertmanagers | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["data"]["activeAlertmanagers"]), len(d["data"]["droppedAlertmanagers"]))' 2>/dev/null)"
   [ "$x" = "1 0" ] && ok "Prometheus talks to one Alertmanager" || bad "Prometheus alertmanagers (active dropped): '$x'"
   x="$(prom /api/v1/rules | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sum(1 for g in d["data"]["groups"] for r in g["rules"] if r.get("type")=="alerting"))' 2>/dev/null)"
-  [ "${x:-0}" -ge 16 ] && ok "$x alert rules loaded (11 + the 5 basics)" || bad "only '$x' alert rules loaded"
+  [ "${x:-0}" -ge 22 ] && ok "$x alert rules loaded (17 + the 5 basics)" || bad "only '$x' alert rules loaded (22 expected since homelab-prometheus 0.10.4)"
   x="$(am '/api/v2/alerts?filter=alertname%3DWatchdog' | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null)"
   [ "$x" = "1" ] && ok "Watchdog is in Alertmanager (Prometheus -> Alertmanager alive)" || bad "Watchdog not seen by Alertmanager ('$x')"
   x="$(am '/api/v2/alerts?active=true&silenced=false' | python3 -c 'import json,sys; a=json.load(sys.stdin); print(",".join(sorted(set(x["labels"]["alertname"] for x in a if x["labels"]["alertname"]!="Watchdog"))) or "none")' 2>/dev/null)"

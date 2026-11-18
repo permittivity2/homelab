@@ -66,7 +66,25 @@ sub settings ($c) {
         # CalDAV (#84): the devices (app passwords) and what to type into one.
         devices  => [ map { _device_row($_, $c->viewer_zone($prefs)) } @{ $model->app_passwords_for($me) } ],
         dav_host => (Mojo::URL->new($c->app->public_base_url)->host // ''),
+        # Holidays (#92): the switch and what the built-in calendar holds.
+        holidays => _holidays_row($model->holidays_state($me), $c->viewer_zone($prefs)),
     );
+}
+
+# The holidays panel's facts: the state, plus the watchdog's last check as a
+# sentence in the viewer's zone.
+sub _holidays_row ($s, $zone) {
+    my $chk = $s->{check};
+    my $when = sub ($ts) { my $dt = eval { Homelab::Calendar::Model::_dt($ts, $zone) } or return ''; return $dt->strftime('%b %e, %Y') =~ s/\s+/ /gr };
+    my $line = '';
+    if ($chk) {
+        my @u = @{ $chk->{unknown} // [] };
+        $line = $chk->{ok}
+            ? ('Compared with Nager.Date for ' . $chk->{year} . ' on ' . $when->($chk->{checked_at}) . ': '
+               . (@u ? 'national holidays the rules do not know: ' . join(', ', @u) . '.' : 'nothing the rules do not know.'))
+            : ('The comparison with Nager.Date for ' . $chk->{year} . ' failed on ' . $when->($chk->{checked_at}) . '; it is tried again daily.');
+    }
+    return { %$s, check_line => $line };
 }
 
 # One app password for the Devices table: when it was made and last used, as

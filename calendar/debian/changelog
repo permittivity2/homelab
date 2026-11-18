@@ -1,3 +1,20 @@
+homelab-calendar (0.6.0) unstable; urgency=medium
+
+  * Holidays (post-cutover #92): common US holidays from RULES in the
+    package, not a feed. Homelab::Calendar::Holidays: the eleven federal
+    holidays with their observed days off, the common observances and the
+    Easter days; a built-in read-only "US Holidays" calendar the runner
+    fills for the years now-1 .. now+10 and keeps (unchanged rows never
+    touched; a New Year adds a year); Settings -> Holidays switch (a read
+    share), GET/PUT /api/holidays and /internal/v1/calendar/holidays; the
+    sidebar's Holidays group; CalDAV shows it under its plain name. Once a
+    year the runner compares the federal list by name with Nager.Date's
+    national public holidays and keeps, shows, exports (metric
+    holidays_unknown) any name the rules do not know. Migration 010
+    (calendars.kind, holiday_runs, holiday_checks).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 17 Nov 2026 22:09:31 -0600
+
 homelab-calendar (0.5.2) unstable; urgency=medium
 
   * Settings, Devices: the table headings no longer break mid-word on a

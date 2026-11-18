@@ -77,6 +77,19 @@
       </div>
     </section>
 
+    %# Holidays (#92): one switch. It is a read share of the built-in
+    %# US Holidays calendar, which the runner fills from rules in the package.
+    <section class="panel" id="holidays-panel">
+      <div class="panel__head"><h2 class="panel__title">Holidays</h2></div>
+      <div class="panel__body stack">
+        <label class="check"><input type="checkbox" id="s-holidays"<%= $holidays->{on} ? ' checked' : '' %>> <span>Show US holidays on my calendar</span></label>
+        <p class="text-muted">A read-only <strong><%= $holidays->{name} %></strong> calendar: the federal holidays and their days off, the common observances (Mother's and Father's Day, Halloween, Valentine's Day, Tax Day, Election Day, the clock changes) and the Easter days, as all-day events. Built from rules inside the calendar, not fetched from anyone<%= $holidays->{through_year} ? ": $holidays->{events} days through $holidays->{through_year}" : '' %>. Your phone gets it over CalDAV like any shared calendar; untick it in the sidebar to hide it for a while.</p>
+% if ($holidays->{check_line}) {
+        <p class="text-muted" id="s-holidays-check"><%= $holidays->{check_line} %></p>
+% }
+      </div>
+    </section>
+
     <section class="panel">
       <div class="panel__head"><h2 class="panel__title">Calendar links in your email</h2></div>
       <div class="panel__body stack">
@@ -259,6 +272,14 @@
   $('s-save-defaults').addEventListener('click', function () {
     put('/api/prefs', { default_reminder_minutes: +$('s-def-reminder').value, all_day_reminder_hour: +$('s-def-hour').value, default_duration_minutes: +$('s-def-duration').value, date_format: $('s-def-date').value })
       .then(function () { say('Saved.', 'ok'); }).catch(function (e) { say(e.message, 'error'); });
+  });
+  // #92: the holidays switch.
+  var hol = $('s-holidays');
+  if (hol) hol.addEventListener('change', function () {
+    var box = this;
+    put('/api/holidays', { on: box.checked })
+      .then(function (h) { say(box.checked ? 'US holidays are on your calendar (' + h.events + ' days).' : 'US holidays are off.', 'ok'); })
+      .catch(function (e) { box.checked = !box.checked; say(e.message, 'error'); });
   });
   // #84: devices (app passwords for CalDAV). The secret is shown once, built
   // into the page as text.

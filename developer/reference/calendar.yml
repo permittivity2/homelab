@@ -1188,3 +1188,45 @@ abilities:
     response: |
       { "ok": true, "id": 4 }
     cli: homelab-cli calendar devices revoke 4
+  - id: calendar-holidays-show
+    title: See whether US holidays are on your calendar
+    method: GET
+    path: /api/v1/calendar/holidays
+    who: signed-in
+    summary: The built-in US Holidays calendar, whether it is on for you, how many days it holds and through which year, and the yearly check's last word.
+    description: >
+      The calendar carries the common US holidays as rules (the federal
+      holidays and their observed days off, Mother's and Father's Day,
+      Halloween, Valentine's Day, Tax Day, Election Day, the clock changes,
+      the Easter days) and keeps a read-only "US Holidays" calendar filled
+      from them for the years before this one through ten ahead. Nothing is
+      fetched to show a holiday. Once a year the server compares its federal
+      list by name with Nager.Date's national public holidays; `check` is
+      the last comparison and `unknown` any national holiday the rules do
+      not know.
+    response: |
+      { "on": false, "name": "US Holidays", "calendar_id": 12, "events": 404, "from_year": 2025, "through_year": 2036,
+        "filled_at": "2026-11-17 20:00:00-06",
+        "check": { "year": 2027, "checked_at": "2026-11-17 20:00:05-06", "ok": true, "unknown": [], "note": "17 rows from date.nager.at" } }
+    cli: homelab-cli calendar holidays
+  - id: calendar-holidays-set
+    title: Switch US holidays on or off
+    method: PUT
+    path: /api/v1/calendar/holidays
+    who: signed-in
+    summary: On, the US Holidays calendar is shared to you read-only and appears on the web, over CalDAV and in search; off, it is gone.
+    description: >
+      The switch is a read share of the built-in calendar to your account, so
+      it behaves like any calendar shared with you: untick it in the sidebar
+      to hide it for a while, or switch it off here to drop it. Nobody sees
+      holidays without switching them on.
+    params:
+      - name: "on"
+        in: body
+        required: true
+        about: true to show US holidays on your calendar, false to stop.
+        example: true
+    response: |
+      { "on": true, "name": "US Holidays", "calendar_id": 12, "events": 404, "from_year": 2025, "through_year": 2036,
+        "filled_at": "2026-11-17 20:00:00-06", "check": null }
+    cli: homelab-cli calendar holidays on

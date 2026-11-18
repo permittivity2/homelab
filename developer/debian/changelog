@@ -1,3 +1,9 @@
+homelab-developer (0.1.13) unstable; urgency=medium
+
+  * The calendar's holidays switch (post-cutover #92): see it, switch it.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Tue, 17 Nov 2026 22:09:31 -0600
+
 homelab-developer (0.1.12) unstable; urgency=medium
 
   * The calendar's CalDAV devices (post-cutover #84): list, add, revoke.

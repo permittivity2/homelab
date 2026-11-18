@@ -718,6 +718,12 @@ class Client:
     def calendar_device_revoke(self, token, device_id):
         return self._request("POST", f"/api/v1/calendar/devices/{device_id}/revoke", headers=self._auth(token))
 
+    def calendar_holidays(self, token):
+        return self._request("GET", "/api/v1/calendar/holidays", headers=self._auth(token))
+
+    def calendar_set_holidays(self, token, on):
+        return self._request("PUT", "/api/v1/calendar/holidays", headers=self._auth(token), json={"on": bool(on)})
+
     def calendar_suggestions(self, token):
         return self._request("GET", "/api/v1/calendar/suggestions", headers=self._auth(token))
 

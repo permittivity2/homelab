@@ -218,7 +218,9 @@ sub _calendar_props ($c, $email, $cal) {
     my $sync = sub { $seq //= $m->sync_seq($cal->{id}) };
     return {
         '{DAV:}resourcetype'                       => sub { '<D:collection/><C:calendar/>' },
-        '{DAV:}displayname'                        => sub { _esc($cal->{name}) . (($perm // '') eq 'owner' ? '' : ' (' . _esc($cal->{owner_email}) . ')') },
+        # A shared calendar carries its owner's address; the built-in holidays
+        # calendar (#92) is nobody's and keeps its plain name.
+        '{DAV:}displayname'                        => sub { _esc($cal->{name}) . ((($perm // '') eq 'owner' || ($cal->{kind} // '') eq 'holidays') ? '' : ' (' . _esc($cal->{owner_email}) . ')') },
         '{DAV:}owner'                              => sub { _href(_principal_href($cal->{owner_email})) },
         '{DAV:}current-user-principal'             => sub { _href(_principal_href($email)) },
         '{DAV:}current-user-privilege-set'         => sub { _privs($perm) },

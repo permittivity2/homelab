@@ -30,6 +30,9 @@
     <div class="cal-item" id="shared-events-item" hidden>
       <label class="check"><input type="checkbox" id="shared-events-toggle"> <span class="cal-name">Events shared with me</span></label>
     </div>
+    %# Holidays (#92): the built-in calendar, when switched on in Settings.
+    <div class="sidenav__group" id="holidays-head" hidden>Holidays</div>
+    <div id="holidays-list"></div>
     <div class="sidenav__group">Settings</div>
     <div style="padding: 0 var(--space-3)"><a class="btn btn-ghost btn-sm" href="/settings">Time zone, links, AI</a></div>
     <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-trash">Deleted events</button></div>

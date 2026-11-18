@@ -236,6 +236,58 @@ sync-collection (RFC 6578): `Homelab::Calendar::App::Controller::Dav`, tests in
   single events shared without their calendar, VTIMEZONE components (TZID
   names IANA zones, as Google's exports do).
 
+## Holidays (0.6.0, #92)
+
+Common US holidays come from RULES in the package, not from a feed. The dates
+move, the rules do not: Thanksgiving is the fourth Thursday of November,
+Memorial Day the last Monday of May, written in law; Easter is a formula; the
+observed day off (a fixed holiday on a Saturday is taken on the Friday, on a
+Sunday on the Monday) is a rule too. `Homelab::Calendar::Holidays`
+(`t/holidays.t`) holds them: the eleven federal holidays with their observed
+days, the common observances (Mother's and Father's Day, Halloween,
+Valentine's Day, St. Patrick's Day, Groundhog Day, April Fools' Day, Earth
+Day, Cinco de Mayo, Flag Day, Election Day, Black Friday, Christmas Eve, New
+Year's Eve, Kwanzaa, Tax Day with the IRS's weekend and Emancipation Day rule,
+the two clock changes) and the Easter days (Ash Wednesday, Palm Sunday, Good
+Friday, Easter Sunday). The list matches Apple's and Google's US holiday
+calendars minus what cannot be a rule (lunar-calendar holidays) and minus
+state days. Nothing is fetched to show a holiday.
+
+- **One built-in calendar** (`calendars.kind = 'holidays'`, owned by
+  `holidays@calendar.invalid`, an address nobody signs in as) holds one
+  ordinary all-day event per holiday per year for the years now-1 … now+10,
+  UID `us-<id>-<year>@holidays.homelab`. The runner fills it on the first tick
+  after an install and looks hourly after that (`Model::fill_holidays`): the
+  work is skipped while the window and a digest of the rules' rows are the
+  same, a row that exists and matches is never touched (no `change_seq`, so a
+  phone's sync sees nothing), a New Year adds a year and retires the oldest
+  into the trash (a sync token sees the removal). A release that changes a
+  rule updates only the rows it touches.
+- **The switch** (Settings → Holidays; `GET/PUT /api/holidays` and
+  `/internal/v1/calendar/holidays` for the CLI's `calendar holidays [on|off]`)
+  is a read share of that calendar to the account, so the web, CalDAV
+  (displayname without an owner address), search and the sidebar tick work
+  as for any calendar shared to a person. Off by default; nobody sees holidays
+  without switching them on. The sidebar shows it under its own "Holidays"
+  group with a "built in" pill.
+- **The watchdog**: once a year, for this year and the next, the runner asks
+  Nager.Date (`holidays.check_url`, `%d` the year; `0` turns it off) for the
+  national public holidays and compares names with the federal set
+  (`unknown_national_names`: only names, since Nager writes the observed day
+  in place of the real one and "Labour Day"). A name the rules do not know is
+  kept on `calendar.holiday_checks`, shown on the Settings panel, exported as
+  `homelab_calendar_holidays_unknown` and alerted on (`CalendarHolidaysUnknown`
+  in homelab-prometheus). The first process to claim a year asks; a failed
+  fetch is retried a day later; a year checked fine is never asked about
+  again; a fill that ran (new rules) drops checks that found unknown names so
+  they are asked again. Nothing here touches the holidays shown.
+- Config (`holidays:` block, all optional): `enabled` (1), `years_ahead`
+  (10), `every` (3600 s between the runner's looks), `check_url`.
+- Metrics: `homelab_calendar_holidays_events`, `..._through_year`,
+  `..._unknown`. Tests: `t/holidays.t` (the rules, pure), `t/holidays-model.t`
+  (the fill, the switch, the watchdog with a local stand-in for Nager.Date),
+  the holidays block of `t/dav.t`.
+
 ## Install
 
 Pool on prod-homelab50/51/52 via `install-orchestrators/calendar-orchestrate.sh`

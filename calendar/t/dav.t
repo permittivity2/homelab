@@ -257,6 +257,30 @@ $TX->(PROPPATCH => $thref, '<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><D:d
 $TX->(DELETE => $thref)->status_is(403, '... and deleting it');
 $PF->($thref, 1)->status_is(207, '... but reading it is fine');
 
+# --- the built-in holidays calendar (#92): in my home once switched on, read-only, plainly named ---
+$m->set_holidays($ME, 1);
+my $hol = $m->holidays_calendar;
+my $hhref = $home . "$hol->{id}/";
+$PF->($home, 1);
+ok((grep { $_ eq $hhref } @{ hrefs($t) }), 'the holidays calendar is in my home once switched on');
+$x = xpc(xml($t));
+my $holr = resp($x, $hhref);
+is $x->findvalue('D:propstat/D:prop/D:displayname', $holr), 'US Holidays', '... under its plain name, no owner address';
+ok !$x->findnodes('D:propstat/D:prop/D:current-user-privilege-set/D:privilege/D:write', $holr)->size, '... read-only';
+$PUT->("${hhref}x-$uid.ics", $ics)->status_is(403, 'a PUT into it is refused');
+{
+    require Homelab::Calendar::Holidays;
+    my $yy = DateTime->now->year;
+    my ($tg) = grep { $_->{id} eq 'thanksgiving' } @{ Homelab::Calendar::Holidays::holidays_for_year($yy) };
+    my ($s, $e) = map { s/-//gr } @{$tg}{qw(start end)};
+    $TX->(REPORT => $hhref, qq{<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:prop><D:getetag/></D:prop><C:filter><C:comp-filter name="VCALENDAR"><C:comp-filter name="VEVENT"><C:time-range start="${s}T000000Z" end="${e}T235959Z"/></C:comp-filter></C:comp-filter></C:filter></C:calendar-query>},
+        'Content-Type' => 'application/xml')->status_is(207, 'a query over Thanksgiving week');
+    ok((grep { /us-thanksgiving-$yy/ } @{ hrefs($t) }), "... finds Thanksgiving $yy as an object");
+}
+$m->set_holidays($ME, 0);
+$PF->($home, 1);
+ok((!grep { $_ eq $hhref } @{ hrefs($t) }), 'switched off, it is gone from my home');
+
 # --- bad input ---
 $PUT->("${calhref}junk.ics", 'this is not a calendar')->status_is(403)->content_like(qr/valid-calendar-data/, 'not iCalendar: 403 with the precondition');
 my $two = join "\r\n", 'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//T//EN', 'BEGIN:VEVENT', 'UID:a1', 'DTSTART:20261201T100000Z', 'SUMMARY:A', 'END:VEVENT', 'BEGIN:VEVENT', 'UID:b2', 'DTSTART:20261201T110000Z', 'SUMMARY:B', 'END:VEVENT', 'END:VCALENDAR', '';
@@ -275,4 +299,6 @@ $PF->('/dav/', 0)->status_is(401, 'a revoked app password no longer signs in');
 
 $m->db->query('DELETE FROM calendar.calendars WHERE lower(owner_email) IN (?, ?)', lc $ME, lc $OTHER);
 $m->db->query('DELETE FROM calendar.app_passwords WHERE lower(user_email) = ?', lc $ME);
+$m->db->query('DELETE FROM calendar.shares WHERE lower(shared_with_email) = ?', lc $ME);
+$m->db->query('DELETE FROM calendar.calendar_visibility WHERE user_email = ?', lc $ME);
 done_testing;
