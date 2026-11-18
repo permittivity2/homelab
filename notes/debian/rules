@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
+override_dh_install:
+	dh_install
+	install -D -m 644 config/notes.example.yml \
+		debian/homelab-notes/usr/share/homelab-notes/config/notes.example.yml
+	install -D -m 644 services/notes.yml \
+		debian/homelab-notes/usr/share/homelab-notes/services/notes.yml
+	find migrations -type f -exec install -D -m 644 {} \
+		debian/homelab-notes/usr/share/homelab-notes/{} \;
+	find templates -type f -exec install -D -m 644 {} \
+		debian/homelab-notes/usr/share/homelab-notes/{} \;
+	find public -type f -exec install -D -m 644 {} \
+		debian/homelab-notes/usr/share/homelab-notes/{} \;

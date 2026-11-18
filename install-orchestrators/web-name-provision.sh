@@ -293,4 +293,4 @@ for n in $SSO_NODES; do
 done
 
 step "verify"
-exec "$0" "$NAME" "$PORT" "${POOL[@]}" --client-id "$CLIENT_ID" --verify
+exec "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" "$NAME" "$PORT" "${POOL[@]}" --client-id "$CLIENT_ID" --verify

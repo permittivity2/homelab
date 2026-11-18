@@ -1,0 +1,29 @@
+[Unit]
+Description=Homelab Notes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+# The hypnotoad pid file lives here (config: server.pid_file), so a stale pid
+# on disk after a power cut cannot make hypnotoad signal a stranger.
+RuntimeDirectory=homelab-notes
+RuntimeDirectoryMode=0750
+Environment="HOMELAB_NOTES_CONFIG=/etc/homelab/notes/config.yml"
+# Reached through homelab-webproxy's notes.<domain> vhost, a real proxy
+# hop: without this $c->tx->remote_address would be the proxy's address.
+Environment="MOJO_REVERSE_PROXY=1"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-notes
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-notes
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-notes
+
+[Install]
+WantedBy=multi-user.target

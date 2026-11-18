@@ -42,3 +42,7 @@ jobs:
   calendar:
     feature: homelab-calendar
     port: 2519
+  # homelab-notes (post-cutover #71): its own /metrics on the service port.
+  notes:
+    feature: homelab-notes
+    port: 2518

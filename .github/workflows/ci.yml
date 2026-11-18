@@ -164,6 +164,54 @@ jobs:
       - name: Run the database-backed tests
         run: cd calendar && PGTZ=America/Chicago TEST_PG_URL=postgres://homelab:homelab@127.0.0.1:5432/homelab HOMELAB_CALENDAR_RUNNER=0 prove -I lib -I ../common/lib t/model.t
 
+  notes-db-tests:
+    # homelab-notes' data paths against a real PostgreSQL (post-cutover #71):
+    # the package's own migration runs on a fresh schema, then notes/t/model.t
+    # (notebooks, folders, notes, versions and the conflict check, the trash,
+    # search, links, shares, prefs, metrics). Same shape as calendar-db-tests.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: homelab
+          POSTGRES_PASSWORD: homelab
+          POSTGRES_DB: homelab
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U homelab" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Perl dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmojolicious-perl libyaml-libyaml-perl libmojo-pg-perl libdbi-perl libdbd-pg-perl postgresql-client
+      - name: Create the schema and run the notes migrations
+        env:
+          PGPASSWORD: homelab
+        run: |
+          psql -h 127.0.0.1 -U homelab -d homelab -c "CREATE SCHEMA IF NOT EXISTS notes"
+          cat > /tmp/notes-ci.yml <<'YAML'
+          database:
+            host: 127.0.0.1
+            port: 5432
+            name: homelab
+            user: homelab
+            password: homelab
+          database_migrate:
+            host: 127.0.0.1
+            port: 5432
+            name: homelab
+            user: homelab
+            password: homelab
+          notes:
+            public_base_url: "https://notes.example.test/"
+          YAML
+          cd notes && HOMELAB_NOTES_CONFIG=/tmp/notes-ci.yml HOMELAB_NOTES_MIGRATIONS_DIR=migrations \
+            perl -I lib -I ../common/lib script/homelab-notes-migrate
+      - name: Run the database-backed tests
+        run: cd notes && PGTZ=America/Chicago TEST_PG_URL=postgres://homelab:homelab@127.0.0.1:5432/homelab prove -I lib -I ../common/lib t/model.t
+
   e2e-suite-lint:
     # The tests/e2e/ suite is pytest too. It needs a real, pre-provisioned
     # host to actually RUN against, so CI only collects/lints it here to

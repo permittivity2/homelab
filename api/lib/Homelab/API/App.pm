@@ -323,6 +323,9 @@ sub startup ($self) {
     # "calendar links in my email" and AI-proposal settings myaccount shows.
     # Same shape as block-link's: /api/v1/calendar/* -> /internal/v1/calendar/*.
     $r->any('/api/v1/calendar/*capture' => sub ($c) { $self->_gateway($c, 'homelab-calendar', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
+    # homelab-notes (post-cutover #71): notebooks, folders, notes, versions,
+    # links, shares and search for homelab-cli. Same shape as the calendar's.
+    $r->any('/api/v1/notes/*capture' => sub ($c) { $self->_gateway($c, 'homelab-notes', strip_prefix => '/api/v1', backend_prefix => '/internal/v1') });
 
     return;
 }
@@ -1736,6 +1739,7 @@ sub _fleet_port_service {
         3000 => 'api', 2501 => 'drive', 2502 => 'sso', 2503 => 'accountmanage',
         2510 => 'mailbridge', 2511 => 'domain-admin', 2512 => 'worker',
         2513 => 'audit', 2514 => 'invite', 2515 => 'block-link',
+        2518 => 'notes', 2519 => 'calendar', 2521 => 'ai',
         8080 => 'roundcube-nginx',
         993 => 'dovecot', 143 => 'dovecot', 24 => 'dovecot', 12345 => 'dovecot',
         25 => 'postfix', 587 => 'postfix', 465 => 'postfix',

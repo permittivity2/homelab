@@ -27,6 +27,7 @@ my %SERVICE_DIR = (
     'homelab-invite'       => 'invite',
     'homelab-block-link'   => 'block-link',
     'homelab-calendar'     => 'calendar',
+    'homelab-notes'        => 'notes',
 );
 
 # Who may call a handler, from the first access check its body makes. Each

@@ -766,6 +766,86 @@ class Client:
         params = {k: v for k, v in params.items() if v is not None}
         return self._request("GET", "/api/v1/calendar/freebusy", headers=self._auth(token), params=params)
 
+    # --- Notes, via homelab-api's /api/v1/notes/* gateway -> homelab-notes
+    # (post-cutover #71). Plain HTTP, the same shape as the calendar's. ---
+    def notes_notebooks(self, token):
+        return self._request("GET", "/api/v1/notes/notebooks", headers=self._auth(token))
+
+    def notes_notebook_create(self, token, body):
+        return self._request("POST", "/api/v1/notes/notebooks", headers=self._auth(token), json=body)
+
+    def notes_notebook_update(self, token, notebook_id, body):
+        return self._request("PATCH", f"/api/v1/notes/notebooks/{notebook_id}", headers=self._auth(token), json=body)
+
+    def notes_notebook_delete(self, token, notebook_id):
+        return self._request("POST", f"/api/v1/notes/notebooks/{notebook_id}/delete", headers=self._auth(token))
+
+    def notes_folders(self, token, notebook_id):
+        return self._request("GET", f"/api/v1/notes/notebooks/{notebook_id}/folders", headers=self._auth(token))
+
+    def notes_folder_create(self, token, notebook_id, body):
+        return self._request("POST", f"/api/v1/notes/notebooks/{notebook_id}/folders", headers=self._auth(token), json=body)
+
+    def notes_folder_delete(self, token, folder_id):
+        return self._request("POST", f"/api/v1/notes/folders/{folder_id}/delete", headers=self._auth(token))
+
+    def notes_list(self, token, **params):
+        params = {k: v for k, v in params.items() if v is not None}
+        return self._request("GET", "/api/v1/notes/notes", headers=self._auth(token), params=params)
+
+    def notes_search(self, token, q, limit=None):
+        params = {"q": q}
+        if limit is not None:
+            params["limit"] = limit
+        return self._request("GET", "/api/v1/notes/search", headers=self._auth(token), params=params)
+
+    def notes_create(self, token, body):
+        return self._request("POST", "/api/v1/notes/notes", headers=self._auth(token), json=body)
+
+    def notes_show(self, token, note_id):
+        return self._request("GET", f"/api/v1/notes/notes/{note_id}", headers=self._auth(token))
+
+    def notes_update(self, token, note_id, body):
+        return self._request("PATCH", f"/api/v1/notes/notes/{note_id}", headers=self._auth(token), json=body)
+
+    def notes_delete(self, token, note_id):
+        return self._request("POST", f"/api/v1/notes/notes/{note_id}/delete", headers=self._auth(token))
+
+    def notes_restore(self, token, note_id):
+        return self._request("POST", f"/api/v1/notes/notes/{note_id}/restore", headers=self._auth(token))
+
+    def notes_move(self, token, note_id, body):
+        return self._request("POST", f"/api/v1/notes/notes/{note_id}/move", headers=self._auth(token), json=body)
+
+    def notes_trash(self, token):
+        return self._request("GET", "/api/v1/notes/trash", headers=self._auth(token))
+
+    def notes_trash_empty(self, token):
+        return self._request("POST", "/api/v1/notes/trash/empty", headers=self._auth(token))
+
+    def notes_versions(self, token, note_id):
+        return self._request("GET", f"/api/v1/notes/notes/{note_id}/versions", headers=self._auth(token))
+
+    def notes_version_restore(self, token, version_id):
+        return self._request("POST", f"/api/v1/notes/versions/{version_id}/restore", headers=self._auth(token))
+
+    def notes_link_add(self, token, note_id, body):
+        return self._request("POST", f"/api/v1/notes/notes/{note_id}/links", headers=self._auth(token), json=body)
+
+    def notes_link_remove(self, token, link_id):
+        return self._request("POST", f"/api/v1/notes/links/{link_id}/remove", headers=self._auth(token))
+
+    def notes_shares(self, token, target_id, notebook=False):
+        what = "notebooks" if notebook else "notes"
+        return self._request("GET", f"/api/v1/notes/{what}/{target_id}/shares", headers=self._auth(token))
+
+    def notes_share(self, token, target_id, body, notebook=False):
+        what = "notebooks" if notebook else "notes"
+        return self._request("POST", f"/api/v1/notes/{what}/{target_id}/shares", headers=self._auth(token), json=body)
+
+    def notes_unshare(self, token, share_id):
+        return self._request("POST", f"/api/v1/notes/shares/{share_id}/revoke", headers=self._auth(token))
+
     # --- Mail, via homelab-api's /api/v1/mail/* gateway ->
     # homelab-mailbridge (see ../../mailbridge/README.md). No more
     # imaplib/smtplib here at all -- these are plain HTTP calls, same

@@ -1,0 +1,23 @@
+% layout 'default';
+% title $notebook->{name} . ' - Notes';
+%# A notebook opened by a share link: its notes, each a link to its own page
+%# under the same token.
+<main class="app__main">
+  <div class="container stack" style="max-width: 48rem">
+    <h1 style="font-size: var(--app-xl); margin: 0"><%= $notebook->{name} %></h1>
+    <p class="muted-small">Shared by <%= $share->{owner_email} %>. <%= scalar @$notes %> note<%= @$notes == 1 ? '' : 's' %>.</p>
+    % if (@$notes) {
+    <ul class="note-rows panel" style="padding: var(--space-2)">
+      % for my $n (@$notes) {
+      <li><a class="note-row" href="/s/<%= $share->{token} %>/n/<%= $n->{id} %>" style="text-decoration: none; display: block">
+        <div class="note-row__title"><%= $n->{title} ne '' ? $n->{title} : 'Untitled note' %></div>
+        <div class="note-row__excerpt"><%= $n->{excerpt} %></div>
+        <div class="note-row__meta"><span><%= substr($n->{updated_at} // '', 0, 10) %></span><% if ($n->{folder_id} && $folder_names->{$n->{folder_id}}) { %><span><%= $folder_names->{$n->{folder_id}} %></span><% } %></div>
+      </a></li>
+      % }
+    </ul>
+    % } else {
+    <p class="panel" style="padding: var(--space-4)">Nothing in this notebook yet.</p>
+    % }
+  </div>
+</main>

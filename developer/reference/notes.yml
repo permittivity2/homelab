@@ -1,0 +1,835 @@
+# Notes (post-cutover #71): what homelab-cli and any script need of
+# homelab-notes through the api: notebooks, folders, notes (rendered and as
+# typed), their history, links, sharing, search. The page itself lives at
+# notes.<domain>; a share link's own page is notes.<domain>/s/<token>.
+area: Notes
+order: 47
+intro: >
+  Your notes through the api: notebooks (the tabs), folders, notes written
+  in Markdown, HTML or plain text and given back both as typed and rendered,
+  the last 20 saves of each, links on a note to an email or a drive file,
+  sharing with an account (see, or see and edit) or by a link anyone can
+  open, and search. The notes app at notes.mailmasker.org shows the same
+  things; a share link opens at notes.mailmasker.org/s/<token> with no
+  sign-in. Every id is a number; every write answers with the thing as it
+  now is. A note or notebook you have nothing to do with answers 404.
+abilities:
+  - id: notes-notebooks
+    title: List your notebooks
+    method: GET
+    path: /api/v1/notes/notebooks
+    who: signed-in
+    summary: Your own notebooks (in your order), then the ones shared with you, each with what you may do in it.
+    description: >
+      permission is owner, edit or read. note_count is the live notes in it.
+      A first call makes "My notes" if you have no notebook yet. prefs is
+      what the page remembers for you (the last notebook and note opened,
+      the format a new note starts in).
+    response: |
+      {
+        "notebooks": [
+          { "id": 3, "name": "My notes", "color": "#6f94b8", "position": 1, "owner_email": "{me}", "permission": "owner", "note_count": 12,
+            "created_at": "2026-11-18 07:50:11.1-06", "updated_at": "2026-11-18 07:50:11.1-06" },
+          { "id": 9, "name": "Family", "color": "#5f9e6e", "position": 0, "owner_email": "someone@example.com", "permission": "edit", "note_count": 4,
+            "created_at": "2026-11-01 10:00:00-06", "updated_at": "2026-11-10 09:12:00-06" }
+        ],
+        "prefs": { "last_notebook_id": 3, "last_note_id": 41, "default_format": "markdown" }
+      }
+    cli: homelab-cli notes notebooks
+
+  - id: notes-notebook-create
+    title: Make a notebook
+    method: POST
+    path: /api/v1/notes/notebooks
+    who: signed-in
+    summary: A new notebook of your own.
+    description: >
+      It goes last in your list. The colour is the swatch the page shows
+      beside its name.
+    params:
+      - name: name
+        in: body
+        required: true
+        about: Its name, 120 characters at most.
+        example: Recipes
+      - name: color
+        in: body
+        required: false
+        about: A colour like #6f94b8 (the default).
+    response: |
+      { "id": 10, "name": "Recipes", "color": "#6f94b8", "position": 2, "owner_email": "{me}", "permission": "owner", "note_count": 0, "created_at": "...", "updated_at": "..." }
+    cli: homelab-cli notes notebooks create Recipes
+
+  - id: notes-notebook-change
+    title: Rename, recolour or reorder a notebook
+    method: PATCH
+    path: /api/v1/notes/notebooks/:id
+    who: signed-in
+    summary: Send only what changes; yours only.
+    description: >
+      Only the owner of a notebook can change it. An editor of a shared
+      notebook changes its notes, not the notebook.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The notebook's id.
+        example: 10
+      - name: name
+        in: body
+        required: false
+        about: A new name, 120 characters at most.
+      - name: color
+        in: body
+        required: false
+        about: A colour like #6f94b8.
+      - name: position
+        in: body
+        required: false
+        about: Where it sits in your list (a whole number; lower comes first).
+    response: |
+      { "id": 10, "name": "Dinner ideas", "color": "#6f94b8", "position": 2, "permission": "owner", "note_count": 0, "owner_email": "{me}", "created_at": "...", "updated_at": "..." }
+    cli: homelab-cli notes notebooks rename 10 "Dinner ideas"
+
+  - id: notes-notebook-delete
+    title: Delete a notebook
+    method: POST
+    path: /api/v1/notes/notebooks/:id/delete
+    who: signed-in
+    summary: The notebook and every note in it go to the trash; restoring any note brings the notebook back.
+    description: >
+      Nothing is lost: the notes are in the trash (List the trash) and
+      restoring one restores the notebook too. Your last notebook cannot be
+      deleted; make another first.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The notebook's id.
+        example: 10
+    response: |
+      { "ok": true }
+    cli: homelab-cli notes notebooks delete 10
+
+  - id: notes-folders
+    title: List a notebook's folders
+    method: GET
+    path: /api/v1/notes/notebooks/:id/folders
+    who: signed-in
+    summary: The folders of a notebook you may see, with how many notes each holds.
+    description: >
+      Folders may nest: parent_id names the folder a folder sits in, null
+      for the top. The list is flat, in position then name order.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The notebook's id.
+        example: 3
+    response: |
+      { "folders": [ { "id": 5, "notebook_id": 3, "parent_id": null, "name": "Projects", "position": 0, "note_count": 3 } ] }
+    cli: homelab-cli notes folders --notebook 3
+
+  - id: notes-folder-create
+    title: Make a folder
+    method: POST
+    path: /api/v1/notes/notebooks/:id/folders
+    who: signed-in
+    summary: A folder in a notebook you may edit; inside another folder with parent_id.
+    description: >
+      Anyone who may edit the notebook may make folders in it.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The notebook's id.
+        example: 3
+      - name: name
+        in: body
+        required: true
+        about: The folder's name, 120 characters at most.
+        example: Projects
+      - name: parent_id
+        in: body
+        required: false
+        about: Another folder of the same notebook, to nest inside.
+    response: |
+      { "id": 6, "notebook_id": 3, "parent_id": 5, "name": "Alpha", "position": 0, "note_count": 0 }
+    cli: homelab-cli notes folders create Projects --notebook 3
+
+  - id: notes-folder-change
+    title: Rename or move a folder
+    method: PATCH
+    path: /api/v1/notes/folders/:id
+    who: signed-in
+    summary: Send name, parent_id (null for the top) or position.
+    description: >
+      Anyone who may edit the notebook may rename or move its folders. A
+      folder cannot be put inside itself.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The folder's id.
+        example: 6
+      - name: name
+        in: body
+        required: false
+        about: A new name.
+      - name: parent_id
+        in: body
+        required: false
+        about: The folder to sit inside, or null for the top of the notebook.
+      - name: position
+        in: body
+        required: false
+        about: Its place among its siblings (a whole number).
+    response: |
+      { "id": 6, "notebook_id": 3, "parent_id": null, "name": "Beta", "position": 0, "note_count": 0 }
+    cli: none
+
+  - id: notes-folder-delete
+    title: Delete a folder
+    method: POST
+    path: /api/v1/notes/folders/:id/delete
+    who: signed-in
+    summary: The folder, the folders inside it and the notes in all of them go to the trash (the owner only).
+    description: >
+      Restoring a note from the trash puts it at the top of its notebook
+      when its folder is gone.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The folder's id.
+        example: 6
+    response: |
+      { "ok": true }
+    cli: homelab-cli notes folders delete 6
+
+  - id: notes-list
+    title: List notes
+    method: GET
+    path: /api/v1/notes/notes
+    who: signed-in
+    summary: The notes of one notebook (or one folder of it), or everything you may see, or a search; no bodies, an excerpt each.
+    description: >
+      Pinned notes come first, then the newest change. With q the best
+      matches come first and each note carries a snippet (plain text) and
+      snippet_html (escaped, with <mark> around the hits). permission says
+      what you may do with each note; url opens it on the page.
+    params:
+      - name: notebook_id
+        in: query
+        required: false
+        about: The notebook. Leave it out for every note you may see (yours, shared notebooks, shared notes), newest change first.
+      - name: folder_id
+        in: query
+        required: false
+        about: With notebook_id, only that folder; 0 for the notes not in any folder.
+      - name: q
+        in: query
+        required: false
+        about: Words to find (full text over title and body). Phrases in quotes, OR between words, a minus before a word to leave it out.
+      - name: limit
+        in: query
+        required: false
+        about: At most this many (200 by default, 500 at most).
+      - name: offset
+        in: query
+        required: false
+        about: Skip this many first, for the next page.
+    response: |
+      {
+        "notes": [
+          { "id": 41, "notebook_id": 3, "folder_id": null, "title": "Plan", "format": "markdown", "excerpt": "Plan Do the thing today.",
+            "pinned": true, "revision": 7, "owner_email": "{me}", "edited_by": "{me}", "permission": "owner",
+            "created_at": "...", "updated_at": "...", "deleted_at": null, "url": "https://notes.mailmasker.org/n/41" }
+        ],
+        "notebook": { "id": 3, "name": "My notes", "permission": "owner" }
+      }
+    cli: homelab-cli notes list --notebook 3
+
+  - id: notes-create
+    title: Make a note
+    method: POST
+    path: /api/v1/notes/notes
+    who: signed-in
+    summary: A new note in a notebook you may edit (your first notebook when you name none).
+    description: >
+      The body is kept as typed and rendered on every read, so a better
+      renderer later improves old notes. The answer is the note in full
+      (see One note). The format you leave out is the one your prefs name,
+      markdown unless you changed it.
+    params:
+      - name: notebook_id
+        in: body
+        required: false
+        about: The notebook to put it in; your first one when left out.
+      - name: folder_id
+        in: body
+        required: false
+        about: A folder of that notebook.
+      - name: title
+        in: body
+        required: false
+        about: 300 characters at most. Empty is allowed; the page shows "Untitled note".
+        example: Groceries
+      - name: format
+        in: body
+        required: false
+        about: markdown (the default, md works too), html or text.
+      - name: body
+        in: body
+        required: false
+        about: The note as typed; 1 MB at most.
+        example: "- milk\n- eggs"
+      - name: pinned
+        in: body
+        required: false
+        about: true to keep it at the top of its list.
+    response: |
+      { "id": 42, "notebook_id": 3, "folder_id": null, "title": "Groceries", "format": "markdown", "body": "- milk\n- eggs", "html": "<ul>\n<li>milk</li>\n<li>eggs</li>\n</ul>",
+        "excerpt": "milk eggs", "pinned": false, "revision": 1, "permission": "owner", "can_edit": true, "can_manage": true, "share_count": 0,
+        "notebook": { "id": 3, "name": "My notes", "color": "#6f94b8" }, "links": [], "owner_email": "{me}", "edited_by": "{me}",
+        "created_at": "...", "updated_at": "...", "deleted_at": null, "url": "https://notes.mailmasker.org/n/42" }
+    cli: homelab-cli notes add Groceries --body "- milk" --notebook 3
+
+  - id: notes-show
+    title: One note
+    method: GET
+    path: /api/v1/notes/notes/:id
+    who: signed-in
+    summary: The note as typed (body) and rendered (html), its links, and what you may do with it.
+    description: >
+      html is the server's cleaned rendering: Markdown is rendered and every
+      HTML body is passed through an allowlist, so nothing a note contains
+      can run script, and the page shows exactly this. can_edit and
+      can_manage say what you may do; share_count is how many live shares
+      the owner has made.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+    response: |
+      { "id": 42, "title": "Groceries", "format": "markdown", "body": "- milk\n- eggs", "html": "<ul>...</ul>", "revision": 1, "permission": "owner",
+        "can_edit": true, "can_manage": true, "share_count": 1, "notebook": { "id": 3, "name": "My notes", "color": "#6f94b8" },
+        "links": [ { "id": 7, "kind": "drive", "label": "", "target": { "file_id": 2207, "filename": "invoice.pdf", "size_bytes": 84210, "mime_type": "application/pdf" },
+                     "open_url": "https://drive.mailmasker.org/files/2207/download", "added_by": "{me}", "created_at": "..." } ],
+        "notebook_id": 3, "folder_id": null, "excerpt": "milk eggs", "pinned": false, "owner_email": "{me}", "edited_by": "{me}",
+        "created_at": "...", "updated_at": "...", "deleted_at": null, "url": "https://notes.mailmasker.org/n/42" }
+    cli: homelab-cli notes show 42
+
+  - id: notes-change
+    title: Change a note
+    method: PATCH
+    path: /api/v1/notes/notes/:id
+    who: signed-in
+    summary: Send only what changes (title, body, format, pinned; folder_id for the owner); the old content is kept as a version.
+    description: >
+      Anyone who may edit the note (its owner, an editor of it or of its
+      notebook) may change its words. When title, body or format change, the
+      content before the change is kept (A note's history) and revision
+      goes up by one. Send revision to be safe against editing over someone
+      else: if the note has moved on since you read it, nothing is written
+      and the answer is 409 with the newer note in "note".
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+      - name: revision
+        in: body
+        required: false
+        about: The revision you are editing. A newer one on the server answers 409 and writes nothing.
+      - name: title
+        in: body
+        required: false
+        about: A new title, 300 characters at most.
+      - name: body
+        in: body
+        required: false
+        about: The new body as typed, 1 MB at most.
+      - name: format
+        in: body
+        required: false
+        about: markdown, html or text.
+      - name: pinned
+        in: body
+        required: false
+        about: true or false.
+      - name: folder_id
+        in: body
+        required: false
+        about: Owner only; a folder of the note's notebook, or null for none.
+    response: |
+      { "id": 42, "revision": 2, "edited_by": "{me}", "title": "Groceries", "format": "markdown", "body": "...", "html": "...", "permission": "owner", "can_edit": true, "can_manage": true, "links": [], "notebook": { "id": 3, "name": "My notes", "color": "#6f94b8" }, "updated_at": "..." }
+    cli: homelab-cli notes edit 42 --title Shopping
+
+  - id: notes-delete
+    title: Delete a note
+    method: POST
+    path: /api/v1/notes/notes/:id/delete
+    who: signed-in
+    summary: To the trash (the owner only); restorable.
+    description: >
+      The note leaves every list and every share link to it answers "not
+      valid" until it is restored. Only the owner deletes; an editor cannot.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+    response: |
+      { "ok": true, "id": 42 }
+    cli: homelab-cli notes delete 42
+
+  - id: notes-restore
+    title: Restore a deleted note
+    method: POST
+    path: /api/v1/notes/notes/:id/restore
+    who: signed-in
+    summary: Back from the trash; its notebook comes back too if it was deleted with it.
+    description: >
+      When the folder it was in is gone, the note comes back at the top of
+      its notebook.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+    response: |
+      { "id": 42, "deleted_at": null, "title": "Groceries", "format": "markdown", "body": "...", "html": "...", "permission": "owner", "notebook": { "id": 3, "name": "My notes", "color": "#6f94b8" }, "links": [] }
+    cli: homelab-cli notes restore 42
+
+  - id: notes-move
+    title: Move a note
+    method: POST
+    path: /api/v1/notes/notes/:id/move
+    who: signed-in
+    summary: To another of your notebooks and/or a folder of it (the owner only).
+    description: >
+      Both notebooks must be yours. Leave folder_id out, or send null, for
+      the top of the notebook.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+      - name: notebook_id
+        in: body
+        required: false
+        about: The notebook to move to (the same one when you only change the folder).
+      - name: folder_id
+        in: body
+        required: false
+        about: A folder of that notebook; leave it out or send null for none.
+    response: |
+      { "id": 42, "notebook_id": 10, "folder_id": null, "title": "Groceries", "permission": "owner", "notebook": { "id": 10, "name": "Recipes", "color": "#6f94b8" }, "body": "...", "html": "...", "links": [] }
+    cli: homelab-cli notes move 42 --notebook 10
+
+  - id: notes-trash
+    title: The trash
+    method: GET
+    path: /api/v1/notes/trash
+    who: signed-in
+    summary: Your deleted notes, newest first.
+    description: >
+      Everything you deleted and have not restored, with deleted_at. Notes
+      deleted with a notebook or a folder are here too. Empty the trash
+      removes them for good.
+    response: |
+      { "notes": [ { "id": 40, "notebook_id": 3, "title": "Old", "format": "text", "excerpt": "...", "deleted_at": "2026-11-17 22:10:00-06", "permission": "owner", "updated_at": "...", "url": "https://notes.mailmasker.org/n/40" } ] }
+    cli: homelab-cli notes trash
+
+  - id: notes-trash-empty
+    title: Empty the trash
+    method: POST
+    path: /api/v1/notes/trash/empty
+    who: signed-in
+    summary: Every note in your trash is removed for good, with its versions and links.
+    description: >
+      There is no undo after this.
+    response: |
+      { "ok": true, "removed": 3 }
+    cli: homelab-cli notes trash --empty
+
+  - id: notes-versions
+    title: A note's history
+    method: GET
+    path: /api/v1/notes/notes/:id/versions
+    who: signed-in
+    summary: The last 20 saves, newest first (what the note was BEFORE each save).
+    description: >
+      Each row is the content a save replaced: its revision, title, format,
+      the body's length and who saved over it. One version gives the body;
+      Restore a version makes it the current text again.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+    response: |
+      { "versions": [ { "id": 88, "note_id": 42, "revision": 1, "title": "Groceries", "format": "markdown", "body_chars": 14, "saved_by": "{me}", "created_at": "..." } ] }
+    cli: homelab-cli notes history 42
+
+  - id: notes-version
+    title: One version
+    method: GET
+    path: /api/v1/notes/versions/:id
+    who: signed-in
+    summary: An earlier save in full, with its body.
+    description: >
+      For anyone who may see the note it belongs to.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The version's id (from A note's history).
+        example: 88
+    response: |
+      { "id": 88, "note_id": 42, "revision": 1, "title": "Groceries", "format": "markdown", "body": "- milk\n- eggs", "body_chars": 14, "saved_by": "{me}", "created_at": "..." }
+    cli: none
+
+  - id: notes-version-restore
+    title: Restore a version
+    method: POST
+    path: /api/v1/notes/versions/:id/restore
+    who: signed-in
+    summary: The version's title, format and body become the note's current text, as a new save.
+    description: >
+      The text being replaced is kept as a version in its turn, so nothing
+      is lost by restoring. For anyone who may edit the note.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The version's id.
+        example: 88
+    response: |
+      { "id": 42, "revision": 8, "title": "Groceries", "body": "- milk\n- eggs", "html": "...", "permission": "owner", "notebook": { "id": 3, "name": "My notes", "color": "#6f94b8" }, "links": [] }
+    cli: homelab-cli notes revert 42 88
+
+  - id: notes-links
+    title: The links on a note
+    method: GET
+    path: /api/v1/notes/notes/:id/links
+    who: signed-in
+    summary: Links to an email, a drive file or a web page, each with where it opens.
+    description: >
+      kind is mail, drive or url. target is what was known when the link was
+      made; open_url is where it opens: a mail link as a search by subject in
+      the search app, a drive link as the file's download, a web link as
+      itself.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+    response: |
+      { "links": [ { "id": 7, "note_id": 42, "kind": "mail", "label": "", "target": { "message_id": 4182, "subject": "Your November invoice", "from_addr": "billing@example.com", "sent_at": "2026-11-03 21:42:10-06", "mailbox": "INBOX" },
+                     "open_url": "https://search.mailmasker.org/?q=%22Your%20November%20invoice%22&source=mail", "added_by": "{me}", "created_at": "..." } ] }
+    cli: homelab-cli notes show 42
+
+  - id: notes-link-add
+    title: Put a link on a note
+    method: POST
+    path: /api/v1/notes/notes/:id/links
+    who: signed-in
+    summary: An email (from a search result), a drive file or a web address, for anyone who may edit the note.
+    description: >
+      Pick mail and Pick a drive file give you targets in the right shape.
+      A web target needs an http or https address.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+      - name: kind
+        in: body
+        required: true
+        about: mail, drive or url.
+        example: url
+      - name: target
+        in: body
+        required: true
+        about: "mail: message_id, subject, from_addr, from_name, sent_at, mailbox. drive: file_id, filename, size_bytes, mime_type. url: url."
+        example: "{ \"url\": \"https://example.com/page\" }"
+      - name: label
+        in: body
+        required: false
+        about: Shown instead of the subject, file name or address.
+    response: |
+      { "id": 8, "note_id": 42, "kind": "url", "label": "", "target": { "url": "https://example.com/page" }, "open_url": "https://example.com/page", "added_by": "{me}", "created_at": "..." }
+    cli: homelab-cli notes link 42 --url https://example.com/page
+
+  - id: notes-link-remove
+    title: Take a link off a note
+    method: POST
+    path: /api/v1/notes/links/:id/remove
+    who: signed-in
+    summary: For anyone who may edit the note.
+    description: >
+      The link row is gone; the email or file it pointed at is untouched.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The link's id.
+        example: 8
+    response: |
+      { "ok": true }
+    cli: homelab-cli notes unlink 8
+
+  - id: notes-pick-mail
+    title: Pick an email
+    method: GET
+    path: /api/v1/notes/pick/mail
+    who: signed-in
+    summary: Your own mail that matches some words, in the shape a mail link's target wants.
+    description: >
+      The notes service asks the search service with YOUR token, so you see
+      exactly what Search would show you. Up to 20 hits.
+    params:
+      - name: q
+        in: query
+        required: true
+        about: Words from the subject or text.
+        example: invoice
+    response: |
+      { "hits": [ { "message_id": 4182, "subject": "Your November invoice", "from_addr": "billing@example.com", "from_name": "Example Billing", "sent_at": "2026-11-03 21:42:10-06", "mailbox": "INBOX", "snippet": "Thanks for your order..." } ] }
+    cli: none
+
+  - id: notes-pick-drive
+    title: Pick a drive file
+    method: GET
+    path: /api/v1/notes/pick/drive
+    who: signed-in
+    summary: One level of your drive (its folders and files), in the shape a drive link's target wants.
+    description: >
+      Asked of drive with YOUR token. Without folder_id, the top level.
+    params:
+      - name: folder_id
+        in: query
+        required: false
+        about: The folder to look in.
+    response: |
+      { "folders": [ { "id": 7, "name": "Bills" } ], "files": [ { "file_id": 2207, "filename": "invoice.pdf", "size_bytes": 84210, "mime_type": "application/pdf", "uploaded_at": "2026-11-02 09:15:44-06" } ] }
+    cli: none
+
+  - id: notes-note-shares
+    title: Who a note is shared with
+    method: GET
+    path: /api/v1/notes/notes/:id/shares
+    who: signed-in
+    summary: The live shares of a note you own.
+    description: >
+      shared_with_email null is a link anyone can open; access_count and
+      accessed_at say whether it has been.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+    response: |
+      { "shares": [ { "id": 12, "token": "...", "url": "https://notes.mailmasker.org/s/...", "note_id": 42, "notebook_id": null, "shared_with_email": null, "permission": "read",
+                      "expires_at": null, "created_at": "...", "accessed_at": "...", "access_count": 3 } ] }
+    cli: homelab-cli notes shares 42
+
+  - id: notes-note-share
+    title: Share a note
+    method: POST
+    path: /api/v1/notes/notes/:id/shares
+    who: signed-in
+    summary: With an account (read, or edit) or, with no address, a link anyone can open read-only.
+    description: >
+      The owner only. A link is always read-only; an account may be allowed
+      to edit (words and links, not sharing or deleting). The url in the
+      answer opens the note at notes.mailmasker.org/s/<token>; for an
+      account it also appears under "Shared with me" when they sign in.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+      - name: with
+        in: body
+        required: false
+        about: The account's address. Leave it out for a link.
+        example: someone@example.com
+      - name: permission
+        in: body
+        required: false
+        about: read (the default) or edit. A link is always read.
+      - name: expires_days
+        in: body
+        required: false
+        about: Days until the share stops working; none by default.
+    response: |
+      { "id": 13, "token": "...", "url": "https://notes.mailmasker.org/s/...", "note_id": 42, "notebook_id": null, "shared_with_email": "someone@example.com", "permission": "edit", "expires_at": null, "created_at": "...", "accessed_at": null, "access_count": 0 }
+    cli: homelab-cli notes share 42 --with someone@example.com --edit
+
+  - id: notes-notebook-shares
+    title: Who a notebook is shared with
+    method: GET
+    path: /api/v1/notes/notebooks/:id/shares
+    who: signed-in
+    summary: The live shares of a notebook you own.
+    description: >
+      A notebook share covers every note in it, now and later.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The notebook's id.
+        example: 3
+    response: |
+      { "shares": [ { "id": 14, "token": "...", "url": "https://notes.mailmasker.org/s/...", "note_id": null, "notebook_id": 3, "shared_with_email": "someone@example.com", "permission": "read", "expires_at": null, "created_at": "...", "accessed_at": null, "access_count": 0 } ] }
+    cli: homelab-cli notes shares 3 --notebook
+
+  - id: notes-notebook-share
+    title: Share a notebook
+    method: POST
+    path: /api/v1/notes/notebooks/:id/shares
+    who: signed-in
+    summary: Every note in the notebook, now and later, with an account (read or edit) or by a read-only link.
+    description: >
+      The owner only. An editor of a shared notebook may change its notes,
+      make folders and add notes to it; they cannot share it on, move or
+      delete.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The notebook's id.
+        example: 3
+      - name: with
+        in: body
+        required: false
+        about: The account's address. Leave it out for a link.
+      - name: permission
+        in: body
+        required: false
+        about: read (the default) or edit.
+      - name: expires_days
+        in: body
+        required: false
+        about: Days until the share stops working.
+    response: |
+      { "id": 15, "token": "...", "url": "https://notes.mailmasker.org/s/...", "note_id": null, "notebook_id": 3, "shared_with_email": null, "permission": "read", "expires_at": null, "created_at": "...", "accessed_at": null, "access_count": 0 }
+    cli: homelab-cli notes share 3 --notebook --link
+
+  - id: notes-unshare
+    title: Withdraw a share
+    method: POST
+    path: /api/v1/notes/shares/:id/revoke
+    who: signed-in
+    summary: The share stops working at once; a link to it answers "not valid".
+    description: >
+      Yours only. Shares of notes and of notebooks alike.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The share's id (from Who a note is shared with).
+        example: 13
+    response: |
+      { "ok": true }
+    cli: homelab-cli notes unshare 13
+
+  - id: notes-search
+    title: Search your notes
+    method: GET
+    path: /api/v1/notes/search
+    who: signed-in
+    summary: Full text over the notes you may see (yours, shared notebooks, shared notes), best match first, with a highlighted passage.
+    description: >
+      Title words count more than body words. When the words make no query
+      (one letter, punctuation) a plain substring match is tried instead.
+      snippet is plain text; snippet_html is escaped with <mark> around the
+      hits, ready for a page.
+    params:
+      - name: q
+        in: query
+        required: true
+        about: Words to find. Phrases in quotes, OR between words, a minus before a word to leave it out.
+        example: budget review
+      - name: limit
+        in: query
+        required: false
+        about: At most this many (50 by default, 200 at most).
+    response: |
+      { "q": "budget", "notes": [ { "id": 41, "title": "Plan", "snippet": "The quarterly budget review is on Thursday", "snippet_html": "The quarterly <mark>budget</mark> review is on Thursday", "format": "markdown", "permission": "owner", "updated_at": "...", "url": "https://notes.mailmasker.org/n/41" } ] }
+    cli: homelab-cli notes search budget review
+
+  - id: notes-preview
+    title: Render some text
+    method: POST
+    path: /api/v1/notes/preview
+    who: signed-in
+    summary: The HTML the notes app would show for a body, nothing stored.
+    description: >
+      What the editor's preview uses. The same rendering and cleaning as a
+      saved note gets.
+    params:
+      - name: format
+        in: body
+        required: false
+        about: markdown (the default), html or text.
+      - name: body
+        in: body
+        required: true
+        about: The text to render.
+        example: "# Hello\n\nSome **bold** words."
+    response: |
+      { "format": "markdown", "html": "<h1>Hello</h1>\n<p>Some <strong>bold</strong> words.</p>" }
+    cli: none
+
+  - id: notes-prefs
+    title: Your notes preferences
+    method: GET
+    path: /api/v1/notes/prefs
+    who: signed-in
+    summary: "What the page remembers for you: the last notebook and note opened, the format a new note starts in."
+    description: >
+      Kept per account by the notes service.
+    response: |
+      { "last_notebook_id": 3, "last_note_id": 41, "default_format": "markdown" }
+    cli: none
+
+  - id: notes-prefs-set
+    title: Change your notes preferences
+    method: PUT
+    path: /api/v1/notes/prefs
+    who: signed-in
+    summary: Send only what changes.
+    description: >
+      default_format is what a new note starts in when the request names
+      none.
+    params:
+      - name: last_notebook_id
+        in: body
+        required: false
+        about: The notebook to open next time.
+      - name: last_note_id
+        in: body
+        required: false
+        about: The note to open next time.
+      - name: default_format
+        in: body
+        required: false
+        about: markdown, html or text.
+    response: |
+      { "last_notebook_id": 3, "last_note_id": 41, "default_format": "text" }
+    cli: none

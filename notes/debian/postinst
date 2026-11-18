@@ -1,0 +1,162 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_DIR=/etc/homelab/notes
+CONFIG_FILE="$CONFIG_DIR/config.yml"
+SHARE_DIR=/usr/share/homelab-notes
+
+case "$1" in
+    configure)
+        echo "homelab-notes post-installation setup..."
+
+        adduser --system --group --home /var/lib/homelab --no-create-home \
+            --shell /usr/sbin/nologin homelab 2>/dev/null || true
+        mkdir -p /var/lib/homelab "$CONFIG_DIR"
+        chown homelab:homelab /var/lib/homelab
+
+        mkdir -p /etc/homelab/services
+        chgrp homelab /etc/homelab/services 2>/dev/null || true
+        chmod 775 /etc/homelab/services
+        cp "$SHARE_DIR/services/notes.yml" "/etc/homelab/services/notes.yml"
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            db_get homelab-notes/db_host || true;               DB_HOST="${RET:-localhost}"
+            db_get homelab-notes/pgbouncer_host || true;        PGBOUNCER_HOST="${RET:-localhost}"
+            db_get homelab-notes/api_base || true;              API_BASE="${RET:-http://localhost:3000}"
+            db_get homelab-notes/listen_port || true;           LISTEN_PORT="${RET:-2518}"
+            db_get homelab-notes/advertise_host || true;        ADVERTISE_HOST="${RET:-127.0.0.1}"
+            db_get homelab-notes/public_base_url || true;       PUBLIC_BASE_URL="${RET:-https://notes.test.mailmasker.org}"
+            db_get homelab-notes/sso_base_url || true;          SSO_BASE_URL="${RET:-https://login.test.mailmasker.org}"
+            db_get homelab-notes/sso_internal_base_url || true; SSO_INTERNAL_BASE_URL="${RET:-$SSO_BASE_URL}"
+            db_get homelab-notes/sso_client_secret || true;     SSO_CLIENT_SECRET="$RET"
+            db_get homelab-notes/session_secret || true;        SESSION_SECRET="$RET"
+
+            echo "  bootstrapping Postgres roles for 'homelab_notes' on $DB_HOST..."
+            BOOTSTRAP_OUT="$(homelab-bootstrap-app-role --feature homelab_notes --schema notes --db-host "$DB_HOST")"
+
+            RUNTIME_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_ROLE=//p')"
+            RUNTIME_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_PASSWORD=//p')"
+            RUNTIME_SCRAM_SECRET="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^RUNTIME_SCRAM_SECRET=//p')"
+            MIGRATE_ROLE="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_ROLE=//p')"
+            MIGRATE_PASSWORD="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^MIGRATE_PASSWORD=//p')"
+            BOOTSTRAP_MANUAL="$(echo "$BOOTSTRAP_OUT" | sed -n 's/^BOOTSTRAP_MANUAL=//p')"
+
+            if [ -z "$RUNTIME_ROLE" ] || [ -z "$MIGRATE_ROLE" ]; then
+                echo "ERROR: homelab-bootstrap-app-role did not report success -- see output above."
+                echo "       Not writing $CONFIG_FILE; re-run 'dpkg-reconfigure homelab-notes' once fixed."
+                db_stop
+                exit 0
+            fi
+
+            # The search and drive names a note links to live beside this app's own name.
+            DOMAIN="${PUBLIC_BASE_URL#*://}"; DOMAIN="${DOMAIN#*.}"; DOMAIN="${DOMAIN%%/*}"
+            [ -n "$SESSION_SECRET" ] || SESSION_SECRET="$(openssl rand -base64 32 | tr -d '\n=')"
+
+            sed \
+                -e "s#https://api\.test\.mailmasker\.org#$API_BASE#g" \
+                -e "s#https://notes\.test\.mailmasker\.org#$PUBLIC_BASE_URL#g" \
+                -e "s#test\.mailmasker\.org#$DOMAIN#g" \
+                -e "s#YOUR_PGBOUNCER_HOST#$PGBOUNCER_HOST#g" \
+                -e "s#YOUR_RUNTIME_PASSWORD_HERE#$RUNTIME_PASSWORD#g" \
+                -e "s#homelab_notes_runtime#$RUNTIME_ROLE#g" \
+                -e "s#YOUR_POSTGRES_HOST#$DB_HOST#g" \
+                -e "s#YOUR_MIGRATE_PASSWORD_HERE#$MIGRATE_PASSWORD#g" \
+                -e "s#homelab_notes_migrate#$MIGRATE_ROLE#g" \
+                -e "s#\"http://127\.0\.0\.1:2518\"#\"http://0.0.0.0:$LISTEN_PORT\"#g" \
+                -e "s#  port: 2518#  port: $LISTEN_PORT#g" \
+                -e "s#  host: 127\.0\.0\.1#  host: $ADVERTISE_HOST#g" \
+                "$SHARE_DIR/config/notes.example.yml" > "$CONFIG_FILE"
+
+            # Sign-in: written as a real block when a client secret was given,
+            # since the example keeps it commented out.
+            if [ -n "$SSO_CLIENT_SECRET" ]; then
+                cat >> "$CONFIG_FILE" <<EOF
+
+sso:
+  base_url: $SSO_BASE_URL
+  internal_base_url: $SSO_INTERNAL_BASE_URL
+  client_id: notes
+  client_secret: $SSO_CLIENT_SECRET
+  redirect_uri: $PUBLIC_BASE_URL/oauth/callback
+
+session:
+  secret: "$SESSION_SECRET"
+EOF
+            else
+                echo "  NOTE: no sso_client_secret given -- nobody can sign in until an sso: block"
+                echo "        (and session.secret) is added to $CONFIG_FILE. Share links still work."
+            fi
+            chown root:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "  wrote $CONFIG_FILE"
+
+            if [ "$BOOTSTRAP_MANUAL" = "1" ]; then
+                echo ""
+                echo "  ================================================================"
+                echo "  CONFIG WRITTEN -- but DB-side steps remain (runbook printed above):"
+                echo "    1) run the role SQL on the DB primary"
+                echo "    2) register '$RUNTIME_ROLE' in pgbouncer on each pooler"
+                echo "  Then finish this host (applies migrations + starts the service):"
+                echo "      sudo dpkg-reconfigure homelab-notes"
+                echo "  ================================================================"
+                echo ""
+                db_stop
+                exit 0
+            fi
+
+            echo "  registering '$RUNTIME_ROLE' with pgbouncer on $PGBOUNCER_HOST..."
+            homelab-bootstrap-pgbouncer-entry --role "$RUNTIME_ROLE" \
+                --scram-secret "$RUNTIME_SCRAM_SECRET" --pgbouncer-host "$PGBOUNCER_HOST" \
+                || echo "  WARNING: pgbouncer registration failed -- see output above; register '$RUNTIME_ROLE' by hand."
+        else
+            echo "  $CONFIG_FILE already exists -- leaving it untouched"
+        fi
+
+        if [ -z "$RUNTIME_ROLE" ]; then
+            RUNTIME_ROLE="$(sed -n '/^database:/,/^database_migrate:/{s/^[[:space:]]*user: //p}' "$CONFIG_FILE" | head -1)"
+        fi
+        if [ -n "$RUNTIME_ROLE" ]; then
+            echo "  granting '$RUNTIME_ROLE' INSERT access on audit.queue (sharing and deletions are audited)..."
+            DB_HOST_FOR_GRANT="${DB_HOST:-$(sed -n '/^database_migrate:/,/^notes:/{s/^[[:space:]]*host: //p}' "$CONFIG_FILE" | head -1)}"
+            homelab-audit-grant-queue-insert --role "$RUNTIME_ROLE" --db-host "${DB_HOST_FOR_GRANT:-localhost}" \
+                || echo "  WARNING: could not grant audit.queue access -- on a fleet host this is done from the workstation by notes-orchestrate.sh; audit lines are logged as warnings until then."
+        fi
+
+        echo "  applying migrations..."
+        HOMELAB_NOTES_MIGRATIONS_DIR="$SHARE_DIR/migrations" \
+            HOMELAB_NOTES_CONFIG="$CONFIG_FILE" \
+            sudo -u homelab homelab-notes-migrate
+
+        systemctl enable homelab-notes >/dev/null 2>&1 || true
+        if systemctl is-active --quiet homelab-notes; then
+            systemctl restart homelab-notes || echo "WARNING: homelab-notes restart failed -- check 'systemctl status homelab-notes' by hand."
+        else
+            systemctl start homelab-notes || echo "WARNING: homelab-notes failed to start -- check 'systemctl status homelab-notes' by hand."
+        fi
+
+        sleep 2
+        LISTEN_PORT="${LISTEN_PORT:-$(sed -n 's/^  listen: "http:\/\/[0-9.]*:\([0-9]*\)"/\1/p' "$CONFIG_FILE" | head -1)}"
+        if ! curl -fsS "http://127.0.0.1:${LISTEN_PORT:-2518}/health" >/dev/null 2>&1; then
+            echo "  WARNING: homelab-notes did not answer its own /health check --"
+            echo "           check 'systemctl status homelab-notes' and the journal by hand."
+        fi
+
+        db_stop
+        echo ""
+        echo "homelab-notes configured."
+        echo "config: $CONFIG_FILE"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

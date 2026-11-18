@@ -2929,6 +2929,423 @@ def _format_session_timestamp(raw):
     return (m.group(1).replace("T", " ") + m.group(2)).strip()
 
 
+# --- notes (post-cutover #71): homelab-api's /api/v1/notes/* gateway -> homelab-notes ---
+
+def _notes_call(args, what, fn):
+    """Sign in, call the client, turn an ApiError into one line. Returns
+    (result, rc): rc is set when the caller should stop."""
+    session = _require_session(args)
+    if not session:
+        return None, 1
+    try:
+        return fn(_client(args), session["token"]), None
+    except ApiError as e:
+        _emit_error(args, f"Could not {what}: {e.message}")
+        return None, 1
+
+
+def _notes_when(ts):
+    return (ts or "")[:16].replace("T", " ")
+
+
+def _notes_read_body(args, implicit_stdin=True):
+    """The body for add/edit: --body, or --file (- = stdin), or, when
+    implicit_stdin is allowed, a pipe on stdin; None when nothing was given.
+    An empty pipe (a script with stdin from /dev/null) counts as nothing, so
+    it can never blank a note by accident."""
+    body = getattr(args, "body", None)
+    if body is not None:
+        return body
+    path = getattr(args, "file", None)
+    if path == "-":
+        return sys.stdin.read()
+    if path:
+        return Path(path).read_text()
+    if implicit_stdin and not sys.stdin.isatty():
+        text = sys.stdin.read()
+        return text if text.strip() else None
+    return None
+
+
+def _notes_row(n, notebooks=None):
+    nb = (notebooks or {}).get(n.get("notebook_id")) or ""
+    mark = "*" if n.get("pinned") else ""
+    return [n.get("id"), _notes_when(n.get("deleted_at") or n.get("updated_at")), mark, n.get("title") or "(untitled)", nb, n.get("format") or "", n.get("permission") or ""]
+
+
+def _notes_notebook_names(client, token):
+    try:
+        return {nb["id"]: nb["name"] for nb in (client.notes_notebooks(token).get("notebooks") or [])}
+    except ApiError:
+        return {}
+
+
+def cmd_notes_notebooks(args):
+    result, rc = _notes_call(args, "list notebooks", lambda c, t: c.notes_notebooks(t))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    rows = [[nb["id"], nb["name"], nb.get("note_count", 0), nb.get("permission") or "owner", "" if nb.get("permission") == "owner" else nb.get("owner_email") or ""]
+            for nb in result.get("notebooks") or []]
+    if not rows:
+        print("(no notebooks)")
+        return 0
+    _print_table(["ID", "NAME", "NOTES", "YOU MAY", "SHARED BY"], rows)
+    return 0
+
+
+def cmd_notes_notebooks_create(args):
+    body = {"name": args.name}
+    if args.color:
+        body["color"] = args.color
+    result, rc = _notes_call(args, "make the notebook", lambda c, t: c.notes_notebook_create(t, body))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Notebook {result.get('id')}: {result.get('name')}")
+    return 0
+
+
+def cmd_notes_notebooks_rename(args):
+    result, rc = _notes_call(args, "rename the notebook", lambda c, t: c.notes_notebook_update(t, args.notebook_id, {"name": args.name}))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Notebook {result.get('id')} is now \"{result.get('name')}\".")
+    return 0
+
+
+def cmd_notes_notebooks_delete(args):
+    result, rc = _notes_call(args, "delete the notebook", lambda c, t: c.notes_notebook_delete(t, args.notebook_id))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Notebook {args.notebook_id} and its notes are in the trash (homelab-cli notes trash).")
+    return 0
+
+
+def cmd_notes_folders(args):
+    result, rc = _notes_call(args, "list folders", lambda c, t: c.notes_folders(t, args.notebook))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    rows = [[f["id"], f["name"], f.get("parent_id") or "", f.get("note_count", 0)] for f in result.get("folders") or []]
+    if not rows:
+        print("(no folders)")
+        return 0
+    _print_table(["ID", "NAME", "INSIDE", "NOTES"], rows)
+    return 0
+
+
+def cmd_notes_folders_create(args):
+    body = {"name": args.name}
+    if args.parent:
+        body["parent_id"] = args.parent
+    result, rc = _notes_call(args, "make the folder", lambda c, t: c.notes_folder_create(t, args.notebook, body))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Folder {result.get('id')}: {result.get('name')}")
+    return 0
+
+
+def cmd_notes_folders_delete(args):
+    result, rc = _notes_call(args, "delete the folder", lambda c, t: c.notes_folder_delete(t, args.folder_id))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Folder {args.folder_id} deleted; its notes are in the trash.")
+    return 0
+
+
+def cmd_notes_list(args):
+    params = {"notebook_id": args.notebook, "folder_id": args.folder, "limit": args.limit}
+    result, rc = _notes_call(args, "list notes", lambda c, t: c.notes_list(t, **params))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    notes = result.get("notes") or []
+    if not notes:
+        print("(no notes)")
+        return 0
+    names = {}
+    if not args.notebook:
+        session = _require_session(args)
+        names = _notes_notebook_names(_client(args), session["token"]) if session else {}
+    elif result.get("notebook"):
+        names = {result["notebook"]["id"]: result["notebook"]["name"]}
+    _print_table(["ID", "CHANGED", "", "TITLE", "NOTEBOOK", "FORMAT", "YOU MAY"], [_notes_row(n, names) for n in notes])
+    return 0
+
+
+def cmd_notes_search(args):
+    q = " ".join(args.words)
+    result, rc = _notes_call(args, "search notes", lambda c, t: c.notes_search(t, q, limit=args.limit))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    notes = result.get("notes") or []
+    if not notes:
+        print(f"Nothing matches \"{q}\".")
+        return 0
+    for n in notes:
+        print(f"{n.get('id')}  {n.get('title') or '(untitled)'}  [{_notes_when(n.get('updated_at'))}]")
+        snippet = (n.get("snippet") or n.get("excerpt") or "").strip()
+        if snippet:
+            print(f"      {snippet}")
+    return 0
+
+
+def _print_note(n, raw=True, html=False):
+    title = n.get("title") or "(untitled)"
+    nb = (n.get("notebook") or {}).get("name") or ""
+    print(title)
+    print("=" * min(len(title), 72))
+    bits = [f"id {n.get('id')}", n.get("format") or "", f"notebook {nb}" if nb else "", f"revision {n.get('revision')}",
+            f"changed {_notes_when(n.get('updated_at'))}" + (f" by {n.get('edited_by')}" if n.get("edited_by") else ""),
+            "pinned" if n.get("pinned") else "", n.get("permission") or "", n.get("url") or ""]
+    print("  ".join(b for b in bits if b))
+    print()
+    print(n.get("html") if html else n.get("body") or "")
+    links = n.get("links") or []
+    if links:
+        print()
+        print("Links:")
+        for l in links:
+            t = l.get("target") or {}
+            what = l.get("label") or (t.get("subject") if l["kind"] == "mail" else t.get("filename") if l["kind"] == "drive" else t.get("url")) or ""
+            print(f"  [{l.get('id')}] {l.get('kind')}: {what}" + (f"  -> {l.get('open_url')}" if l.get("open_url") else ""))
+
+
+def cmd_notes_show(args):
+    result, rc = _notes_call(args, "read the note", lambda c, t: c.notes_show(t, args.note_id))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    if args.raw:
+        print(result.get("body") or "", end="" if (result.get("body") or "").endswith("\n") else "\n")
+        return 0
+    _print_note(result, html=args.html)
+    return 0
+
+
+def cmd_notes_add(args):
+    body = {"title": args.title or ""}
+    text = _notes_read_body(args)
+    if text is not None:
+        body["body"] = text
+    if args.format:
+        body["format"] = args.format
+    if args.notebook:
+        body["notebook_id"] = args.notebook
+    if args.folder:
+        body["folder_id"] = args.folder
+    if args.pin:
+        body["pinned"] = True
+    result, rc = _notes_call(args, "add the note", lambda c, t: c.notes_create(t, body))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Note {result.get('id')}: {result.get('title') or '(untitled)'}  ({result.get('format')}, in {(result.get('notebook') or {}).get('name')})  {result.get('url') or ''}")
+    return 0
+
+
+def cmd_notes_edit(args):
+    body = {}
+    if args.title is not None:
+        body["title"] = args.title
+    # A pipe is the new body only when nothing else was asked for: a script
+    # that changes the title with stdin not a terminal must not read it.
+    other = any([args.title is not None, args.format, args.pin, args.unpin, args.folder is not None])
+    text = _notes_read_body(args, implicit_stdin=not other)
+    if text is not None:
+        body["body"] = text
+    if args.format:
+        body["format"] = args.format
+    if args.pin:
+        body["pinned"] = True
+    if args.unpin:
+        body["pinned"] = False
+    if args.folder is not None:
+        body["folder_id"] = None if args.folder in ("0", "none", "root") else args.folder
+    if not body:
+        _emit_error(args, "Nothing to change: give --title, --body, --file, --format, --pin/--unpin or --folder.")
+        return 1
+    result, rc = _notes_call(args, "change the note", lambda c, t: c.notes_update(t, args.note_id, body))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Note {result.get('id')} saved (revision {result.get('revision')}).")
+    return 0
+
+
+def cmd_notes_move(args):
+    body = {"notebook_id": args.notebook}
+    if args.folder:
+        body["folder_id"] = None if args.folder in ("0", "none", "root") else args.folder
+    result, rc = _notes_call(args, "move the note", lambda c, t: c.notes_move(t, args.note_id, body))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Note {result.get('id')} is in {(result.get('notebook') or {}).get('name')}" + (f", folder {result.get('folder_id')}" if result.get("folder_id") else "") + ".")
+    return 0
+
+
+def cmd_notes_delete(args):
+    result, rc = _notes_call(args, "delete the note", lambda c, t: c.notes_delete(t, args.note_id))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Note {args.note_id} is in the trash. Bring it back with: homelab-cli notes restore {args.note_id}")
+    return 0
+
+
+def cmd_notes_restore(args):
+    result, rc = _notes_call(args, "restore the note", lambda c, t: c.notes_restore(t, args.note_id))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Note {result.get('id')} restored: {result.get('title') or '(untitled)'}")
+    return 0
+
+
+def cmd_notes_trash(args):
+    if args.empty:
+        result, rc = _notes_call(args, "empty the trash", lambda c, t: c.notes_trash_empty(t))
+        if rc is not None:
+            return rc
+        if _emit(args, result):
+            return 0
+        print(f"{result.get('removed', 0)} note(s) gone for good.")
+        return 0
+    result, rc = _notes_call(args, "list the trash", lambda c, t: c.notes_trash(t))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    notes = result.get("notes") or []
+    if not notes:
+        print("The trash is empty.")
+        return 0
+    _print_table(["ID", "DELETED", "", "TITLE", "NOTEBOOK", "FORMAT", "YOU MAY"], [_notes_row(n) for n in notes])
+    return 0
+
+
+def cmd_notes_history(args):
+    result, rc = _notes_call(args, "read the history", lambda c, t: c.notes_versions(t, args.note_id))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    versions = result.get("versions") or []
+    if not versions:
+        print("No earlier saves yet.")
+        return 0
+    _print_table(["VERSION", "REVISION", "SAVED", "BY", "CHARS", "TITLE"],
+                 [[v["id"], v.get("revision"), _notes_when(v.get("created_at")), v.get("saved_by") or "", v.get("body_chars"), v.get("title") or ""] for v in versions])
+    print("Bring one back with: homelab-cli notes revert NOTE_ID VERSION")
+    return 0
+
+
+def cmd_notes_revert(args):
+    result, rc = _notes_call(args, "revert the note", lambda c, t: c.notes_version_restore(t, args.version_id))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Note {result.get('id')} is back at that text (revision {result.get('revision')}).")
+    return 0
+
+
+def cmd_notes_link(args):
+    if args.url:
+        body = {"kind": "url", "target": {"url": args.url}}
+    elif args.drive:
+        body = {"kind": "drive", "target": {"file_id": args.drive, "filename": args.label or f"file {args.drive}"}}
+    else:
+        _emit_error(args, "Give --url ADDRESS or --drive FILE_ID.")
+        return 1
+    if args.label:
+        body["label"] = args.label
+    result, rc = _notes_call(args, "add the link", lambda c, t: c.notes_link_add(t, args.note_id, body))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Link {result.get('id')} added to note {args.note_id}.")
+    return 0
+
+
+def cmd_notes_unlink(args):
+    result, rc = _notes_call(args, "remove the link", lambda c, t: c.notes_link_remove(t, args.link_id))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Link {args.link_id} removed.")
+    return 0
+
+
+def cmd_notes_shares(args):
+    result, rc = _notes_call(args, "list shares", lambda c, t: c.notes_shares(t, args.target_id, notebook=args.notebook))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    shares = result.get("shares") or []
+    if not shares:
+        print("Not shared with anyone.")
+        return 0
+    _print_table(["SHARE", "WITH", "MAY", "EXPIRES", "OPENED", "LINK"],
+                 [[s["id"], s.get("shared_with_email") or "anyone with the link", s.get("permission"), _notes_when(s.get("expires_at")) or "never", s.get("access_count", 0), s.get("url")] for s in shares])
+    return 0
+
+
+def cmd_notes_share(args):
+    if not args.link and not args.with_:
+        _emit_error(args, "Say who: --with EMAIL, or --link for a link anyone can open.")
+        return 1
+    body = {"permission": "edit" if args.edit else "read"}
+    if args.with_:
+        body["with"] = args.with_
+    if args.expires:
+        body["expires_days"] = args.expires
+    result, rc = _notes_call(args, "share", lambda c, t: c.notes_share(t, args.target_id, body, notebook=args.notebook))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    who = result.get("shared_with_email") or "anyone with the link"
+    print(f"Shared with {who} ({'may edit' if result.get('permission') == 'edit' else 'may see'}). Share {result.get('id')}.")
+    print(result.get("url") or "")
+    return 0
+
+
+def cmd_notes_unshare(args):
+    result, rc = _notes_call(args, "withdraw the share", lambda c, t: c.notes_unshare(t, args.share_id))
+    if rc is not None:
+        return rc
+    if _emit(args, result):
+        return 0
+    print(f"Share {args.share_id} withdrawn.")
+    return 0
+
+
 def _print_table(headers, rows):
     """Minimal aligned-column table printer -- no new dependency, this
     CLI's tables are always small (a user's own session count, a domain's
@@ -3974,6 +4391,128 @@ def build_parser():
     p = calendar_sub.add_parser("account", help="Your calendar's switches (email links, the AI proposal); --mail-links on|off changes the first")
     p.add_argument("--mail-links", dest="mail_links", metavar="on|off", help="Add an 'Add to calendar' link to every email you receive")
     p.set_defaults(func=cmd_calendar_account)
+
+    # Notes (post-cutover #71): homelab-api's /api/v1/notes/* gateway -> homelab-notes.
+    notes = sub.add_parser("notes", help="Your notes, via homelab-api's notes gateway: notebooks, folders, list, show, add, edit, share, search")
+    notes_sub = notes.add_subparsers(dest="notes_command", required=True)
+    FORMAT_HELP = "markdown (md), html or text"
+
+    p = notes_sub.add_parser("notebooks", help="List your notebooks and the ones shared with you (or 'notebooks create|rename|delete')")
+    p.set_defaults(func=cmd_notes_notebooks)
+    nbs = p.add_subparsers(dest="notebooks_command")
+    pc = nbs.add_parser("create", help="Make a notebook")
+    pc.add_argument("name")
+    pc.add_argument("--color", metavar="#RRGGBB")
+    pc.set_defaults(func=cmd_notes_notebooks_create)
+    pc = nbs.add_parser("rename", help="Rename a notebook of yours")
+    pc.add_argument("notebook_id")
+    pc.add_argument("name")
+    pc.set_defaults(func=cmd_notes_notebooks_rename)
+    pc = nbs.add_parser("delete", help="Delete a notebook and its notes (to the trash)")
+    pc.add_argument("notebook_id")
+    pc.set_defaults(func=cmd_notes_notebooks_delete)
+
+    p = notes_sub.add_parser("folders", help="The folders of a notebook (or 'folders create|delete')")
+    p.add_argument("--notebook", required=False, metavar="ID", help="The notebook (required for the list)")
+    p.set_defaults(func=cmd_notes_folders)
+    fs = p.add_subparsers(dest="folders_command")
+    pc = fs.add_parser("create", help="Make a folder in a notebook")
+    pc.add_argument("name")
+    pc.add_argument("--notebook", required=True, metavar="ID")
+    pc.add_argument("--parent", metavar="FOLDER_ID", help="Inside this folder")
+    pc.set_defaults(func=cmd_notes_folders_create)
+    pc = fs.add_parser("delete", help="Delete a folder (its notes go to the trash)")
+    pc.add_argument("folder_id")
+    pc.set_defaults(func=cmd_notes_folders_delete)
+
+    p = notes_sub.add_parser("list", help="List notes: a notebook's (or one folder of it), or everything you may see")
+    p.add_argument("--notebook", metavar="ID")
+    p.add_argument("--folder", metavar="ID", help="Only this folder; 0 for notes not in a folder")
+    p.add_argument("--limit", type=int, metavar="N")
+    p.set_defaults(func=cmd_notes_list)
+
+    p = notes_sub.add_parser("show", help="One note: its title, facts, body as typed (or --html rendered) and links; --raw prints only the body")
+    p.add_argument("note_id")
+    p.add_argument("--raw", action="store_true", help="Only the body, as typed (for a pipe)")
+    p.add_argument("--html", action="store_true", help="The rendered HTML instead of the body as typed")
+    p.set_defaults(func=cmd_notes_show)
+
+    p = notes_sub.add_parser("add", help="Add a note: the body from --body, --file (- = stdin) or a pipe")
+    p.add_argument("title", nargs="?", default="")
+    p.add_argument("--body", metavar="TEXT")
+    p.add_argument("--file", metavar="PATH", help="Read the body from this file; - for stdin")
+    p.add_argument("--format", choices=["markdown", "md", "html", "text"], help=FORMAT_HELP)
+    p.add_argument("--notebook", metavar="ID", help="Which notebook (your first one when left out)")
+    p.add_argument("--folder", metavar="ID")
+    p.add_argument("--pin", action="store_true")
+    p.set_defaults(func=cmd_notes_add)
+
+    p = notes_sub.add_parser("edit", help="Change a note: give only what changes")
+    p.add_argument("note_id")
+    p.add_argument("--title", metavar="TEXT")
+    p.add_argument("--body", metavar="TEXT")
+    p.add_argument("--file", metavar="PATH", help="The new body from this file; - for stdin")
+    p.add_argument("--format", choices=["markdown", "md", "html", "text"], help=FORMAT_HELP)
+    p.add_argument("--folder", metavar="ID", help="Put it in this folder (0 for none); owner only")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--pin", action="store_true")
+    g.add_argument("--unpin", action="store_true")
+    p.set_defaults(func=cmd_notes_edit)
+
+    p = notes_sub.add_parser("move", help="Move a note to another of your notebooks (and a folder of it)")
+    p.add_argument("note_id")
+    p.add_argument("--notebook", required=True, metavar="ID")
+    p.add_argument("--folder", metavar="ID", help="A folder of that notebook; 0 for none")
+    p.set_defaults(func=cmd_notes_move)
+
+    p = notes_sub.add_parser("delete", help="Delete a note (to the trash; restorable)")
+    p.add_argument("note_id")
+    p.set_defaults(func=cmd_notes_delete)
+    p = notes_sub.add_parser("restore", help="Bring a deleted note back")
+    p.add_argument("note_id")
+    p.set_defaults(func=cmd_notes_restore)
+    p = notes_sub.add_parser("trash", help="Your deleted notes; --empty removes them for good")
+    p.add_argument("--empty", action="store_true")
+    p.set_defaults(func=cmd_notes_trash)
+
+    p = notes_sub.add_parser("search", help="Find notes by their words (phrases in quotes, OR, -word to leave one out)")
+    p.add_argument("words", nargs="+")
+    p.add_argument("--limit", type=int, metavar="N")
+    p.set_defaults(func=cmd_notes_search)
+
+    p = notes_sub.add_parser("history", help="The last 20 saves of a note")
+    p.add_argument("note_id")
+    p.set_defaults(func=cmd_notes_history)
+    p = notes_sub.add_parser("revert", help="Make an earlier save the current text (see 'history')")
+    p.add_argument("note_id")
+    p.add_argument("version_id")
+    p.set_defaults(func=cmd_notes_revert)
+
+    p = notes_sub.add_parser("link", help="Put a link on a note: a web address, or a drive file by its id")
+    p.add_argument("note_id")
+    p.add_argument("--url", metavar="ADDRESS")
+    p.add_argument("--drive", metavar="FILE_ID", help="A file in your drive (see 'homelab-cli drive list')")
+    p.add_argument("--label", metavar="TEXT", help="Shown instead of the address or file name")
+    p.set_defaults(func=cmd_notes_link)
+    p = notes_sub.add_parser("unlink", help="Take a link off a note by its id (see 'show')")
+    p.add_argument("link_id")
+    p.set_defaults(func=cmd_notes_unlink)
+
+    p = notes_sub.add_parser("shares", help="Who a note (or, with --notebook, a notebook) is shared with")
+    p.add_argument("target_id", help="The note's id (or the notebook's with --notebook)")
+    p.add_argument("--notebook", action="store_true", help="The id is a notebook's")
+    p.set_defaults(func=cmd_notes_shares)
+    p = notes_sub.add_parser("share", help="Share a note (or, with --notebook, a notebook) with an account, or make a link anyone can open")
+    p.add_argument("target_id", help="The note's id (or the notebook's with --notebook)")
+    p.add_argument("--notebook", action="store_true", help="The id is a notebook's")
+    p.add_argument("--with", dest="with_", metavar="EMAIL", help="The account to share with")
+    p.add_argument("--link", action="store_true", help="A read-only link anyone can open")
+    p.add_argument("--edit", action="store_true", help="They may edit too (an account, not a link)")
+    p.add_argument("--expires", type=int, metavar="DAYS", help="Stops working after this many days")
+    p.set_defaults(func=cmd_notes_share)
+    p = notes_sub.add_parser("unshare", help="Withdraw a share by its id (see 'shares')")
+    p.add_argument("share_id")
+    p.set_defaults(func=cmd_notes_unshare)
 
     jobs = sub.add_parser("jobs", help="Background job status, via homelab-api's jobs gateway -> homelab-worker")
     jobs_sub = jobs.add_subparsers(dest="jobs_command", required=True)

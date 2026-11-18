@@ -1,0 +1,14 @@
+homelab-notes (0.1.0) unstable; urgency=medium
+
+  * First release (post-cutover #71): notes.<domain>. Notebooks, folders and
+    notes in Markdown, HTML or plain text, rendered by the package's own
+    Markdown subset and cleaned by an allowlist sanitiser on Mojo::DOM (no
+    inline script can run: the pages carry a CSP without inline script).
+    Versions (the last 20 bodies, restorable), links on a note to an email
+    (picked by searching the viewer's mail through the gateway) or a drive
+    file (picked by browsing their drive), sharing to accounts (read or edit)
+    or by link, full-text search, a trash. The same handlers behind a Bearer
+    check under /internal/v1/notes/* for homelab-cli through homelab-api.
+    /metrics for Prometheus.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 18 Nov 2026 07:40:00 -0600

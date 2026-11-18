@@ -1,0 +1,40 @@
+% layout 'default';
+% title(($note->{title} ne '' ? $note->{title} : 'Untitled note') . ' - Notes');
+%# A note opened by a share link: read only, the owner's name on it, the
+%# links it carries. $html is Clean's output; nothing else of the note's is
+%# raw here.
+<main class="app__main">
+  <div class="container stack" style="max-width: 48rem">
+    % if ($back) {
+    <p><a class="btn btn-ghost btn-sm" href="<%= $back %>">&lsaquo; <%= $notebook->{name} %></a></p>
+    % }
+    <h1 style="font-size: var(--app-xl); margin: 0"><%= $note->{title} ne '' ? $note->{title} : 'Untitled note' %></h1>
+    <p class="muted-small">Shared by <%= $share->{owner_email} %> from the notebook <%= $notebook->{name} %>. Last changed <%= substr($note->{updated_at} // '', 0, 16) %>.
+      % if ($open_url) {
+      <a href="<%= $open_url %>">Open in your notes</a>
+      % }
+    </p>
+    <article class="note-body panel" style="padding: var(--space-4)"><%== $html %></article>
+    % if (@$links) {
+    <section class="note-links" aria-label="Links">
+      % for my $l (@$links) {
+      % my $t = $l->{target} // {};
+      <div class="link-card">
+        <span class="link-card__kind"><%= $l->{kind} eq 'mail' ? 'Email' : $l->{kind} eq 'drive' ? 'File' : 'Web' %></span>
+        <div class="link-card__main">
+          <div class="link-card__title"><%= $l->{label} ne '' ? $l->{label} : $l->{kind} eq 'mail' ? ($t->{subject} // '(no subject)') : $l->{kind} eq 'drive' ? ($t->{filename} // 'file') : ($t->{url} // '') %></div>
+          <div class="link-card__sub"><%= $l->{kind} eq 'mail' ? join(' ', grep { defined && length } ($t->{from_name} // $t->{from_addr}), substr($t->{sent_at} // '', 0, 10)) : $l->{kind} eq 'drive' ? ($t->{mime_type} // '') : '' %></div>
+        </div>
+        % if ($l->{kind} eq 'url' && ($t->{url} // '') =~ m{\Ahttps?://}) {
+        <a class="btn btn-sm" href="<%= $t->{url} %>" rel="noopener noreferrer" target="_blank">Open</a>
+        % } elsif ($l->{kind} eq 'drive' && ($t->{file_id} // '') =~ /\A\d+\z/) {
+        <a class="btn btn-sm" href="<%= app->drive_url %>/files/<%= $t->{file_id} %>/download" rel="noopener" target="_blank">Open</a>
+        % } elsif ($l->{kind} eq 'mail' && length($t->{subject} // '')) {
+        <a class="btn btn-sm" href="<%= app->search_url %>/?q=<%= Mojo::Util::url_escape('"' . ($t->{subject} =~ s/"//gr) . '"') %>&source=mail" rel="noopener" target="_blank">Find it</a>
+        % }
+      </div>
+      % }
+    </section>
+    % }
+  </div>
+</main>

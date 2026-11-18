@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+%# Shared chrome from homelab-webtheme (theme.css, fonts, favicon from
+%# static.mailmasker.org); only what this app needs is below. No inline
+%# script anywhere: the app's CSP forbids it (App.pm), so the page script is
+%# /notes.js and the boot data is a JSON data block.
+%= include 'homelab/head'
+<title><%= title %></title>
+<link rel="stylesheet" href="/notes.css">
+</head>
+<body class="app">
+%= include 'homelab/header'
+<%= content %>
+%= include 'homelab/footer'
+</body>
+</html>

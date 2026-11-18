@@ -1,3 +1,11 @@
+homelab-api (0.1.73) unstable; urgency=medium
+
+  * The gateway fronts homelab-notes (post-cutover #71): /api/v1/notes/* ->
+    the notes service's /internal/v1/notes/*, as the calendar's. The port map
+    learns 2518 notes, 2519 calendar, 2521 ai.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 18 Nov 2026 08:30:00 -0600
+
 homelab-api (0.1.72) unstable; urgency=medium
 
   * The account time zone (post-cutover #74 phase 2): api.users.timezone

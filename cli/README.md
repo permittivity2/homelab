@@ -227,6 +227,36 @@ on or off.
 Talks to homelab-calendar through `homelab-api`'s `/api/v1/calendar/*`
 gateway (see `../calendar/README.md`'s Routes section).
 
+## Notes (`notes`)
+
+Your notes through homelab-api's `/api/v1/notes/*` gateway to the notes app
+(post-cutover #71): notebooks (the tabs), folders, notes in Markdown, HTML or
+plain text, their history, links, sharing, search. The page is
+notes.mailmasker.org; a share link opens there with no sign-in.
+
+```
+homelab-cli notes notebooks [create <name> [--color #rrggbb] | rename <id> <name> | delete <id>]
+homelab-cli notes folders --notebook <id>            homelab-cli notes folders create <name> --notebook <id> [--parent <folder-id>]
+homelab-cli notes list [--notebook <id>] [--folder <id>|0] [--limit N]      (without --notebook: everything you may see)
+homelab-cli notes show <id> [--raw | --html]         (--raw: only the body as typed, for a pipe)
+homelab-cli notes add [<title>] [--body <text> | --file <path>|-] [--format md|html|text] [--notebook <id>] [--folder <id>] [--pin]
+cat plan.md | homelab-cli notes add "Plan"           (a pipe is the body)
+homelab-cli notes edit <id> [--title ...] [--body ... | --file ...] [--format ...] [--pin|--unpin] [--folder <id>|0]
+homelab-cli notes move <id> --notebook <id> [--folder <id>|0]
+homelab-cli notes delete <id> | restore <id> | trash [--empty]
+homelab-cli notes search <words>                     (phrases in quotes, OR, -word to leave one out)
+homelab-cli notes history <id>                       homelab-cli notes revert <id> <version>
+homelab-cli notes link <id> --url <address> [--label ...] | --drive <file-id> [--label ...]      homelab-cli notes unlink <link-id>
+homelab-cli notes shares <id> [--notebook]           homelab-cli notes share <id> [--notebook] --with <email> [--edit] [--expires <days>] | --link
+homelab-cli notes unshare <share-id>
+```
+
+`show` prints the note as typed; the rendered form (`--html`) is the same
+cleaned HTML the page shows. `edit` keeps the old text as a version
+(`history`); `revert` brings one back as a new save. A link shared with
+`--link` is read-only; an account shared `--with` may also `--edit`.
+Linking an email is done on the page, where you can search your mail for it.
+
 ## DNS + mail-domain administration (`dns`)
 
 ```bash

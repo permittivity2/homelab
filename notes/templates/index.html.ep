@@ -1,0 +1,170 @@
+% layout 'default';
+% title 'Notes';
+%# The one page of the app. The notebooks column, the list and the note are
+%# filled by /notes.js from /api/*; the dialogs below are the shared theme's
+%# modals, opened by the script. The boot block is a JSON data block, not a
+%# script (the CSP allows no inline script): who is signed in, the CSRF
+%# token for every write, the note to open.
+<div class="app__body">
+  <nav class="sidenav nb-side" id="nb-side" aria-label="Notebooks">
+    <div class="nb-side__head"><span class="nb-side__title">Notebooks</span><button type="button" class="btn btn-ghost btn-sm" id="side-close" aria-label="Close the notebook list">&times;</button></div>
+    <div class="quick-add"><label class="sr-only" for="q">Search notes</label><input class="form-input" type="search" id="q" placeholder="Search notes" autocomplete="off" title="Press / to search; Enter to run it"></div>
+    <div class="sidenav__group">Notebooks</div>
+    <div id="nb-list"></div>
+    <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-new-notebook">+ New notebook</button></div>
+    <div class="sidenav__group" id="shared-head" hidden>Shared with me</div>
+    <div id="shared-list"></div>
+    <div class="sidenav__group" id="folders-head">Folders</div>
+    <div id="folder-list"></div>
+    <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-new-folder">+ New folder</button></div>
+    <div class="sidenav__group">More</div>
+    <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-shared-notes">Notes shared with me</button></div>
+    <div style="padding: 0 var(--space-3)"><button type="button" class="btn btn-ghost btn-sm" id="btn-trash">Deleted notes</button></div>
+    <p class="muted-small" style="padding: var(--space-2) var(--space-3) 0">Keys: n new note, e edit, / search, Esc back.</p>
+  </nav>
+  <div class="nb-side-backdrop" id="side-backdrop"></div>
+  <main class="app__main notes-main">
+    <div class="toolbar notes-actions" id="notes-actions">
+      <button type="button" class="btn btn-sm" id="side-toggle" aria-controls="nb-side" aria-expanded="false"><span aria-hidden="true">&#9776;</span> Notebooks</button>
+      <button type="button" class="btn btn-sm" id="btn-search-m">Search</button>
+      <span class="toolbar__spacer"></span>
+      <button type="button" class="btn btn-sm btn-primary" id="btn-new-note-m">+ New note</button>
+    </div>
+    <div class="notes-panes">
+      <section class="note-list" id="note-list" aria-label="Notes">
+        <div class="note-list__head"><h2 id="list-title">Notes</h2><button type="button" class="btn btn-sm btn-primary" id="btn-new-note">+ New note</button></div>
+        <p class="muted-small" id="list-note"></p>
+        <ul id="list" class="note-rows"></ul>
+      </section>
+      <section class="note-view" id="note-view" aria-label="Note">
+        <p class="note-view__empty" id="view-empty">Pick a note, or make a new one.</p>
+        <div id="view" class="hide">
+          <div class="note-head">
+            <button type="button" class="btn btn-sm btn-ghost note-back" id="btn-back">&lsaquo; Notes</button>
+            <input class="note-title" id="n-title" placeholder="Title" aria-label="Title" maxlength="300">
+            <div class="note-tools">
+              <select class="form-select" id="n-format" aria-label="Format"><option value="markdown">Markdown</option><option value="html">HTML</option><option value="text">Text</option></select>
+              <button type="button" class="btn btn-sm" id="btn-edit">Edit</button>
+              <button type="button" class="btn btn-sm" id="btn-more" aria-haspopup="true" aria-label="More">&#8943;</button>
+            </div>
+          </div>
+          <p class="muted-small note-meta" id="n-meta"></p>
+          <p id="n-readonly" class="banner banner--info hide"><span>You can see this note but not change it.</span></p>
+          <div class="editor-bar hide" id="editor-bar">
+            <button type="button" class="btn btn-sm" id="btn-preview-toggle">Preview</button>
+            <span class="save-state" id="save-state"></span>
+            <span class="spacer"></span>
+            <button type="button" class="btn btn-sm btn-primary" id="btn-done">Done</button>
+          </div>
+          <div class="note-editor hide" id="editor">
+            <textarea id="n-body" class="form-textarea" spellcheck="true" aria-label="Body"></textarea>
+            <div class="note-preview note-body" id="n-preview"></div>
+          </div>
+          <article class="note-body" id="n-html"></article>
+          <section class="note-links" id="n-links" aria-label="Links"></section>
+          <div class="form-actions note-link-actions" id="link-actions">
+            <button type="button" class="btn btn-sm" id="btn-link-mail">Link an email</button>
+            <button type="button" class="btn btn-sm" id="btn-link-drive">Link a file</button>
+            <button type="button" class="btn btn-sm" id="btn-link-url">Link a web page</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div id="msg" role="status" aria-live="polite" class="sr-only"></div>
+<div class="nt-backdrop" id="nt-backdrop"></div>
+
+%# The note's menu.
+<div class="menu" id="note-menu" role="menu">
+  <button type="button" data-act="pin">Pin</button>
+  <button type="button" data-act="share">Share</button>
+  <button type="button" data-act="move">Move</button>
+  <button type="button" data-act="history">History</button>
+  <button type="button" data-act="copy-link">Copy link</button>
+  <button type="button" data-act="delete" class="is-danger">Delete</button>
+</div>
+%# A notebook's or folder's menu.
+<div class="menu" id="nb-menu" role="menu">
+  <button type="button" data-act="rename">Rename</button>
+  <button type="button" data-act="share">Share notebook</button>
+  <button type="button" data-act="delete" class="is-danger">Delete</button>
+</div>
+
+%# A question with one text box (names).
+<div class="modal" id="prompt-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-h">
+  <form id="prompt-form" autocomplete="off">
+  <div class="modal__head"><h2 id="prompt-h" class="panel__title">Name</h2></div>
+  <div class="modal__body stack">
+    <div class="form-row"><label class="form-label" for="prompt-input" id="prompt-label">Name</label><input class="form-input" id="prompt-input" maxlength="300"></div>
+    <p class="form-error hide" id="prompt-error"></p>
+  </div>
+  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn btn-primary" id="prompt-ok">OK</button></div>
+  </form>
+</div>
+
+%# Sharing a note or a notebook.
+<div class="modal" id="share-modal" role="dialog" aria-modal="true" aria-labelledby="share-h">
+  <div class="modal__head"><h2 id="share-h" class="panel__title">Share</h2></div>
+  <div class="modal__body stack">
+    <p class="muted-small" id="share-what"></p>
+    <form id="share-form" class="form-grid" autocomplete="off">
+      <div class="span2"><label class="form-label" for="share-with">With an account (leave empty for a link anyone can open)</label><input class="form-input" id="share-with" type="email" placeholder="someone@mailmasker.org"></div>
+      <div><label class="form-label" for="share-perm">They may</label><select class="form-select" id="share-perm"><option value="read">See it</option><option value="edit">See and edit</option></select></div>
+      <div><label class="form-label" for="share-days">Expires</label><select class="form-select" id="share-days"><option value="">Never</option><option value="1">In a day</option><option value="7">In a week</option><option value="30">In 30 days</option></select></div>
+      <div class="span2 form-actions"><button type="submit" class="btn btn-primary">Share</button></div>
+    </form>
+    <p class="form-error hide" id="share-error"></p>
+    <ul class="share-list" id="share-list"></ul>
+  </div>
+  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-close>Close</button></div>
+</div>
+
+%# Moving a note.
+<div class="modal" id="move-modal" role="dialog" aria-modal="true" aria-labelledby="move-h">
+  <form id="move-form" autocomplete="off">
+  <div class="modal__head"><h2 id="move-h" class="panel__title">Move</h2></div>
+  <div class="modal__body stack">
+    <div class="form-row"><label class="form-label" for="move-nb">Notebook</label><select class="form-select" id="move-nb"></select></div>
+    <div class="form-row"><label class="form-label" for="move-folder">Folder</label><select class="form-select" id="move-folder"></select></div>
+    <p class="form-error hide" id="move-error"></p>
+  </div>
+  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn btn-primary">Move</button></div>
+  </form>
+</div>
+
+%# The earlier bodies of a note.
+<div class="modal" id="history-modal" role="dialog" aria-modal="true" aria-labelledby="history-h">
+  <div class="modal__head"><h2 id="history-h" class="panel__title">History</h2></div>
+  <div class="modal__body stack">
+    <p class="muted-small">The last 20 saves. Restoring one keeps the current text as a version too.</p>
+    <ul class="pick-list" id="history-list"></ul>
+    <pre class="hide note-body" id="history-preview"></pre>
+  </div>
+  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-close>Close</button></div>
+</div>
+
+%# Linking an email, a drive file or a web page.
+<div class="modal" id="pick-modal" role="dialog" aria-modal="true" aria-labelledby="pick-h">
+  <div class="modal__head"><h2 id="pick-h" class="panel__title">Link</h2></div>
+  <div class="modal__body stack">
+    <form id="pick-mail-form" class="hide" autocomplete="off">
+      <div class="form-row"><label class="form-label" for="pick-q">Find the email (words from its subject or text)</label>
+        <div style="display:flex; gap: var(--space-2)"><input class="form-input" id="pick-q" type="search" style="flex:1 1 auto; min-width:0"><button type="submit" class="btn">Search</button></div></div>
+    </form>
+    <div id="pick-drive-head" class="hide"><div class="form-actions" id="pick-crumbs" style="flex-wrap: wrap; gap: var(--space-1)"></div></div>
+    <form id="pick-url-form" class="hide" autocomplete="off">
+      <div class="form-row"><label class="form-label" for="pick-url">Web address</label><input class="form-input" id="pick-url" type="url" placeholder="https://"></div>
+      <div class="form-row"><label class="form-label" for="pick-url-label">Shown as (optional)</label><input class="form-input" id="pick-url-label" maxlength="200"></div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Add link</button></div>
+    </form>
+    <p class="muted-small hide" id="pick-note"></p>
+    <p class="form-error hide" id="pick-error"></p>
+    <ul class="pick-list" id="pick-list"></ul>
+  </div>
+  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-close>Close</button></div>
+</div>
+
+<script type="application/json" id="boot"><%== $boot %></script>
+<script src="/notes.js" defer></script>

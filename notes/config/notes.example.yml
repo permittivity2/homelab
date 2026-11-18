@@ -1,0 +1,66 @@
+# Homelab Notes configuration
+#
+# notes.<domain>: notebooks, folders, notes in Markdown, HTML or plain text,
+# links to email and drive files, sharing. Sign-in through homelab-sso; the
+# token is held in this app's own session cookie and introspected against
+# homelab-api on every request (see README.md).
+
+homelab_api:
+  base_url: https://api.test.mailmasker.org
+
+# RUNTIME connection -- CRUD only, no DDL. Point this at pgbouncer.
+database:
+  host: YOUR_PGBOUNCER_HOST
+  port: 6432
+  name: homelab
+  user: homelab_notes_runtime
+  password: YOUR_RUNTIME_PASSWORD_HERE
+
+# MIGRATE connection -- direct to Postgres, bypassing pgbouncer. Only used by
+# homelab-notes-migrate at install/upgrade time.
+database_migrate:
+  host: YOUR_POSTGRES_HOST
+  port: 5432
+  name: homelab
+  user: homelab_notes_migrate
+  password: YOUR_MIGRATE_PASSWORD_HERE
+
+notes:
+  # The public URL of this app: share links are built from it. Must match
+  # what homelab-webproxy's sites.yml fronts this service as.
+  public_base_url: https://notes.test.mailmasker.org
+  # Where a linked email opens (the search app) and a linked file (drive).
+  search_url: https://search.test.mailmasker.org
+  drive_url: https://drive.test.mailmasker.org
+  # The largest body a note may have, in bytes, and how many earlier bodies
+  # are kept per note (the oldest beyond that is dropped on the next save).
+  max_body_bytes: 1048576
+  versions_kept: 20
+
+# Sign-in through homelab-sso. Without these two blocks nobody can sign in,
+# so only share links work. Written by install-orchestrators/notes-orchestrate.sh
+# with the client registered on the SSO nodes first; the session secret must
+# be the SAME on every pool node (requests are not sticky).
+# sso:
+#   base_url: https://login.test.mailmasker.org        # the BROWSER goes here
+#   internal_base_url: http://sso.example.internal:2502 # this app's own code exchange
+#   client_id: notes
+#   client_secret: YOUR_SSO_CLIENT_SECRET_HERE
+#   redirect_uri: https://notes.test.mailmasker.org/oauth/callback
+# session:
+#   secret: "THE SAME LONG RANDOM VALUE ON EVERY POOL NODE"
+
+# Optional: the shared mailmasker look (homelab-webtheme). Leave base_url out:
+# the package default (.../theme/v1) is right and a bare host 404s theme.css.
+# web_theme:
+#   home_url: https://mailmasker.org/
+
+# What this instance announces itself as in homelab-api's service registry.
+registry:
+  host: 127.0.0.1
+  port: 2518
+
+server:
+  listen: "http://127.0.0.1:2518"
+  workers: 2
+  pid_file: /run/homelab-notes/hypnotoad.pid

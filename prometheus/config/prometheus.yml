@@ -106,6 +106,14 @@ scrape_configs:
       - files: ['/etc/prometheus/homelab/targets/calendar.json', '/etc/prometheus/homelab/targets-static/calendar.json']
         refresh_interval: 30s
 
+  # homelab-notes (post-cutover #71): notebooks, notes, shares, saves. Three
+  # nodes, from the pull.
+  - job_name: notes
+    metrics_path: /metrics
+    file_sd_configs:
+      - files: ['/etc/prometheus/homelab/targets/notes.json', '/etc/prometheus/homelab/targets-static/notes.json']
+        refresh_interval: 30s
+
   - job_name: pdns-recursor
     file_sd_configs:
       - files: ['/etc/prometheus/homelab/targets/pdns-recursor.json', '/etc/prometheus/homelab/targets-static/pdns-recursor.json']

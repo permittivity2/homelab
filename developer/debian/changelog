@@ -1,3 +1,10 @@
+homelab-developer (0.1.14) unstable; urgency=medium
+
+  * Reference area "Notes" (post-cutover #71): notebooks, folders, notes,
+    history, links, sharing, search through /api/v1/notes/*.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 18 Nov 2026 08:30:00 -0600
+
 homelab-developer (0.1.13) unstable; urgency=medium
 
   * The calendar's holidays switch (post-cutover #92): see it, switch it.

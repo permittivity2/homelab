@@ -1,0 +1,7 @@
+name: notes
+package: homelab-notes
+kind: http_service
+check:
+  systemd_unit: homelab-notes
+  tcp_port: 2518
+description: "Notes web app: notebooks, folders, Markdown/HTML/text notes, links to mail and files, sharing at notes.<domain>"

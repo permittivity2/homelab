@@ -349,4 +349,4 @@ for n in $NODES; do
 done
 
 step "verify"
-exec "$0" --verify
+exec "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" --verify

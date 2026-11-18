@@ -1,3 +1,10 @@
+homelab-prometheus (0.10.5) unstable; urgency=medium
+
+  * Scrapes homelab-notes (post-cutover #71): a `notes` pull entry and job
+    for its /metrics on 2518.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 18 Nov 2026 08:30:00 -0600
+
 homelab-prometheus (0.10.4) unstable; urgency=medium
 
   * CalendarHolidaysUnknown (post-cutover #92): the calendar's yearly

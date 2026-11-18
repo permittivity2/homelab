@@ -1,0 +1,64 @@
+Template: homelab-notes/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host to bootstrap this app's roles/schema on:
+ Used only once, at first install, to run homelab-bootstrap-app-role.
+
+Template: homelab-notes/pgbouncer_host
+Type: string
+Default: localhost
+Description: PgBouncer host to register this app's runtime role with:
+ Used only once, at first install. Also written into config.yml's
+ database.host, so the running service connects through the pooler.
+
+Template: homelab-notes/api_base
+Type: string
+Default: http://localhost:3000
+Description: Base URL where homelab-api is reachable:
+ Written into config.yml's homelab_api.base_url -- every sign-in is
+ verified by introspecting the session's token here.
+
+Template: homelab-notes/listen_port
+Type: string
+Default: 2518
+Description: Port for homelab-notes to listen on:
+
+Template: homelab-notes/advertise_host
+Type: string
+Default: 127.0.0.1
+Description: This host's own address to advertise in the service registry:
+ Written into config.yml's registry.host. Set it to this host's service
+ address for any distributed deployment.
+
+Template: homelab-notes/public_base_url
+Type: string
+Default: https://notes.test.mailmasker.org
+Description: Public URL of this notes app:
+ Share links are built from it; the search and drive links a note shows use
+ its domain. Must match the name
+ homelab-webproxy's sites.yml fronts this service as.
+
+Template: homelab-notes/sso_base_url
+Type: string
+Default: https://login.test.mailmasker.org
+Description: Public base URL of homelab-sso (where the browser is sent to sign in):
+ A BROWSER redirect: it must be the public SSO name, never an internal
+ address (see homelab-drive's identical note).
+
+Template: homelab-notes/sso_internal_base_url
+Type: string
+Default:
+Description: Internal base URL of homelab-sso for this app's own code exchange (blank = the public URL):
+
+Template: homelab-notes/sso_client_secret
+Type: password
+Description: Shared secret for this app's "notes" OAuth client:
+ Must match the 'notes' client registered in homelab-sso's config.
+ Leave blank to install without sign-in (share links still work) and add
+ the sso: block to config.yml later.
+
+Template: homelab-notes/session_secret
+Type: password
+Description: Session secret (the SAME value on every node of the pool):
+ Requests are not sticky across the pool, so a per-node secret would fail
+ sign-ins two times in three. Leave blank on a single node to generate one.
