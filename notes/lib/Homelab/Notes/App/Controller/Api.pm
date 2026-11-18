@@ -69,11 +69,25 @@ sub _snippet ($s) {
     return (snippet => ($s =~ s/\[\[\[|\]\]\]//gr), snippet_html => $html);
 }
 
+# Links between notes (#93): [[Title]] in a body asks this for a URL. The
+# note's own notebook first, then what the viewer may see; one query per
+# title, remembered for the request.
+sub _resolver ($c, $me, $nb) {
+    my $m = _model($c);
+    my %seen;
+    return sub ($title) {
+        my $k = lc $title;
+        return $seen{$k} if exists $seen{$k};
+        my $row = $m->note_by_title($me, $title, $nb ? $nb->{id} : undef);
+        return $seen{$k} = $row ? '/n/' . $row->{id} : undef;
+    };
+}
+
 sub _note_json ($c, $note, $nb, $perm) {
     my $m = _model($c);
     my $j = _row_json($c, $note, $perm);
     $j->{body} = $note->{body};
-    $j->{html} = render_body($note->{format}, $note->{body});
+    $j->{html} = render_body($note->{format}, $note->{body}, _resolver($c, $c->session_email, $nb));
     $j->{notebook} = { id => 0 + $nb->{id}, name => $nb->{name}, color => $nb->{color} };
     $j->{links} = [ map { _link_json($c, $_) } @{ $m->links_for($note->{id}) } ];
     $j->{can_edit} = may_edit($perm) ? \1 : \0;
@@ -435,7 +449,8 @@ sub preview ($c) {
     $c->csrf_ok or return;
     my $b = _body($c);
     my $f = eval { Homelab::Notes::Model::_clean_format($b->{format}) } // 'markdown';
-    return $c->render(json => { html => render_body($f, $b->{body} // ''), format => $f });
+    my $nb = ($b->{notebook_id} // '') =~ /\A\d+\z/ ? _model($c)->notebook($b->{notebook_id}) : undef;
+    return $c->render(json => { html => render_body($f, $b->{body} // '', _resolver($c, $me, $nb)), format => $f });
 }
 sub prefs ($c) {
     my $me = $c->require_login or return;

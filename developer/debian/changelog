@@ -1,3 +1,9 @@
+homelab-developer (0.1.15) unstable; urgency=medium
+
+  * Notes reference: the wiki format and [[Note title]] links (post-cutover #93).
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 18 Nov 2026 10:10:00 -0600
+
 homelab-developer (0.1.14) unstable; urgency=medium
 
   * Reference area "Notes" (post-cutover #71): notebooks, folders, notes,

@@ -344,7 +344,7 @@
     var wide = window.matchMedia('(min-width: 861px)').matches;
     if (!wide && !ed.classList.contains('preview-on')) return;
     if (wide && ed.classList.contains('preview-off')) return;
-    api('POST', '/api/preview', { format: $('n-format').value, body: $('n-body').value }).then(function (r) { $('n-preview').innerHTML = r.html || ''; }).catch(function () {});
+    api('POST', '/api/preview', { format: $('n-format').value, body: $('n-body').value, notebook_id: S.note ? S.note.notebook_id : null }).then(function (r) { $('n-preview').innerHTML = r.html || ''; }).catch(function () {});
   }
   $('btn-edit').addEventListener('click', function () { S.editing ? (S.dirty ? save().then(function () { stopEdit(); }) : stopEdit()) : startEdit(); });
   $('btn-done').addEventListener('click', function () { (S.dirty ? save() : Promise.resolve()).then(function () { stopEdit(); }); });
@@ -364,6 +364,18 @@
     if ((ev.ctrlKey || ev.metaKey) && ev.key === 's') { ev.preventDefault(); save(); }
   });
   window.addEventListener('beforeunload', function (ev) { if (S.dirty) { ev.preventDefault(); ev.returnValue = ''; } });
+
+  // Links between notes (#93): a [[Title]] link opens the note in place; a
+  // missing one, for someone who may edit, makes that note in the same notebook.
+  document.addEventListener('click', function (ev) {
+    var a = ev.target.closest('#n-html a.wikilink, #n-preview a.wikilink');
+    if (a) { var m = (a.getAttribute('href') || '').match(/^\/n\/(\d+)$/); if (m) { ev.preventDefault(); openNote(+m[1]); } return; }
+    var miss = ev.target.closest('#n-html .wikilink--missing, #n-preview .wikilink--missing');
+    if (!miss || !S.note || !S.note.can_edit) return;
+    var title = miss.getAttribute('data-title') || miss.textContent;
+    api('POST', '/api/notes', { notebook_id: S.note.notebook_id, title: title, format: (S.prefs && S.prefs.default_format) || 'markdown', body: '' })
+      .then(function (n) { toast('Made "' + title + '".'); loadNotes(); loadNotebooks(); return openNote(n.id, { edit: true }); }).catch(fail);
+  });
 
   // --- the note's menu ---------------------------------------------------------
   $('btn-more').addEventListener('click', function (ev) { openMenu('note-menu', ev.currentTarget, { kind: 'note', item: S.note }); });

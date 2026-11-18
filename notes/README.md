@@ -39,6 +39,28 @@ open. Everything homelab-cli needs is behind homelab-api's `/api/v1/notes/*`.
   index, `websearch_to_tsquery`, `ts_headline` for the passage; a substring
   fallback when the words make no query. Scoped to what the viewer may see.
 
+## Links between notes (0.2.0, #93)
+
+`[[Title]]` or `[[Title|shown as]]` in a Markdown or wiki body links to the
+note with that title, case ignored: the body's own notebook first, then any
+note the viewer may see (`Model::note_by_title`). The renderers call a
+resolver the controller builds per request (`Api::_resolver`, one query per
+distinct title); a title with no note renders as `<span class="wikilink
+wikilink--missing" data-title="…">`, which the page turns into "make this
+note" for someone who may edit. On a share link's public page links resolve
+only within the shared notebook (`/s/<token>/n/<id>`). `Clean` keeps exactly
+the `wikilink` classes and the `data-title`, nothing else of that kind.
+
+## The wiki format (0.2.0, #93)
+
+`Homelab::Notes::Wikitext`: MediaWiki markup, the subset a note needs:
+`=`-headings, `'''bold'''`, `''italic''`, `*`/`#` lists nested by repeating
+the marker, `;`/`:` definition lists and indents, `----`, `[[links]]` (to
+notes; `File:`/`Category:` dropped), `[url text]`, bare URLs, `{| |}` tables,
+leading-space preformatted lines, `<pre>`/`<nowiki>` verbatim, HTML passed
+through; templates, `<ref>`, signatures, magic words and comments dropped.
+Same gate as Markdown. `t/wikitext.t`.
+
 ## Rendering: the one gate
 
 `Homelab::Notes::Markdown` turns Markdown into HTML (a GitHub-flavoured

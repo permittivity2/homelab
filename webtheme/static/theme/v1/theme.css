@@ -1,0 +1,425 @@
+/* ===========================================================================
+   Homelab app theme -- the shared look for every homelab web app.
+   Served from https://static.mailmasker.org/theme/v1/theme.css
+   ---------------------------------------------------------------------------
+   Built on the Silver Linings design system (silverlinings.llc,
+   www.mailmasker.org) so the apps and the marketing pages read as one product.
+   This file is SELF-CONTAINED -- an app loads this one stylesheet and nothing
+   else. It deliberately does NOT @import the marketing sheet: that sheet is
+   written for full-bleed marketing pages (100vh heroes, decorative arcs) and
+   most of it is dead weight in an application.
+
+   DARK ONLY. No prefers-color-scheme branching anywhere, by decision -- the
+   brand is dark, and branching guarantees the apps drift apart again.
+   =========================================================================== */
+
+:root {
+  /* --- Silver Linings base palette (identical values to style.css) ------- */
+  --black-primary:   #0a0a0a;
+  --black-secondary: #1a1a1a;
+  --black-tertiary:  #252525;
+
+  --silver-bright: #e8e8e8;
+  --silver-medium: #c0c0c0;
+  --silver-dim:    #808080;
+
+  --text-primary:   #d0d0d0;
+  --text-secondary: #a0a0a0;
+  --text-muted:     #707070;
+
+  --accent-steel: #4a5d6e;
+  --focus-ring:   #e8e8e8;
+  --error:        #d85c5c;
+  --success:      #5c9e7c;
+
+  /* --- ADDED for applications (the marketing sheet has no equivalent) ---- */
+  /* Surfaces. Apps need more than three greys: a page ground, a raised panel,
+     a hover state, and a line colour. ~12 places in the marketing sheet
+     hardcode rgba(192,192,192,.1) as a border; that is now a token. */
+  --surface:       #121212;   /* panels/cards sitting on the page ground */
+  --surface-raised:#1a1a1a;   /* menus, modals, things above panels */
+  --surface-hover: #202020;   /* row/item hover */
+  --border:        rgba(192, 192, 192, 0.10);
+  --border-strong: rgba(192, 192, 192, 0.22);
+
+  --warning: #d9a441;
+  --info:    #6f94b8;
+
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* FIXED type scale for application UI.
+     The marketing scale is fluid (clamp with vw) which is right for a hero but
+     wrong here: a data table whose text grows with the window is unreadable at
+     one size and absurd at another. App components use these; the fluid tokens
+     remain available for marketing-style pages inside an app. */
+  --app-xs:   0.75rem;
+  --app-sm:   0.8125rem;
+  --app-base: 0.875rem;
+  --app-md:   1rem;
+  --app-lg:   1.125rem;
+  --app-xl:   1.375rem;
+
+  --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+
+  --weight-light: 300; --weight-normal: 400; --weight-medium: 500; --weight-semibold: 600;
+  --leading-tight: 1.2; --leading-normal: 1.6; --leading-relaxed: 1.8;
+  --tracking-tight: -0.02em; --tracking-normal: 0; --tracking-wide: 0.05em; --tracking-wider: 0.1em;
+
+  --space-1: 0.25rem; --space-2: 0.5rem;  --space-3: 0.75rem; --space-4: 1rem;
+  --space-6: 1.5rem;  --space-8: 2rem;    --space-12: 3rem;   --space-16: 4rem;
+
+  /* Sharp corners are part of the Silver Linings look -- resist rounding these
+     up to the 10px the apps used before. --radius-pill is only for status
+     chips and avatars. */
+  --radius-sm: 2px; --radius-md: 4px; --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.5);
+  --shadow-lg: 0 12px 40px rgba(0,0,0,0.6);
+
+  --transition-fast: 0.15s ease; --transition-base: 0.2s ease;
+
+  --z-base: 1; --z-dropdown: 100; --z-sticky: 200; --z-overlay: 300; --z-modal: 400; --z-toast: 500;
+
+  --topbar-height: 56px;
+  --sidenav-width: 220px;
+  --container-max-width: 1200px;
+  --container-padding: var(--space-6);
+}
+
+/* --- reset --------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+img, svg, video, canvas { display: block; max-width: 100%; }
+button, input, select, textarea { font: inherit; color: inherit; }
+
+/* color-scheme tells the browser to render native widgets (scrollbars, date
+   pickers, form controls) dark. Without it they come out light-on-dark and
+   look broken -- the marketing sheet omits this because it has no forms. */
+html { color-scheme: dark; }
+
+body {
+  min-height: 100vh;
+  font-family: var(--font-primary);
+  font-size: var(--app-base);
+  line-height: var(--leading-normal);
+  color: var(--text-primary);
+  background: var(--black-primary);
+  text-rendering: optimizeLegibility;
+}
+
+h1,h2,h3,h4 { color: var(--silver-bright); font-weight: var(--weight-semibold); line-height: var(--leading-tight); letter-spacing: var(--tracking-tight); }
+h1 { font-size: var(--app-xl); }
+h2 { font-size: var(--app-lg); }
+h3 { font-size: var(--app-md); }
+a { color: var(--silver-medium); text-decoration: none; transition: color var(--transition-fast); }
+a:hover { color: var(--silver-bright); }
+code, pre, .mono, .tabular { font-family: var(--font-mono); }
+/* Tabular numerals so columns of numbers/dates line up. */
+.tabular, td.num, .num { font-variant-numeric: tabular-nums; }
+
+/* --- focus -------------------------------------------------------------- */
+/* The marketing sheet styles only a:focus-visible AND removes the native
+   outline on inputs without replacing it, so keyboard users lose focus
+   entirely on every form. One rule for everything interactive instead. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* --- app shell ----------------------------------------------------------- */
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+
+.topbar {
+  position: sticky; top: 0; z-index: var(--z-sticky);
+  height: var(--topbar-height);
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: 0 var(--space-6);
+  background: rgba(10,10,10,0.85);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+.topbar__brand { display: flex; align-items: center; gap: var(--space-3); flex: 0 0 auto; }
+.topbar__logo { height: 26px; width: auto; }
+.topbar__app { font-size: var(--app-sm); color: var(--text-muted); letter-spacing: var(--tracking-wide); text-transform: uppercase; }
+.topbar__spacer { flex: 1 1 auto; }
+.topbar__actions { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; }
+
+.app__body { flex: 1 1 auto; display: flex; min-height: 0; }
+.app__main { flex: 1 1 auto; min-width: 0; padding: var(--space-6); }
+.container { max-width: var(--container-max-width); margin-inline: auto; }
+
+/* --- side nav ------------------------------------------------------------ */
+.sidenav {
+  flex: 0 0 var(--sidenav-width); width: var(--sidenav-width);
+  border-right: 1px solid var(--border); padding: var(--space-4) var(--space-2);
+  display: flex; flex-direction: column; gap: var(--space-1);
+}
+.sidenav__item {
+  display: flex; align-items: center; gap: var(--space-3);
+  width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary); font-size: var(--app-base);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.sidenav__item:hover { background: var(--surface-hover); color: var(--text-primary); }
+.sidenav__item.is-active { background: var(--surface); color: var(--silver-bright); font-weight: var(--weight-medium); box-shadow: inset 2px 0 0 var(--silver-medium); }
+.sidenav__group { margin-top: var(--space-4); padding: 0 var(--space-3) var(--space-1); font-size: var(--app-xs); text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--text-muted); }
+
+/* --- account dropdown ----------------------------------------------------
+   Class names deliberately match what accountmanage and drive INDEPENDENTLY
+   converged on (.profile / .profile-btn / .avatar / .menu / .menu-item), so
+   adopting this is a style swap rather than a markup rewrite. */
+.profile { position: relative; }
+.profile-btn {
+  display: flex; align-items: center; gap: var(--space-2);
+  background: none; border: 1px solid transparent; border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1);
+  cursor: pointer; color: var(--text-secondary);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.profile-btn:hover { background: var(--surface-hover); border-color: var(--border); }
+.avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: var(--app-sm); font-weight: var(--weight-semibold);
+  /* Silver ring + light text rather than a filled accent disc: the brand's
+     accent IS the silver lining, so a filled blue circle (what the apps used)
+     reads as a different product. */
+  color: var(--silver-bright);
+  background: var(--black-tertiary);
+  border: 1px solid var(--border-strong);
+}
+.profile-btn .who { font-size: var(--app-sm); color: var(--text-secondary); }
+.caret { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; opacity: 0.7; }
+
+.menu {
+  position: absolute; right: 0; top: calc(100% + var(--space-2));
+  min-width: 260px; z-index: var(--z-dropdown);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-2) 0;
+  display: none;
+}
+.menu.open { display: block; }
+.menu--left { right: auto; left: 0; }
+.menu-head { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
+.menu-email { font-size: var(--app-sm); color: var(--silver-bright); word-break: break-all; }
+.menu-sub { font-size: var(--app-xs); color: var(--text-muted); margin-top: var(--space-1); }
+.menu-item {
+  display: flex; align-items: center; gap: var(--space-3);
+  width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer;
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-primary); font-size: var(--app-base);
+  transition: background var(--transition-fast);
+}
+.menu-item:hover { background: var(--surface-hover); color: var(--silver-bright); }
+.menu-item.danger { color: var(--error); }
+.menu-item.danger:hover { background: rgba(216,92,92,0.12); }
+.menu-sep { height: 1px; background: var(--border); margin: var(--space-2) 0; }
+
+/* --- buttons ------------------------------------------------------------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--app-base); font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-wide);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  background: transparent; color: var(--silver-medium);
+  cursor: pointer; transition: all var(--transition-base); white-space: nowrap;
+}
+.btn:hover { color: var(--black-primary); background: var(--silver-bright); border-color: var(--silver-bright); }
+.btn-primary { background: var(--silver-bright); color: var(--black-primary); border-color: var(--silver-bright); }
+.btn-primary:hover { background: var(--silver-medium); border-color: var(--silver-medium); }
+.btn-ghost { border-color: transparent; }
+.btn-ghost:hover { background: var(--surface-hover); color: var(--silver-bright); border-color: transparent; }
+.btn-danger { border-color: var(--error); color: var(--error); }
+.btn-danger:hover { background: var(--error); color: #fff; border-color: var(--error); }
+.btn-sm { padding: var(--space-1) var(--space-3); font-size: var(--app-sm); }
+.btn-icon { padding: var(--space-2); }
+.btn[disabled], .btn.is-disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+.btn.is-loading { position: relative; color: transparent; pointer-events: none; }
+.btn.is-loading::after {
+  content: ''; position: absolute; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  color: var(--silver-bright); animation: hl-spin 0.7s linear infinite;
+}
+@keyframes hl-spin { to { transform: rotate(360deg); } }
+
+/* --- forms (dense) ------------------------------------------------------- */
+.form-row { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-4); }
+.form-label { font-size: var(--app-xs); text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--text-muted); }
+.form-input, .form-select, .form-textarea {
+  width: 100%; padding: var(--space-2) var(--space-3);
+  font-size: var(--app-base);
+  background: var(--black-secondary); color: var(--text-primary);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast);
+}
+.form-input::placeholder, .form-textarea::placeholder { color: var(--text-muted); }
+.form-input:hover, .form-select:hover, .form-textarea:hover { border-color: var(--silver-dim); }
+.form-input:disabled, .form-select:disabled, .form-textarea:disabled { opacity: 0.5; cursor: not-allowed; }
+.form-textarea { min-height: 7rem; resize: vertical; }
+.form-hint { font-size: var(--app-xs); color: var(--text-muted); }
+.form-error { font-size: var(--app-xs); color: var(--error); }
+.form-input.is-invalid { border-color: var(--error); }
+.form-actions { display: flex; gap: var(--space-2); align-items: center; margin-top: var(--space-4); }
+.form-inline { display: flex; gap: var(--space-2); align-items: flex-end; flex-wrap: wrap; }
+.check { display: inline-flex; align-items: center; gap: var(--space-2); cursor: pointer; font-size: var(--app-base); }
+.check input { accent-color: var(--silver-bright); width: 15px; height: 15px; }
+
+/* --- panels -------------------------------------------------------------- */
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.panel__head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--border); }
+.panel__title { font-size: var(--app-md); color: var(--silver-bright); }
+.panel__body { padding: var(--space-6); }
+.panel__foot { padding: var(--space-4) var(--space-6); border-top: 1px solid var(--border); }
+.panel + .panel { margin-top: var(--space-6); }
+
+/* --- tables -------------------------------------------------------------- */
+/* The marketing sheet has no table styling at all; both apps hand-rolled one. */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.table { width: 100%; border-collapse: collapse; font-size: var(--app-base); }
+.table th, .table td { padding: var(--space-3) var(--space-4); text-align: left; border-bottom: 1px solid var(--border); }
+.table th {
+  background: var(--black-secondary); color: var(--text-muted);
+  font-size: var(--app-xs); font-weight: var(--weight-medium);
+  text-transform: uppercase; letter-spacing: var(--tracking-wider);
+  position: sticky; top: 0; z-index: var(--z-base);
+}
+.table tbody tr { transition: background var(--transition-fast); }
+.table tbody tr:hover { background: var(--surface-hover); }
+.table tbody tr:last-child td { border-bottom: none; }
+.table th.sortable { cursor: pointer; user-select: none; }
+.table th.sortable:hover { color: var(--silver-medium); }
+.table th[aria-sort]::after { content: ''; display: inline-block; margin-left: var(--space-2); border-left: 4px solid transparent; border-right: 4px solid transparent; }
+.table th[aria-sort="ascending"]::after  { border-bottom: 5px solid currentColor; }
+.table th[aria-sort="descending"]::after { border-top: 5px solid currentColor; }
+.table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.table--compact th, .table--compact td { padding: var(--space-2) var(--space-3); }
+
+/* --- status chips -------------------------------------------------------- */
+.pill { display: inline-flex; align-items: center; gap: var(--space-1); padding: 2px var(--space-2); font-size: var(--app-xs); letter-spacing: var(--tracking-wide); border-radius: var(--radius-pill); border: 1px solid var(--border-strong); color: var(--text-secondary); }
+.pill--ok    { color: var(--success); border-color: rgba(92,158,124,0.4); }
+.pill--warn  { color: var(--warning); border-color: rgba(217,164,65,0.4); }
+.pill--error { color: var(--error);   border-color: rgba(216,92,92,0.4); }
+.pill--info  { color: var(--info);    border-color: rgba(111,148,184,0.4); }
+
+/* --- banners + toasts ---------------------------------------------------- */
+.banner { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-strong); border-left-width: 3px; border-radius: var(--radius-md); background: var(--surface); font-size: var(--app-base); }
+.banner--ok    { border-left-color: var(--success); }
+.banner--warn  { border-left-color: var(--warning); }
+.banner--error { border-left-color: var(--error); }
+.banner--info  { border-left-color: var(--info); }
+
+.toasts { position: fixed; right: var(--space-6); bottom: var(--space-6); z-index: var(--z-toast); display: flex; flex-direction: column; gap: var(--space-2); }
+.toast { min-width: 260px; max-width: 420px; padding: var(--space-3) var(--space-4); background: var(--surface-raised); border: 1px solid var(--border-strong); border-left: 3px solid var(--silver-medium); border-radius: var(--radius-md); box-shadow: var(--shadow-md); font-size: var(--app-base); display: flex; gap: var(--space-3); align-items: flex-start; }
+.toast--ok { border-left-color: var(--success); } .toast--error { border-left-color: var(--error); }
+.toast__close { margin-left: auto; background: none; border: none; color: var(--text-muted); cursor: pointer; }
+
+/* --- modal / drawer ------------------------------------------------------ */
+.backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: var(--z-overlay); display: none; }
+.backdrop.open { display: block; }
+.modal { position: fixed; z-index: var(--z-modal); top: 50%; left: 50%; transform: translate(-50%,-50%); width: min(560px, calc(100vw - var(--space-8))); background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); display: none; }
+.modal.open { display: block; }
+.modal__head { padding: var(--space-4) var(--space-6); border-bottom: 1px solid var(--border); }
+.modal__body { padding: var(--space-6); }
+.modal__foot { padding: var(--space-4) var(--space-6); border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: var(--space-2); }
+
+/* --- small recurring patterns -------------------------------------------- */
+.kv { display: grid; grid-template-columns: minmax(8rem, max-content) 1fr; gap: var(--space-2) var(--space-6); font-size: var(--app-base); }
+.kv dt { color: var(--text-muted); font-size: var(--app-xs); text-transform: uppercase; letter-spacing: var(--tracking-wider); }
+.kv dd { color: var(--text-primary); }
+
+.progress { height: 6px; background: var(--black-tertiary); border-radius: var(--radius-pill); overflow: hidden; }
+.progress__bar { height: 100%; background: var(--silver-medium); transition: width var(--transition-base); }
+
+.stat { padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.stat__label { font-size: var(--app-xs); text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--text-muted); }
+.stat__value { font-size: var(--app-xl); color: var(--silver-bright); font-variant-numeric: tabular-nums; margin-top: var(--space-1); }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap: var(--space-4); }
+
+.breadcrumb { display: flex; align-items: center; gap: var(--space-2); font-size: var(--app-sm); color: var(--text-muted); flex-wrap: wrap; }
+.breadcrumb a { color: var(--text-secondary); }
+.breadcrumb__sep { opacity: 0.5; }
+
+.empty { text-align: center; padding: var(--space-16) var(--space-6); color: var(--text-muted); }
+.empty__title { color: var(--text-secondary); font-size: var(--app-md); margin-bottom: var(--space-2); }
+
+.spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--silver-bright); animation: hl-spin 0.7s linear infinite; }
+
+.toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.toolbar__spacer { flex: 1 1 auto; }
+
+/* --- footer -------------------------------------------------------------- */
+.appfoot { border-top: 1px solid var(--border); padding: var(--space-6); text-align: center; font-size: var(--app-sm); color: var(--text-muted); }
+.appfoot a { color: var(--silver-dim); border-bottom: 1px solid rgba(192,192,192,0.25); }
+.appfoot a:hover { color: var(--silver-bright); border-bottom-color: var(--silver-bright); }
+
+/* --- utilities ----------------------------------------------------------- */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.text-muted { color: var(--text-muted); }
+.text-center { text-align: center; }
+.stack > * + * { margin-top: var(--space-4); }
+.row { display: flex; gap: var(--space-3); align-items: center; }
+.hide { display: none !important; }
+
+/* NOTE: there is deliberately NO .fade-in here. In the marketing sheet it sets
+   opacity:0 and relies on an IntersectionObserver in main.js to clear it --
+   ship the class without that script (or inject elements after the observer
+   ran) and the content is permanently invisible. */
+
+/* --- responsive ---------------------------------------------------------- */
+/* --- app launcher (post-cutover #94) --------------------------------------
+   The dotted-grid button left of the account name; its panel is one more
+   .menu (shell.js opens and closes it by data-menu id) holding a grid of
+   tiles, one per mailmasker site, alphabetical. Markup: homelab-webtheme's
+   header partial. */
+.launcher { position: relative; }
+.launcher-btn {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: none; border: 1px solid transparent;
+  color: var(--text-secondary); cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+.launcher-btn:hover, .launcher-btn[aria-expanded="true"] { background: var(--surface-hover); border-color: var(--border); color: var(--silver-bright); }
+.menu.launcher__panel { min-width: 0; width: min(328px, calc(100vw - 2 * var(--space-4))); padding: var(--space-3); }
+.launcher__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); }
+.launcher__tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2);
+  min-height: 84px; padding: var(--space-3) var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary); text-decoration: none; font-size: var(--app-sm);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.launcher__tile:hover, .launcher__tile:focus-visible { background: var(--surface-hover); color: var(--silver-bright); outline: none; }
+.launcher__icon { width: 28px; height: 28px; color: var(--silver-medium); }
+.launcher__tile:hover .launcher__icon, .launcher__tile:focus-visible .launcher__icon { color: var(--silver-bright); }
+.launcher__label { line-height: 1.2; text-align: center; }
+
+@media (max-width: 860px) {
+  .app__body { flex-direction: column; }
+  .sidenav {
+    flex: none; width: 100%;
+    border-right: none; border-bottom: 1px solid var(--border);
+    flex-direction: row; overflow-x: auto;
+  }
+  .sidenav__group { display: none; }
+  .sidenav__item.is-active { box-shadow: inset 0 -2px 0 var(--silver-medium); }
+  .app__main { padding: var(--space-4); }
+  .topbar { padding: 0 var(--space-4); }
+  .profile-btn .who { display: none; }   /* avatar only on narrow screens */
+  .menu { min-width: 220px; }
+  .launcher-btn { width: 40px; height: 40px; }   /* a thumb-sized target */
+  .launcher__tile { min-height: 88px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

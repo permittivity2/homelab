@@ -81,4 +81,16 @@ md "", '', 'nothing in, nothing out';
 md "\n\n", '', 'blank lines only';
 md "a\r\nb", "<p>a\nb</p>", 'CRLF is fine';
 
+# --- links between notes (#93), through a resolver ---
+{
+    my $r = sub ($t) { return $t eq 'Shopping' ? '/n/42' : $t eq 'Plan & more' ? '/n/9' : undef };
+    is markdown_to_html('See [[Shopping]] now.', $r), '<p>See <a class="wikilink" href="/n/42">Shopping</a> now.</p>', 'a link to a note that exists';
+    is markdown_to_html('See [[Shopping|the list]].', $r), '<p>See <a class="wikilink" href="/n/42">the list</a>.</p>', '... shown as something else';
+    is markdown_to_html('[[Nope]]', $r), '<p><span class="wikilink wikilink--missing" data-title="Nope">Nope</span></p>', 'a missing one is marked, with its title';
+    is markdown_to_html('[[Plan & more]]', $r), '<p><a class="wikilink" href="/n/9">Plan &amp; more</a></p>', 'an ampersand in a title is looked up unescaped and shown escaped';
+    is markdown_to_html('[[  Shopping  ]]', $r), '<p><a class="wikilink" href="/n/42">  Shopping  </a></p>', 'spaces around the title do not matter to the lookup';
+    is markdown_to_html('**[[Shopping]]**', $r), '<p><strong><a class="wikilink" href="/n/42">Shopping</a></strong></p>', 'inside emphasis';
+    is markdown_to_html('`[[Shopping]]`', $r), '<p><code>[[Shopping]]</code></p>', 'not inside code';
+    is markdown_to_html('[[Shopping]]'), '<p><span class="wikilink wikilink--missing" data-title="Shopping">Shopping</span></p>', 'without a resolver every link is missing';
+}
 done_testing;

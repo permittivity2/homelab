@@ -196,5 +196,16 @@ ok exists $met->{'notes_by_format{format="markdown"}'}, '... by format';
 ok $met->{shares} >= 1, '... shares';
 ok $met->{versions} >= 1, '... versions';
 
+# --- the wiki format and the title lookup (#93) ---
+{
+    my $w = $m->create_note($work, $alice, { title => 'Wiki one', format => 'mediawiki', body => "== H ==\n* [[Plan]]" });
+    is $w->{format}, 'wiki', 'mediawiki means wiki';
+    is $m->note_by_title($alice, 'plan', $work->{id})->{id}, $n1->{id}, 'a title is found, case ignored';
+    is $m->note_by_title($bob, 'Plan'), undef, 'bob cannot see it';
+    is $m->note_by_title($alice, 'no such title'), undef, 'an unknown title is nothing';
+    is $m->note_in_notebook_by_title($work->{id}, 'PLAN')->{id}, $n1->{id}, 'within the notebook too';
+    is $m->note_in_notebook_by_title($nb->{id}, 'Plan'), undef, '... but not another notebook';
+    is $m->set_prefs($alice, default_format => 'wiki')->{default_format}, 'wiki', 'wiki as a default format';
+}
 cleanup();
 done_testing;

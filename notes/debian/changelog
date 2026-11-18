@@ -1,3 +1,18 @@
+homelab-notes (0.2.0) unstable; urgency=medium
+
+  * Links between notes (post-cutover #93): [[Note title]] and [[Title|shown
+    as]] in a Markdown or wiki body link to the note with that title (the
+    same notebook first, then what the viewer may see); a title with no note
+    shows as missing and, for someone who may edit, a tap makes that note.
+    On a share link's page a link resolves only inside the shared notebook.
+  * A fourth format, wiki (MediaWiki markup), rendered by the package's own
+    Homelab::Notes::Wikitext through the same cleaner: headings, bold and
+    italic, * and # lists, definition lists, rules, [[links]], [url text],
+    tables, preformatted lines, <pre> and <nowiki>; templates, refs,
+    signatures, magic words and comments dropped. Migration 002.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 18 Nov 2026 10:10:00 -0600
+
 homelab-notes (0.1.1) unstable; urgency=medium
 
   * On a phone the list showed two "+ New note" buttons (the action row's and

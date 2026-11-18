@@ -33,8 +33,10 @@ sub share_page ($c) {
             unless $note && !$note->{deleted_at} && $note->{notebook_id} == $nb->{id};
     }
     if ($note) {
+        # [[Links]] (#93) resolve only inside a shared notebook, to its other notes.
+        my $resolver = $share->{notebook_id} ? sub ($title) { my $r = $m->note_in_notebook_by_title($nb->{id}, $title); return $r ? '/s/' . $share->{token} . '/n/' . $r->{id} : undef } : undef;
         return $c->render(template => 'public_note', share => $share, notebook => $nb, note => $note,
-            html => render_body($note->{format}, $note->{body}), links => $m->links_for($note->{id}),
+            html => render_body($note->{format}, $note->{body}, $resolver), links => $m->links_for($note->{id}),
             back => ($share->{notebook_id} ? '/s/' . $share->{token} : undef), me => $me,
             open_url => (length $me ? $c->app->public_base_url . '/n/' . $note->{id} : undef));
     }

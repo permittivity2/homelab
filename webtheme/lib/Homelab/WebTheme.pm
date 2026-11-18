@@ -1,7 +1,8 @@
 package Homelab::WebTheme;
 use Mojo::Base 'Mojolicious::Plugin', -signatures;
+use Mojo::ByteStream;
 
-our $VERSION = '0.1.3';
+our $VERSION = '0.2.0';
 
 # Shared web chrome for the homelab Mojolicious apps.
 #
@@ -81,6 +82,38 @@ sub register ($self, $app, $conf = {}) {
     # set -- myaccount has no reason to link to itself -- and because the
     # next app (chat, meetings) should be able to add itself without a
     # change to this package. Defaults to the four that exist today.
+    # The app launcher (post-cutover #94): every mailmasker site, alphabetical,
+    # as tiles behind the dotted button left of the account name. The default
+    # is the fleet's public apps; an app may pass its own `sites` (or set the
+    # stash). Whatever the source, the list comes back sorted by label.
+    my @default_sites = (
+        { href => 'https://myaccount.mailmasker.org/', label => 'Account',  icon => 'account' },
+        { href => 'https://calendar.mailmasker.org/',  label => 'Calendar', icon => 'calendar' },
+        { href => 'https://drive.mailmasker.org/',     label => 'Drive',    icon => 'drive' },
+        { href => 'https://mail.mailmasker.org/',      label => 'Email',    icon => 'mail' },
+        { href => 'https://notes.mailmasker.org/',     label => 'Notes',    icon => 'notes' },
+        { href => 'https://search.mailmasker.org/',    label => 'Search',   icon => 'search' },
+    );
+    $app->helper(homelab_sites => sub ($c) {
+        my $list = $c->stash('sites') // $conf->{sites} // \@default_sites;
+        return [ sort { lc($a->{label} // '') cmp lc($b->{label} // '') } grep { ref $_ eq 'HASH' } @$list ];
+    });
+    # The tiles' icons: small line drawings in the text colour, inline (no
+    # image files, nothing from a CDN). An unknown name gets the generic one.
+    my %ICON = (
+        account  => '<circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6"/>',
+        calendar => '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+        drive    => '<path d="M9 4h6l6 10-3 6H6l-3-6z"/><path d="M3 14h18M9 4l-3 10M15 4l3 10"/>',
+        mail     => '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+        notes    => '<path d="M6 3h9l5 5v13H6z"/><path d="M14 3v6h6M9 13h6M9 17h6"/>',
+        search   => '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
+        generic  => '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c3 3 3 13 0 16M12 4c-3 3-3 13 0 16"/>',
+    );
+    $app->helper(homelab_site_icon => sub ($c, $name = '') {
+        my $d = $ICON{ $name // '' } // $ICON{generic};
+        return Mojo::ByteStream->new(qq{<svg class="launcher__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">$d</svg>});
+    });
+
     $app->helper(homelab_menu_links => sub ($c) {
         $c->stash('menu_links') // $conf->{menu_links} // [
             { href => 'https://myaccount.mailmasker.org/', label => 'Manage your account' },

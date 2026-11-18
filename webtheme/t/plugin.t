@@ -65,7 +65,8 @@ $t->get_ok('/header')->status_is(200)
 $t->get_ok('/header?who=zoe@example.test')->status_is(200)
   ->content_like(qr{profile-btn}, 'account menu appears when signed in')
   ->content_like(qr{data-menu="homelab-account-menu"}, 'trigger is wired to the panel id')
-  ->content_like(qr{href="https://search\.mailmasker\.org/">Search<}, 'default dropdown lists Search after Drive')
+  ->content_unlike(qr{href="https://search\.mailmasker\.org/">Search<}, 'the dropdown no longer lists the sites (the launcher does, #94)')
+  ->content_like(qr{class="menu-item" role="menuitem" href="https://myaccount\.mailmasker\.org/">Manage your account<}, 'the dropdown keeps the account page')
   ->content_like(qr{<span class="avatar" aria-hidden="true">Z</span>}, 'avatar shows the uppercased initial')
   ->content_like(qr{<form method="post" action="/bye">}, 'sign-out POSTs (a GET sign-out is prefetchable / CSRF-able)')
   ->content_unlike(qr{<a[^>]*href="/bye"}, 'sign-out is not a plain link');
@@ -107,7 +108,7 @@ unlike($hdr, qr/\bfade-in\b/, 'header does not use .fade-in (it needs JS or cont
 my $tc = Test::Mojo->new('Homelab::WebTheme::Test::Custom');
 $tc->get_ok('/header')->status_is(200)
   ->content_like(qr{href="https://acct\.test/">My stuff<}, 'configured menu_links are used')
-  ->content_unlike(qr{myaccount\.mailmasker\.org},        'the default links are replaced, not appended')
+  ->content_unlike(qr{class="menu-item" role="menuitem" href="https://myaccount\.mailmasker\.org/"}, 'the default dropdown links are replaced, not appended (the launcher still has the Account tile)')
   ->content_like(qr{class="menu-sep"},                     'separator still divides links from sign-out');
 # An app with no cross-app links at all must not render a dangling separator.
 $tc->get_ok('/empty')->status_is(200)
@@ -116,8 +117,33 @@ $tc->get_ok('/empty')->status_is(200)
 
 # --- the default dropdown lists Calendar after Search (#74) and has no Settings line unless asked (#77) ---
 $t->get_ok('/header?who=a@b.test')->status_is(200)
-  ->content_like(qr{Search<.*?href="https://calendar\.mailmasker\.org/">Calendar<}s, 'default dropdown lists Calendar after Search')
+  ->content_unlike(qr{href="https://calendar\.mailmasker\.org/">Calendar</a>\s*<a class="menu-item"}s, 'the dropdown has no site links any more')
   ->content_unlike(qr{>Settings<}, 'no Settings line when the app has no settings page');
+
+# --- the app launcher (#94): signed in only, every site alphabetical, with icons ---
+$t->get_ok('/header')->status_is(200)
+  ->content_unlike(qr{homelab-app-launcher}, 'no launcher when nobody is signed in');
+$t->get_ok('/header?who=zoe@example.test')->status_is(200)
+  ->content_like(qr{<div class="launcher">\s*<button class="launcher-btn" type="button" data-menu="homelab-app-launcher"}, 'the dotted button, wired to its panel')
+  ->content_like(qr{launcher-btn.*?<div class="profile">}s, '... left of the account button')
+  ->content_like(qr{Account</span>.*?Calendar</span>.*?Drive</span>.*?Email</span>.*?Notes</span>.*?Search</span>}s, 'the six sites, alphabetical')
+  ->content_like(qr{href="https://notes\.mailmasker\.org/"><svg class="launcher__icon"}, 'each tile has its icon')
+  ->content_unlike(qr{class="menu-item" role="menuitem" href="https://drive\.mailmasker\.org/"}, 'Drive is in the launcher, not the dropdown');
+{
+    package Homelab::WebTheme::Test::Sites;
+    use Mojo::Base 'Mojolicious', -signatures;
+    sub startup ($self) {
+        $self->plugin('Homelab::WebTheme' => {
+            user_email => sub ($c) { 'who@test.example' },
+            sites => [ { href => 'https://zed.test/', label => 'Zed', icon => 'nope' }, { href => 'https://alpha.test/', label => 'alpha' } ],
+        });
+        $self->routes->get('/header' => sub ($c) { $c->render(inline => '%= include "homelab/header"') });
+    }
+}
+Test::Mojo->new('Homelab::WebTheme::Test::Sites')->get_ok('/header')->status_is(200)
+  ->content_like(qr{alpha</span>.*?Zed</span>}s, 'a configured list is sorted, case ignored')
+  ->content_unlike(qr{notes\.mailmasker\.org}, '... and replaces the default')
+  ->content_like(qr{href="https://zed\.test/"><svg class="launcher__icon"[^>]*><circle cx="12" cy="12" r="8"/>}, 'an unknown icon name gets the generic icon');
 
 # --- an app with a settings page gets "Settings" first, under the address ---
 {

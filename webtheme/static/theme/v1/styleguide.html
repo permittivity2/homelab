@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homelab theme — styleguide</title>
+<link rel="icon" type="image/svg+xml" href="/theme/v1/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap">
+<link rel="stylesheet" href="/theme/v1/theme.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="topbar__brand">
+      <a href="/theme/v1/styleguide.html" aria-label="Home"><img class="topbar__logo" src="/theme/v1/logo.svg" alt="Silver Linings"></a>
+      <span class="topbar__app">Styleguide</span>
+    </div>
+    <div class="topbar__spacer"></div>
+    <div class="topbar__actions">
+      <div class="profile">
+        <button class="profile-btn" type="button" data-menu="account-menu" aria-expanded="false" aria-haspopup="true">
+          <span class="avatar" aria-hidden="true">P</span>
+          <span class="who">permittivity@mailmasker.org</span>
+          <span class="caret" aria-hidden="true"></span>
+        </button>
+        <div class="menu" id="account-menu" role="menu">
+          <div class="menu-head">
+            <div class="menu-email">permittivity@mailmasker.org</div>
+            <div class="menu-sub">Signed in</div>
+          </div>
+          <a class="menu-item" role="menuitem" href="#">Manage your account</a>
+          <a class="menu-item" role="menuitem" href="#">Password &amp; security</a>
+          <a class="menu-item" role="menuitem" href="#">Signed-in devices</a>
+          <div class="menu-sep"></div>
+          <a class="menu-item danger" role="menuitem" href="#">Sign out</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="app__body">
+    <nav class="sidenav">
+      <div class="sidenav__group">Account</div>
+      <button class="sidenav__item is-active">Overview</button>
+      <button class="sidenav__item">Security</button>
+      <button class="sidenav__item">Devices</button>
+      <div class="sidenav__group">Admin</div>
+      <button class="sidenav__item">Users</button>
+      <button class="sidenav__item">Metrics</button>
+    </nav>
+
+    <main class="app__main">
+      <div class="container stack">
+
+        <nav class="breadcrumb"><a href="#">Home</a><span class="breadcrumb__sep">/</span><a href="#">Theme</a><span class="breadcrumb__sep">/</span><span>Styleguide</span></nav>
+        <h1>Homelab theme</h1>
+        <p class="text-muted">Every component the shared app shell provides. Served from <code>static.mailmasker.org/theme/v1/</code>.</p>
+
+        <div class="stat-grid">
+          <div class="stat"><div class="stat__label">Files</div><div class="stat__value">30,485</div></div>
+          <div class="stat"><div class="stat__label">Storage</div><div class="stat__value">11 GB</div></div>
+          <div class="stat"><div class="stat__label">Certs</div><div class="stat__value">16</div></div>
+          <div class="stat"><div class="stat__label">Hosts</div><div class="stat__value">50</div></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__head"><h2 class="panel__title">Buttons</h2></div>
+          <div class="panel__body row" style="flex-wrap:wrap">
+            <button class="btn btn-primary">Primary</button>
+            <button class="btn">Default</button>
+            <button class="btn btn-ghost">Ghost</button>
+            <button class="btn btn-danger">Danger</button>
+            <button class="btn btn-sm">Small</button>
+            <button class="btn" disabled>Disabled</button>
+            <button class="btn btn-primary is-loading">Loading</button>
+            <button class="btn" data-modal-open="demo-modal">Open modal</button>
+            <button class="btn" onclick="HomelabShell.toast('Saved.','ok')">Toast</button>
+            <button class="btn btn-danger" onclick="HomelabShell.toast('Could not reach the server.','error')">Error toast</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__head"><h2 class="panel__title">Status</h2></div>
+          <div class="panel__body stack">
+            <div class="row" style="flex-wrap:wrap">
+              <span class="pill">neutral</span><span class="pill pill--ok">active</span>
+              <span class="pill pill--warn">pending</span><span class="pill pill--error">failed</span>
+              <span class="pill pill--info">info</span>
+            </div>
+            <div class="banner banner--ok">Certificates are current on all consumers.</div>
+            <div class="banner banner--warn">One host has not reported in 3 days.</div>
+            <div class="banner banner--error">Renewal failed for <code>example.org</code>.</div>
+            <div class="progress"><div class="progress__bar" style="width:62%"></div></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__head"><h2 class="panel__title">Table</h2><div class="topbar__spacer"></div><span class="text-muted">4 rows</span></div>
+          <div class="panel__body">
+            <div class="toolbar">
+              <input class="form-input" style="max-width:220px" placeholder="Filter…">
+              <div class="toolbar__spacer"></div>
+              <button class="btn btn-sm">Export</button>
+            </div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th class="sortable" aria-sort="ascending">Name</th><th>Status</th><th class="num">Size</th><th>Updated</th></tr></thead>
+                <tbody>
+                  <tr><td>mail.mailmasker.org</td><td><span class="pill pill--ok">live</span></td><td class="num">4.2 KB</td><td>2026-10-27</td></tr>
+                  <tr><td>drive.mailmasker.org</td><td><span class="pill pill--ok">live</span></td><td class="num">4.1 KB</td><td>2026-10-27</td></tr>
+                  <tr><td>static.mailmasker.org</td><td><span class="pill pill--info">new</span></td><td class="num">3.9 KB</td><td>2026-10-27</td></tr>
+                  <tr><td>legacy.example.org</td><td><span class="pill pill--error">expired</span></td><td class="num">12.0 KB</td><td>2026-02-01</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__head"><h2 class="panel__title">Form</h2></div>
+          <div class="panel__body">
+            <div class="form-row"><label class="form-label" for="a">Display name</label><input class="form-input" id="a" value="Permittivity"><div class="form-hint">Shown to other users.</div></div>
+            <div class="form-row"><label class="form-label" for="b">Recovery email</label><input class="form-input is-invalid" id="b" value="not-an-email"><div class="form-error">That does not look like an email address.</div></div>
+            <div class="form-row"><label class="form-label" for="c">Timezone</label><select class="form-select" id="c"><option>America/Chicago</option><option>UTC</option></select></div>
+            <div class="form-row"><label class="form-label" for="d">Notes</label><textarea class="form-textarea" id="d"></textarea></div>
+            <label class="check"><input type="checkbox" checked> Email me when a certificate is near expiry</label>
+            <div class="form-actions"><button class="btn btn-primary">Save</button><button class="btn btn-ghost">Cancel</button></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel__head"><h2 class="panel__title">Details &amp; empty state</h2></div>
+          <div class="panel__body stack">
+            <dl class="kv">
+              <dt>Issuer</dt><dd>prod-homelab46</dd>
+              <dt>Serial</dt><dd class="mono">06D7FEF9186F706997C525BF5819A9EF4A21</dd>
+              <dt>Expires</dt><dd>Jan 25 2027 <span class="text-muted">(89 days)</span></dd>
+            </dl>
+            <div class="empty"><div class="empty__title">Nothing here yet</div><div>Upload a file to get started.</div></div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <footer class="appfoot">A product of <a href="https://silverlinings.llc/">Silver Linings,&nbsp;LLC</a>.</footer>
+</div>
+
+<div class="modal" id="demo-modal" role="dialog" aria-modal="true" aria-labelledby="dm-t">
+  <div class="modal__head"><h2 id="dm-t" class="panel__title">Delete 3 files?</h2></div>
+  <div class="modal__body">They move to Trash and are purged after 30 days.</div>
+  <div class="modal__foot"><button class="btn btn-ghost" data-modal-close>Cancel</button><button class="btn btn-danger" data-modal-close>Delete</button></div>
+</div>
+
+<script src="/theme/v1/shell.js" defer></script>
+</body>
+</html>

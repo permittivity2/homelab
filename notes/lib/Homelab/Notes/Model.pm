@@ -164,14 +164,15 @@ sub delete_folder ($self, $folder) {
 
 # ---------------------------------------------------------------------- notes
 
-my @FORMATS = qw(markdown html text);
+my @FORMATS = qw(markdown wiki html text);
 sub _clean_format ($f, $default = 'markdown') {
     return $default unless defined $f && length $f;
     $f = lc $f;
     $f = 'markdown' if $f eq 'md';
     $f = 'html' if $f eq 'htm';
     $f = 'text' if $f eq 'txt' || $f eq 'plain';
-    die "The format must be markdown, html or text.\n" unless grep { $_ eq $f } @FORMATS;
+    $f = 'wiki' if $f eq 'wikitext' || $f eq 'mediawiki';
+    die "The format must be markdown, wiki, html or text.\n" unless grep { $_ eq $f } @FORMATS;
     return $f;
 }
 sub _clean_title ($t) {
@@ -225,6 +226,24 @@ sub notes_for_viewer ($self, $email, %w) {
     my @v = ($me, $me, $me);
     if ($w{notebook_id}) { push @where, 'n.notebook_id = ?'; push @v, $w{notebook_id} }
     return $self->db->query("SELECT $LIST_COLS FROM notes.notes n WHERE " . join(' AND ', @where) . ' ORDER BY n.updated_at DESC, n.id DESC LIMIT ? OFFSET ?', @v, $limit, $offset)->hashes->to_array;
+}
+
+# The note a [[Title]] link means (#93): a live note with that title (case
+# ignored) among what the viewer may see, the given notebook's first.
+sub note_by_title ($self, $email, $title, $notebook_id = undef) {
+    my $me = _norm($email);
+    $title = ($title // '') =~ s/\s+/ /gr =~ s/\A\s+|\s+\z//gr;
+    return undef unless length $title;
+    return $self->db->query('SELECT n.id, n.notebook_id, n.title FROM notes.notes n WHERE ' . _scope_sql()
+        . ' AND n.deleted_at IS NULL AND lower(n.title) = lower(?) ORDER BY (n.notebook_id = ?) DESC, n.updated_at DESC LIMIT 1',
+        $me, $me, $me, $title, ($notebook_id // 0))->hash;
+}
+# The same within one notebook only (a share link's public page).
+sub note_in_notebook_by_title ($self, $notebook_id, $title) {
+    $title = ($title // '') =~ s/\s+/ /gr =~ s/\A\s+|\s+\z//gr;
+    return undef unless length $title;
+    return $self->db->query('SELECT id, notebook_id, title FROM notes.notes WHERE notebook_id = ? AND deleted_at IS NULL AND lower(title) = lower(?) ORDER BY updated_at DESC LIMIT 1',
+        $notebook_id, $title)->hash;
 }
 
 sub create_note ($self, $nb, $email, $input) {

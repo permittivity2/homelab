@@ -1,3 +1,10 @@
+homelab-cli (0.8.1) unstable; urgency=medium
+
+  * `notes add|edit --format wiki` (post-cutover #93); the README on
+    [[Note title]] links.
+
+ -- Jeff Gardner <mailmasker-api01@forge.name>  Wed, 18 Nov 2026 10:10:00 -0600
+
 homelab-cli (0.8.0) unstable; urgency=medium
 
   * `notes` (post-cutover #71): notebooks, folders, list, show (rendered or

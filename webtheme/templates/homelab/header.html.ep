@@ -1,9 +1,13 @@
-%# Shared application top bar: Silver Linings logo (links home) + the account
-%# dropdown. Identical in every app so the fleet reads as one product.
+%# Shared application top bar: Silver Linings logo (links home), the app
+%# launcher (post-cutover #94: the dotted grid left of the account name, every
+%# mailmasker site as a tile, alphabetical) and the account dropdown.
+%# Identical in every app so the fleet reads as one product.
 %#
 %# Class names deliberately match what homelab-accountmanage and homelab-drive
 %# had ALREADY converged on independently (.profile / .profile-btn / .avatar /
 %# .menu / .menu-item), so adopting this is a style swap, not a markup rewrite.
+%# The launcher is one more .menu panel: shell.js opens and closes it by its
+%# data-menu id like the account menu (Escape, a tap outside).
 %#
 %# $user_email comes from the `homelab_user_email` helper the consuming app
 %# installs -- NOT from a raw stash value. A raw stash scalar breaks on any
@@ -12,6 +16,11 @@
 % my $email = homelab_user_email();
 % my $app   = homelab_app_name();
 % my $links = homelab_nav_links();
+% my $sites = homelab_sites();
+%# The dropdown no longer repeats what the launcher holds; a link to the
+%# account page stays in both, as the model (Google's bar) has it.
+% my %launched = map { ($_->{href} =~ s{/\z}{}r) => 1 } @$sites;
+% my @menu = grep { !$launched{ ($_->{href} // '') =~ s{/\z}{}r } || ($_->{label} // '') =~ /account/i } @{ homelab_menu_links() };
 <header class="topbar">
   <div class="topbar__brand">
     <a href="/" aria-label="Home"><img class="topbar__logo" src="<%= theme_base %>/logo.svg" alt="Silver Linings"></a>
@@ -25,6 +34,19 @@
       <a class="btn btn-ghost btn-sm" href="<%= $l->{href} %>"><%= $l->{label} %></a>
     % }
     % if (length $email) {
+      <div class="launcher">
+        <button class="launcher-btn" type="button" data-menu="homelab-app-launcher"
+                aria-expanded="false" aria-haspopup="true" aria-label="Mailmasker sites" title="Mailmasker sites">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>
+        </button>
+        <div class="menu launcher__panel" id="homelab-app-launcher" role="menu" aria-label="Mailmasker sites">
+          <div class="launcher__grid">
+            % for my $s (@$sites) {
+            <a class="launcher__tile" role="menuitem" href="<%= $s->{href} %>"><%= homelab_site_icon($s->{icon}) %><span class="launcher__label"><%= $s->{label} %></span></a>
+            % }
+          </div>
+        </div>
+      </div>
       <div class="profile">
         <button class="profile-btn" type="button" data-menu="homelab-account-menu"
                 aria-expanded="false" aria-haspopup="true"
@@ -39,15 +61,15 @@
             <div class="menu-sub">Signed in</div>
           </div>
           %# This app's own settings page, when it has one (#77): first, under
-          %# the address, before the links to the other apps.
+          %# the address, before the link to the account page.
           % if (length homelab_settings_url()) {
             <a class="menu-item" role="menuitem" href="<%= homelab_settings_url() %>">Settings</a>
             <div class="menu-sep"></div>
           % }
-          % for my $m (@{ homelab_menu_links() }) {
+          % for my $m (@menu) {
             <a class="menu-item" role="menuitem" href="<%= $m->{href} %>"><%= $m->{label} %></a>
           % }
-          % if (@{ homelab_menu_links() }) {
+          % if (@menu) {
             <div class="menu-sep"></div>
           % }
           %# POST, not a link: a GET sign-out is prefetchable and can be

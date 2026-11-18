@@ -278,11 +278,11 @@ abilities:
       - name: format
         in: body
         required: false
-        about: markdown (the default, md works too), html or text.
+        about: markdown (the default, md works too), wiki (MediaWiki markup), html or text.
       - name: body
         in: body
         required: false
-        about: The note as typed; 1 MB at most.
+        about: "The note as typed; 1 MB at most. [[Note title]] in a markdown or wiki body links to the note with that title (the same notebook first, then what you may see); a title with no note shows as missing."
         example: "- milk\n- eggs"
       - name: pinned
         in: body
@@ -302,9 +302,11 @@ abilities:
     who: signed-in
     summary: The note as typed (body) and rendered (html), its links, and what you may do with it.
     description: >
-      html is the server's cleaned rendering: Markdown is rendered and every
-      HTML body is passed through an allowlist, so nothing a note contains
-      can run script, and the page shows exactly this. can_edit and
+      html is the server's cleaned rendering: Markdown and wiki bodies are
+      rendered and every HTML body is passed through an allowlist, so nothing
+      a note contains can run script, and the page shows exactly this.
+      [[Note title]] links come back as <a class="wikilink" href="/n/ID">, or
+      a span marked wikilink--missing when no note has that title. can_edit and
       can_manage say what you may do; share_count is how many live shares
       the owner has made.
     params:
@@ -356,7 +358,7 @@ abilities:
       - name: format
         in: body
         required: false
-        about: markdown, html or text.
+        about: markdown, wiki, html or text.
       - name: pinned
         in: body
         required: false
@@ -786,7 +788,7 @@ abilities:
       - name: format
         in: body
         required: false
-        about: markdown (the default), html or text.
+        about: markdown (the default), wiki, html or text.
       - name: body
         in: body
         required: true
@@ -829,7 +831,7 @@ abilities:
       - name: default_format
         in: body
         required: false
-        about: markdown, html or text.
+        about: markdown, wiki, html or text.
     response: |
       { "last_notebook_id": 3, "last_note_id": 41, "default_format": "text" }
     cli: none

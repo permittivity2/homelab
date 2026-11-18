@@ -239,7 +239,7 @@ homelab-cli notes notebooks [create <name> [--color #rrggbb] | rename <id> <name
 homelab-cli notes folders --notebook <id>            homelab-cli notes folders create <name> --notebook <id> [--parent <folder-id>]
 homelab-cli notes list [--notebook <id>] [--folder <id>|0] [--limit N]      (without --notebook: everything you may see)
 homelab-cli notes show <id> [--raw | --html]         (--raw: only the body as typed, for a pipe)
-homelab-cli notes add [<title>] [--body <text> | --file <path>|-] [--format md|html|text] [--notebook <id>] [--folder <id>] [--pin]
+homelab-cli notes add [<title>] [--body <text> | --file <path>|-] [--format md|wiki|html|text] [--notebook <id>] [--folder <id>] [--pin]
 cat plan.md | homelab-cli notes add "Plan"           (a pipe is the body)
 homelab-cli notes edit <id> [--title ...] [--body ... | --file ...] [--format ...] [--pin|--unpin] [--folder <id>|0]
 homelab-cli notes move <id> --notebook <id> [--folder <id>|0]
@@ -256,6 +256,9 @@ cleaned HTML the page shows. `edit` keeps the old text as a version
 (`history`); `revert` brings one back as a new save. A link shared with
 `--link` is read-only; an account shared `--with` may also `--edit`.
 Linking an email is done on the page, where you can search your mail for it.
+`[[Note title]]` in a Markdown or wiki body links to the note with that title
+(the same notebook first); a title with no note yet shows as missing, and a tap
+on it in the page makes that note.
 
 ## DNS + mail-domain administration (`dns`)
 

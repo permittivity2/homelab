@@ -1,6 +1,7 @@
 package Homelab::Notes::Markdown;
 use Mojo::Base -strict, -signatures;
 use Exporter 'import';
+use Homelab::Notes::Links qw(wikilink_html);
 
 our @EXPORT_OK = qw(markdown_to_html);
 
@@ -30,7 +31,12 @@ sub _esc ($s) {
 }
 sub _attr ($s) { my $t = _esc($s); $t =~ s/"/&quot;/g; return $t }
 
-sub markdown_to_html ($text) {
+# $resolver (post-cutover #93): a code ref the controller builds, answering a
+# URL for a note title or nothing; [[Title]] and [[Title|shown as]] go
+# through it (Links.pm). Without one every such link renders as missing.
+our $RESOLVER;
+sub markdown_to_html ($text, $resolver = undef) {
+    local $RESOLVER = $resolver;
     $text //= '';
     $text =~ s/\r\n?/\n/g;
     $text =~ s/\t/    /g;
@@ -291,6 +297,8 @@ sub _inline ($text) {
 
     $text = _esc($text);
 
+    # Links between notes first: [[Title]] / [[Title|shown as]] (#93).
+    $text =~ s/\[\[([^\[\]|]+?)(?:\|([^\[\]]*?))?\]\]/$put->(wikilink_html($1, $2, $RESOLVER))/ge;
     # Images, then links (a link's text may carry emphasis), then bare URLs.
     $text =~ s/!\[([^\]]*)\]\(\s*((?:[^\s()]|\([^\s()]*\))+)(?:\s+"([^"]*)")?\s*\)/$put->('<img src="' . _attr($2) . '" alt="' . _attr($1) . '"' . (defined $3 ? ' title="' . _attr($3) . '"' : '') . '>')/ge;
     $text =~ s/\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*((?:[^\s()]|\([^\s()]*\))+)(?:\s+"([^"]*)")?\s*\)/$put->('<a href="' . _attr($2) . '"' . (defined $3 ? ' title="' . _attr($3) . '"' : '') . '>' . _spans($1) . '<\/a>')/ge;

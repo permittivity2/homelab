@@ -4395,7 +4395,7 @@ def build_parser():
     # Notes (post-cutover #71): homelab-api's /api/v1/notes/* gateway -> homelab-notes.
     notes = sub.add_parser("notes", help="Your notes, via homelab-api's notes gateway: notebooks, folders, list, show, add, edit, share, search")
     notes_sub = notes.add_subparsers(dest="notes_command", required=True)
-    FORMAT_HELP = "markdown (md), html or text"
+    FORMAT_HELP = "markdown (md), wiki (MediaWiki markup), html or text"
 
     p = notes_sub.add_parser("notebooks", help="List your notebooks and the ones shared with you (or 'notebooks create|rename|delete')")
     p.set_defaults(func=cmd_notes_notebooks)
@@ -4441,7 +4441,7 @@ def build_parser():
     p.add_argument("title", nargs="?", default="")
     p.add_argument("--body", metavar="TEXT")
     p.add_argument("--file", metavar="PATH", help="Read the body from this file; - for stdin")
-    p.add_argument("--format", choices=["markdown", "md", "html", "text"], help=FORMAT_HELP)
+    p.add_argument("--format", choices=["markdown", "md", "wiki", "html", "text"], help=FORMAT_HELP)
     p.add_argument("--notebook", metavar="ID", help="Which notebook (your first one when left out)")
     p.add_argument("--folder", metavar="ID")
     p.add_argument("--pin", action="store_true")
@@ -4452,7 +4452,7 @@ def build_parser():
     p.add_argument("--title", metavar="TEXT")
     p.add_argument("--body", metavar="TEXT")
     p.add_argument("--file", metavar="PATH", help="The new body from this file; - for stdin")
-    p.add_argument("--format", choices=["markdown", "md", "html", "text"], help=FORMAT_HELP)
+    p.add_argument("--format", choices=["markdown", "md", "wiki", "html", "text"], help=FORMAT_HELP)
     p.add_argument("--folder", metavar="ID", help="Put it in this folder (0 for none); owner only")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--pin", action="store_true")

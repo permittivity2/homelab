@@ -106,4 +106,13 @@ is excerpt('html', '<h1>T</h1><p>body <b>here</b></p>'), 'T body here', 'an html
 is excerpt('text', "line one\nline two"), 'line one line two', 'a text excerpt joins lines';
 is length(excerpt('text', 'x' x 500, 40)), 40, 'an excerpt is cut to size';
 
+# --- links between notes (#93): exactly that class, nothing else ---
+keeps '<a class="wikilink" href="/n/4">x</a>', '<a class="wikilink" href="/n/4">x</a>', 'the wikilink class stays on a path link';
+keeps '<a class="wikilink evil" href="/n/4">x</a>', '<a href="/n/4">x</a>', '... only exactly that';
+keeps '<span class="wikilink wikilink--missing" data-title="T &amp; U">t</span>', '<span class="wikilink wikilink--missing" data-title="T &amp; U">t</span>', 'a missing link keeps its class and title';
+keeps '<span class="other" data-title="x" onclick="y">t</span>', '<span data-title="x">t</span>', 'any other class goes';
+keeps '<p class="wikilink">t</p>', '<p>t</p>', 'the class means nothing on other tags';
+is render_body('wiki', "== T ==\n'''b''' <script>x</script> [[Nope]]"), '<h2>T</h2>' . "\n" . '<p><strong>b</strong>  <span class="wikilink wikilink--missing" data-title="Nope">Nope</span></p>', 'wiki: rendered then cleaned';
+is render_body('markdown', 'See [[Shopping]]', sub ($t) { '/n/1' }), '<p>See <a class="wikilink" href="/n/1">Shopping</a></p>', 'markdown: a resolver reaches the renderer';
+is excerpt('wiki', "== Head ==\n'''bold''' [[Shopping|the list]] {{tpl}} [https://x.test site]"), 'Head bold the list site', 'a wiki excerpt loses the markup';
 done_testing;

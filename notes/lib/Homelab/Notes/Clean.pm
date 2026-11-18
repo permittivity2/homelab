@@ -11,7 +11,8 @@ our @EXPORT_OK = qw(clean_html text_to_html safe_url);
 # active ones is removed with everything inside, attributes are kept only
 # when the tag may have that one and its value passes, and every URL must
 # be http, https, mailto, a fragment or a path on this site. No style, no
-# class (but the code-language one), no id, no event handler, no data: URL.
+# class (but the code-language one and the note-link one), no id, no event
+# handler, no data: URL.
 #
 # Belt and braces: the pages that show a body also carry a Content-Security-
 # Policy with no inline script, so even a gap here could not run anything.
@@ -29,7 +30,8 @@ my %DROP = map { $_ => 1 } qw(
 );
 # What each tag may carry, and the rule its value must pass.
 my %ATTR = (
-    a          => { href => 'url', title => 'text' },
+    a          => { href => 'url', title => 'text', class => 'wikiclass' },
+    span       => { class => 'wikiclass', 'data-title' => 'text' },
     img        => { src => 'imgurl', alt => 'text', title => 'text', width => 'int', height => 'int' },
     td         => { colspan => 'int', rowspan => 'int', align => 'align' },
     th         => { colspan => 'int', rowspan => 'int', align => 'align', scope => 'scope' },
@@ -79,7 +81,7 @@ sub _attrs ($n, $tag) {
         my $l = lc $name;
         my $rule = $ATTR{$tag}{$l} // $GLOBAL{$l};
         my $val = $attrs->{$name};
-        if ($rule && _ok($rule, $val) && !($l =~ /\Aon/ || $l eq 'style' || $l eq 'id' || $l eq 'class' && $tag ne 'code')) {
+        if ($rule && _ok($rule, $val) && !($l =~ /\Aon/ || $l eq 'style' || $l eq 'id')) {
             next if $name eq $l;
             $attrs->{$l} = $val;
         }
@@ -105,6 +107,7 @@ sub _ok ($rule, $v) {
     return $v =~ /\A[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*\z/ ? 1 : 0 if $rule eq 'lang';
     return $v =~ /\A(?:ltr|rtl|auto)\z/i ? 1 : 0 if $rule eq 'dir';
     return $v =~ /\Alanguage-[a-zA-Z0-9_+#.-]{1,30}\z/ ? 1 : 0 if $rule eq 'codelang';
+    return $v =~ /\Awikilink(?: wikilink--missing)?\z/ ? 1 : 0 if $rule eq 'wikiclass';    # a link between notes (#93)
     return lc($v) eq 'checkbox' ? 1 : 0 if $rule eq 'checkbox';
     return 0;
 }
