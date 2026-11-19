@@ -27,7 +27,28 @@ Two scripts only look and report. Exit 0 means clean, 1 means findings.
 | Script | Answers |
 |---|---|
 | `fleet-version-audit.sh` | is every node running what the apt repo publishes? |
+| `fleet-running-audit.sh` | is every node RUNNING what it should, and nothing else? (post-cutover #32) |
 | `fleet-permission-audit.sh` | can anything read or destroy data it has no business touching — or is anything so tight the service that needs it cannot? |
+
+`fleet-running-audit.sh` is the half a version check cannot do. prod-homelab39
+reported the right version of every homelab package the whole time it ran a
+stray pgbouncer left over from before the cutover, and a VM's drive package sat
+two versions behind until an upgrade swept it up. This one reads, on every
+node, the installed packages with their dependencies, every systemd unit with
+its state and owning package, every listening socket with the unit behind it,
+and the agent's manifests, then judges them: a homelab package (or a stock
+daemon one of them pulls in) whose enabled unit is not running, a manifest
+whose unit is down or whose port has no listener, a failed unit = MISSING; a
+daemon no installed homelab package needs (loopback-only or not), a homelab
+unit running without its package, an exposed listener nothing explains, a
+stray manifest = UNEXPECTED; masked or removed-not-purged leftovers = warnings;
+a watched distro package at two versions = DRIFT. "Expected" is derived from
+what is installed (plus Depends/Recommends, followed through); under #31 only
+`expected_packages` changes. `--selftest` proves each rule on crafted
+snapshots, `KEEP=DIR` keeps the per-node snapshot and `--from DIR` judges it
+again without ssh, so every finding is reproducible from files. The header
+lists the false positives it was built to avoid; add to those lists
+deliberately, never silently.
 
 `fleet-permission-audit.sh` was written the day after the drive blob store was
 found at **0777** — every local uid on a drive node could list all 30,512 of a
