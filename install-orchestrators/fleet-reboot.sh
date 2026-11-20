@@ -140,7 +140,9 @@ for n in "${ORDER[@]}"; do
     done
     for _ in $(seq 1 60); do AFTER_S=$(active_services "$n"); MISSING=$(comm -23 <(printf '%s\n' "$BEFORE_S") <(printf '%s\n' "$AFTER_S") | grep -E '.' || true); [ -z "$MISSING" ] && break; sleep 2; done
     [ -z "$MISSING" ] && ok "every service that was active is active again ($(printf '%s\n' "$AFTER_S" | grep -c .))" || { bad "not active again: $(echo "$MISSING" | paste -sd' ' -)"; FAILS=1; break; }
-    AFTER_F=$(failed_units "$n"); NEWF=$(comm -13 <(printf '%s\n' "$BEFORE_F") <(printf '%s\n' "$AFTER_F") | grep -E '.' || true)
+    # netplan-configure and systemd-networkd-wait-online fail at every container boot (a Proxmox
+    # quirk, no service behind them; fleet-running-audit.sh knows them too): never "new"
+    AFTER_F=$(failed_units "$n"); NEWF=$(comm -13 <(printf '%s\n' "$BEFORE_F") <(printf '%s\n' "$AFTER_F") | grep -E '.' | grep -vxE 'netplan-configure\.service|systemd-networkd-wait-online\.service' || true)
     [ -z "$NEWF" ] && ok "no new failed unit$([ -n "$AFTER_F" ] && echo " (as before: $(echo "$AFTER_F" | paste -sd' ' -))")" || { bad "newly failed: $(echo "$NEWF" | paste -sd' ' -)"; FAILS=1; break; }
     for _ in $(seq 1 60); do AFTER_A=$(addrs "$n"); OWN2=$(printf '%s\n' "$AFTER_A" | grep -vE '^10\.50\.[0-3]\.' ; printf '%s\n' "$AFTER_A" | grep -x "$(svc_of "$n")"); OWN2=$(printf '%s\n' "$OWN2" | sort); [ "$OWN2" = "$(printf '%s\n' "$OWN" | sort)" ] && break; sleep 2; done
     [ "$OWN2" = "$(printf '%s\n' "$OWN" | sort)" ] && ok "own addresses back ($(echo "$OWN2" | paste -sd' ' -))" || { bad "own addresses differ: before [$(echo "$OWN" | paste -sd' ' -)] after [$(echo "$OWN2" | paste -sd' ' -)]"; FAILS=1; break; }
