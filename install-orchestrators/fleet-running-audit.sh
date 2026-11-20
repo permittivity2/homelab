@@ -27,7 +27,12 @@
 #               is still installed; stock daemons installed where nothing
 #               needs them; homelab packages removed but not purged.
 #   DRIFT       a watched distro package at more than one version across the
-#               nodes that have it (postfix was found at two).
+#               nodes that have it (postfix was found at two). Since #97 the
+#               containers run unattended security updates at staggered daily
+#               times, so a DRIFT line in the day after a security release is
+#               the fleet catching up, not a fault -- unless the lagging nodes
+#               are the DB tier or the edges, which never auto-update: those
+#               get fleet-os-upgrade.sh.
 #
 # WHERE "EXPECTED" COMES FROM (the design question of #32)
 #   Today: the homelab-* packages INSTALLED on the node, plus every package

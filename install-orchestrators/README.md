@@ -52,6 +52,10 @@ snapshots, `KEEP=DIR` keeps the per-node snapshot and `--from DIR` judges it
 again without ssh, so every finding is reproducible from files. The header
 lists the false positives it was built to avoid; add to those lists
 deliberately, never silently.
+A DRIFT line in the day after a security release is the containers' staggered
+unattended-upgrades runs catching up; the edges and the DB tier never
+auto-update, so when they are the lagging ones run `fleet-os-upgrade.sh` on
+them.
 
 `fleet-permission-audit.sh` was written the day after the drive blob store was
 found at **0777** — every local uid on a drive node could list all 30,512 of a
