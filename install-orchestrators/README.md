@@ -28,6 +28,8 @@ Two scripts only look and report. Exit 0 means clean, 1 means findings.
 |---|---|
 | `fleet-version-audit.sh` | is every node running what the apt repo publishes? |
 | `fleet-running-audit.sh` | is every node RUNNING what it should, and nothing else? (post-cutover #32) |
+| `fleet-os-upgrade.sh` | the deliberate OS-package sweep: one node at a time, `apt-get upgrade` only, apps restarted so the new libc/perl run, the same checks as pkg-upgrade plus the running audit (post-cutover #97) |
+| `unattended-upgrades-orchestrate.sh` | unattended SECURITY updates on the containers (never the DB tier or the edges): install where missing, `--verify` dry-runs the tool on every node (#97) |
 | `fleet-permission-audit.sh` | can anything read or destroy data it has no business touching — or is anything so tight the service that needs it cannot? |
 
 `fleet-running-audit.sh` is the half a version check cannot do. prod-homelab39
