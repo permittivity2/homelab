@@ -29,6 +29,7 @@ Two scripts only look and report. Exit 0 means clean, 1 means findings.
 | `fleet-version-audit.sh` | is every node running what the apt repo publishes? |
 | `fleet-running-audit.sh` | is every node RUNNING what it should, and nothing else? (post-cutover #32) |
 | `fleet-os-upgrade.sh` | the deliberate OS-package sweep: one node at a time, `apt-get upgrade` only, apps restarted so the new libc/perl run, the same checks as pkg-upgrade plus the running audit (post-cutover #97) |
+| `fleet-reboot.sh` | reboot guests ONE AT A TIME through pve2 with prechecks (a patroni leader is switched over first), a graceful reboot, and after it: mounts, services, failed units, addresses and VIPs, the agent, patroni, an edge from offsite, the running audit (post-cutover #98) |
 | `unattended-upgrades-orchestrate.sh` | unattended SECURITY updates on the containers (never the DB tier or the edges): install where missing, `--verify` dry-runs the tool on every node (#97) |
 | `fleet-permission-audit.sh` | can anything read or destroy data it has no business touching — or is anything so tight the service that needs it cannot? |
 
