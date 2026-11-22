@@ -101,11 +101,16 @@ sso_secret(){ on "$1" "sudo awk '/client_id: $CLIENT_ID\$/{f=1} f&&/client_secre
 verify(){
     step "$NAME: DNS"
     local pubs; pubs=$(public_ipv4s | tr '\n' ' ')
+    # Every edge must be in the answer: a plain A to one edge (notes.mailmasker.org sat like
+    # that from 2026-11-18 to 2026-11-21, no steering, no AAAA) means the Lua conversion of
+    # step 1 did not happen -- a FAIL here, not a warning.
     local a; a=$(auth_answer A | tr '\n' ' ')
-    local hit=0; for ip in $a; do grep -qw -- "$ip" <<<"$pubs" && hit=1; done
-    [ "$hit" = 1 ] && ok "authoritative A: $a" || bad "authoritative A returned '${a:-nothing}' (expected an edge address)"
+    local hit=0 want=0; for ip in $pubs; do want=$((want+1)); grep -qw -- "$ip" <<<"$a" && hit=$((hit+1)); done
+    [ "$hit" = "$want" ] && [ "$want" -gt 0 ] && ok "authoritative A: every edge ($a)" || bad "authoritative A returned '${a:-nothing}' (expected all $want edge addresses: not a Lua record yet? run ONLY='^${NAME//./[.]}\$' dns-lua-orchestrate.sh --apply)"
+    on "$DNS_NODE" "sudo pdnsutil zone list $ZONE 2>/dev/null | grep -qE '^$NAME\.?\s.*\sLUA\s'" && ok "the zone holds a LUA record for $NAME" || bad "the zone has no LUA record for $NAME (a plain A: not health-steered)"
     local aaaa; aaaa=$(auth_answer AAAA | tr '\n' ' ')
-    [ -n "$aaaa" ] && ok "authoritative AAAA: $aaaa" || warn "no AAAA (dns-lua-orchestrate.sh --apply publishes one when .edge-ipv6 exists)"
+    if [ -s "$HERE/.edge-ipv6" ]; then [ -n "$aaaa" ] && ok "authoritative AAAA: $aaaa" || bad "no AAAA although .edge-ipv6 exists (the Lua record lacks it)"
+    else [ -n "$aaaa" ] && ok "authoritative AAAA: $aaaa" || warn "no AAAA (no .edge-ipv6 yet)"; fi
     local pub; pub=$(off "dig +short +time=4 $NAME A @ns1.$ZONE 2>/dev/null | grep -E '^[0-9.]+\$' | head -1" 2>/dev/null)
     [ -n "$pub" ] && ok "from the internet, ns1.$ZONE answers $pub" || bad "from the internet, ns1.$ZONE gave no A for $NAME"
 
@@ -198,7 +203,12 @@ if [ -z "$A_NOW" ]; then
     on "$DNS_NODE" "sudo pdnsutil rrset add $ZONE $NAME A 3600 $REF_IP >/dev/null 2>&1 && sudo pdnsutil zone increase-serial $ZONE >/dev/null 2>&1" \
         && ok "A record added" || die "could not add the A record on $DNS_NODE"
 fi
-if [ -n "$(auth_answer A)" ] && ! on "$DNS_NODE" "sudo pdnsutil zone list $ZONE 2>/dev/null | grep -qE '^$NAME\.?\s.*\sLUA\s'" ; then
+# Convert whenever the ZONE has no LUA record for the name. The old guard also
+# asked the authoritative server for the A record just added and, when the
+# answer had not caught up yet, fell through to "already a Lua record" --
+# which is how notes.mailmasker.org stayed a plain A to one edge for three
+# days (2026-11-18 .. 21).
+if ! on "$DNS_NODE" "sudo pdnsutil zone list $ZONE 2>/dev/null | grep -qE '^$NAME\.?\s.*\sLUA\s'" ; then
     if [ -x "$HERE/dns-lua-orchestrate.sh" ]; then
         # ONLY is an awk regex handed over with -v, which eats backslashes
         # (a "\." became a literal backslash on the first run, 2026-11-14, and
