@@ -40,6 +40,18 @@ server {
     real_ip_header X-Forwarded-For;
     real_ip_recursive on;
 
+    # The Silver Linings favicon (post-cutover #100). Without this a bare
+    # /favicon.ico request fell through try_files to index.php, which
+    # answered it with a redirect to the SSO login (Safari asks for this
+    # file always; the signed-in pages declare the theme's SVG through
+    # skin_logo, see homelab-roundcube-account-menu). The file is
+    # homelab-webtheme's, the one every homelab app serves at this path.
+    location = /favicon.ico {
+        alias /usr/share/homelab-webtheme/public/favicon.ico;
+        expires 1d;
+        access_log off;
+    }
+
     location / {
         try_files $uri $uri/ /index.php$is_args$args;
     }
