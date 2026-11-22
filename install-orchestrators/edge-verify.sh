@@ -180,8 +180,15 @@ else
         case "$r" in ns1.*) ok "DNS over IPv6/TCP on $V6" ;; *) bad "no DNS answer over IPv6/TCP on $V6 ('$r')" ;; esac
         r=$(timeout 25 ssh -o ConnectTimeout=6 offsite "curl -6 -s -o /dev/null -w '%{http_code}' -m 15 --resolve 'mailmasker.org:443:[$V6]' https://mailmasker.org/" 2>/dev/null)
         case "$r" in 200|301|302) ok "https://mailmasker.org/ over IPv6 on $V6 -> $r" ;; *) bad "https://mailmasker.org/ over IPv6 on $V6 -> '$r'" ;; esac
+        # Mail over IPv6 (post-cutover #73): haproxy binds the mail ports
+        # dual-stack since homelab-haproxy 0.1.14. SMTPS and IMAPS banners on
+        # this edge's own IPv6, the certificate judged against the mail name.
+        r=$(timeout 25 ssh -o ConnectTimeout=6 offsite "timeout 12 bash -c '(sleep 3) | openssl s_client -quiet -connect [$V6]:465 -servername mail.mailmasker.org 2>/dev/null | head -1'" 2>/dev/null)
+        case "$r" in 220*) ok "SMTPS :465 over IPv6 on $V6 -> ${r:0:40}" ;; *) bad "SMTPS :465 over IPv6 on $V6 -> '${r:0:60}'" ;; esac
+        r=$(timeout 25 ssh -o ConnectTimeout=6 offsite "timeout 12 bash -c '(printf \"a1 LOGOUT\r\n\"; sleep 3) | openssl s_client -quiet -connect [$V6]:993 -servername mail.mailmasker.org 2>/dev/null | head -1'" 2>/dev/null)
+        case "$r" in "* OK"*) ok "IMAPS :993 over IPv6 on $V6 -> ${r:0:40}" ;; *) bad "IMAPS :993 over IPv6 on $V6 -> '${r:0:60}'" ;; esac
     fi
-    # Mail ingress: haproxy binds *:25/587/143/993 on this node.
+    # Mail ingress: haproxy binds [::]:25/587/143/993 v4v6 on this node (dual-stack since #73).
     #
     # :25 CANNOT be probed from offsite -- its provider blocks outbound port 25
     # (verified: it cannot reach gmail-smtp-in.l.google.com:25 either), which is

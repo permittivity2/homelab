@@ -36,11 +36,12 @@
 #
 # IPv6 (post-cutover #64). When install-orchestrators/.edge-ipv6 exists (one
 # "public-IPv4 IPv6" pair per line, written by dns-ipv6-orchestrate.sh), every
-# WEB name (checked on 443; not mail.*) also carries a Lua AAAA record in the
+# name (checked on 443; mail.* on 25) also carries a Lua AAAA record in the
 # same LUA rrset. The up-set is still decided by the IPv4 health check -- the
 # DNS nodes have no IPv6 of their own -- and then mapped to the edges' IPv6
 # addresses, so an edge that drops out of the A answer drops out of the AAAA
-# answer too. mail.* stays A-only (haproxy binds IPv4 only, item for later).
+# answer too. mail.* joined on 2026-11-21 (post-cutover #73: haproxy binds
+# the mail ports dual-stack since homelab-haproxy 0.1.14).
 # Without the file nothing about AAAA happens, which was the behaviour before.
 #
 # SAFETY. Originals are saved to $STATE before anything changes; --revert
@@ -96,11 +97,11 @@ candidates() {
         done' | grep -E "\|($EDGE_RE)\$" | grep -vE '\|ns[12]\.' | awk -F'|' -v re="$ONLY" '$2 ~ re' | sort
 }
 
-lua_contents() {   # name -> the LUA record content(s), one per line: A, then AAAA for a web name when IPv6 is on
+lua_contents() {   # name -> the LUA record content(s), one per line: A, then AAAA when IPv6 is on
     local port=443 a m=""
     [ "${1%%.*}" = mail ] && port=25
     printf "A \"ifportup(%s, {%s}, {selector='all', backupSelector='all', minimumFailures=2})\"\n" "$port" "$EDGE_LUA"
-    [ "$IPV6_ON" = 1 ] && [ "$port" = 443 ] || return 0
+    [ "$IPV6_ON" = 1 ] || return 0
     # The same IPv4 health check, then each healthy address mapped to its
     # IPv6 twin. A Lua record whose code starts with ";" is a statement block
     # and must return the answer set.
@@ -220,7 +221,7 @@ case "$MODE" in
             [ "$good" = 1 ] && ok "${n%.} @$ns -> $ans" || bad "${n%.} @$ns -> '${ans}' (no edge address)"
             # IPv6: a web name must answer AAAA with an edge's IPv6 twin, asked
             # over IPv4 and -- when the nameserver has one -- over IPv6.
-            [ "$IPV6_ON" = 1 ] && [ "${n%%.*}" != mail ] || continue
+            [ "$IPV6_ON" = 1 ] || continue
             ans6=$(ssh -n -o ConnectTimeout=8 offsite "dig +short +time=4 +tries=1 AAAA ${n%.} @$ns" 2>/dev/null | tr '\n' ' ')
             good=0
             for e in $EDGES; do [ -n "${V6[$e]:-}" ] && case " $ans6 " in *" ${V6[$e]} "*) good=1 ;; esac; done

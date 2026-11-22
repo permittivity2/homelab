@@ -230,9 +230,9 @@ edges_deploy(){
 # ------------------------------------------------------------- internet --
 
 internet_check(){
-  step "[internet] from offsite: $MAIL_HOST:465 on every public address, then AUTH + a message to the test account"
+  step "[internet] from offsite: $MAIL_HOST:465 on every public address (IPv4 and, since #73, IPv6), then AUTH + a message to the test account"
   local ips args n x
-  ips="$(dig +short "$MAIL_HOST" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | sort | tr '\n' ' ')"
+  ips="$( { dig +short "$MAIL_HOST" A @1.1.1.1; dig +short "$MAIL_HOST" AAAA @1.1.1.1; } 2>/dev/null | grep -E '^[0-9.]+$|^[0-9a-f:]+$' | sort | tr '\n' ' ')"
   [ -n "$ips" ] || { bad "could not resolve $MAIL_HOST through 1.1.1.1"; return; }
   echo "  $MAIL_HOST -> $ips"
   scp -q "$CHECK70" offsite:/tmp/smtps-check.py || { bad "could not copy the checker to offsite"; return; }

@@ -174,9 +174,15 @@ for my $backend (@backends) {
         "    server $srv_name $t check$send_proxy$backup\n";
     } 0 .. $#targets;
 
+    # One dual-stack socket per frontend (post-cutover #73): [::] with v4v6
+    # takes IPv4 and IPv6 clients alike (net.ipv6.bindv6only is 0 on the
+    # edges). The PROXY header then carries TCP4 or TCP6 as the client came,
+    # which postfix (inet_protocols = all) and dovecot (listen = *, ::)
+    # both accept; the backends themselves stay IPv4 on the service plane.
+    # The metrics frontend above stays *:8404: scraped over IPv4 only.
     $cfg .= <<BLOCK;
 frontend ${name}_in
-    bind *:$frontend_port
+    bind [::]:$frontend_port v4v6
     maxconn $maxconn
     default_backend ${name}_out
 

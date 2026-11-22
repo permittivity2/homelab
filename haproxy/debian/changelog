@@ -1,3 +1,12 @@
+homelab-haproxy (0.1.14) unstable; urgency=medium
+
+  * Every TCP frontend binds one dual-stack socket, [::]:port v4v6, so the
+    mail and IMAP ports take IPv6 clients too (post-cutover #73); the PROXY
+    header carries TCP4 or TCP6 as the client came, the backends stay IPv4.
+    The metrics frontend stays *:8404.
+
+ -- Gardner <gardner@homelab>  Sat, 21 Nov 2026 10:00:00 -0600
+
 homelab-haproxy (0.1.13) unstable; urgency=medium
 
   * backends.example.yml: the smtps frontend (465 -> the Postfix pool's

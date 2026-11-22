@@ -34,8 +34,11 @@
 # ns03's allow-from and the registry glue only if those were ever done) is what
 # --prefix-changed does. The listener never names an address: dnsdist binds [::]:53.
 #
-# WHAT STAYS IPv4. mail.* (haproxy binds *:port = IPv4 only; outbound mail
-# reputation) and the fleet's internal planes (no /64 there). PowerDNS on
+# WHAT STAYS IPv4. Outbound mail (the mail nodes have no IPv6 at all, and
+# AT&T delegates no reverse DNS for the block) and the fleet's internal planes
+# (no /64 there). Inbound mail, submission and IMAP take IPv6 since
+# post-cutover #73 (2026-11-21): haproxy binds the mail ports dual-stack and
+# mail.* carries the same health-steered AAAA as the web names. PowerDNS on
 # 03/04/05 needs nothing: dnsdist proxies IPv6 clients to it over IPv4 and the
 # client address travels in the PROXY protocol header, so the Lua steering
 # sees it unchanged.
@@ -137,9 +140,9 @@ edge_live_v6(){ # $1 = NN $2 = NIC $3 = token
   rssh "$(h "$1")" "ip -6 -o addr show dev $2 scope global -tentative" | awk '{print $4}' | cut -d/ -f1 | grep -- ":$3\$" | head -1
 }
 zones(){ rssh "$DNS_NODE" 'sudo pdnsutil zone list-all 2>/dev/null' | grep -v '\.invalid$' | sort; }
-web_names(){ # every Lua-steered name that is not mail.*
+web_names(){ # every Lua-steered name, mail.* included since #73
   rssh "$DNS_NODE" 'for z in $(sudo pdnsutil zone list-all 2>/dev/null | grep -v "\.invalid$"); do sudo pdnsutil zone list "$z" 2>/dev/null | awk "\$4==\"LUA\" {print \$1}"; done' \
-    | sed 's/\.$//' | grep -v '^mail\.' | sort -u
+    | sed 's/\.$//' | sort -u
 }
 rolling_restart(){
   local n
@@ -555,8 +558,8 @@ web_check(){
     x=$(retry 3 5 '*:23:116:91:6*' offsite "dig -6 +short +time=4 +tries=1 AAAA $n @$v6 | grep -v '^;' | tr '\n' ' '") \
       && echo "       ok   $n -> $x" || { bad "$n AAAA -> '$x'"; f=1; }
   done
-  [ "$f" = 0 ] && ok "$(printf '%s\n' $names | wc -l) web names answer AAAA"
-  x=$(offsite "dig +short +time=4 +tries=1 AAAA mail.$PROBE_NAME @$NS1_V4"); [ -z "$x" ] && ok "mail.$PROBE_NAME has no AAAA (mail stays IPv4)" || bad "mail.$PROBE_NAME answers AAAA '$x'"
+  [ "$f" = 0 ] && ok "$(printf '%s\n' $names | wc -l) Lua names (web and mail) answer AAAA"
+  x=$(offsite "dig +short +time=4 +tries=1 AAAA mail.$PROBE_NAME @$NS1_V4 | tr '\n' ' '"); case "$x" in *:23:116:91:6*) ok "mail.$PROBE_NAME answers AAAA (an edge's IPv6, #73) -> $x" ;; *) bad "mail.$PROBE_NAME AAAA -> '${x:-none}' (expected an edge's IPv6 since #73)" ;; esac
   step "[web] through a public resolver (negative answers for AAAA cache up to 1 h after publication)"
   for n in $PROBE_NAME myaccount.$PROBE_NAME; do
     x=$(offsite "curl -6 -s -o /dev/null -w '%{http_code} %{remote_ip}' -m 15 https://$n/")

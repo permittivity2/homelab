@@ -81,9 +81,9 @@ node_probe(){ # $1 = NN
 internet_checks(){
   step "[internet] port 25 through the house hairpin to $MAIL_HOST"
   python3 "$CHECK" hairpin --host "$MAIL_HOST" && ok "25 through the edge passed" || bad "25 through the edge FAILED"
-  step "[internet] 587 and 465 on every public address, from offsite"
+  step "[internet] 587 and 465 on every public address (IPv4 and, since #73, IPv6), from offsite"
   local ips
-  ips="$(dig +short "$MAIL_HOST" @1.1.1.1 2>/dev/null | grep -E '^[0-9.]+$' | sort | paste -sd, -)"
+  ips="$( { dig +short "$MAIL_HOST" A @1.1.1.1; dig +short "$MAIL_HOST" AAAA @1.1.1.1; } 2>/dev/null | grep -E '^[0-9.]+$|^[0-9a-f:]+$' | sort | paste -sd, -)"
   [ -n "$ips" ] || { bad "could not resolve $MAIL_HOST"; return; }
   echo "  $MAIL_HOST -> $ips"
   scp -q "$CHECK" offsite:/tmp/mail-ports-check.py || { bad "could not copy the checker to offsite"; return; }
