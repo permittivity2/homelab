@@ -11,3 +11,10 @@ versioned copy from then on. Edit here, then publish:
 (gardner may write there: the directory is group www-data, mode 664.) The markup
 the stylesheet styles is in `../templates/homelab/`, which IS packaged: a change
 to it is a webtheme bump plus `install-orchestrators/webtheme-rollout.sh`.
+
+`favicon.ico` (post-cutover #100) is rendered from `favicon.svg`: headless
+Firefox draws the SVG at 64 px over white and over black, the two shots give
+the exact alpha, and PIL writes the 16/32/48/64 ICO (the recipe is in the #100
+item). The same bytes are `../public/favicon.ico`, which the package installs
+and the plugin serves at `/favicon.ico` in every app, and `landing/site/`'s.
+Publish a new one to all three places.

@@ -26,6 +26,9 @@ for my $name (qw(index.html 404.html claude-code.html getting-started.md claude-
                  reference.md reference.json llms.txt skill/SKILL.md robots.txt)) {
     ok(defined $file->($name), "$name is built");
 }
+ok(-f $out->child('favicon.ico') && -s $out->child('favicon.ico') == -s $root->sibling('webtheme')->child('public', 'favicon.ico'),
+   'favicon.ico is the theme\'s (#100)');
+like($file->('index.html'), qr{<link rel="shortcut icon" href="/favicon\.ico">}, '... and the pages link it');
 is((grep { !defined $file->("$_->{id}.html") || !defined $file->("$_->{id}.md") } @all), 0,
    'every ability has its page, as HTML and as Markdown (' . scalar(@all) . ')');
 my @fleet = grep { $_->{who} eq 'fleet' } map { @{ $_->{abilities} } } @{ load_reference($root->child('reference'))->{areas} };

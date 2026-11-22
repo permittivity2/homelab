@@ -1,3 +1,13 @@
+homelab-webtheme (0.2.1) unstable; urgency=medium
+
+  * /favicon.ico in every app is the Silver Linings mark (public/favicon.ico,
+    rendered from the theme's favicon.svg at 16/32/48/64), served by the
+    plugin ahead of Mojolicious's bundled cloud icon; the head partial links
+    it as the shortcut icon for browsers that ignore SVG icons (post-cutover
+    #100). The same file is published at static.mailmasker.org/theme/v1/.
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 10:00:00 -0600
+
 homelab-webtheme (0.2.0) unstable; urgency=medium
 
   * The app launcher (post-cutover #94): a dotted-grid button left of the

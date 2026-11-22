@@ -9,3 +9,4 @@ override_dh_install:
 	dh_install
 	find templates -type f -exec install -D -m 644 {} \
 		debian/homelab-webtheme/usr/share/homelab-webtheme/{} \;
+	install -D -m 644 public/favicon.ico debian/homelab-webtheme/usr/share/homelab-webtheme/public/favicon.ico

@@ -46,6 +46,14 @@ sub register ($self, $app, $conf = {}) {
     # can deliberately override the shared one. Matches how every homelab app
     # already builds this list additively.
     push @{ $app->renderer->paths }, "$home/templates";
+    # The Silver Linings favicon as /favicon.ico in every app (post-cutover
+    # #100). Without this Mojolicious answers that path with its OWN bundled
+    # icon, the red-and-yellow cloud, which is what a browser shows for any
+    # page that declares no icon (an error page, a JSON response), what
+    # Safari shows always (it ignores SVG icons), and what Brave kept in a
+    # saved tab group for three of the apps. Appended, so an app's own
+    # public/ still wins; the framework's fallback comes after every path.
+    push @{ $app->static->paths }, "$home/public";
 
     my $base = $conf->{theme_base} // $ENV{HOMELAB_THEME_BASE} // DEFAULT_THEME_BASE;
     $base =~ s{/\z}{};

@@ -56,6 +56,7 @@ $t->get_ok('/override')->content_like(qr{\AOverridden\s*\z}, 'stash overrides th
 # --- the partials actually render ---
 $t->get_ok('/head')->status_is(200)
   ->content_like(qr{static\.mailmasker\.org/theme/v1/theme\.css}, 'head links the remote stylesheet')
+  ->content_like(qr{<link rel="shortcut icon" href="/favicon\.ico">}, 'head links /favicon.ico too (Safari ignores SVG icons; #100)')
   ->content_like(qr{preconnect}, 'fonts are preconnected (not @import-ed, which chains blocking round trips)');
 
 # the account menu appears ONLY when there is a signed-in address
@@ -161,5 +162,12 @@ $ts->get_ok('/header')->status_is(200)
   ->content_like(qr{class="menu-sub">Signed in</div>\s*</div>\s*<a class="menu-item" role="menuitem" href="/settings">Settings</a>\s*<div class="menu-sep"></div>}s,
       'Settings sits directly under the address, then a separator')
   ->content_like(qr{Settings</a>.*?Manage your account}s, '... before the cross-app links');
+
+# --- /favicon.ico is the Silver Linings mark, not the framework's cloud (#100) ---
+$t->get_ok('/favicon.ico')->status_is(200)
+  ->header_like('Content-Type', qr{image/(?:x-icon|vnd\.microsoft\.icon)}, 'an icon')
+  ->content_like(qr{\A\x00\x00\x01\x00}, '... in ICO form');
+isnt length($t->tx->res->body), 15086, "... not Mojolicious's own 15,086-byte favicon";
+is length($t->tx->res->body), -s "$ENV{HOMELAB_WEBTHEME_HOME}/public/favicon.ico", '... the one the package ships';
 
 done_testing;

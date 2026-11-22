@@ -91,6 +91,11 @@ sub build_site (%o) {
         built => $v{built}, areas => $areas }) =~ s{\\/}{/}gr . "\n");
     _write($out, 'skill/SKILL.md', $skill);
     _write($out, 'robots.txt', "User-agent: *\nAllow: /\n");
+    # The Silver Linings favicon.ico from the same webtheme the chrome came
+    # from (post-cutover #100): nginx serves the site root, so without the
+    # file /favicon.ico was a 404 here.
+    my $ico = _theme_dir($root, $o{webtheme})->child('public', 'favicon.ico');
+    $ico->copy_to($out->child('favicon.ico')) if -f $ico;
     _write($out, $MARK, "Built by homelab-developer $v{version}; homelab-developer-build may clear this directory.\n");
     return { pages => scalar(@all) + 3, abilities => scalar(@all), out => "$out" };
 }
@@ -255,19 +260,26 @@ sub _fill ($text, $file, %v) {
 # A Mojolicious app used only to render templates: the site's own, and the
 # shared header and footer from homelab-webtheme.
 sub _renderer ($root, $webtheme) {
-    my $wt = path($webtheme // $root->sibling('webtheme'));
+    my $wt = _theme_dir($root, $webtheme);
     my $app = Mojolicious->new;
     $app->log->level('fatal');
     $app->renderer->paths([ $root->child('templates')->to_string ]);
     my %theme = (app_name => 'MailMasker API', nav_links => [ { href => '/claude-code', label => 'Claude Code' } ]);
-    if (-d $wt->child('templates', 'homelab')) {
-        unshift @INC, $wt->child('lib')->to_string if -d $wt->child('lib');
+    if (-d $wt->child('lib')) {
+        unshift @INC, $wt->child('lib')->to_string;
         local $ENV{HOMELAB_WEBTHEME_HOME} = $wt->to_string;
         $app->plugin('Homelab::WebTheme' => \%theme);
     } else {
         $app->plugin('Homelab::WebTheme' => \%theme);   # the installed package's
     }
     return $app;
+}
+
+# Where the shared chrome comes from: the webtheme source given, else the
+# repo's ../webtheme when this is a checkout, else the installed package.
+sub _theme_dir ($root, $webtheme) {
+    my $wt = path($webtheme // $root->sibling('webtheme'));
+    return -d $wt->child('templates', 'homelab') ? $wt : path('/usr/share/homelab-webtheme');
 }
 
 sub _clear ($out) {
