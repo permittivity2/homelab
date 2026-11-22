@@ -378,7 +378,13 @@
   });
 
   // --- the note's menu ---------------------------------------------------------
-  $('btn-more').addEventListener('click', function (ev) { openMenu('note-menu', ev.currentTarget, { kind: 'note', item: S.note }); });
+  // stopPropagation, like the notebook and folder "..." buttons: the click would
+  // otherwise bubble to the two document-level handlers (this page's and the
+  // theme's shell.js) that close every open menu on a click outside one -- and
+  // the menu they just saw opened counted as "outside" (0.2.1: the menu had
+  // never opened from a real click since 0.1.0; the live check clicked the
+  // hidden items directly, which is why it passed).
+  $('btn-more').addEventListener('click', function (ev) { ev.stopPropagation(); openMenu('note-menu', ev.currentTarget, { kind: 'note', item: S.note }); });
   $('note-menu').addEventListener('click', function (ev) {
     var b = ev.target.closest('button'); if (!b || !S.note) return;
     closeMenus();

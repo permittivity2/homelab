@@ -1,3 +1,15 @@
+homelab-notes (0.2.1) unstable; urgency=medium
+
+  * The note's "..." menu (pin, share, move, history, copy link, delete)
+    opens from a real click: the click bubbled to the document-level
+    handlers that close any open menu, so it closed in the same instant
+    it opened and delete was unreachable (post-cutover #71 reopened,
+    found by Gardner). The trigger now stops propagation like the notebook
+    and folder menus do; the live check opens the menu for real and
+    deletes and restores a note through it.
+
+ -- Gardner <gardner@homelab>  Sat, 21 Nov 2026 21:30:00 -0600
+
 homelab-notes (0.2.0) unstable; urgency=medium
 
   * Links between notes (post-cutover #93): [[Note title]] and [[Title|shown
