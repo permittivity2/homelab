@@ -1371,6 +1371,7 @@ sub suggestions_for ($self, $email) {
     my $rows = $self->db->query(
         q{SELECT * FROM calendar.mail_links m
            WHERE proposal IS NOT NULL AND expires_at > NOW()
+             AND coalesce(m.proposal->>'event', 'true') NOT IN ('false', '0')
              AND ? IN (SELECT lower(a) FROM jsonb_array_elements_text(accounts) AS a)
              AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_events x WHERE x.link_id = m.id AND x.user_email = ?)
              AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_dismissals d WHERE d.link_id = m.id AND d.user_email = ?)
@@ -1384,9 +1385,21 @@ sub suggestions_count ($self, $email) {
     return $self->db->query(
         q{SELECT count(*) FROM calendar.mail_links m
            WHERE proposal IS NOT NULL AND expires_at > NOW()
+             AND coalesce(m.proposal->>'event', 'true') NOT IN ('false', '0')
              AND ? IN (SELECT lower(a) FROM jsonb_array_elements_text(accounts) AS a)
              AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_events x WHERE x.link_id = m.id AND x.user_email = ?)
              AND NOT EXISTS (SELECT 1 FROM calendar.mail_link_dismissals d WHERE d.link_id = m.id AND d.user_email = ?)}, $me, $me, $me,
+    )->array->[0] + 0;
+}
+
+# How many proposals from this sender THIS account dismissed lately (#99): a
+# weight for the gate and a hint for the model, never a block.
+sub dismissed_from_sender ($self, $email, $from_addr, $days = 60) {
+    return 0 unless defined $from_addr && length $from_addr;
+    return $self->db->query(
+        q{SELECT count(*) FROM calendar.mail_link_dismissals d JOIN calendar.mail_links m ON m.id = d.link_id
+           WHERE d.user_email = ? AND lower(m.from_addr) = lower(?) AND d.dismissed_at > NOW() - (? || ' days')::INTERVAL},
+        _norm($email), $from_addr, $days + 0,
     )->array->[0] + 0;
 }
 

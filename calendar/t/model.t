@@ -164,6 +164,15 @@ is scalar @{ $m->suggestions_for($bob) }, 2, '... his are not';
 $m->dismiss_suggestion($link->{id}, $bob);
 is scalar @{ $m->suggestions_for($bob) }, 1, 'Bob dismissed his copy';
 is $m->suggestions_count($bob), 1, '... the count agrees';
+# #99: dismissals counted per sender, and a "not an event" verdict kept out of the list
+is $m->dismissed_from_sender($bob, 'office@example.test'), 1, 'Bob dismissed one proposal from this sender';
+is $m->dismissed_from_sender($bob, 'OFFICE@example.test'), 1, '... case does not matter';
+is $m->dismissed_from_sender($alice, 'office@example.test'), 0, '... Alice none';
+$db->query(q{UPDATE calendar.mail_links SET proposal = proposal || '{"event": false}'::jsonb WHERE token = ?}, $tok2);
+is scalar @{ $m->suggestions_for($bob) }, 0, 'a proposal the model called "not an event" stays out of the list';
+is $m->suggestions_count($bob), 0, '... and out of the count';
+$db->query(q{UPDATE calendar.mail_links SET proposal = proposal - 'event' WHERE token = ?}, $tok2);
+is scalar @{ $m->suggestions_for($bob) }, 1, '... and is back once the verdict is gone (the rest of this file expects it)';
 is scalar @{ $m->suggestions_for($alice) }, 1, '... and Alice still has her other one';
 $m->delete_event($m->event($ev->{id}), scope => 'all');
 is scalar @{ $m->mail_link_events_for($link->{id}, $alice) }, 0, 'a deleted event drops out of the link\'s live list';

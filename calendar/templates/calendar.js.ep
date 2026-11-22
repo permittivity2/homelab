@@ -973,7 +973,9 @@ var Cal = (function () {
       $('ev-facts').classList.add('hide');
       return api('POST', '/api/mail-links/' + mailLink.token + '/propose').then(function (r) {
         fillFromProposal(r.proposal);
-        $('ev-ai-note').textContent = 'Proposed (' + (r.proposal.confidence || 'low') + ' confidence' + (r.proposal.note ? ': ' + r.proposal.note : '') + '). Check it, then Save.';
+        $('ev-ai-note').textContent = r.proposal.event === false
+          ? 'The AI read this email as not an event' + (r.proposal.why ? ': ' + r.proposal.why : '') + '. The form holds its best reading anyway; check it before you Save.'
+          : 'Proposed (' + (r.proposal.kind ? r.proposal.kind + ', ' : '') + (r.proposal.confidence || 'low') + ' confidence' + (r.proposal.note ? ': ' + r.proposal.note : '') + '). Check it, then Save.';
         showResearchLine(r.proposal.research);
         if (researchHint && mailLink.research.enabled && mailLink.research.auto) return researchNow();
       }).catch(function (err) { $('ev-ai-note').textContent = err.message; })
@@ -1022,7 +1024,9 @@ var Cal = (function () {
       if (mailLink.proposal) {
         var p = mailLink.proposal;
         fillFromProposal(p);
-        $('ev-proposed-note').textContent = 'Proposed when the email arrived (' + (p.confidence || 'low') + ' confidence' + (p.note ? ': ' + p.note : '') + '). Check it, then Save.';
+        $('ev-proposed-note').textContent = p.event === false
+          ? 'When the email arrived the AI read it as not an event' + (p.why ? ': ' + p.why : '') + '. The form holds its best reading anyway; check it before you Save.'
+          : 'Proposed when the email arrived (' + (p.kind ? p.kind + ', ' : '') + (p.confidence || 'low') + ' confidence' + (p.note ? ': ' + p.note : '') + '). Check it, then Save.';
         $('ev-proposed-note').classList.remove('hide');
         $('ev-ai-propose').textContent = 'Propose again';
         showResearchLine(p.research);
@@ -1087,7 +1091,7 @@ var Cal = (function () {
         var p = s.proposal || {};
         var when = p.start ? (p.all_day ? fmtDate(p.start + 'T00:00:00') : fmtRange(p.start, p.end || addMinutes(p.start, 60), false, h24)) : 'no time found';
         return '<li data-token="' + esc(s.token) + '"><span class="share-who">' + esc(p.title || s.subject || '(no title)')
-          + ' <span class="muted-small">' + esc(when) + (p.location ? ' at ' + esc(p.location) : '') + (p.confidence && p.confidence !== 'high' ? ' (' + esc(p.confidence) + ' confidence)' : '') + (s.facts ? ', ' + s.facts + ' fact' + (s.facts === 1 ? '' : 's') : '') + '</span>'
+          + ' <span class="muted-small">' + esc(when) + (p.location ? ' at ' + esc(p.location) : '') + (p.kind ? ' · ' + esc(p.kind) : '') + (p.confidence && p.confidence !== 'high' ? ' (' + esc(p.confidence) + ' confidence)' : '') + (s.facts ? ', ' + s.facts + ' fact' + (s.facts === 1 ? '' : 's') : '') + '</span>'
           + '<br><span class="muted-small">from ' + esc(s.from || 'unknown') + ': "' + esc(s.subject || '') + '"</span></span>'
           + '<button type="button" class="btn btn-sm btn-primary" data-sugg-save="' + esc(s.token) + '">Save</button>'
           + '<a class="btn btn-sm" href="' + esc(s.open_url) + '">Open</a>'

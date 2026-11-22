@@ -39,10 +39,14 @@ sub configured ($self) { return (length $self->service_url && length $self->serv
 my $CANON = JSON::PP->new->canonical(1)->utf8(1);
 
 my $SYSTEM = <<'PROMPT';
-You turn one email into one calendar event. Answer with a single JSON object and nothing else, with exactly these keys:
-"title" (short, no "Re:"), "all_day" (true/false), "start" ("YYYY-MM-DDTHH:MM:SS" wall-clock time as written in the email, or "YYYY-MM-DD" when all_day), "end" (same form; for all_day the day AFTER the last day), "location" (string or null), "timezone" (the IANA time zone the email's times are in: the zone of the location when the email gives a place whose zone is clear from a city, state, postcode or country, e.g. "America/Chicago" for Overland Park, KS; otherwise the given time zone), "description" (one or two sentences from the email that matter for the event, or null), "confidence" ("high", "medium" or "low"), "note" (one short sentence on what was unclear, or null),
-"research" (an object: "worth_it" true only when the email names something a web search could add facts about -- a venue, a team, a public event, an organisation -- and the facts would help the event (an address, who is playing, a schedule); "about" a few words naming that thing, e.g. "McCool Field, Cleveland MS"; "query" the single best web search to run; all three null when worth_it is false).
-Rules: use the email's own dates and times; resolve relative words ("Friday", "tomorrow") against the reference date given; if no time is given, make it all_day; never invent a place; if the email contains no event at all, still answer with your best single guess and confidence "low".
+You read one email for one person and say whether it holds a calendar event for them and, if so, what the event is. Answer with a single JSON object and nothing else, with exactly these keys:
+"event" (true or false. True only when the email is about something in the recipient's FUTURE that they would attend, do, or need to be ready for: an appointment, a meeting, a game or show they hold tickets for, a trip, a deadline, a renewal that will charge them, a delivery window. False for a record of something that already happened (a payment, a sign-in, a backup, an alert, a device notice), a daily digest, a policy or terms notice, a promotion or newsletter unless it names a dated occasion the recipient signed up for, and any reminder, invitation update or cancellation sent by this calendar itself),
+"why" (one short sentence: what made it an event, or not),
+"kind" (one of "appointment", "meeting", "deadline", "travel", "tickets", "delivery", "promotion", "other"; null when event is false),
+"title" (short, no "Re:"), "all_day" (true/false), "start" ("YYYY-MM-DDTHH:MM:SS" wall-clock time as written in the email, or "YYYY-MM-DD" when all_day), "end" (same form; for all_day the day AFTER the last day), "location" (string or null), "timezone" (the IANA time zone the email's times are in: the zone of the location when the email gives a place whose zone is clear from a city, state, postcode or country, e.g. "America/Chicago" for Overland Park, KS; otherwise the given time zone), "description" (one or two sentences from the email that matter for the event, or null), "confidence" ("high", "medium" or "low": how sure you are of the FIELDS, not of whether it is an event), "note" (one short sentence on what was unclear, or null),
+"research" (an object: "worth_it" true only when event is true and the email names something a web search could add facts about -- a venue, a team, a public event, an organisation -- and the facts would help the event (an address, who is playing, a schedule); "about" a few words naming that thing, e.g. "McCool Field, Cleveland MS"; "query" the single best web search to run; all three null when worth_it is false).
+Rules: use the email's own dates and times; resolve relative words ("Friday", "tomorrow") against the reference date given; if no time is given, make it all_day; never invent a place. A time that only records when the email was sent or when something happened is NOT the event's time. A receipt or confirmation for something that happens later is about that later thing (the game, the flight, the delivery), not the purchase. When event is false, still fill the other keys with your best reading (they are kept for the person to check) and set confidence "low".
+Examples: "Your Daily Digest for Sat, 11/21 is ready to view" from a postal service -> event false (a digest). "See you at Par Exsalonce for your 1:30 PM appointment" -> event true, kind appointment. "Your receipt and tickets for Delta State vs Valdosta, Saturday 2:00 PM at McCool Field" -> event true, kind tickets, the game on Saturday. "You spent $67.16 at Costco" -> event false (a payment that happened). "A sound was played on iPhone at 6:18 PM" -> event false (a device notice). "Webinar: The State of AI, December 8, register now" -> event true, kind promotion. "Reminder: Haircut at 1:30 PM today" sent by this calendar -> event false.
 PROMPT
 
 my $RESEARCH_SYSTEM = <<'PROMPT';
@@ -71,7 +75,11 @@ sub _ref ($zone, $now) { return $now ? $now->clone->set_time_zone($zone)->strfti
 sub _propose_request ($self, %a) {
     my $zone = validate_zone($a{zone} // '') ? $a{zone} : 'America/Chicago';
     my $text = substr($a{text} // '', 0, 12000);
-    my $user = "Time zone: $zone\nReference date and time: " . _ref($zone, $a{now}) . "\n\nFrom: " . ($a{from} // '') . "\nDate: " . ($a{date_header} // '')
+    # A hint, not a rule (#99): the person keeps dismissing this sender.
+    my $hint = ($a{dismissed_before} // 0) >= 1
+        ? "Context: the recipient dismissed " . ($a{dismissed_before} + 0) . " earlier proposal(s) made from this sender's emails; weigh that, it is not a rule.\n"
+        : '';
+    my $user = "Time zone: $zone\nReference date and time: " . _ref($zone, $a{now}) . "\n$hint\nFrom: " . ($a{from} // '') . "\nDate: " . ($a{date_header} // '')
              . "\nSubject: " . ($a{subject} // '') . "\n\n" . $text;
     my $payload = $CANON->encode({
         model => $self->model, max_tokens => $self->max_tokens,
@@ -303,6 +311,13 @@ sub _facts ($list) {
 # Only the fields the editor knows, in shapes it accepts.
 sub _sanitise ($p, $zone) {
     my %o;
+    # Is there an event at all (#99)? JSON true/false; a model that omits the
+    # key is read as "yes", which is what every answer meant before 0.6.2.
+    my $e = $p->{event};
+    my $yes = (!defined $e) ? 1 : (ref $e ? ($e ? 1 : 0) : ("$e" =~ /^(?:false|0|no)$/i ? 0 : 1));
+    $o{event} = $yes ? Mojo::JSON->true : Mojo::JSON->false;
+    $o{why}   = _str($p->{why}, 300);
+    $o{kind}  = (defined $p->{kind} && !ref $p->{kind} && lc($p->{kind}) =~ /^(appointment|meeting|deadline|travel|tickets|delivery|promotion|other)$/) ? $1 : undef;
     # The research hint (#78): is there anything a web search could add?
     my $r = ref $p->{research} eq 'HASH' ? $p->{research} : {};
     $o{research} = $r->{worth_it}

@@ -70,6 +70,7 @@ $r = $ai->propose(%mail);
 ok $r->{ok}, 'a proposal comes back' or diag explain $r;
 is_deeply $r->{proposal}, { title => 'Dentist', all_day => 0, start => '2026-11-20T15:30:00', end => '2026-11-20T16:30:00',
     location => 'Main St office', description => 'Bring the insurance card.', confidence => 'high', note => undef, timezone => undef,
+    event => Mojo::JSON->true, why => undef, kind => undef,
     research => { worth_it => 1, about => 'Main St dental office', query => 'Main St dental office Cleveland hours' } },
     'only the editor\'s fields, in its shapes (the stray key dropped, the JSON found inside prose), plus the research hint';
 is $r->{model}, 'claude-haiku-5-5', 'the model that answered';
@@ -145,4 +146,20 @@ is $r->{place}, 'Overland Park, KS', '... and the place as read';
 $r = $ai->zone_for_place(place => 'NOWHERE room 4', zone => 'America/Denver');
 ok $r->{ok} && !defined $r->{timezone}, 'a non-place: ok with no zone' or diag explain $r;
 
+
+# --- #99: the verdict keys through the sanitiser --------------------------
+{
+    my $p = Homelab::Calendar::AI::_sanitise({ event => Mojo::JSON->false, why => 'A payment that already happened.', kind => 'promotion', title => 'x', confidence => 'low' }, 'America/Chicago');
+    ok !$p->{event}, 'event false comes through false';
+    is $p->{why}, 'A payment that already happened.', '... with its reason';
+    is $p->{kind}, 'promotion', '... and the kind';
+    $p = Homelab::Calendar::AI::_sanitise({ event => 'false', kind => 'nonsense', title => 'x' }, 'America/Chicago');
+    ok !$p->{event}, 'the string "false" is false too'; is $p->{kind}, undef, 'an unknown kind is dropped';
+    $p = Homelab::Calendar::AI::_sanitise({ title => 'x' }, 'America/Chicago');
+    ok $p->{event}, 'a model that omits the key is read as "an event" (what every answer meant before 0.6.2)';
+    my ($url, $h, $payload) = $ai->_propose_request(%mail, dismissed_before => 4);
+    like $payload, qr/dismissed 4 earlier proposal/, 'the dismissal hint reaches the model';
+    ($url, $h, $payload) = $ai->_propose_request(%mail);
+    unlike $payload, qr/dismissed/, '... and is absent when there is nothing to say';
+}
 done_testing;

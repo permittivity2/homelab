@@ -1,3 +1,19 @@
+homelab-calendar (0.6.2) unstable; urgency=medium
+
+  * Suggestions that make sense (post-cutover #99). The AI now says first
+    whether the email holds an event for the recipient at all ("event",
+    "why", "kind"); a "not an event" is stored for the link's page but kept
+    out of the Suggestions list and gets no research. The gate before the AI
+    is a score, not a set of vetoes: a transactional word in the subject
+    ("receipt") weighs against, so a receipt for tickets still reaches the
+    model; an automated sender and a sender this account keeps dismissing
+    weigh against too; the calendar's own reminders and cancellations and the
+    fleet's alert mail never pass. The prompt tells the model that a time
+    recording when something happened is not an event's time, and that a
+    confirmation for a later occasion is about that occasion.
+
+ -- Gardner <gardner@homelab>  Sat, 21 Nov 2026 23:30:00 -0600
+
 homelab-calendar (0.6.1) unstable; urgency=medium
 
   * /metrics no longer dies before the first holidays fill (a fresh schema has

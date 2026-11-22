@@ -690,7 +690,7 @@ sub _suggestion_json ($c, $row, $zone) {
     return {
         token => $row->{token}, subject => $row->{subject}, from => $row->{from_addr}, received_at => $row->{created_at},
         proposed_at => $row->{proposed_at}, zone => $zone,
-        proposal => { map { $_ => $p->{$_} } qw(title all_day start end location description confidence note timezone) },
+        proposal => { map { $_ => $p->{$_} } qw(title all_day start end location description confidence note timezone event why kind) },
         facts => (ref $row->{facts} eq 'HASH' ? scalar @{ $row->{facts}{facts} // [] } : 0),
         open_url => $c->app->public_base_url . "/m/$row->{token}",
     };

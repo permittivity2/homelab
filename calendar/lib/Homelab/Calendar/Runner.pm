@@ -11,7 +11,7 @@ use Homelab::Calendar::MailExtract ();
 use Homelab::Calendar::Consent ();
 use Homelab::Calendar::Invite qw(request_message cancel_message reply_notice_message event_ics);
 
-our @EXPORT_OK = qw(looks_like_event reminder_message);
+our @EXPORT_OK = qw(looks_like_event reminder_message event_score);
 
 # The calendar's background work (#79, #80), run from a timer inside every
 # hypnotoad worker -- the same recurring-timer + FOR UPDATE SKIP LOCKED shape
@@ -410,22 +410,46 @@ my $EVENT_WORDS = qr/\b(?:meeting|meet(?:ing)?\s+up|appointment|appt|game|match|
     birthday|anniversary|ceremony|graduation|service|visit|tour|open\s+house|deadline|due\s+(?:on|by)|schedule[ds]?|reschedule[ds]?|
     calendar|agenda|event|kick-?off|launch|flight|departs?|arriv(?:es|al)|check-?in|pickup|pick\s+up|drop-?off)\b/ix;
 
-# The plain-parse gate (#80): only email that LOOKS like it carries an event
-# is sent anywhere. A date or a time in the text, or one of the words above.
-# Pure, exported for the tests.
-sub looks_like_event ($subject, $text, %o) {
+# Subject words of transactional mail: a weight against, never a veto (#99:
+# "Your receipt and tickets for ..." is a game).
+my $NOISE_WORDS = qr/\b(?:unsubscribe|newsletter|receipt|invoice|statement|password|verification code|your order|shipped|delivery update)\b/i;
+# Machines writing to a person: timestamps everywhere, events seldom.
+my $AUTOMATED_FROM = qr/\b(?:no-?reply|donotreply|do-not-reply|notifications?|alerts?|mailer-daemon|systemmessage)\b/i;
+# The calendar's own mail about events the person already knows, and the
+# fleet's alert mail from the same mailbox: never proposed back.
+my $OWN_SUBJECT = qr/^\s*(?:Reminder|Cancelled|No longer invited|Updated invitation):\s/;
+my $ALERT_SUBJECT = qr/^\s*\[homelab\]\s+(?:FIRING|RESOLVED)\b/;
+
+# The gate (#80, a score since #99): only email that LOOKS like it carries an
+# event is sent anywhere. Weights, not vetoes: a date, a time, an event word
+# and a day reference count for; a transactional subject, an automated sender
+# and a sender this person keeps dismissing count against. The AI then decides
+# for real (the prompt lets it say "not an event"); this only keeps obvious
+# noise from costing a call. Returns (score, why). Pure, exported for the tests.
+sub event_score ($subject, $text, %o) {
     my $hay = (($subject // '') . "\n" . substr($text // '', 0, 20000)) =~ s/\r//gr;
-    return 0 if $hay !~ /\S/;
-    # Bulk and transactional noise rarely carries an event worth proposing.
-    return 0 if ($subject // '') =~ /\b(?:unsubscribe|newsletter|receipt|invoice|statement|password|verification code|your order|shipped|delivery update)\b/i;
+    return (0, 'empty') if $hay !~ /\S/;
+    my $from = lc($o{from} // ''); my $own = lc($o{own_from} // '');
+    if (length $own && index($from, $own) >= 0) {
+        return (-99, "the calendar's own mail") if ($subject // '') =~ $OWN_SUBJECT;
+        return (-99, 'a fleet alert') if ($subject // '') =~ $ALERT_SUBJECT;
+    }
+    my ($score, @why) = (0);
     my $g = Homelab::Calendar::MailExtract::guess(subject => $subject, text => $text, zone => $o{zone} // 'UTC', now => $o{now});
     my $src = ($g && $g->{source}) // '';
-    return 1 if $src =~ /^(?:iso date|numeric date|month name|day month|tomorrow)$/;
-    return 1 if $src eq 'weekday' && $hay =~ $EVENT_WORDS;
-    return 1 if $hay =~ /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b/i;
-    return 1 if $hay =~ /\b(?:at|@)\s*\d{1,2}(?::\d{2})\b/;
-    return 1 if $hay =~ $EVENT_WORDS && $hay =~ /\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\b|\btomorrow\b|\btonight\b|\bnext week\b|\bthis week(?:end)?\b|\b\d{1,2}\/\d{1,2}\b/i;
-    return 0;
+    if ($hay =~ $EVENT_WORDS)                                               { $score += 2; push @why, 'an event word' }
+    if ($src =~ /^(?:iso date|numeric date|month name|day month|tomorrow)$/) { $score += 2; push @why, "a date ($src)" }
+    if ($hay =~ /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b/i || $hay =~ /\b(?:at|@)\s*\d{1,2}:\d{2}\b/) { $score += 2; push @why, 'a time' }
+    if ($hay =~ /\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\b|\btonight\b|\bnext week\b|\bthis week(?:end)?\b/i) { $score += 1; push @why, 'a day' }
+    if (($subject // '') =~ $NOISE_WORDS)                                   { $score -= 2; push @why, 'a transactional subject' }
+    if ($from =~ $AUTOMATED_FROM)                                           { $score -= 2; push @why, 'an automated sender' }
+    if (($o{dismissed_before} // 0) >= 3)                                   { $score -= 2; push @why, "$o{dismissed_before} dismissed from this sender" }
+    return ($score, join(', ', @why) || 'nothing date-like');
+}
+
+sub looks_like_event ($subject, $text, %o) {
+    my ($score) = event_score($subject, $text, %o);
+    return $score >= 2 ? 1 : 0;
 }
 
 sub run_proposals ($self) {
@@ -440,24 +464,29 @@ sub run_proposals ($self) {
         unless (@$accounts) { $m->mail_link_skipped($link->{id}); next }
         my $acct = $accounts->[0];
         my $zone = (defined $acct->{timezone} && validate_zone($acct->{timezone})) ? $acct->{timezone} : $self->default_zone;
-        unless (looks_like_event($link->{subject}, $link->{text_excerpt}, zone => $zone, now => DateTime->now(time_zone => $zone))) {
+        my $dismissed = $m->dismissed_from_sender($acct->{user_email}, $link->{from_addr});
+        my ($score, $why) = event_score($link->{subject}, $link->{text_excerpt}, zone => $zone, now => DateTime->now(time_zone => $zone),
+            from => $link->{from_addr}, own_from => ($self->mailer ? $self->mailer->{email} : ''), dismissed_before => $dismissed);
+        if ($score < 2) {
             $m->mail_link_skipped($link->{id});
+            $self->log->info("calendar runner: link $link->{id} skipped by the gate (score $score: $why)") if $self->log;
             next;
         }
-        $self->propose_link($link, $acct, $zone, $sha);
+        $self->propose_link($link, $acct, $zone, $sha, $dismissed);
     }
     return;
 }
 
 # One link: the proposal, then (entitled, switched on, consented, and worth
 # it) the research step; each step writes its result as it lands.
-sub propose_link ($self, $link, $acct, $zone, $sha) {
+sub propose_link ($self, $link, $acct, $zone, $sha, $dismissed = 0) {
     my $m = $self->model;
     $self->in_flight($self->in_flight + 1);
     my $done = sub { $self->in_flight($self->in_flight - 1) };
     $self->ai->propose_p(
         subject => $link->{subject}, from => $link->{from_addr}, date_header => $link->{date_header}, text => $link->{text_excerpt},
         zone => $zone, now => DateTime->now(time_zone => $zone), consent_sha => $sha, consent_kind => 'auto', account_key => $acct->{user_email},
+        dismissed_before => $dismissed,
     )->then(sub ($r) {
         unless ($r->{ok}) {
             $self->log->warn("calendar runner: proposal for link $link->{id} failed: " . ($r->{error} // '?')) if $self->log;
@@ -467,8 +496,9 @@ sub propose_link ($self, $link, $acct, $zone, $sha) {
         my $p = $r->{proposal};
         $p->{zone} = $zone;      # the wall clocks' zone, for a later Save
         $m->mail_link_proposed($link->{id}, $p);
-        $self->log->info("calendar runner: proposed link $link->{id} ($p->{confidence})") if $self->log;
-        my $want = $acct->{research} && $p->{research} && $p->{research}{worth_it}
+        $self->log->info("calendar runner: proposed link $link->{id} (event " . ($p->{event} ? 'yes' : 'no') . ", $p->{confidence}" . ($p->{why} ? ": $p->{why}" : '') . ")") if $self->log;
+        # No research for what the model says is not an event (#99).
+        my $want = $p->{event} && $acct->{research} && $p->{research} && $p->{research}{worth_it}
             && defined $acct->{research_consent_sha256} && $acct->{research_consent_sha256} eq Homelab::Calendar::Consent::research_notice_sha256();
         return unless $want;
         return $self->ai->research_p(

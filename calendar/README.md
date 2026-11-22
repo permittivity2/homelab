@@ -139,11 +139,18 @@ reminder (`calendar.reminder_queue`, one row per reminder, occurrence and
 account: the owner and everyone the calendar or event is shared with), send
 the due ones through `mailer:` (the submission VIP, like drive's; a few per
 tick), then pick up links whose email arrived for an account with the
-"propose automatically" consent, run the plain-parse gate
-(`Runner::looks_like_event`), and call homelab-ai without blocking (promises;
+"propose automatically" consent, run the gate (`Runner::event_score`, since
+#99 a score, not vetoes: an event word, a date, a time and a day reference
+count for; a transactional subject, an automated sender and a sender this
+account keeps dismissing count against; the calendar's own reminders and
+cancellations and the fleet's alert mail never pass), and call homelab-ai
+without blocking (promises;
 at most `runner.ai_in_flight` calls per process). Results land on the
 `mail_links` row (`proposal`, `facts`); the Suggestions list and the `/m/:token`
-page read them. `runner.enabled: 0` (or `HOMELAB_CALENDAR_RUNNER=0`, the tests)
+page read them. Since #99 the model answers `event` true/false first, with
+`why` and a `kind` (appointment, meeting, deadline, travel, tickets, delivery,
+promotion, other); a "false" is stored and shown on the link's own page but
+kept out of the Suggestions list, and gets no research step. `runner.enabled: 0` (or `HOMELAB_CALENDAR_RUNNER=0`, the tests)
 keeps it off. Without `mailer:` reminders queue and wait. Reminders for an
 all-day event are relative to 9 AM of its first day.
 

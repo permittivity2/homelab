@@ -9,7 +9,7 @@ use DateTime;
 
 use lib 'lib';
 use_ok 'Homelab::Calendar::Runner';
-Homelab::Calendar::Runner->import(qw(looks_like_event reminder_message));
+Homelab::Calendar::Runner->import(qw(looks_like_event event_score reminder_message));
 
 my $now = DateTime->new(year => 2026, month => 11, day => 14, hour => 10, time_zone => 'America/Chicago');
 
@@ -24,6 +24,24 @@ ok !looks_like_event('Your order has shipped', 'Track your package. Meeting the 
 ok !looks_like_event('Weekly newsletter', 'This week in tech: 10 things.', zone => 'America/Chicago', now => $now), 'a newsletter is skipped';
 ok !looks_like_event('Thanks', 'Thanks for everything!', zone => 'America/Chicago', now => $now), 'nothing date-like at all';
 ok !looks_like_event('', '', zone => 'America/Chicago', now => $now), 'empty is not an event';
+# --- the score (#99): weights, not vetoes ---------------------------------
+ok looks_like_event('Fwd: Your receipt and tickets for Delta State Football vs. Valdosta State', 'Saturday, November 22 at 2:00 PM, McCool Field. Show this receipt at the gate.', zone => 'America/Chicago', now => $now),
+    'a receipt for tickets to a game still goes to the AI ("receipt" weighs, it does not veto)';
+ok !looks_like_event('A sound was played on iPhone.', 'A sound was played on iPhone at 6:18 PM.', from => 'Find My <noreply@email.apple.com>', zone => 'America/Chicago', now => $now),
+    'a device notice from an automated sender stays out (a time, minus an automated sender)';
+ok looks_like_event('Dentist', 'Your appointment is on November 20 at 3:30 PM.', from => 'noreply@dentist.example', zone => 'America/Chicago', now => $now),
+    'an automated sender with a real appointment still goes through';
+ok !looks_like_event('Reminder: Haircut at 1:30 PM today', 'Haircut at Par Exsalonce, 1:30 PM today.', from => 'noreply@mailmasker.org', own_from => 'noreply@mailmasker.org', zone => 'America/Chicago', now => $now),
+    "the calendar's own reminder is never proposed back";
+ok !looks_like_event('[homelab] FIRING: RootDiskFilling on prod-homelabvm69', 'Alert started at 12:17 UTC, 2026-11-21.', from => 'noreply@mailmasker.org', own_from => 'noreply@mailmasker.org', zone => 'America/Chicago', now => $now),
+    'a fleet alert from the same mailbox is never proposed';
+ok looks_like_event('Reminder: Haircut at 1:30 PM today', 'Haircut at 1:30 PM today.', from => 'someone@example.test', own_from => 'noreply@mailmasker.org', zone => 'America/Chicago', now => $now),
+    "... but a reminder from someone else is only the subject's words";
+my ($sc, $why) = event_score('Weekly offer', 'Dinner this weekend? 7pm at Luigi', from => 'promo@shop.example', dismissed_before => 3, zone => 'America/Chicago', now => $now);
+is $sc, 3, 'dinner + a time + a day (5) minus three dismissals from this sender (2) still passes at 3';
+like $why, qr/3 dismissed from this sender/, '... and the score says why';
+($sc) = event_score('Weekly offer', 'See you Saturday', from => 'promo@shop.example', dismissed_before => 3, zone => 'America/Chicago', now => $now);
+ok $sc < 2, 'a bare weekday from a thrice-dismissed sender stays out';
 
 # --- when a reminder is due ------------------------------------------------
 my $s = DateTime->new(year => 2026, month => 11, day => 20, hour => 15, minute => 30, time_zone => 'America/Chicago');
