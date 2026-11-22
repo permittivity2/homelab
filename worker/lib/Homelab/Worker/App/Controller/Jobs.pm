@@ -3,6 +3,7 @@ use Mojo::Base 'Mojolicious::Controller', -signatures;
 
 use File::Spec;
 use Homelab::Common::AuthClient qw(introspect);
+use Homelab::Worker::JobType::HtmlPdf;
 
 # Returns (email, roles) on success. On failure, has already rendered a
 # 401 and returns nothing -- callers use
@@ -65,6 +66,10 @@ sub create ($c) {
                 $c->app->jobs_config->{zip_allowed_url_prefixes});
             return $c->render(json => { error => 'entry ' . ($i + 1) . " was refused: $why" }, status => 400) if $why;
         }
+    }
+    if ($type eq 'html_pdf') {
+        my $why = Homelab::Worker::JobType::HtmlPdf::html_refusal($input->{html});
+        return $c->render(json => { error => "html was refused: $why" }, status => 400) if $why;
     }
 
     my $row = $c->app->pg->db->query(

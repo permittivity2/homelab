@@ -805,6 +805,21 @@ class Client:
     def notes_show(self, token, note_id):
         return self._request("GET", f"/api/v1/notes/notes/{note_id}", headers=self._auth(token))
 
+    def notes_download(self, token, note_id, kind, dest_path):
+        # The note as a file (post-cutover #101): kind is source (as typed),
+        # text, html or pdf. Streamed to disk like a drive download; the
+        # gateway passes the type on but not the file name, so the caller
+        # names the file.
+        resp = self._send(
+            "GET", f"/api/v1/notes/notes/{note_id}/download/{kind}", headers=self._auth(token),
+            timeout=120, stream=True,
+        )
+        if not resp.ok:
+            raise ApiError(resp.status_code, _error_message(resp))
+        with open(dest_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                f.write(chunk)
+
     def notes_update(self, token, note_id, body):
         return self._request("PATCH", f"/api/v1/notes/notes/{note_id}", headers=self._auth(token), json=body)
 

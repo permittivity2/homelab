@@ -171,3 +171,10 @@ body.nb-side-open { overflow: hidden; }
   .app__main { padding: 0; }
   body { background: #fff; color: #000; }
 }
+
+/* Download (#101): one full-width link per kind, the extension at the right. */
+.download-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.download-list .btn { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); width: 100%; text-decoration: none; }
+.download-list .btn small { color: var(--text-muted); font-size: 0.8em; }
+.download-list .btn:hover small { color: inherit; }
+.download-list .btn.hide { display: none; }

@@ -83,6 +83,7 @@
   <button type="button" data-act="move">Move</button>
   <button type="button" data-act="history">History</button>
   <button type="button" data-act="copy-link">Copy link</button>
+  <button type="button" data-act="download">Download</button>
   <button type="button" data-act="delete" class="is-danger">Delete</button>
 </div>
 %# A notebook's or folder's menu.
@@ -117,6 +118,22 @@
     </form>
     <p class="form-error hide" id="share-error"></p>
     <ul class="share-list" id="share-list"></ul>
+  </div>
+  <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-close>Close</button></div>
+</div>
+
+%# Downloading a note (#101): four plain links, each answered as an attachment
+%# named after the note; the PDF one is made by the worker and takes a moment.
+<div class="modal" id="download-modal" role="dialog" aria-modal="true" aria-labelledby="download-h">
+  <div class="modal__head"><h2 id="download-h" class="panel__title">Download</h2></div>
+  <div class="modal__body stack">
+    <p class="muted-small" id="download-what"></p>
+    <div class="download-list">
+      <a class="btn" id="dl-source" href="#" download><span>As written</span><small id="dl-source-ext">.md</small></a>
+      <a class="btn" id="dl-text" href="#" download><span>Plain text</span><small>.txt</small></a>
+      <a class="btn" id="dl-html" href="#" download><span>Web page</span><small>.html</small></a>
+      <a class="btn" id="dl-pdf" href="#" download><span>PDF</span><small>.pdf &middot; takes a few seconds</small></a>
+    </div>
   </div>
   <div class="modal__foot"><span class="spacer"></span><button type="button" class="btn" data-close>Close</button></div>
 </div>

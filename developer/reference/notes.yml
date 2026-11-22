@@ -324,6 +324,38 @@ abilities:
         "created_at": "...", "updated_at": "...", "deleted_at": null, "url": "https://notes.mailmasker.org/n/42" }
     cli: homelab-cli notes show 42
 
+  - id: notes-download
+    title: Download a note as a file
+    method: GET
+    path: /api/v1/notes/notes/:id/download/:kind
+    who: signed-in
+    summary: The note as a file, as written, as plain text, as one web page, or as a PDF.
+    description: >
+      kind is source (the body exactly as typed: .md for a Markdown note, .txt
+      for a wiki or text note, .html for an HTML note), text (the rendered note
+      flattened to readable text: headings, bullets, links as "text (url)"),
+      html (one self-contained web page with the title and where it came from)
+      or pdf (the same page laid out for paper, made by the worker service;
+      allow a few seconds). The api passes on the type but not the file's
+      name, so name the file yourself.
+    params:
+      - name: id
+        in: path
+        required: true
+        about: The note's id.
+        example: 42
+      - name: kind
+        in: path
+        required: true
+        about: source, text, html or pdf.
+        example: pdf
+    response: |
+      (the file: text/markdown, text/plain, text/html or application/pdf)
+    notes:
+      - Anyone who may read the note (its owner, or someone it or its notebook is shared with) may download it.
+      - A PDF is made for the request and streamed back; nothing is kept. Pictures in it are the note's own images, fetched once by the notes service; one that cannot be had shows as its alt text.
+    cli: homelab-cli notes download 42 --as pdf --output note.pdf
+
   - id: notes-change
     title: Change a note
     method: PATCH

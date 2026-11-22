@@ -1,3 +1,23 @@
+homelab-notes (0.3.1) unstable; urgency=medium
+
+  * The PDF shows a task's checkbox as a box glyph: WeasyPrint drew the
+    <input> as a form field on a line of its own (post-cutover #101).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 12:30:00 -0600
+
+homelab-notes (0.3.0) unstable; urgency=medium
+
+  * Download a note as a file (post-cutover #101): "Download" in the note's
+    menu offers it as written (.md, .html or .txt), as plain text, as one
+    self-contained web page, or as a PDF. The first three are made here;
+    the PDF is laid out by homelab-worker (job type html_pdf) from the same
+    page, after this service fetched the note's images and inlined them so
+    the worker fetches nothing. Also GET /api/notes/:id/download/:kind and,
+    through the gateway, GET /api/v1/notes/notes/:id/download/:kind for the
+    CLI (homelab-cli notes download).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 11:45:00 -0600
+
 homelab-notes (0.2.1) unstable; urgency=medium
 
   * The note's "..." menu (pin, share, move, history, copy link, delete)

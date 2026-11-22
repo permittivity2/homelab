@@ -1,3 +1,10 @@
+homelab-developer (0.1.17) unstable; urgency=medium
+
+  * The reference gains "Download a note as a file" (notes, post-cutover
+    #101).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 11:40:00 -0600
+
 homelab-developer (0.1.16) unstable; urgency=medium
 
   * The site root carries favicon.ico (the Silver Linings mark from

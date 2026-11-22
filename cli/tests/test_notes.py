@@ -90,6 +90,56 @@ def test_show_and_raw(capsys):
     assert "<li>milk</li>" in capsys.readouterr().out
 
 
+def _stream_resp(status, chunks, content_type="application/pdf"):
+    r = Mock()
+    r.ok = 200 <= status < 300
+    r.status_code = status
+    r.iter_content.return_value = iter(chunks)
+    r.headers = {"Content-Type": content_type}
+    r.json.return_value = {"error": "no"}
+    r.text = '{"error": "no"}'
+    return r
+
+
+def test_download_pdf(tmp_path, capsys):
+    dest = tmp_path / "groceries.pdf"
+    with patch("requests.request", return_value=_stream_resp(200, [b"%PDF-1.7 ", b"rest"])) as req:
+        assert main(["notes", "download", "42", "--as", "pdf", "--output", str(dest)]) == 0
+    assert req.call_args.args[:2] == ("GET", "http://localhost:3000/api/v1/notes/notes/42/download/pdf")
+    assert req.call_args.kwargs["stream"] is True
+    assert dest.read_bytes() == b"%PDF-1.7 rest"
+    assert capsys.readouterr().out == f"Downloaded to {dest}\n"
+
+
+def test_download_source_names_the_file_by_format(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    # No --output: "as written" asks for the note first, to pick .md/.html/.txt.
+    responses = [_resp(200, NOTE), _stream_resp(200, [b"- milk\n- eggs\n"], "text/markdown")]
+    with patch("requests.request", side_effect=responses) as req:
+        assert main(["-j", "notes", "download", "42"]) == 0
+    assert [c.args[:2] for c in req.call_args_list] == [
+        ("GET", "http://localhost:3000/api/v1/notes/notes/42"),
+        ("GET", "http://localhost:3000/api/v1/notes/notes/42/download/source"),
+    ]
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"downloaded_to": "note-42.md", "kind": "source", "size_bytes": 14}
+    assert (tmp_path / "note-42.md").read_bytes() == b"- milk\n- eggs\n"
+
+
+def test_download_text_default_name(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    with patch("requests.request", return_value=_stream_resp(200, [b"milk\n"], "text/plain")) as req:
+        assert main(["notes", "download", "42", "--as", "text"]) == 0
+    assert len(req.call_args_list) == 1, "plain text needs no look-up for its extension"
+    assert (tmp_path / "note-42.txt").read_bytes() == b"milk\n"
+
+
+def test_download_error(capsys):
+    with patch("requests.request", return_value=_stream_resp(404, [])):
+        assert main(["notes", "download", "42", "--as", "pdf", "-o", "/dev/null"]) == 1
+    assert "Could not download the note" in capsys.readouterr().err
+
+
 def test_list_in_notebook(capsys):
     rows = {"notes": [dict(NOTE, body=None, html=None), dict(NOTE, id=43, title="Plan", pinned=True)], "notebook": {"id": 3, "name": "My notes", "permission": "owner"}}
     with patch("requests.request", return_value=_resp(200, rows)) as req:

@@ -3139,6 +3139,39 @@ def cmd_notes_show(args):
     return 0
 
 
+NOTES_DOWNLOAD_EXT = {"text": "txt", "html": "html", "pdf": "pdf"}
+
+
+def cmd_notes_download(args):
+    session = _require_session(args)
+    if not session:
+        return 1
+    client = _client(args)
+    dest = args.output
+    if not dest:
+        # The file is named after the note's id; "as written" needs the
+        # note's format for its extension (.md, .html or .txt).
+        ext = NOTES_DOWNLOAD_EXT.get(args.as_)
+        if ext is None:
+            try:
+                note = client.notes_show(session["token"], args.note_id)
+            except ApiError as e:
+                _emit_error(args, f"Could not read the note: {e.message}")
+                return 1
+            fmt = note.get("format") or "text"
+            ext = "md" if fmt == "markdown" else "html" if fmt == "html" else "txt"
+        dest = f"note-{args.note_id}.{ext}"
+    try:
+        client.notes_download(session["token"], args.note_id, args.as_, dest)
+    except ApiError as e:
+        _emit_error(args, f"Could not download the note: {e.message}")
+        return 1
+    if _emit(args, {"downloaded_to": dest, "kind": args.as_, "size_bytes": Path(dest).stat().st_size}):
+        return 0
+    print(f"Downloaded to {dest}")
+    return 0
+
+
 def cmd_notes_add(args):
     body = {"title": args.title or ""}
     text = _notes_read_body(args)
@@ -4393,7 +4426,7 @@ def build_parser():
     p.set_defaults(func=cmd_calendar_account)
 
     # Notes (post-cutover #71): homelab-api's /api/v1/notes/* gateway -> homelab-notes.
-    notes = sub.add_parser("notes", help="Your notes, via homelab-api's notes gateway: notebooks, folders, list, show, add, edit, share, search")
+    notes = sub.add_parser("notes", help="Your notes, via homelab-api's notes gateway: notebooks, folders, list, show, add, edit, download, share, search")
     notes_sub = notes.add_subparsers(dest="notes_command", required=True)
     FORMAT_HELP = "markdown (md), wiki (MediaWiki markup), html or text"
 
@@ -4436,6 +4469,13 @@ def build_parser():
     p.add_argument("--raw", action="store_true", help="Only the body, as typed (for a pipe)")
     p.add_argument("--html", action="store_true", help="The rendered HTML instead of the body as typed")
     p.set_defaults(func=cmd_notes_show)
+
+    p = notes_sub.add_parser("download", help="Save a note as a file: as written (default), plain text, a web page or a PDF")
+    p.add_argument("note_id")
+    p.add_argument("--as", dest="as_", choices=["source", "text", "html", "pdf"], default="source",
+                   help="source = the body as typed (.md, .html or .txt); text = readable plain text; html = one self-contained web page; pdf = laid out for paper (takes a few seconds)")
+    p.add_argument("--output", "-o", metavar="FILE", help="Where to save it (default: note-ID with the right extension)")
+    p.set_defaults(func=cmd_notes_download)
 
     p = notes_sub.add_parser("add", help="Add a note: the body from --body, --file (- = stdin) or a pipe")
     p.add_argument("title", nargs="?", default="")

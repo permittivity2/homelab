@@ -10,6 +10,7 @@ use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
 use Homelab::Common::Registry qw(register_recurring);
 use Homelab::Worker::JobType::Zip;
+use Homelab::Worker::JobType::HtmlPdf;
 
 has 'pg';
 has 'api_base';
@@ -66,7 +67,8 @@ sub startup ($self) {
     # workdir and either returns a finished artifact's local path or
     # dies. See README.md.
     $self->job_types({
-        zip    => \&Homelab::Worker::JobType::Zip::run,
+        zip      => \&Homelab::Worker::JobType::Zip::run,
+        html_pdf => \&Homelab::Worker::JobType::HtmlPdf::run,    # post-cutover #101
     });
 
     mount_health_route($self, check => sub {
@@ -83,7 +85,7 @@ sub startup ($self) {
         register_recurring(
             api_base => $self->api_base, feature_name => 'homelab-worker',
             host => $me->{host}, port => $me->{port}, health_check_url => '/health',
-            description => 'Background jobs: zip-job pipeline, serves /api/v1/jobs/*',
+            description => 'Background jobs: zip bundles, HTML to PDF (WeasyPrint), serves /api/v1/jobs/*',
             log => $self->log,
         );
     }

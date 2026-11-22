@@ -394,6 +394,7 @@
     else if (act === 'move') openMove(n);
     else if (act === 'history') openHistory(n);
     else if (act === 'copy-link') { navigator.clipboard && navigator.clipboard.writeText(n.url).then(function () { toast('Link copied: ' + n.url); }, function () { toast(n.url); }); }
+    else if (act === 'download') openDownload(n);
     else if (act === 'delete') deleteNote(n);
   });
   function deleteNote(n) {
@@ -427,6 +428,18 @@
     }
   });
   $('nb-menu').querySelector('[data-act=share]').addEventListener('mousedown', function () {});
+
+  // --- downloading (#101) ---------------------------------------------------
+  // Plain links: the server answers each as an attachment named after the
+  // note. "As written" is hidden for a text note (it is the plain text).
+  function openDownload(n) {
+    var base = '/api/notes/' + n.id + '/download/';
+    var ext = n.format === 'markdown' ? '.md' : n.format === 'html' ? '.html' : '.txt';
+    $('download-what').textContent = '"' + (n.title || 'Untitled note') + '" as a file.';
+    $('dl-source').href = base + 'source'; $('dl-source-ext').textContent = ext; $('dl-source').classList.toggle('hide', n.format === 'text');
+    $('dl-text').href = base + 'text'; $('dl-html').href = base + 'html'; $('dl-pdf').href = base + 'pdf';
+    openModal('download-modal');
+  }
 
   // --- sharing ------------------------------------------------------------------
   var shareTarget = null;

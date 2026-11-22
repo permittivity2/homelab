@@ -1,9 +1,12 @@
 package Homelab::Notes::App::Controller::Api;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
-use Mojo::Util qw(url_escape);
+use Mojo::Util qw(url_escape encode);
 use Homelab::Common::AuditClient qw(enqueue);
 use Homelab::Notes::Access qw(may_edit may_manage);
 use Homelab::Notes::Render qw(render_body excerpt);
+use Homelab::Notes::Export qw(source_ext export_name plain_text standalone_html inline_images_p pdf_ready_html);
+use Homelab::Common::Registry qw(lookup);
+use Mojo::Promise;
 
 # The JSON the page talks to, and (behind a Bearer check, the i_* twins at
 # the bottom) what homelab-cli gets through homelab-api's gateway. Every
@@ -278,6 +281,93 @@ sub note ($c) {
     _model($c)->set_prefs($me, last_notebook_id => $nb->{id}, last_note_id => $note->{id}) if $perm eq 'owner';
     return $c->render(json => _note_json($c, $note, $nb, $perm));
 }
+
+# ------------------------------------------------------------- a note as a file
+# Post-cutover #101: the note as written, as plain text, as one web page, or
+# as a PDF, each answered as an attachment named after the note. The first
+# three are made here; the PDF is laid out by homelab-worker (job type
+# html_pdf) from the same web page, with the note's images fetched here and
+# inlined first so the worker fetches nothing. Anyone who may read the note
+# may download it.
+my %SOURCE_TYPE = (markdown => 'text/markdown; charset=utf-8', html => 'text/html; charset=utf-8');
+
+sub download ($c) {
+    my $me = $c->require_login or return;
+    my ($note, $nb) = _note_for($c, $me, 'read') or return;
+    my $kind  = $c->stash('kind');
+    my $title = $note->{title} ne '' ? $note->{title} : 'Untitled note';
+    _audit($c, action => 'note.download', resource_type => 'note', resource_id => $note->{id}, detail => { kind => $kind, format => $note->{format} });
+    if ($kind eq 'source') {
+        return _attachment($c, export_name($title, source_ext($note->{format})), $SOURCE_TYPE{ $note->{format} // '' } // 'text/plain; charset=utf-8', encode('UTF-8', $note->{body} // ''));
+    }
+    my $html = render_body($note->{format}, $note->{body}, _resolver($c, $me, $nb));
+    return _attachment($c, export_name($title, 'txt'), 'text/plain; charset=utf-8', encode('UTF-8', plain_text($html))) if $kind eq 'text';
+    my %page = (title => $title, notebook => $nb->{name}, updated => substr($note->{updated_at} // '', 0, 16),
+                url => $c->app->public_base_url . '/n/' . $note->{id}, base => $c->app->public_base_url);
+    return _attachment($c, export_name($title, 'html'), 'text/html; charset=utf-8', encode('UTF-8', standalone_html(%page, html => $html))) if $kind eq 'html';
+
+    # pdf: fetch the images, build the page, have the worker lay it out.
+    my $name = export_name($title, 'pdf');
+    $c->render_later;
+    $c->inactivity_timeout(120);
+    inline_images_p($html, $c->app->export_ua)->then(sub ($inlined) {
+        return _pdf_p($c, $name, standalone_html(%page, html => pdf_ready_html($inlined), for_pdf => 1));
+    })->then(sub ($pdf) {
+        _attachment($c, $name, 'application/pdf', $pdf);
+    })->catch(sub ($err) {
+        chomp(my $e = "$err");
+        $c->app->log->error("notes: pdf of note $note->{id} for $me: $e");
+        $c->render(json => { error => 'The PDF could not be made right now; try again in a moment.' }, status => 502) unless $c->res->code;
+    });
+    return;
+}
+
+# The bytes as a download. The name is sent twice, as RFC 6266 asks: an
+# ASCII fallback and the UTF-8 one (a title may be anything).
+sub _attachment ($c, $name, $type, $bytes) {
+    (my $ascii = $name) =~ s/[^\x20-\x7e]/_/g;
+    $ascii =~ s/"/'/g;
+    my $utf8 = url_escape(encode('UTF-8', $name), '^A-Za-z0-9\-._~');
+    my $h = $c->res->headers;
+    $h->content_disposition(qq{attachment; filename="$ascii"; filename*=UTF-8''$utf8});
+    $h->content_type($type);
+    $h->cache_control('private, no-store');
+    $h->header('X-Content-Type-Options' => 'nosniff');
+    return $c->render(data => $bytes);
+}
+
+# A homelab-worker html_pdf job, as the viewer: submitted, polled every
+# second (a note's PDF takes a few seconds; 60 at most), then fetched.
+# Resolves to the PDF's bytes.
+sub _pdf_p ($c, $name, $doc) {
+    my $entry = eval { lookup('homelab-worker', api_base => $c->app->api_base) };
+    return Mojo::Promise->reject("homelab-worker is not registered: " . ($@ || 'no entry')) unless $entry && $entry->{host} && $entry->{port};
+    my $base = "http://$entry->{host}:$entry->{port}";
+    my %auth = (Authorization => 'Bearer ' . $c->viewer_jwt);
+    my $ua = $c->app->worker_ua;
+    return $ua->post_p("$base/internal/v1/jobs" => \%auth => json => { type => 'html_pdf', input => { output_name => $name, html => $doc } })->then(sub ($tx) {
+        my $code = $tx->res->code // 0;
+        die "the worker refused the job ($code): " . (($tx->res->json // {})->{error} // ($tx->error // {})->{message} // '') . "\n" unless $code == 201;
+        my $id = $tx->res->json->{id};
+        return _poll_job_p($ua, $base, \%auth, $id, time + 60);
+    });
+}
+
+sub _poll_job_p ($ua, $base, $auth, $id, $deadline) {
+    return $ua->get_p("$base/internal/v1/jobs/$id" => $auth)->then(sub ($tx) {
+        my $j = $tx->res->json // {};
+        my $state = $j->{state} // '';
+        if ($state eq 'completed') {
+            return $ua->get_p("$base/internal/v1/jobs/$id/download" => $auth)->then(sub ($tx) {
+                die "the PDF could not be fetched (" . ($tx->res->code // 'no answer') . ")\n" unless $tx->res->is_success;
+                return $tx->res->body;
+            });
+        }
+        die "the worker could not make the PDF: " . ($j->{error_message} // 'unknown') . "\n" if $state eq 'failed';
+        die "the PDF took too long (job $id still $state)\n" if time > $deadline;
+        return Mojo::Promise->timer(1)->then(sub { _poll_job_p($ua, $base, $auth, $id, $deadline) });
+    });
+}
 # PATCH: title, body, format, pinned, folder_id; revision = the copy being
 # edited. A newer copy on the server answers 409 with it, nothing written.
 sub update_note ($c) {
@@ -495,6 +585,7 @@ sub i_update_folder            ($c) { my $me = $c->authenticated_email_any or re
 sub i_delete_folder            ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return delete_folder($c) }
 sub i_notes                    ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return notes($c) }
 sub i_create_note              ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return create_note($c) }
+sub i_download                 ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return download($c) }
 sub i_note                     ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return note($c) }
 sub i_update_note              ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return update_note($c) }
 sub i_delete_note              ($c) { my $me = $c->authenticated_email_any or return; _as_session($c, $me); return delete_note($c) }

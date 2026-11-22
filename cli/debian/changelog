@@ -1,3 +1,11 @@
+homelab-cli (0.8.2) unstable; urgency=medium
+
+  * notes download ID [--as source|text|html|pdf] [--output FILE]: a note as
+    a file, as written (default), as plain text, as one web page or as a
+    PDF (post-cutover #101).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 11:40:00 -0600
+
 homelab-cli (0.8.1) unstable; urgency=medium
 
   * `notes add|edit --format wiki` (post-cutover #93); the README on

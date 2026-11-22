@@ -1,3 +1,14 @@
+homelab-worker (0.1.15) unstable; urgency=medium
+
+  * New job type html_pdf: one self-contained HTML document in, a PDF out,
+    laid out by WeasyPrint (new dependencies weasyprint, fonts-inter,
+    fonts-dejavu-core). The document may reference nothing outside itself
+    (every src a data: URL, no link/script/object/iframe, no url() or
+    @import that is not data:), refused at submission and in the child;
+    4 MB at most. For homelab-notes' "Download as PDF" (post-cutover #101).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 11:30:00 -0600
+
 homelab-worker (0.1.14) unstable; urgency=medium
 
   * A finished job's output can be downloaded from any worker node (post-

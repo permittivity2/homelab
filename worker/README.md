@@ -62,7 +62,7 @@ branch on job type.
 > is the rule; *which host* runs it is a per-workload call. See
 > `drive/README.md` and `drive/migrations/005-append-jobs.sql`.
 
-### The `zip` job type (v1's only type)
+### The `zip` job type
 
 Generic "fetch N URLs, each with its own auth header, bundle into one
 zip" -- not drive-specific, reusable later by anything else that wants
@@ -83,6 +83,26 @@ forked child -- see below) with its own optional `Authorization` header,
 then added to the archive at `zip_path` (`Archive::Zip`). `output_name`
 is sanitized to its basename only before being used as a filename --
 caller-supplied, never trusted as a path.
+
+### The `html_pdf` job type (post-cutover #101)
+
+One complete HTML document in, one PDF out, laid out by WeasyPrint (a
+Debian package, with Inter and DejaVu fonts installed beside it):
+
+```json
+{ "output_name": "Groceries.pdf", "html": "<!doctype html><html>...</html>" }
+```
+
+The document must be **self-contained**: WeasyPrint fetches whatever a
+page references, from this node, so `JobType::HtmlPdf::html_refusal`
+refuses (at submission and again in the child) any `src`/`poster`/`data`
+that is not a `data:` URL, any `link`/`script`/`object`/`embed`/`iframe`/
+`base`/`form` element, and any `url()` or `@import` in a style that is
+not `data:`; 4 MB at most. The caller inlines what it wants shown
+(homelab-notes fetches a note's images itself, to a cap, first). The
+child runs `timeout 120 weasyprint --media-type print` with its scratch
+dir as `$HOME` (fontconfig's cache) and returns the PDF. homelab-notes'
+"Download as PDF" submits one of these, polls it, and streams the result.
 
 ## The auth hand-off (why every entry carries its own `auth_header`)
 

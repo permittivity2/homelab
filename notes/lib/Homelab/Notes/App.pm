@@ -2,14 +2,21 @@ package Homelab::Notes::App;
 use Mojo::Base 'Mojolicious', -signatures;
 
 use Mojo::URL;
+use Mojo::UserAgent;
 use Mojo::Util qw(secure_compare);
 use Homelab::Common::Config qw(load_config);
 use Homelab::Common::DB qw(runtime_pg);
 use Homelab::Common::Health qw(mount_health_route);
-use Homelab::Common::Registry qw(register_recurring);
+use Homelab::Common::Registry qw(register_recurring lookup);
 use Homelab::Common::AuthClient qw(introspect);
 use Homelab::Notes::Model;
 use Homelab::Notes::Gateway;
+
+# The agents of a download (post-cutover #101): one fetches a note's images
+# for the PDF (small and quick, 3 MB each at most), one talks to
+# homelab-worker, which lays the PDF out (a note's PDF is small too).
+has export_ua => sub { Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 8, inactivity_timeout => 8, max_redirects => 2, max_response_size => 3 * 1024 * 1024) };
+has worker_ua => sub { Mojo::UserAgent->new(connect_timeout => 5, request_timeout => 30, inactivity_timeout => 30, max_response_size => 50 * 1024 * 1024) };
 
 has 'pg';
 has 'model';
@@ -178,6 +185,7 @@ sub startup ($self) {
     my $r = $self->routes;
     my $id  = [id => qr/\d+/];
     my $tok = [token => qr/[0-9a-f]{64}/];
+    my $kind = [kind => qr/source|text|html|pdf/];    # a download (#101)
 
     # The app itself.
     $r->get('/')                        ->to('auth#index');
@@ -205,6 +213,7 @@ sub startup ($self) {
     $r->get('/api/notes')                                       ->to('api#notes');
     $r->post('/api/notes')                                      ->to('api#create_note');
     $r->get('/api/notes/:id' => $id)                            ->to('api#note');
+    $r->get('/api/notes/:id/download/:kind' => $id => $kind)    ->to('api#download');
     $r->patch('/api/notes/:id' => $id)                          ->to('api#update_note');
     $r->post('/api/notes/:id/delete' => $id)                    ->to('api#delete_note');
     $r->post('/api/notes/:id/restore' => $id)                   ->to('api#restore_note');
@@ -242,6 +251,7 @@ sub startup ($self) {
     $r->get('/internal/v1/notes/notes')                                     ->to('api#i_notes');
     $r->post('/internal/v1/notes/notes')                                    ->to('api#i_create_note');
     $r->get('/internal/v1/notes/notes/:id' => $id)                          ->to('api#i_note');
+    $r->get('/internal/v1/notes/notes/:id/download/:kind' => $id => $kind)    ->to('api#i_download');
     $r->patch('/internal/v1/notes/notes/:id' => $id)                        ->to('api#i_update_note');
     $r->post('/internal/v1/notes/notes/:id/delete' => $id)                  ->to('api#i_delete_note');
     $r->post('/internal/v1/notes/notes/:id/restore' => $id)                 ->to('api#i_restore_note');
