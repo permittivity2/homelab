@@ -1,3 +1,32 @@
+homelab-common (0.1.40) unstable; urgency=medium
+
+  * homelab-mount-retry calls systemctl without a shell: a mount unit named
+    with \x2d (var-lib-homelab-drive\x2dstorage.mount) was mangled by sh and
+    never started, so a drive VM whose store was away at boot stayed down
+    (found by the phase 1 proof on vm67, post-cutover #41 H).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 22:30:00 -0600
+
+homelab-common (0.1.39) unstable; urgency=medium
+
+  * homelab-mount-retry.service and .timer are actually installed and the
+    timer enabled (0.1.38 shipped the script alone: dh_installsystemd needs
+    --name for a unit not named after the package).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 22:05:00 -0600
+
+homelab-common (0.1.38) unstable; urgency=medium
+
+  * homelab-mount-retry + timer: for two hours after boot, every two
+    minutes, start an NFS mount that is not there and a service bound to it
+    that has never been active this boot (lists in
+    /etc/homelab/boot-mounts.d/, written by the mount orchestrators).
+  * load_config forces server.pid_file into the unit's RuntimeDirectory when
+    systemd exports one, so a pid file left on disk by a power cut is never
+    read again (post-cutover #41 H, J).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 21:30:00 -0600
+
 homelab-common (0.1.37) unstable; urgency=medium
 
   * Mailer: send_mail takes `calendar => { method, ics }` for an iTIP message

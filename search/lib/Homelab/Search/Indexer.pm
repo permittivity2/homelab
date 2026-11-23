@@ -15,6 +15,10 @@ has 'log';
 has 'index';
 has host         => sub { hostname() };
 has mail_root    => '/srv/mail-ro';
+# Refuse to scan mailboxes when mail_root is not a mount point (post-cutover
+# #41 K): a bare directory where the store should be is "everything is gone"
+# to the scan below. The daemon turns this on; tests use a plain directory.
+has require_mounted_root => 0;
 has drive_root   => '/srv/drive-ro';
 # How many metadata-stale files to re-queue per discovery pass. See (2b).
 has stale_batch  => 400;
@@ -83,6 +87,7 @@ sub new_from_config ($class, $config, $log) {
     my $self = $class->new(pg => $pg, config => $config, log => $log);
     $self->index(Homelab::Search::Index->new(pg => $pg, log => $log));
     $self->mail_root($config->{mail_root})   if $config->{mail_root};
+    $self->require_mounted_root($config->{indexer}{require_mounted_root} // 1);
     $self->drive_root($config->{drive_root}) if $config->{drive_root};
 
     if (my $d = $config->{drive_database}) {
@@ -486,6 +491,18 @@ sub run_unit ($self, $row) {
     return ($items // 0, 0);
 }
 
+# A path is a mount point when its device differs from its parent's (or it is
+# the root). Pure; exported for the daemon and the tests.
+sub root_is_mountpoint ($path) {
+    my @me = stat($path) or return 0;
+    (my $parent = $path) =~ s{/+[^/]+/*\z}{};
+    $parent = '/' unless length $parent;
+    my @up = stat($parent) or return 0;
+    return 1 if $me[0] != $up[0];
+    return 1 if $me[1] == $up[1];    # the root itself
+    return 0;
+}
+
 # ---------------------------------------------------------------- mailbox
 sub _do_mailbox ($self, $row) {
     my $info = $self->_tx(sub ($db) {
@@ -496,6 +513,11 @@ sub _do_mailbox ($self, $row) {
               JOIN search.domains  d ON d.domain_id  = a.domain_id
              WHERE m.mailbox_id = ?}, $row->{mailbox_id})->hash;
     }) or die "mailbox $row->{mailbox_id} not found in the index\n";
+
+    if ($self->require_mounted_root && !root_is_mountpoint($self->mail_root)) {
+        die "mail root " . $self->mail_root . " is not a mount point: refusing to read an empty "
+          . "directory as an empty store\n";
+    }
 
     my $known   = $self->index->known_files($info->{mailbox_id});
     my $indexed = 0;
@@ -530,10 +552,14 @@ sub _do_mailbox ($self, $row) {
         # directories, and treating that as a failure would park every one of
         # them. A directory that EXISTS and cannot be read is the dangerous
         # case, and the only one that sets $partial.
-        unless (-e $dir) { next }
-
+        # One stat decides, and its errno is the distinction: ENOENT (or
+        # ENOTDIR) is a directory that is not there, which is fine; anything
+        # else -- ESTALE after an NFS hiccup, EIO, EACCES -- is a directory
+        # we could not see, which is not evidence of anything (#41 K; `-e`
+        # could not tell the two apart).
         my @st = stat($dir);
         unless (@st) {
+            next if $!{ENOENT} || $!{ENOTDIR};
             $self->log->warn("cannot stat $dir: $!");
             $partial = 1;
             next;

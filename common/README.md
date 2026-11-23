@@ -162,3 +162,20 @@ against a real instance. `t/bootstrap-role.t` needs
 as `HOMELAB_COMMON_TEST_LIVE_BOOTSTRAP=1` and passwordless `sudo` to
 the `postgres` user. `t/registry.t`, `t/bootstrap-entry.t`, and
 `t/health.t` need no live infrastructure at all.
+
+## homelab-mount-retry (post-cutover #41)
+
+A tiny Perl tool with a timer (`homelab-mount-retry.timer`, every two minutes for the
+first two hours after boot) for hosts whose services need an NFS mount. It reads
+`/etc/homelab/boot-mounts.d/*.list` (lines `<mountpoint> <mount unit> <service> ...`,
+written by the mount orchestrators): a mountpoint that is not mounted gets its mount
+unit started; a mounted one gets each listed service started if it is enabled, not
+active and has **never** been active this boot, so a deliberate stop is never undone.
+Every start is `--no-block`. At two hours of uptime it writes
+`/run/homelab/mount-retry.done` and stops. Why: the NAS publishes its exports after
+its NFS server starts, so a boot-time mount can be refused outright; a service whose
+mount failed is `inactive`, not `failed`, and nothing else would retry it.
+
+`Homelab::Common::Config::load_config` also forces `server.pid_file` to
+`$RUNTIME_DIRECTORY/hypnotoad.pid` whenever systemd exports `RUNTIME_DIRECTORY`, so a
+stale pid on disk after a power cut can never make hypnotoad signal a stranger.

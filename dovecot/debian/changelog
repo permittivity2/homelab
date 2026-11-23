@@ -1,3 +1,13 @@
+homelab-dovecot (0.1.21) unstable; urgency=medium
+
+  * Two drop-ins for dovecot.service (post-cutover #41): Restart=on-failure
+    RestartSec=5 (the stock unit never restarts), and
+    RequiresMountsFor=/var/mail/vhosts so dovecot waits for the mail store's
+    mount and refuses to start on a bare directory. postinst reloads systemd
+    before it restarts anything.
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 21:30:00 -0600
+
 homelab-dovecot (0.1.20) unstable; urgency=medium
 
   * Release v0.1.20

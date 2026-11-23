@@ -13,6 +13,13 @@ Environment="HOMELAB_ACCOUNTMANAGE_HOME=/usr/share/homelab-accountmanage"
 # Browser traffic arrives via homelab-webproxy (myaccount.<domain>), so
 # trust X-Forwarded-* to build correct absolute OAuth redirect URLs.
 Environment="MOJO_REVERSE_PROXY=1"
+# Post-cutover #41 J: the hypnotoad pid file lives in /run, emptied at every
+# boot (homelab-common >= 0.1.38 points pid_file at RUNTIME_DIRECTORY), so a
+# pid left on disk by a power cut can never make hypnotoad signal a stranger.
+# The ExecStartPre clears the old on-disk pid for one release.
+RuntimeDirectory=homelab-accountmanage
+RuntimeDirectoryMode=0750
+ExecStartPre=-/bin/rm -f /var/lib/homelab/accountmanage-hypnotoad.pid
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-accountmanage
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-accountmanage
 TimeoutStopSec=10

@@ -14,6 +14,13 @@ Environment="HOMELAB_AUDIT_CONFIG=/etc/homelab/audit/config.yml"
 # internal HTTP (see README.md). No MOJO_REVERSE_PROXY needed for the
 # same reason homelab-worker/mailbridge/domain-admin don't need it:
 # there is no proxy in front of this one.
+# Post-cutover #41 J: the hypnotoad pid file lives in /run, emptied at every
+# boot (homelab-common >= 0.1.38 points pid_file at RUNTIME_DIRECTORY), so a
+# pid left on disk by a power cut can never make hypnotoad signal a stranger.
+# The ExecStartPre clears the old on-disk pid for one release.
+RuntimeDirectory=homelab-audit
+RuntimeDirectoryMode=0750
+ExecStartPre=-/bin/rm -f /var/lib/homelab/audit-hypnotoad.pid
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-audit
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-audit
 TimeoutStopSec=10

@@ -3,6 +3,11 @@ Description=Homelab unified search (search.mailmasker.org)
 Documentation=file:///usr/share/doc/homelab-search/README.md
 After=network-online.target srv-mail\x2dro.mount srv-drive\x2dro.mount
 Wants=network-online.target
+# Post-cutover #41 F: wait for both read-only stores and refuse to start when
+# either mount failed, instead of only ordering after them. The BindsTo that
+# also STOPS the unit when a mount goes away is written beside this unit by
+# nfs-mounts-orchestrate.sh.
+RequiresMountsFor=/srv/mail-ro /srv/drive-ro
 
 [Service]
 Type=simple

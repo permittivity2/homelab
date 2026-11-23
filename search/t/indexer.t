@@ -337,4 +337,39 @@ SKIP: {
       . 'that failed must not be allowed to delete anything';
 }
 
+# ===========================================================================
+# #41 K: A DIRECTORY WE COULD NOT SEE IS NOT A DIRECTORY THAT IS NOT THERE
+# ===========================================================================
+# `-e` fails for ENOENT and for ESTALE/EIO/EACCES alike. Only the first means
+# "nothing here"; the others mean "no idea", and must stop the gone-detection.
+# EACCES on the mailbox's parent makes stat() of cur/ fail without ENOENT.
+SKIP: {
+    skip 'cannot test unreadable directories as root', 3 if $> == 0;
+
+    my $dir = maildir('.Projects');
+    deliver($dir, 'cur', '1699000030.MbPb.host,S=512:2,S', 'a project note');
+    my $idx = FakeIndex->new;
+    indexer_for('.Projects', $idx)->_do_mailbox({ mailbox_id => 7 });
+    cmp_ok scalar keys %{ $idx->{known} }, '>', 0, 'indexed while readable';
+
+    chmod 0000, $dir or die $!;    # stat("$dir/cur") now fails with EACCES, not ENOENT
+    my $died = !eval { indexer_for('.Projects', $idx)->_do_mailbox({ mailbox_id => 7 }); 1 };
+    chmod 0755, $dir or die $!;
+    ok $died, 'a stat that fails without ENOENT fails the unit';
+    is scalar @{ $idx->{deleted} }, 0, '... and deletes nothing';
+}
+
+# ------------------------------------------------- the store must be mounted
+{
+    my $idx = FakeIndex->new;
+    my $ix = indexer_for('INBOX', $idx);
+    ok !Homelab::Search::Indexer::root_is_mountpoint("$root"), 'a temp directory is not a mount point';
+    ok Homelab::Search::Indexer::root_is_mountpoint('/'), '... the root is';
+    $ix->require_mounted_root(1);
+    my $died = !eval { $ix->_do_mailbox({ mailbox_id => 7 }); 1 };
+    ok $died, 'with require_mounted_root the scan refuses an unmounted root';
+    like $@, qr/not a mount point/, '... saying why';
+    is scalar @{ $idx->{deleted} }, 0, '... and deletes nothing';
+}
+
 done_testing;

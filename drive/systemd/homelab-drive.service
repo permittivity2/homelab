@@ -2,6 +2,13 @@
 Description=Homelab Drive
 After=network-online.target
 Wants=network-online.target
+# Post-cutover #41 F: never serve a bare mountpoint. storage.path is an NFS
+# mount on the fleet; RequiresMountsFor waits for whatever mounts that path
+# and refuses to start when the mount failed (on a host where it is a plain
+# directory this adds nothing). The BindsTo that also STOPS the service when
+# the mount goes away names the host's mount unit and is written beside this
+# unit by nfs-mounts-orchestrate.sh.
+RequiresMountsFor=/var/lib/homelab/drive-storage
 
 [Service]
 Type=simple
@@ -38,6 +45,12 @@ Environment="MOJO_TMPDIR=/var/lib/homelab/drive-storage/.uploads-tmp"
 # drive actions (deletes, uploads) were recording homelab-api's own
 # loopback address before this fix.
 Environment="MOJO_REVERSE_PROXY=1"
+# Post-cutover #41 J: the hypnotoad pid file lives in /run, emptied at every
+# boot (homelab-common's loader points pid_file at RUNTIME_DIRECTORY). The
+# ExecStartPre clears the old on-disk pid for one release.
+RuntimeDirectory=homelab-drive
+RuntimeDirectoryMode=0750
+ExecStartPre=-/bin/rm -f /var/lib/homelab/drive-hypnotoad.pid
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-drive
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-drive
 TimeoutStopSec=10

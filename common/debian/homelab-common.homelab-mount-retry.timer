@@ -1,0 +1,10 @@
+[Unit]
+Description=Boot-window retry of NFS mounts and the services bound to them, every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

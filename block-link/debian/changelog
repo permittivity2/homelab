@@ -1,3 +1,11 @@
+homelab-block-link (0.1.7) unstable; urgency=medium
+
+  * The unit keeps its hypnotoad pid file in /run (RuntimeDirectory; needs
+    homelab-common >= 0.1.38), so a pid left on disk by a power cut is
+    never read again (post-cutover #41 J).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 21:30:00 -0600
+
 homelab-block-link (0.1.6) unstable; urgency=high
 
   * SECURITY (post-cutover #69): the link page works only for a visitor

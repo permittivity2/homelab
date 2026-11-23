@@ -18,6 +18,13 @@ Environment="HOMELAB_MAILBRIDGE_CONFIG=/etc/homelab/mailbridge/config.yml"
 # client -- caught while wiring up the audit trail, where every
 # gateway-mediated mail.send entry was recording the wrong IP.
 Environment="MOJO_REVERSE_PROXY=1"
+# Post-cutover #41 J: the hypnotoad pid file lives in /run, emptied at every
+# boot (homelab-common >= 0.1.38 points pid_file at RUNTIME_DIRECTORY), so a
+# pid left on disk by a power cut can never make hypnotoad signal a stranger.
+# The ExecStartPre clears the old on-disk pid for one release.
+RuntimeDirectory=homelab-mailbridge
+RuntimeDirectoryMode=0750
+ExecStartPre=-/bin/rm -f /var/lib/homelab/mailbridge-hypnotoad.pid
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-mailbridge
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-mailbridge
 TimeoutStopSec=10

@@ -16,6 +16,13 @@ Environment="HOMELAB_SSO_HOME=/usr/share/homelab-sso"
 # from that path is safe, and without it every relying party's OAuth
 # requests would look like they came from 127.0.0.1.
 Environment="MOJO_REVERSE_PROXY=1"
+# Post-cutover #41 J: the hypnotoad pid file lives in /run, emptied at every
+# boot (homelab-common >= 0.1.38 points pid_file at RUNTIME_DIRECTORY), so a
+# pid left on disk by a power cut can never make hypnotoad signal a stranger.
+# The ExecStartPre clears the old on-disk pid for one release.
+RuntimeDirectory=homelab-sso
+RuntimeDirectoryMode=0750
+ExecStartPre=-/bin/rm -f /var/lib/homelab/sso-hypnotoad.pid
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-sso
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-sso
 TimeoutStopSec=10

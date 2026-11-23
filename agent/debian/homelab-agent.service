@@ -9,6 +9,13 @@ User=homelab
 Group=homelab
 WorkingDirectory=/var/lib/homelab
 Environment="HOMELAB_AGENT_CONFIG=/etc/homelab/agent/config.yml"
+# Post-cutover #41 J: the hypnotoad pid file lives in /run, emptied at every
+# boot (homelab-common >= 0.1.38 points pid_file at RUNTIME_DIRECTORY), so a
+# pid left on disk by a power cut can never make hypnotoad signal a stranger.
+# The ExecStartPre clears the old on-disk pid for one release.
+RuntimeDirectory=homelab-agent
+RuntimeDirectoryMode=0750
+ExecStartPre=-/bin/rm -f /var/lib/homelab/agent-hypnotoad.pid
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-agent
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-agent
 TimeoutStopSec=10

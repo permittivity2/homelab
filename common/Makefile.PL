@@ -31,6 +31,7 @@ WriteMakefile(
         'script/homelab-bootstrap-haproxy-backend',
         'script/homelab-bootstrap-pdns-api-client',
         'script/homelab-audit-grant-queue-insert',
+        'script/homelab-mount-retry',
     ],
     DIR          => [],
     dist         => { COMPRESS => 'gzip -9f', SUFFIX => '.gz' },

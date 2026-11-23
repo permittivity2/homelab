@@ -1,3 +1,11 @@
+homelab-domain-admin (0.1.46) unstable; urgency=medium
+
+  * The unit keeps its hypnotoad pid file in /run (RuntimeDirectory; needs
+    homelab-common >= 0.1.38), so a pid left on disk by a power cut is
+    never read again (post-cutover #41 J).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 21:30:00 -0600
+
 homelab-domain-admin (0.1.45) unstable; urgency=medium
 
   * DKIM key hand-off through root (post-cutover #68): the data plane now

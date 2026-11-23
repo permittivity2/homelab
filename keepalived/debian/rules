@@ -25,3 +25,5 @@ override_dh_install:
 		debian/homelab-keepalived/etc/systemd/network/10-homelab-pubvip.network
 	install -D -m 644 config/keepalived-teardown.conf \
 		debian/homelab-keepalived/etc/systemd/system/keepalived.service.d/10-homelab-teardown.conf
+	install -D -m 644 config/keepalived-restart.conf \
+		debian/homelab-keepalived/etc/systemd/system/keepalived.service.d/20-homelab-restart.conf

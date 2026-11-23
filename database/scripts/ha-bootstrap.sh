@@ -162,7 +162,8 @@ render "$SHARE/etcd.env.tmpl" /etc/default/etcd
 # THIS run returns immediately and the operator can bring up the other members
 # (quorum then forms across them, and all three reach READY together).
 install -d /etc/systemd/system/etcd.service.d
-printf '[Service]\nTimeoutStartSec=300\n' > /etc/systemd/system/etcd.service.d/override.conf
+# Restart on failure too (post-cutover #41 I); keep in step with db-unit-policy.sh.
+printf '[Service]\nTimeoutStartSec=300\nRestart=on-failure\nRestartSec=5\n' > /etc/systemd/system/etcd.service.d/override.conf
 systemctl daemon-reload
 systemctl reset-failed etcd 2>/dev/null || true
 systemctl enable etcd >/dev/null 2>&1 || true
@@ -201,7 +202,12 @@ chown root:postgres /etc/patroni/config.yml; chmod 640 /etc/patroni/config.yml
 # start timeout systemd kills+restarts patroni in a loop that manifests as a
 # relentless failover storm (learned the hard way). Give it headroom.
 install -d /etc/systemd/system/patroni.service.d
-printf '[Service]\nTimeoutStartSec=300\n' > /etc/systemd/system/patroni.service.d/override.conf
+# After etcd (so it stops before etcd), a calm RestartSec, and a stop timeout
+# that fits pve2's down=300 (post-cutover #41 I); keep in step with db-unit-policy.sh.
+printf '[Unit]\nAfter=etcd.service\n[Service]\nTimeoutStartSec=300\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=240\n' > /etc/systemd/system/patroni.service.d/override.conf
+# The tier's keepalived (stock package) restarts on failure too (post-cutover #41 I).
+install -d /etc/systemd/system/keepalived.service.d
+printf '[Service]\nRestart=on-failure\nRestartSec=5\n' > /etc/systemd/system/keepalived.service.d/20-homelab-restart.conf
 systemctl daemon-reload
 systemctl reset-failed patroni 2>/dev/null || true
 systemctl enable patroni >/dev/null 2>&1 || true

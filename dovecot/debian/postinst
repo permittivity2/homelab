@@ -10,6 +10,9 @@ VMAIL_HOME=/var/mail/vhosts
 
 case "$1" in
     configure)
+        # The unit drop-ins this package ships (restart policy, the mount
+        # requirement) must be known before anything below restarts dovecot.
+        systemctl daemon-reload >/dev/null 2>&1 || true
         echo "homelab-dovecot post-installation setup..."
 
         # Fixed uid/gid (5000), NOT auto-allocated: `adduser --system

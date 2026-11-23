@@ -1,3 +1,10 @@
+homelab-pgbouncer (0.1.6) unstable; urgency=medium
+
+  * A drop-in for pgbouncer.service: Restart=on-failure RestartSec=5 (the
+    stock unit never restarts; post-cutover #41 I).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 21:30:00 -0600
+
 homelab-pgbouncer (0.1.5) unstable; urgency=medium
 
   * Release v0.1.5

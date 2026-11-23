@@ -30,6 +30,8 @@ Two scripts only look and report. Exit 0 means clean, 1 means findings.
 | `fleet-running-audit.sh` | is every node RUNNING what it should, and nothing else? (post-cutover #32) |
 | `fleet-os-upgrade.sh` | the deliberate OS-package sweep: one node at a time, `apt-get upgrade` only, apps restarted so the new libc/perl run, the same checks as pkg-upgrade plus the running audit (post-cutover #97) |
 | `fleet-reboot.sh` | reboot guests ONE AT A TIME through pve2 with prechecks (a patroni leader is switched over first), a graceful reboot, and after it: mounts, services, failed units, addresses and VIPs, the agent, patroni, an edge from offsite, the running audit (post-cutover #98) |
+| `nfs-mounts-orchestrate.sh` | the NFS stores of dovecot (62-64), drive (65-67) and search (70-72): fstab lines `hard,nofail`, a `BindsTo` drop-in beside each service (the package unit carries `RequiresMountsFor`), the `boot-mounts.d` list for `homelab-mount-retry`, the stale vm69 metrics lines gone from the search hosts; `--dry-run`, `--apply`, `--verify` (post-cutover #41 F/G/H) |
+| `db-unit-policy.sh` | the patroni/etcd override files on 06/07/08 (restart on failure after 5 s, patroni stops within 240 s and after etcd), written + daemon-reload, no restarts; `--verify` (post-cutover #41 I) |
 | `unattended-upgrades-orchestrate.sh` | unattended SECURITY updates on the containers (never the DB tier or the edges): install where missing, `--verify` dry-runs the tool on every node (#97) |
 | `fleet-permission-audit.sh` | can anything read or destroy data it has no business touching — or is anything so tight the service that needs it cannot? |
 

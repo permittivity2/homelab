@@ -1,3 +1,14 @@
+homelab-search (0.3.12) unstable; urgency=medium
+
+  * Both units require the two read-only store mounts (RequiresMountsFor),
+    not only order after them. The indexer refuses to scan when mail_root
+    is not a mount point (indexer.require_mounted_root, default on), and a
+    stat that fails for any reason but ENOENT now marks the unit partial
+    instead of counting as an empty directory (ESTALE after an NFS hiccup
+    was "everything is gone"). Post-cutover #41 F and K.
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 21:30:00 -0600
+
 homelab-search (0.3.11) unstable; urgency=medium
 
   * The calendar is a source of the search (post-cutover #90): events whose

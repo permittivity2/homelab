@@ -4,3 +4,11 @@
 	dh $@ --buildsystem=perl_makemaker
 
 override_dh_auto_test:
+
+# The retry timer and its oneshot are named units beside the package name, so
+# dh_installsystemd only sees them with --name (post-cutover #41 H). The timer
+# carries the [Install] section and is enabled and started; the service is
+# timer-driven and has none.
+override_dh_installsystemd:
+	dh_installsystemd
+	dh_installsystemd --name=homelab-mount-retry

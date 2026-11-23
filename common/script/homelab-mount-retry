@@ -1,0 +1,116 @@
+#!/usr/bin/perl
+# homelab-mount-retry -- the boot-window retry for NFS-backed services
+# (post-cutover #41 H). Run by homelab-mount-retry.timer every two minutes
+# for the first two hours after boot, on any host that has a list in
+# /etc/homelab/boot-mounts.d/.
+#
+# WHY. On the NAS, ZFS publishes its exports after the NFS server starts, so a
+# mount asked for at boot can be refused outright, not merely delayed. A
+# refused mount fails the start of every service bound to it, and a service
+# whose dependency failed is `inactive` -- not `failed` -- so `Restart=` never
+# applies and nothing retries. This does, within bounds: for every line
+#
+#     <mountpoint> <mount unit> <service unit> [<service unit> ...]
+#
+# it starts the mount unit when the mountpoint is not mounted, and starts a
+# listed service when the mount is there and the service is enabled, not
+# active, and has NEVER been active this boot (ActiveEnterTimestampMonotonic
+# is 0) -- so a service someone stopped on purpose is never started again.
+# Once the host has been up two hours it writes the done-file and stops
+# acting. Every systemctl start is --no-block: a hard NFS mount that hangs
+# must never hang this. Exits 0 always; what it did goes to the journal.
+#
+# For the tests: HOMELAB_BOOT_MOUNTS_DIR, HOMELAB_MOUNTINFO, HOMELAB_UPTIME
+# and HOMELAB_MOUNT_RETRY_DONE override the paths and the clock, and the
+# systemctl found first on PATH is the one used.
+use strict;
+use warnings;
+
+my $dir      = $ENV{HOMELAB_BOOT_MOUNTS_DIR}   // '/etc/homelab/boot-mounts.d';
+my $mountinfo = $ENV{HOMELAB_MOUNTINFO}        // '/proc/self/mountinfo';
+my $uptime_f = $ENV{HOMELAB_UPTIME}            // '/proc/uptime';
+my $done     = $ENV{HOMELAB_MOUNT_RETRY_DONE}  // '/run/homelab/mount-retry.done';
+my $window   = 7200;
+
+sub say_log { print "homelab-mount-retry: @_\n" }
+
+sub uptime_s {
+    open(my $fh, '<', $uptime_f) or return 0;
+    my $line = <$fh> // '';
+    return $line =~ /^(\d+)/ ? $1 : 0;
+}
+
+sub mounted {
+    my ($mp) = @_;
+    open(my $fh, '<', $mountinfo) or return 0;
+    while (my $l = <$fh>) {
+        my @f = split ' ', $l;
+        next unless @f > 4;
+        (my $m = $f[4]) =~ s/\\(\d{3})/chr oct $1/ge;   # mountinfo escapes spaces as \040
+        return 1 if $m eq $mp;
+    }
+    return 0;
+}
+
+# List form, never a shell: a mount unit's name holds backslashes
+# (var-lib-homelab-drive\x2dstorage.mount), and a shell would eat them --
+# which is exactly how 0.1.39 started a unit that did not exist and logged
+# success (found by the vm67 proof, post-cutover #41).
+sub systemctl {
+    my @a = @_;
+    my $pid = open(my $fh, '-|');
+    die "fork: $!" unless defined $pid;
+    unless ($pid) { open(STDERR, '>', '/dev/null'); exec 'systemctl', @a or exit 127 }
+    my $out = do { local $/; <$fh> } // '';
+    close $fh;
+    return ($? >> 8, $out);
+}
+
+sub service_state {
+    my ($unit) = @_;
+    my (undef, $out) = systemctl('show', '-p', 'ActiveState', '-p', 'ActiveEnterTimestampMonotonic', '-p', 'UnitFileState', '--', $unit);
+    my %p = map { /^([^=]+)=(.*)$/ ? ($1 => $2) : () } split /\n/, $out;
+    return \%p;
+}
+
+my @lines;
+if (opendir(my $dh, $dir)) {
+    for my $f (sort grep { /\.list$/ } readdir $dh) {
+        open(my $fh, '<', "$dir/$f") or next;
+        while (my $l = <$fh>) {
+            $l =~ s/#.*//; $l =~ s/^\s+|\s+$//g;
+            next unless length $l;
+            my ($mp, $unit, @svc) = split ' ', $l;
+            next unless defined $unit;
+            $mp =~ s/\\(\d{3})/chr oct $1/ge;   # a space in a mountpoint is written \040, as in mountinfo
+            push @lines, { file => $f, mountpoint => $mp, unit => $unit, services => \@svc };
+        }
+    }
+}
+
+my $acted = 0;
+for my $e (@lines) {
+    unless (mounted($e->{mountpoint})) {
+        say_log("$e->{mountpoint} is not mounted: starting $e->{unit}");
+        systemctl('start', '--no-block', '--', $e->{unit});
+        $acted++;
+        next;
+    }
+    for my $svc (@{ $e->{services} }) {
+        my $st = service_state($svc);
+        next unless ($st->{UnitFileState} // '') =~ /^(?:enabled|static|linked|indirect)/;
+        next if ($st->{ActiveState} // '') =~ /^(?:active|activating|reloading)$/;
+        next if ($st->{ActiveEnterTimestampMonotonic} // '1') ne '0';   # ran before this boot's pause: someone's choice
+        say_log("$e->{mountpoint} is mounted and $svc has never been active this boot: starting it");
+        systemctl('start', '--no-block', '--', $svc);
+        $acted++;
+    }
+}
+
+my $up = uptime_s();
+if ($up >= $window) {
+    if (open(my $fh, '>', $done)) { print $fh "homelab-mount-retry stopped acting at uptime ${up}s\n"; close $fh; say_log("up ${up}s: done for this boot") }
+    else { say_log("could not write $done: $!") }
+}
+say_log("checked " . scalar(@lines) . " line(s), acted on $acted") if @lines;
+exit 0;

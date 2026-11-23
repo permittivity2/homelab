@@ -59,8 +59,8 @@ MAIL_SRC="10.45.0.105:/vault/dovecot_vmail_mig"
 DRIVE_SRC="10.45.0.105:/vault/nfsexports/mailmasker-drive_mig"
 MAIL_MNT=/srv/mail-ro
 DRIVE_MNT=/srv/drive-ro
-MAIL_FSTAB="$MAIL_SRC  $MAIL_MNT  nfs  ro,hard,noatime,nodiratime,nosuid,nodev,vers=3,rsize=1048576,wsize=1048576,timeo=600,retrans=5,_netdev  0  0"
-DRIVE_FSTAB="$DRIVE_SRC  $DRIVE_MNT  nfs4  ro,hard,noatime,nosuid,nodev,timeo=600,retrans=2,_netdev  0  0"
+MAIL_FSTAB="$MAIL_SRC  $MAIL_MNT  nfs  ro,hard,noatime,nodiratime,nosuid,nodev,vers=3,rsize=1048576,wsize=1048576,timeo=600,retrans=5,_netdev,nofail  0  0"
+DRIVE_FSTAB="$DRIVE_SRC  $DRIVE_MNT  nfs4  ro,hard,noatime,nosuid,nodev,timeo=600,retrans=2,_netdev,nofail  0  0"
 
 DRY=0; VERIFY_ONLY=0
 for a in "$@"; do

@@ -1,0 +1,16 @@
+[Unit]
+Description=Boot-window retry of NFS mounts and the services bound to them (post-cutover #41)
+Documentation=file:///usr/share/doc/homelab-common/README.md
+# Only where a package or orchestrator left a list, and only until the retry
+# gave up for this boot (the script writes the done-file at two hours of uptime).
+ConditionDirectoryNotEmpty=/etc/homelab/boot-mounts.d
+ConditionPathExists=!/run/homelab/mount-retry.done
+
+[Service]
+Type=oneshot
+# No RemainAfterExit: the timer's OnUnitActiveSec re-arms only once this unit
+# is inactive again (see homelab-certsync.timer for the bug that taught it).
+RuntimeDirectory=homelab
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/homelab-mount-retry
+TimeoutStartSec=60

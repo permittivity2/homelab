@@ -130,6 +130,9 @@ generate_config() {
 
 case "$1" in
     configure)
+        # The restart-policy drop-in this package ships must be known to systemd
+        # before anything below restarts pgbouncer (post-cutover #41 I).
+        systemctl daemon-reload >/dev/null 2>&1 || true
         echo "homelab-pgbouncer post-installation setup..."
         generate_config
         db_stop

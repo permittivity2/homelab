@@ -19,6 +19,13 @@ Environment="HOMELAB_INVITE_CONFIG=/etc/homelab/invite/config.yml"
 # on the real IP. Same fix already applied for homelab-domain-admin's
 # gateway-only case; this service needs it for both paths.
 Environment="MOJO_REVERSE_PROXY=1"
+# Post-cutover #41 J: the hypnotoad pid file lives in /run, emptied at every
+# boot (homelab-common >= 0.1.38 points pid_file at RUNTIME_DIRECTORY), so a
+# pid left on disk by a power cut can never make hypnotoad signal a stranger.
+# The ExecStartPre clears the old on-disk pid for one release.
+RuntimeDirectory=homelab-invite
+RuntimeDirectoryMode=0750
+ExecStartPre=-/bin/rm -f /var/lib/homelab/invite-hypnotoad.pid
 ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-invite
 ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-invite
 TimeoutStopSec=10
