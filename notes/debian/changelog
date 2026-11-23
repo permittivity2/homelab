@@ -1,3 +1,13 @@
+homelab-notes (0.3.3) unstable; urgency=medium
+
+  * A notebook's or folder's "..." menu stretched from its anchor to the
+    right edge of the page on a desktop: the theme's .menu is pinned right
+    (the header's account dropdown) and these menus are placed by their
+    left edge, so both edges were set. The pin is lifted; a menu is as wide
+    as its words (post-cutover #103).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 18:50:00 -0600
+
 homelab-notes (0.3.2) unstable; urgency=medium
 
   * Every dialog (share, move, history, download, the prompts) was drawn
