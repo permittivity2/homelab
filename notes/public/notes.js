@@ -64,15 +64,19 @@
     closeMenus();
     if (openModalId) closeModal(openModalId);
     openModalId = id;
-    if (window.HomelabShell && window.HomelabShell.openModal) window.HomelabShell.openModal(id); else $(id).classList.add('open');
-    $('nt-backdrop').classList.add('open');
+    // The theme's shell opens the dialog and its own backdrop (and closes
+    // both on a click outside); the page's own backdrop is only for a page
+    // without the shell. Two backdrops at once made the page behind a
+    // dialog nearly black (#102).
+    if (window.HomelabShell && window.HomelabShell.openModal) window.HomelabShell.openModal(id);
+    else { $(id).classList.add('open'); $('nt-backdrop').classList.add('open'); }
     var first = $(id).querySelector('input:not([type=hidden]), select, textarea, button:not([data-close])');
     if (first) setTimeout(function () { first.focus(); }, 30);
   }
   function closeModal(id) {
     id = id || openModalId; if (!id) return;
-    if (window.HomelabShell && window.HomelabShell.closeModal) window.HomelabShell.closeModal(id); else $(id).classList.remove('open');
-    $('nt-backdrop').classList.remove('open');
+    if (window.HomelabShell && window.HomelabShell.closeModal) window.HomelabShell.closeModal(id);
+    else { $(id).classList.remove('open'); $('nt-backdrop').classList.remove('open'); }
     openModalId = null;
   }
   document.querySelectorAll('[data-close]').forEach(function (b) { b.addEventListener('click', function () { closeModal(); }); });

@@ -95,10 +95,16 @@
 .link-card .btn { flex: none; }
 .note-link-actions { flex-wrap: wrap; margin-top: var(--space-2); }
 
-/* Dialogs: the theme's .modal, opened by the page script with .open. */
-.nt-backdrop { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); z-index: calc(var(--z-overlay) - 1); }
+/* Dialogs: the theme's .modal, opened through the theme's shell, which
+   dims the page with its own div.backdrop (z-index --z-overlay, appended to
+   body on first use, so AFTER every dialog in the DOM). The dialog must sit
+   at the theme's --z-modal, above it: until 0.3.2 this put it at --z-overlay
+   too, and the backdrop, later in the DOM at the same level, was drawn OVER
+   every dialog, which read as grey on black (post-cutover #102). The
+   .nt-backdrop below is only for a page without the shell. */
+.nt-backdrop { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); z-index: var(--z-overlay); }
 .nt-backdrop.open { display: block; }
-.modal { width: min(640px, calc(100vw - var(--space-4))); max-height: calc(100vh - var(--space-8)); max-height: calc(100dvh - var(--space-8)); display: none; flex-direction: column; z-index: var(--z-overlay); }
+.modal { width: min(640px, calc(100vw - var(--space-4))); max-height: calc(100vh - var(--space-8)); max-height: calc(100dvh - var(--space-8)); display: none; flex-direction: column; z-index: var(--z-modal); }
 .modal.open { display: flex; }
 .modal__head, .modal__foot { flex: 0 0 auto; }
 .modal__body { flex: 1 1 auto; min-height: 0; overflow: auto; }

@@ -1,3 +1,14 @@
+homelab-notes (0.3.2) unstable; urgency=medium
+
+  * Every dialog (share, move, history, download, the prompts) was drawn
+    UNDER the theme's backdrop and read as grey on black, and the page
+    behind it was dimmed twice: the dialog sat at the backdrop's own level
+    instead of the theme's --z-modal, and the page opened its own backdrop
+    beside the shell's. Dialogs now sit above the backdrop, and only the
+    shell's backdrop is used (post-cutover #102).
+
+ -- Gardner <gardner@homelab>  Sun, 22 Nov 2026 18:30:00 -0600
+
 homelab-notes (0.3.1) unstable; urgency=medium
 
   * The PDF shows a task's checkbox as a box glyph: WeasyPrint drew the
