@@ -1,12 +1,17 @@
 #!/bin/bash
 # ============================================================================
-# Move the first member of every pool (and the singletons that matter) from the
-# spinning pool to the NVMe, one guest at a time -- RUN ON THE ADMIN
-# WORKSTATION. Post-cutover #41, waves plan step 2.
+# Put each boot wave on its own storage, one guest at a time -- RUN ON THE
+# ADMIN WORKSTATION. Post-cutover #41, waves plan step 2 (and its extension:
+# wave 2 on the NAS flash, Gardner 2026-11-26).
 #
-#   ./pve-storage-wave1.sh --dry-run             # every wave-1 guest: where its volumes are, what would be done
-#   ./pve-storage-wave1.sh --apply NN [NN ...]   # move these (guest numbers: 403, 462 ...), in the order given, stop at the first failure
-#   ./pve-storage-wave1.sh --verify              # every wave-1 guest on local-lvm, nothing of it left on the spinner
+#   wave 1  local-lvm   (pve2's NVMe)            the first member of every pool + the singletons that matter
+#   wave 2  nfs-speedy  (the NAS's mirrored NVMe over NFS 4.2, 10 GbE)   the second members, except the
+#                                                 third DB node 408, which stays local
+#   wave 3  local-spinner (stays)                 the third members, the standbys, the rest
+#
+#   ./pve-storage-waves.sh --dry-run             # every wave-1/2 guest: where its volumes are, what would be done
+#   ./pve-storage-waves.sh --apply NN [NN ...]   # move these (guest numbers: 403, 462 ...), in the order given, stop at the first failure
+#   ./pve-storage-waves.sh --verify              # every wave-1/2 guest on its storage, nothing of it left behind
 #
 # Nothing but Proxmox's own commands: pct shutdown / move-volume / start / set,
 # qm disk move (online) / set. No script lands on pve2.
@@ -42,6 +47,10 @@ bad(){ echo "  ${R}FAIL${O} $*"; FAILS=$((FAILS+1)); }
 note(){ echo "  ${Y}>>${O}   $*"; }
 FAILS=0
 WAVE1="403 415 421 424 427 430 433 436 447 450 453 446 445 409 412 418 439 442 470 469 465 462 407 406 400"
+WAVE2="404 416 422 425 428 431 434 437 448 451 440 443 410 413 419 401 471 466 463"
+declare -A TARGET; for id in $WAVE1; do TARGET[$id]=local-lvm; done; for id in $WAVE2; do TARGET[$id]=nfs-speedy; done
+# a VM on the NAS gets qcow2 (snapshots, and so vzdump's snapshot mode); on LVM-thin raw is the only form
+fmt_for(){ [ "$1" = nfs-speedy ] && echo " --format qcow2" || echo ""; }
 ip_of(){ printf '10.20.2.%d' "$((144 + $1 - 400))"; }
 UNITS='homelab-|nginx|postfix|dovecot|pdns|dnsdist|haproxy|keepalived|pgbouncer|patroni|etcd|opendkim|php|prometheus|grafana|bad-ips'
 
@@ -55,35 +64,46 @@ agent_health(){ local ip=$1; local inst; inst=$(rssh "$ip" 'dpkg-query -W -f "\$
 
 case "$MODE" in
 --dry-run|--verify)
-    echo "=== wave 1 on pve2: where every guest's volumes are ==="
-    for id in $WAVE1; do
-        t=$(guest_type "$id"); vols=$(volumes "$id" | paste -sd' ' -); name=$(pve "$t config $id" | awk -F': ' '/^(hostname|name):/ {print $2}' | head -1)
+    echo "=== waves 1 and 2 on pve2: where every guest's volumes are ==="
+    for id in $WAVE1 $WAVE2; do
+        tgt=${TARGET[$id]}; t=$(guest_type "$id"); vols=$(volumes "$id" | paste -sd' ' -); name=$(pve "$t config $id" | awk -F': ' '/^(hostname|name):/ {print $2}' | head -1)
         # only ATTACHED volumes decide (an unusedN on the spinner is a leftover copy a snapshot
         # still references -- 462 465 469 after the first run -- not something the boot needs)
         attached=$(echo "$vols" | tr ' ' '\n' | grep -v '^unused' | paste -sd' ' -); leftover=$(echo "$vols" | tr ' ' '\n' | grep '^unused' | paste -sd' ' -)
         case "$attached" in
-            *"=local-spinner:"*) [ "$MODE" = --verify ] && bad "$id $t ${name:0:20}: still on the spinner: $attached" || note "$id $t ${name:0:20}: $attached  -> move to local-lvm" ;;
-            *"=local-lvm:"*) ok "$id $t ${name:0:20}: on local-lvm ($attached)${leftover:+; leftover copy on the spinner: $leftover}" ;;
-            *) bad "$id $t ${name:0:20}: unexpected: $vols" ;;
+            *"=$tgt:"*) ok "$id $t ${name:0:20}: on $tgt ($attached)${leftover:+; leftover copy: $leftover}" ;;
+            *"=local-spinner:"*) [ "$MODE" = --verify ] && bad "$id $t ${name:0:20}: still on the spinner: $attached" || note "$id $t ${name:0:20}: $attached  -> move to $tgt" ;;
+            *) bad "$id $t ${name:0:20}: unexpected (wanted $tgt): $vols" ;;
         esac
     done
-    pve "pvesm status" | awk '/^local-lvm/ {printf "  local-lvm: %.0f GB free\n", $6/1048576}'
+    pve "pvesm status" | awk '/^(local-lvm|nfs-speedy)/ {printf "  %s: %.0f GB free\n", $1, $6/1048576}'
     echo "=== result: $FAILS problem(s) ==="; exit $(( FAILS > 0 )) ;;
 --apply)
     [ $# -gt 0 ] || { echo "usage: $0 --apply NN [NN ...]"; exit 1; }
     for id in "$@"; do
-        case " $WAVE1 " in *" $id "*) ;; *) bad "$id is not a wave-1 guest"; exit 1;; esac
+        tgt=${TARGET[$id]:-}; [ -n "$tgt" ] || { bad "$id is not a wave-1 or wave-2 guest"; exit 1; }
         t=$(guest_type "$id"); ip=$(ip_of "$id"); name=$(pve "$t config $id" | awk -F': ' '/^(hostname|name):/ {print $2}' | head -1)
-        echo "=== $id $t $name ($ip) $(date +%T) ==="
+        echo "=== $id $t $name ($ip) -> $tgt  $(date +%T) ==="
         vols=$(volumes "$id" | paste -sd' ' -)
-        case "$vols" in *"=local-spinner:"*) ;; *) ok "already on local-lvm: $vols"; continue;; esac
+        case "$vols" in *"=local-spinner:"*) ;; *) ok "already off the spinner: $vols"; continue;; esac
+        # A VM whose disk already sits on the target but that still carries a spinner leftover
+        # (an interrupted run: the mirror finished on pve2 after the tool was killed): only the
+        # tail of the VM path is left -- the CD and the old copy.
+        if [ "$t" = qm ] && [[ "$vols" == *"scsi0=$tgt:"* ]]; then
+            note "disk already on $tgt; finishing the tail (CD, old copy)"
+            ci=$(rssh "$ip" 'ls /etc/cloud/cloud-init.disabled 2>/dev/null; grep -l -E "datasource_list:\s*\[\s*None\s*\]" /etc/cloud/cloud.cfg.d/*.cfg 2>/dev/null' | paste -sd' ' -)
+            cd0=$(pve "qm config $id" | awk -F': ' '/^ide0:/ {print $2}')
+            if [ -n "$ci" ] && [[ "$cd0" == local-spinner:* ]]; then pve "qm set $id --delete ide0" >/dev/null && ok "cloud-init CD on the spinner detached; applies at the VM's next restart" || bad "could not detach ide0"; fi
+            if [[ "$vols" == *"unused0=local-spinner:"* ]]; then pve "qm set $id --delete unused0" >/dev/null && ok "spinner copy removed" || bad "could not remove unused0"; fi
+            continue
+        fi
         before=$(active_units "$ip"); [ -n "$before" ] && ok "active before: $before" || note "no unit list before (ssh?)"
         if [ "$t" = pct ]; then
             t0=$(date +%s)
             pve "pct shutdown $id --timeout 90" >/dev/null; st=$(pve "pct status $id"); [ "$st" = "status: stopped" ] || { pve "pct stop $id" >/dev/null; st=$(pve "pct status $id"); }
             [ "$st" = "status: stopped" ] && ok "stopped ($(( $(date +%s)-t0 )) s)" || { bad "could not stop $id: $st"; exit 1; }
-            out=$(pve "pct move-volume $id rootfs local-lvm 2>&1 | tail -3"); vols=$(volumes "$id" | paste -sd' ' -)
-            case "$vols" in "rootfs=local-lvm:"*) ok "rootfs moved: $vols ($(( $(date +%s)-t0 )) s)";; *) bad "move failed: $out"; echo "  rollback: nothing to do, the guest is still on the spinner; start it: ssh pve2 sudo pct start $id"; exit 1;; esac
+            out=$(pve "pct move-volume $id rootfs $tgt 2>&1 | tail -3"); vols=$(volumes "$id" | paste -sd' ' -)
+            case "$vols" in "rootfs=$tgt:"*) ok "rootfs moved: $vols ($(( $(date +%s)-t0 )) s)";; *) bad "move failed: $out"; echo "  rollback: nothing to do, the guest is still on the spinner; start it: ssh pve2 sudo pct start $id"; exit 1;; esac
             pve "pct start $id" >/dev/null
             wait_ssh "$ip" && ok "up again, SSH answers ($(( $(date +%s)-t0 )) s since the shutdown)" || { bad "no SSH within 2 min"; echo "  rollback: ssh pve2 'sudo pct stop $id; sudo pct set $id --delete rootfs --rootfs \$(sudo pct config $id | grep ^unused0: | cut -d\" \" -f2),size=8G; sudo pct start $id'"; exit 1; }
             for i in $(seq 1 40); do after=$(active_units "$ip"); [ "$after" = "$before" ] && break; sleep 3; done
@@ -92,8 +112,8 @@ case "$MODE" in
             if [ "$FAILS" = 0 ]; then pve "pct set $id --delete unused0" >/dev/null && ok "spinner copy removed" || bad "could not remove unused0"; else echo "  the spinner copy is kept as unused0 until this is understood"; exit 1; fi
         else
             t0=$(date +%s)
-            out=$(pve "qm disk move $id scsi0 local-lvm 2>&1 | tail -2"); vols=$(volumes "$id" | paste -sd' ' -)
-            case "$vols" in *"scsi0=local-lvm:"*) ok "scsi0 mirrored online to local-lvm ($(( $(date +%s)-t0 )) s)";; *) bad "move failed: $out"; exit 1;; esac
+            out=$(pve "qm disk move $id scsi0 $tgt$(fmt_for "$tgt") 2>&1 | tail -2"); vols=$(volumes "$id" | paste -sd' ' -)
+            case "$vols" in *"scsi0=$tgt:"*) ok "scsi0 mirrored online to $tgt ($(( $(date +%s)-t0 )) s)";; *) bad "move failed: $out"; exit 1;; esac
             rssh "$ip" true && ok "the VM still answers" || { bad "the VM does not answer SSH after the move"; exit 1; }
             after=$(active_units "$ip"); [ "$after" = "$before" ] && ok "every unit that was active is active" || bad "units differ: before [$before] after [$after]"
             ci=$(rssh "$ip" 'ls /etc/cloud/cloud-init.disabled 2>/dev/null; grep -l -E "datasource_list:\s*\[\s*None\s*\]" /etc/cloud/cloud.cfg.d/*.cfg 2>/dev/null' | paste -sd' ' -)
