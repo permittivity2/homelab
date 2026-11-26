@@ -58,9 +58,12 @@ case "$MODE" in
     echo "=== wave 1 on pve2: where every guest's volumes are ==="
     for id in $WAVE1; do
         t=$(guest_type "$id"); vols=$(volumes "$id" | paste -sd' ' -); name=$(pve "$t config $id" | awk -F': ' '/^(hostname|name):/ {print $2}' | head -1)
-        case "$vols" in
-            *"=local-spinner:"*) [ "$MODE" = --verify ] && bad "$id $t ${name:0:20}: still on the spinner: $vols" || note "$id $t ${name:0:20}: $vols  -> move to local-lvm" ;;
-            *"=local-lvm:"*) ok "$id $t ${name:0:20}: on local-lvm ($vols)" ;;
+        # only ATTACHED volumes decide (an unusedN on the spinner is a leftover copy a snapshot
+        # still references -- 462 465 469 after the first run -- not something the boot needs)
+        attached=$(echo "$vols" | tr ' ' '\n' | grep -v '^unused' | paste -sd' ' -); leftover=$(echo "$vols" | tr ' ' '\n' | grep '^unused' | paste -sd' ' -)
+        case "$attached" in
+            *"=local-spinner:"*) [ "$MODE" = --verify ] && bad "$id $t ${name:0:20}: still on the spinner: $attached" || note "$id $t ${name:0:20}: $attached  -> move to local-lvm" ;;
+            *"=local-lvm:"*) ok "$id $t ${name:0:20}: on local-lvm ($attached)${leftover:+; leftover copy on the spinner: $leftover}" ;;
             *) bad "$id $t ${name:0:20}: unexpected: $vols" ;;
         esac
     done
