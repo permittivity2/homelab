@@ -1,3 +1,14 @@
+homelab-blackbox-exporter (0.3.1) unstable; urgency=medium
+
+  * Run the exporter with --log.level=warn. At the default "info" level every
+    probe wrote ~10 lines (resolve, request, response, timings, result); with
+    18 targets every 15 s that was ~790,000 lines and ~245 MB of syslog a day
+    on the monitoring host -- 99% of its syslog, with a second copy in the
+    journal, and the 18 GB root disk at 80%. Probe failures are level=ERROR
+    and still get logged. (post-cutover #104)
+
+ -- Gardner <gardner@homelab>  Wed, 25 Nov 2026 19:20:59 -0600
+
 homelab-blackbox-exporter (0.3.0) unstable; urgency=medium
 
   * Release v0.3.0

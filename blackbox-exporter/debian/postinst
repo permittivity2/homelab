@@ -16,8 +16,13 @@ case "$1" in
         # scrape job). Always refreshed -- it is declarative, not user state.
         install -m 644 "$SHARE_DIR/config/blackbox-http.json" "$TARGETS_DIR/blackbox-http.json"
 
-        # Point the exporter at our module config.
-        printf 'ARGS="--config.file=%s/blackbox.yml"\n' "$CONF_DIR" > "$DEFAULT_FILE"
+        # Point the exporter at our module config, and log only warnings and
+        # errors. At the default "info" level every probe writes ~10 lines
+        # (resolve, request, response, timings, result); with 18 targets every
+        # 15 s that was ~790,000 lines and ~245 MB of syslog A DAY on the
+        # monitoring host, duplicated into the journal (post-cutover #104).
+        # Probe failures are level=ERROR and still get logged.
+        printf 'ARGS="--config.file=%s/blackbox.yml --log.level=warn"\n' "$CONF_DIR" > "$DEFAULT_FILE"
 
         # Fleet manifest (topology/services visibility + pull discovery of
         # the exporter's OWN /metrics, not the probes).

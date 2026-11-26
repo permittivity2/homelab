@@ -387,7 +387,10 @@ cat <<NEXT
        ./install-orchestrators/agent-reenroll.sh $NN
   2. Check this host and 469 together:
        ./install-orchestrators/vm-clone-finalize.sh $VMID --verify
-  3. Only then move to the next clone.
+  3. The journal cap, and the template's journal directories this clone carries
+     (post-cutover #104):
+       NODES=$NN ./install-orchestrators/journald-cap-orchestrate.sh --apply
+  4. Only then move to the next clone.
 NEXT
 echo
 echo "  ${D}Nothing here added the NFS mounts, the search package or the firewall${O}"
