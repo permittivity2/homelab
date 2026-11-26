@@ -1,3 +1,14 @@
+homelab-webproxy (0.1.16) unstable; urgency=medium
+
+  * sites.yml `aliases:` -- more server names on one vhost and one
+    certificate (the lineage named after `domain` must cover them). For a
+    whole domain, apex + wildcard, in front of one web node:
+    domain 7redlines.org, aliases [*.7redlines.org] (post-cutover #106).
+    The :80 redirect block answers for every name; a wildcard alias is
+    never handed to certbot. Tests in apply-sites.t and enable-tls.t.
+
+ -- Gardner <gardner@homelab>  Thu, 26 Nov 2026 18:10:00 -0600
+
 homelab-webproxy (0.1.15) unstable; urgency=medium
 
   * A drop-in for nginx.service: Restart=on-failure RestartSec=5. At the

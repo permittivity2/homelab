@@ -1,3 +1,14 @@
+homelab-domain-admin (0.1.47) unstable; urgency=medium
+
+  * The ACME DNS-01 endpoint ADDS a challenge value to the _acme-challenge
+    name instead of replacing the set. An apex + wildcard certificate
+    (7redlines.org and *.7redlines.org) puts two challenges at the one
+    name; certbot publishes both before validating either, and the second
+    publish erased the first (post-cutover #106). PowerDNS.pm gains
+    rrset_contents; t/acme-challenge-accumulate.t.
+
+ -- Gardner <gardner@homelab>  Thu, 26 Nov 2026 18:10:00 -0600
+
 homelab-domain-admin (0.1.46) unstable; urgency=medium
 
   * The unit keeps its hypnotoad pid file in /run (RuntimeDirectory; needs

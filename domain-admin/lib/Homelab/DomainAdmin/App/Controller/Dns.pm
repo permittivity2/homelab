@@ -99,6 +99,14 @@ sub _acme_name ($domain, $name) {
     return $fqdn;
 }
 
+# The union of the TXT values already at a challenge name and the new ones,
+# in order, each once (a certbot retry republishes the same token). Pure, so
+# acme-challenge-accumulate.t can test it without an app.
+sub _merge_challenge_values ($existing, $new) {
+    my %seen;
+    return [ grep { !$seen{$_}++ } @$existing, @$new ];
+}
+
 sub acme_challenge_set ($c) {
     $c->authenticated_system_agent or return;
     my $domain = $c->stash('domain');
@@ -121,12 +129,23 @@ sub acme_challenge_set ($c) {
     # PowerDNS stores TXT content quoted.
     my @quoted = map { qq{"$_"} } @values;
 
+    # ADD to what is already at the name, never replace it. certbot runs the
+    # auth hook once per name in the certificate and only then has every
+    # challenge validated, and an apex + wildcard certificate (7redlines.org
+    # and *.7redlines.org, 2026-11-26) puts BOTH challenges at the ONE name
+    # _acme-challenge.<zone>. upsert_rrset is a REPLACE, so the second call
+    # used to erase the first and the apex failed its validation. The
+    # cleanup hook clears the whole set afterwards (acme_challenge_clear).
+    my @existing = eval { $c->app->powerdns->rrset_contents($domain, $fqdn, 'TXT') };
+    return $c->render(json => { error => "ACME challenge read failed: $@" }, status => 502) if $@;
+    my $all = _merge_challenge_values(\@existing, \@quoted);
+
     # TTL 60: the challenge lives for seconds, and a short TTL keeps a failed
     # attempt from being cached against the next one.
-    eval { $c->app->powerdns->upsert_rrset($domain, $fqdn, 'TXT', 60, \@quoted) };
+    eval { $c->app->powerdns->upsert_rrset($domain, $fqdn, 'TXT', 60, $all) };
     return $c->render(json => { error => "ACME challenge write failed: $@" }, status => 502) if $@;
 
-    return $c->render(json => { ok => \1, name => $fqdn, count => scalar(@values) }, status => 201);
+    return $c->render(json => { ok => \1, name => $fqdn, count => scalar(@$all) }, status => 201);
 }
 
 sub acme_challenge_clear ($c) {

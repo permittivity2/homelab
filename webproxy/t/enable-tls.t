@@ -69,4 +69,26 @@ unlike($tls_block, qr/listen\s+(\[::\]:)?80;/, 'plain :80 listener removed from 
 # idempotent: running again on an already-TLS vhost is a no-op
 ok(!_enable_tls_for($vhost, 'example.test', $live), 'second run is a no-op (already has TLS)');
 
+# --- aliases (post-cutover #106): the redirect block answers for every name
+#     of the main block, not just the lineage's domain ---
+my $vhost2 = "$dir/7redlines.test";
+open($fh, '>', $vhost2) or die $!;
+print $fh <<'CONF';
+server {
+    listen 80;
+    listen [::]:80;
+    server_name 7redlines.test *.7redlines.test;
+    location / {
+        proxy_pass http://10.0.0.2:80;
+    }
+}
+CONF
+close $fh;
+ok(_enable_tls_for($vhost2, '7redlines.test', $live), 'rewrite of an aliases vhost reports success');
+my $out2 = do { open(my $o,'<',$vhost2) or die $!; local $/; <$o> };
+my @names = $out2 =~ /^\s*server_name\s+([^;]+);/mg;
+is(scalar(@names), 2, 'two server_name lines (TLS block + redirect)');
+is($names[0], '7redlines.test *.7redlines.test', 'the TLS block keeps every name');
+is($names[1], '7redlines.test *.7redlines.test', 'the :80 redirect answers for every name too');
+
 done_testing;

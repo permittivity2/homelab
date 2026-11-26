@@ -6,7 +6,7 @@
 server {
     listen 80;
     listen [::]:80;
-    server_name __DOMAIN__;
+    server_name __SERVER_NAMES__;
 
     # nginx's own compiled-in default (1m) is why a real ~1.1MB
     # homelab-drive upload once failed with a slow, confusing timeout

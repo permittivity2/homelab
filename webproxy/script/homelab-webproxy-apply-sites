@@ -178,6 +178,20 @@ for my $site (@sites) {
         $upstream = $upstream_targets[0];
     }
 
+    # 'aliases:' (optional list) -- more names this vhost answers for, on
+    # the SAME certificate: the lineage is named after 'domain' and must
+    # cover them. The case that needed it is a wildcard: domain 7redlines.org
+    # with aliases ['*.7redlines.org'] and a lineage issued for both
+    # (post-cutover #106). A wildcard alias is never handed to certbot here
+    # (HTTP-01 cannot validate one); the fleet store delivers that cert.
+    die "sites.yml: site '$domain''s 'aliases' must be a list\n" unless ref($site->{aliases} // []) eq 'ARRAY';
+    my @aliases = @{ $site->{aliases} // [] };
+    for (@aliases) {
+        die "sites.yml: site '$domain''s alias '$_' is not a host name (a leading *. is allowed)\n"
+            unless /^(?:\*\.)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/;
+    }
+    my $server_names = join(' ', $domain, @aliases);
+
     my $vhost_path = "$SITES_AVAILABLE/$domain";
 
     # A vhost that already has HTTPS (certbot's --nginx plugin adds a
@@ -243,6 +257,7 @@ for my $site (@sites) {
 
         my $vhost = $template;
         $vhost =~ s/__DOMAIN__/$domain/g;
+        $vhost =~ s/__SERVER_NAMES__/$server_names/g;
         $vhost =~ s/__UPSTREAM__/$upstream/g;
         $vhost =~ s/__MAX_BODY_SIZE__/$max_body/g;
         $vhost =~ s/__WEBSOCKET_DIRECTIVES__/$websocket_directives/g;
@@ -281,7 +296,7 @@ for my $site (@sites) {
 
     print "  requesting a cert for $domain via certbot...\n";
     my $rc = system(
-        'certbot', '--nginx', '-d', $domain,
+        'certbot', '--nginx', '-d', $domain, (map { ('-d', $_) } grep { !/^\*/ } @aliases),
         '--non-interactive', '--agree-tos', '-m', $email, '--redirect',
     );
     if ($rc != 0) {
@@ -367,7 +382,11 @@ sub _enable_tls_for {
     return 0 if $conf =~ /ssl_certificate\s/;          # already TLS
 
     # Add the TLS bits to the existing server block, then append a redirect
-    # server for :80. Keep the original listen 80 line inside the redirect.
+    # server for :80. The redirect answers for every name the main block
+    # does (an 'aliases:' site has more than $domain), read from the block.
+    my ($server_names) = $conf =~ /^\s*server_name\s+([^;]+);/m;
+    $server_names = $domain unless defined $server_names && length $server_names;
+    $server_names =~ s/\s+/ /g;
     my $tls = qq{\n    listen 443 ssl;\n    listen [::]:443 ssl;\n}
             . qq{    ssl_certificate $live/fullchain.pem;\n}
             . qq{    ssl_certificate_key $live/privkey.pem;\n};
@@ -387,7 +406,7 @@ sub _enable_tls_for {
     $conf .= "\nserver {\n"
            . "    listen 80;\n"
            . "    listen [::]:80;\n"
-           . "    server_name $domain;\n"
+           . "    server_name $server_names;\n"
            . "    return 301 https://\$host\$request_uri;\n"
            . "}\n";
 

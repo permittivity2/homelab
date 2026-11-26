@@ -60,6 +60,20 @@ sub rrset_exists ($self, $zone, $name, $type) {
     return 0;
 }
 
+# The content values PowerDNS holds at (name, type) -- for TXT, quoted, the
+# way the API returns them -- or an empty list when there is no such rrset.
+# upsert_rrset is a REPLACE, so a caller that must ADD a value to an rrset
+# reads the set with this first and sends the union.
+sub rrset_contents ($self, $zone, $name, $type) {
+    my $z = $self->get_zone($zone) or return ();
+    my $fqdn = _fqdn($name);
+    for my $rr (@{ $z->{rrsets} // [] }) {
+        next unless $rr->{name} eq $fqdn && $rr->{type} eq $type;
+        return map { $_->{content} } @{ $rr->{records} // [] };
+    }
+    return ();
+}
+
 sub create_zone ($self, $name, %opts) {
     # Default derived from THIS domain, not hardcoded to
     # test.mailmasker.org's own value -- found live, 2026-09-26,

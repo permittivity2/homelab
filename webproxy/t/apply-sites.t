@@ -182,4 +182,56 @@ my $plain_vhost = do { local (@ARGV, $/) = "$available/plain.test.mailmasker.org
 unlike($plain_vhost, qr/proxy_set_header Upgrade/, 'a non-websocket site has no Upgrade directive');
 unlike($plain_vhost, qr/proxy_buffering off/, 'a non-websocket site keeps default response buffering');
 
+# --- aliases: one vhost, several names, one certificate (post-cutover #106) ---
+# domain 7redlines.test with aliases [*.7redlines.test, www.7redlines.test]:
+# the server_name line carries all three; the wildcard is NOT handed to
+# certbot (HTTP-01 cannot validate it) while the plain alias is.
+open($fh, '>', $sites_yml) or die $!;
+print $fh <<YAML;
+letsencrypt_email: admin\@test.mailmasker.org
+sites:
+  - domain: 7redlines.test
+    aliases: ['*.7redlines.test', www.7redlines.test]
+    upstream: 10.50.2.198:80
+YAML
+close($fh);
+# the stub certbot records every -d it was given
+open($cbfh, '>', "$stub_bin/certbot") or die $!;
+print $cbfh <<'STUB';
+#!/bin/sh
+first=""
+while [ $# -gt 0 ]; do
+    if [ "$1" = "-d" ]; then echo "$2" >> "$AVAILABLE_DIR/certbot-names"; [ -n "$first" ] || first="$2"; fi
+    shift
+done
+echo "    listen 443 ssl;" >> "$AVAILABLE_DIR/$first"
+exit 0
+STUB
+close($cbfh);
+chmod(0755, "$stub_bin/certbot");
+my $output5 = `perl script/homelab-webproxy-apply-sites 2>&1`;
+is($? >> 8, 0, 'script exits 0 for a site with aliases') or diag($output5);
+my $alias_vhost = do { local (@ARGV, $/) = "$available/7redlines.test"; <> };
+like($alias_vhost, qr/^\s*server_name 7redlines\.test \*\.7redlines\.test www\.7redlines\.test;/m,
+    'server_name carries the domain and every alias, in order');
+unlike($alias_vhost, qr/__[A-Z_]+__/, 'no template placeholders left in an aliases vhost');
+like($alias_vhost, qr{proxy_pass http://10\.50\.2\.198:80;}, 'aliases vhost proxies to the upstream');
+my $certbot_names = do { local (@ARGV, $/) = "$available/certbot-names"; <> };
+is($certbot_names, "7redlines.test\nwww.7redlines.test\n",
+    'certbot was asked for the domain and the plain alias, never the wildcard');
+
+# a non-list aliases value is a config error, said plainly, not a Perl error
+open($fh, '>', $sites_yml) or die $!;
+print $fh <<YAML;
+letsencrypt_email: admin\@test.mailmasker.org
+sites:
+  - domain: bad.test
+    aliases: www.bad.test
+    upstream: 127.0.0.1:81
+YAML
+close($fh);
+my $output6 = `perl script/homelab-webproxy-apply-sites 2>&1`;
+isnt($? >> 8, 0, 'a scalar aliases value fails the run');
+like($output6, qr/'aliases' must be a list/, '...with the config error named');
+
 done_testing;

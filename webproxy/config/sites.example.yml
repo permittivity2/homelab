@@ -45,3 +45,11 @@ sites:
   # - domain: plex.forge.name
   #   upstream: 10.10.0.106:32400
   #   websocket: true
+  # aliases: more names this vhost answers for, on the SAME certificate --
+  # the lineage is named after `domain` and must cover them (the fleet cert
+  # store delivers it; a wildcard alias is never handed to certbot, HTTP-01
+  # cannot validate one). The case: a whole domain, apex + wildcard, in one
+  # vhost in front of one web node.
+  # - domain: 7redlines.org
+  #   aliases: ['*.7redlines.org']
+  #   upstream: 10.50.2.198:80
