@@ -30,14 +30,14 @@
 #   30  database (etcd + patroni)    406 407 408           up=60 (quorum), down=300
 #   40  pooler                       409 410 411           up=5
 #   50  control plane                api 412-414, sso 418-420   up=15
-#   60  auth DNS + app pools         403-405 415-417 421-438 445 446
+#   60  auth DNS + app pools         403-405 415-417 421-438 445 446, notes 447-449, calendar 450-452, ai 453
 #   80-85 storage VMs, one by one    dovecot 462 463 464, drive 465 466 467   up=20
 #   88  mail + webmail               postfix 439-441, roundcube 442-444   up=5
 #   90  the public edge, all three   400 401 402           up=5
 #   100-104 background VMs           metrics 469, search 470 471 472, mirrors 129   up=20
 #   110 harness                      461
 #   120-123 NAS-backed legacy        administrator 117, aptcacher 122, forwarder01 125, Plex 100   up=10
-#   never (onboot=0)                 spares 447-460, vm68, proxy01 109, 107 111 112, 300-360,
+#   never (onboot=0)                 spares 454-460, vm68, proxy01 109, 107 111 112, 300-360,
 #                                    old VMs 102-106 110 113-115 118 121 128 200, templates
 # ============================================================================
 set -u
@@ -66,6 +66,7 @@ WANT=(
 "421|app|60||" "422|app|60||" "423|app|60||" "424|app|60||" "425|app|60||" "426|app|60||" "427|app|60||" "428|app|60||" "429|app|60||"
 "430|app|60||" "431|app|60||" "432|app|60||" "433|app|60||" "434|app|60||" "435|app|60||" "436|app|60||" "437|app|60||" "438|app|60||"
 "445|static+apt|60||" "446|cert issuer|60||"
+"447|notes|60||" "448|notes|60||" "449|notes|60||" "450|calendar|60||" "451|calendar|60||" "452|calendar|60||" "453|ai|60||"
 "462|dovecot vm|80|20|" "463|dovecot vm|81|20|" "464|dovecot vm|82|20|"
 "465|drive vm|83|20|" "466|drive vm|84|20|" "467|drive vm|85|20|"
 "439|postfix|88|5|" "440|postfix|88|5|" "441|postfix|88|5|" "442|roundcube|88|5|" "443|roundcube|88|5|" "444|roundcube|88|5|"
@@ -74,7 +75,7 @@ WANT=(
 "461|harness|110||"
 "117|legacy nas administrator|120|10|" "122|legacy nas aptcacher|121|10|" "125|legacy nas forwarder01|122|10|" "100|legacy nas plex|123|10|"
 )
-NEVER="447 448 449 450 451 452 453 454 455 456 457 458 459 460 468 109 107 111 112 300 301 302 303 304 305 306 307 308 309 310 311 312 313 314 315 316 317 318 319 320 321 322 323 324 325 326 327 328 329 330 331 332 333 334 335 336 337 338 339 340 341 342 343 344 345 346 347 348 349 350 360 102 103 104 105 106 110 113 114 115 118 121 128 200 99907 99908 99909 99910 99911 99912 99913"
+NEVER="454 455 456 457 458 459 460 468 109 107 111 112 300 301 302 303 304 305 306 307 308 309 310 311 312 313 314 315 316 317 318 319 320 321 322 323 324 325 326 327 328 329 330 331 332 333 334 335 336 337 338 339 340 341 342 343 344 345 346 347 348 349 350 360 102 103 104 105 106 110 113 114 115 118 121 128 200 99907 99908 99909 99910 99911 99912 99913"
 
 startup_of(){ local o="$1" u="$2" d="$3"; local s="order=$o"; [ -n "$u" ] && s="$s,up=$u"; [ -n "$d" ] && s="$s,down=$d"; echo "$s"; }
 # one pass over pve2 for every guest's type, name, status, onboot, startup
@@ -128,7 +129,11 @@ exit 0 ;;
                 [ "$MODE" = --verify ] && bad "$id not as wanted"
             fi
         elif [ -n "${NEV[$id]:-}" ] || [ "$tpl" = 1 ]; then
-            if [ "${onboot:-0}" = 0 ]; then ok "$id $cmd ${name:0:22}: never starts (onboot=${onboot:-unset})"
+            # A guest that is RUNNING today but on the never list is a stale table
+            # (2026-11-23: notes, calendar and ai had moved onto "spares" 47-53 and
+            # were left off after the first boot). Decide; never silently.
+            if [ "$status" = running ] && [ "$tpl" != 1 ]; then bad "$id $cmd ${name:0:22} is RUNNING today but on the never-start list -- a spare in use? move it into WANT or stop it"
+            elif [ "${onboot:-0}" = 0 ]; then ok "$id $cmd ${name:0:22}: never starts (onboot=${onboot:-unset})"
             else
                 chg "$id $cmd ${name:0:22}: onboot=$onboot  ->  0 (never starts)"
                 [ "$MODE" = --apply ] && { pve "$cmd set $id --onboot 0" >/dev/null && ok "   set" || bad "   could not set $id"; }
@@ -165,9 +170,13 @@ exit 0 ;;
     echo "--- the startall task of this boot"
     pve 'f=$(ls -t /var/log/pve/tasks/*/UPID:*:startall:* 2>/dev/null | head -1); [ -n "$f" ] && { echo "$f"; grep -E -i "error|fail|warn|timeout" "$f" | head -8; grep -c -E "^Starting " "$f" | sed "s/^/starts: /"; } || echo "no startall task log found"' | sed 's/^/  /'
     echo "--- agents, patroni, VIPs, the NFS-bound services"
-    for w in "${WANT[@]}"; do IFS='|' read -r id tier order up down <<<"$w"; case "$id" in 4[0-6][0-9]|47[0-2]) n=$((id-400)); ip=$(printf '10.20.2.%d' $((144+n))); code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$ip:2520/health"); [ "$code" = 200 ] || bad "agent on $id ($ip): $code";; esac; done; ok "agents answered (any that did not are listed above)"
+    # only where the agent is installed (the harness 461 has none); a node that does not even answer dpkg is reported as unreachable
+    for w in "${WANT[@]}"; do IFS='|' read -r id tier order up down <<<"$w"; case "$id" in 4[0-6][0-9]|47[0-2]) n=$((id-400)); ip=$(printf '10.20.2.%d' $((144+n)));
+        inst=$(ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$ip" 'dpkg-query -W -f "\${db:Status-Status}" homelab-agent 2>/dev/null' 2>/dev/null)
+        case "$inst" in installed) code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$ip:2520/health"); [ "$code" = 200 ] || bad "agent on $id ($ip): $code";; "") bad "$id ($ip): unreachable over ssh";; *) ;; esac;; esac; done; ok "agents answered where installed (any that did not are listed above)"
     pl=$(ssh -o ConnectTimeout=10 -o BatchMode=yes 10.20.2.150 'sudo patronictl -c /etc/patroni/config.yml list 2>/dev/null' 2>/dev/null); echo "$pl" | grep -q -E "Leader.*running" && [ "$(echo "$pl" | grep -c -E "Replica.*(streaming|running)")" -ge 2 ] && ok "patroni: a leader and two replicas" || bad "patroni: $(echo "$pl" | paste -sd' ' - | cut -c1-200)"
-    tl=$(echo "$pl" | grep -o -E "\|\s+[0-9]+\s+\|" | sort -u | wc -l); [ "$tl" = 1 ] && ok "one timeline" || bad "timelines: $tl"
+    # the TL column only: the Lag columns hold numbers too (three nodes on timeline 4 with lag 0 once counted as two)
+    tl=$(echo "$pl" | grep -E "Leader|Replica" | awk -F"|" '{gsub(/ /,"",$6); if ($6 != "") print $6}' | sort -u | wc -l); [ "$tl" = 1 ] && ok "one timeline" || bad "timelines: $tl ($(echo "$pl" | grep -E "Leader|Replica" | awk -F"|" '{gsub(/ /,"",$6); print $6}' | paste -sd, -))"
     for v in "10.50.2.130 06 07 08" "10.50.2.131 09 10 11" "10.50.2.132 12 13 14" "10.50.2.140 00 01 02"; do set -- $v; vip=$1; shift; holders=0; for n in "$@"; do ip=$(printf '10.20.2.%d' $((144+10#$n))); ssh -o ConnectTimeout=5 -o BatchMode=yes "$ip" "ip -4 -o addr show | grep -q '$vip/'" 2>/dev/null && holders=$((holders+1)); done; [ "$holders" = 1 ] && ok "$vip has one holder" || bad "$vip has $holders holders"; done
     for s in "dovecot 62 63 64" "homelab-drive 65 66 67" "homelab-search 70 71 72" "homelab-search-indexer 70 71 72" "pgbouncer 09 10 11" "patroni 06 07 08" "etcd 06 07 08"; do set -- $s; svc=$1; shift; for n in "$@"; do ip=$(printf '10.20.2.%d' $((144+10#$n))); st=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$ip" "systemctl is-active $svc" 2>/dev/null); [ "$st" = active ] || bad "$svc on $n: ${st:-unreachable}"; done; done; ok "services checked by name (dovecot, drive, search, indexer, pgbouncer, patroni, etcd)"
     "$(dirname "$0")/nfs-mounts-orchestrate.sh" --verify 2>&1 | grep -E "FAIL|every store" | sed 's/^/  /'
