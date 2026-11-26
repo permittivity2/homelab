@@ -257,6 +257,40 @@ Both services' `smtpd_milters` (OpenDKIM last) and `milter_default_action`
 files. Offering both ports removes a whole class of client misconfiguration:
 "SSL/TLS" on 587 and "STARTTLS" on 465 both fail with unhelpful errors.
 
+## Health checks are not logged (0.1.33, post-cutover #105)
+
+A prober that connects and hangs up costs Postfix three lines (`connect from`,
+`lost connection after CONNECT`, `disconnect ... commands=0/0`), four on 465. On
+this project's mail pool that was haproxy's `check` from three proxies on three
+ports every 2 s, plus the DNS nodes' Lua `ifportup(25, ...)` probes of the public
+port that the proxy passes through: about 1.4 million lines a day per node, 99%
+of `mail.log`, stored twice (Ubuntu's stock rsyslog writes `mail.*` to both
+`mail.log` and `syslog`), two uncompressed weeks of both kept by the weekly
+`delaycompress` rotation. prod-homelab39's 7.8 GB root disk hit 97%.
+
+Postfix has no setting to skip logging a connection, so the postinst writes two
+rsyslog drop-ins, both read before Ubuntu's `50-default.conf`:
+
+- `/etc/rsyslog.d/45-homelab-postfix-health-checks.conf` -- `stop` for every
+  Postfix line whose client is one of the debconf question
+  `homelab-postfix/health_check_clients` (space-separated addresses; empty = log
+  everything, and the file is removed). With `smtpd_upstream_proxy_protocol =
+  haproxy` the address Postfix logs is the one in the PROXY header, so a proxy's
+  own checks show the proxy's service address and a prober behind the proxy shows
+  its own; a real client never shows one of them. The orchestrator
+  `install-orchestrators/probe-logging-orchestrate.sh` sets the question to
+  127.0.0.1 (the fleet agent's own once-a-minute port checks), the edges' service addresses plus the DNS nodes' probe-side addresses (read live:
+  the latter are DHCP leases) and its `--verify` fails when they drift.
+- `/etc/rsyslog.d/49-homelab-mail.conf` (homelab-dovecot writes the identical
+  file) -- mail-facility messages to `mail.log` (and `mail.err`) only, then
+  `stop`, so `syslog` no longer holds a second copy of every mail line.
+
+Both are validated with `rsyslogd -N1` before rsyslog is restarted; a drop-in
+that does not validate is withdrawn (the previous one restored) and the postinst
+says so. The journal is not involved and keeps every line within its own cap, so
+`journalctl` and bad-ips (which reads the postfix units' journal) see the probes
+as before. `dpkg-reconfigure homelab-postfix` changes the list.
+
 ## Testing
 
 Package-local: none — like `homelab-dns` and `homelab-dovecot`, this

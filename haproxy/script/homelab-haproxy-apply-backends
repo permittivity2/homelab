@@ -162,6 +162,24 @@ for my $backend (@backends) {
     my $send_proxy = (exists $backend->{send_proxy} && !$backend->{send_proxy})
         ? '' : ' send-proxy';
 
+    # check_inter (optional, default 10s): the interval between health checks
+    # of a server that is up. HAProxy's own default is 2 s; with three proxies
+    # checking three Postfix servers on three ports every 2 s, each probe a
+    # three-line SMTP session in Postfix's log, the mail pool wrote 1.4 million
+    # lines a day per node and filled a root disk (post-cutover #105). The
+    # mail nodes also drop the probe lines by address (homelab-postfix
+    # 0.1.33), so this is the belt under those braces, and what keeps the
+    # proxies' own work and any other backend's log small. fastinter 2s keeps
+    # the transitions fast (a server that just failed a check is re-checked
+    # every 2 s, so at haproxy's default fall=3 it is marked down within about
+    # 14 s instead of 6 s); downinter 5s re-checks a down server every 5 s.
+    # Set a shorter check_inter where a slow down-detection is felt by users
+    # (IMAP: 5s). SMTP, which retries, takes the default.
+    my $inter = $backend->{check_inter} // '10s';
+    die "backends.yml: backend '$name' has an unusable check_inter '$inter' (want a haproxy time such as 5s, 10s or 2000ms)\n"
+        unless $inter =~ /^\d+(?:ms|s|m)?$/;
+    my $check = "check inter $inter fastinter 2s downinter 5s";
+
     # No balance line for active_passive (there is only ever one active
     # server, so balancing is moot) or for a single-server backend.
     my $balance_line = (@targets > 1 && !$active_passive) ? "    balance roundrobin\n" : '';
@@ -171,7 +189,7 @@ for my $backend (@backends) {
         my $srv_name = @targets > 1 ? "${name}${i}" : $name;
         # In active_passive, every server after the first is a hot standby.
         my $backup = ($active_passive && $_ > 0) ? ' backup' : '';
-        "    server $srv_name $t check$send_proxy$backup\n";
+        "    server $srv_name $t $check$send_proxy$backup\n";
     } 0 .. $#targets;
 
     # One dual-stack socket per frontend (post-cutover #73): [::] with v4v6

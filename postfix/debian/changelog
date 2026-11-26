@@ -1,3 +1,21 @@
+homelab-postfix (0.1.33) unstable; urgency=medium
+
+  * Health checks out of the text logs (post-cutover #105). New debconf
+    question homelab-postfix/health_check_clients: every Postfix line whose
+    client is one of those addresses is dropped by an rsyslog drop-in this
+    package writes (/etc/rsyslog.d/45-homelab-postfix-health-checks.conf)
+    before it reaches mail.log or syslog. haproxy's `check` from three
+    proxies on three ports every 2 s, plus the DNS nodes' ifportup probes of
+    the public port 25 passed through by the proxy, were 1.4 million lines a
+    day per node, 99% of mail.log, and filled prod-homelab39's root disk.
+  * /etc/rsyslog.d/49-homelab-mail.conf (shared with homelab-dovecot):
+    mail-facility messages go to mail.log and mail.err only, no longer also
+    into syslog, which stored every one of them twice. Both drop-ins are
+    validated with rsyslogd -N1 before rsyslog is restarted; one that does
+    not validate is withdrawn.
+
+ -- Gardner <gardner@homelab>  Thu, 26 Nov 2026 14:00:00 -0600
+
 homelab-postfix (0.1.32) unstable; urgency=medium
 
   * A drop-in for postfix.service: Restart=on-failure RestartSec=5. At the

@@ -274,6 +274,27 @@ misconfigured-but-mounted share shows no error at mount time at all,
 only later, non-deterministically, once real data is created and
 another instance tries to read it.
 
+## Health checks are not logged (0.1.22, post-cutover #105)
+
+haproxy's `check` on the edges connects to 143 and 993 every 2 s and hangs up;
+imap-login logs each one (`haproxy: Client disconnected (rip=10.50.2.x):
+Connection reset by peer`), over 10,000 lines a day on vm62, written to both
+`mail.log` and `syslog` by Ubuntu's stock rsyslog rules. Same fix as
+homelab-postfix 0.1.33 (see its README for the whole story): the postinst writes
+
+- `/etc/rsyslog.d/45-homelab-dovecot-health-checks.conf` -- `stop` for every
+  `dovecot` line whose `rip=` is one of `homelab-dovecot/health_check_clients`
+  (space-separated; empty = log everything, file removed). With
+  `behind_haproxy=true` the address is the PROXY header's, so a proxy's own
+  checks carry the proxy's service address and a real user never does.
+- `/etc/rsyslog.d/49-homelab-mail.conf` (identical to homelab-postfix's) --
+  mail-facility messages to `mail.log` and `mail.err` only, then `stop`.
+
+Validated with `rsyslogd -N1` before rsyslog is restarted; a drop-in that does
+not validate is withdrawn. The journal keeps every line within its cap.
+`install-orchestrators/probe-logging-orchestrate.sh` sets the list to the edges'
+service addresses and verifies it.
+
 ## Testing
 
 Package-local: none beyond `t/dovecot-bootstrap-role.t` (needs a real

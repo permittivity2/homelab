@@ -1,3 +1,15 @@
+homelab-haproxy (0.1.15) unstable; urgency=medium
+
+  * Every generated server line carries `check inter 10s fastinter 2s
+    downinter 5s` (haproxy's own inter is 2s); a backend may set its own
+    `check_inter:` in backends.yml, and the example gives imap/imaps 5s. Each
+    health check is a logged connection on the backend, and at 2s from three
+    proxies the postfix pool wrote 1.4 million probe lines a day and filled a
+    root disk (post-cutover #105). Detection of a dead server goes from about
+    6s to about 14s at the default; IMAP keeps it under 10s.
+
+ -- Gardner <gardner@homelab>  Thu, 26 Nov 2026 14:00:00 -0600
+
 homelab-haproxy (0.1.14) unstable; urgency=medium
 
   * Every TCP frontend binds one dual-stack socket, [::]:port v4v6, so the

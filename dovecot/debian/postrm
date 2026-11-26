@@ -13,6 +13,14 @@ case "$1" in
         # same reasoning as every other package in this ecosystem).
         rm -f "$MARKER"
 
+        # The rsyslog drop-ins (post-cutover #105): ours goes; the shared mail
+        # routing file only when homelab-postfix is not here to want it.
+        rm -f /etc/rsyslog.d/45-homelab-dovecot-health-checks.conf
+        if ! dpkg-query -W -f='${Status}' homelab-postfix 2>/dev/null | grep -q 'install ok installed'; then
+            rm -f /etc/rsyslog.d/49-homelab-mail.conf
+        fi
+        systemctl try-restart rsyslog 2>/dev/null || true
+
         if command -v doveconf >/dev/null 2>&1 && doveconf -n >/dev/null 2>&1; then
             systemctl reload-or-restart dovecot 2>/dev/null || true
         fi

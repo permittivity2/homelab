@@ -21,6 +21,14 @@
 # `selector='all'` gives every healthy address, in a different order per
 # query, so clients spread across the edges with no load balancer.
 # minimumFailures=2 keeps one lost packet from dropping an edge.
+# interval=20 (post-cutover #105): PowerDNS checks each address every 5 s by
+# default, and each check is a connection the edge's haproxy passes on to a
+# postfix node, which logs it as a three-line SMTP session: with three DNS
+# nodes that was over 50,000 connects a day on the mail pool. At 20 s a dead
+# edge leaves the answer within 40 s (minimumFailures=2); the records' TTL is
+# 120 s anyway. The mail nodes also drop the probe lines by address
+# (homelab-postfix 0.1.33). Re-running --apply rewrites every Lua record with
+# the current interval (no pdns restart needed for a content change).
 #
 # WHICH ADDRESSES GO IN THE LIST. Only addresses that exist. A listed address
 # that nothing holds is skipped once its check has run, but a DNS node answers
@@ -56,6 +64,7 @@ PDNS_NODES=${PDNS_NODES:-"10.20.2.147 10.20.2.148 10.20.2.149"}
 EDGES=${EDGES:-"23.116.91.66 23.116.91.67 23.116.91.68"}   # addresses held by a live edge TODAY (see above)
 ALL_EDGES=${ALL_EDGES:-"23.116.91.66 23.116.91.67 23.116.91.68"}   # every address a candidate A record may hold
 TTL=${TTL:-120}
+LUA_INTERVAL=${LUA_INTERVAL:-20}                   # seconds between two checks of one address (PowerDNS default 5; post-cutover #105)
 STATE=${DNS_LUA_STATE:-$HOME/.local/state/homelab/dns-lua-original-records.txt}
 NS_IPS=${NS_IPS:-"23.116.91.66 23.116.91.68"}      # the two nameserver addresses
 ONLY=${ONLY:-.}      # regex on the record name, to convert a few names first
@@ -100,14 +109,14 @@ candidates() {
 lua_contents() {   # name -> the LUA record content(s), one per line: A, then AAAA when IPv6 is on
     local port=443 a m=""
     [ "${1%%.*}" = mail ] && port=25
-    printf "A \"ifportup(%s, {%s}, {selector='all', backupSelector='all', minimumFailures=2})\"\n" "$port" "$EDGE_LUA"
+    printf "A \"ifportup(%s, {%s}, {selector='all', backupSelector='all', minimumFailures=2, interval=%s})\"\n" "$port" "$EDGE_LUA" "$LUA_INTERVAL"
     [ "$IPV6_ON" = 1 ] || return 0
     # The same IPv4 health check, then each healthy address mapped to its
     # IPv6 twin. A Lua record whose code starts with ";" is a statement block
     # and must return the answer set.
     for a in $EDGES; do [ -n "${V6[$a]:-}" ] && m="$m['$a']='${V6[$a]}',"; done
     [ -n "$m" ] || return 0
-    printf "AAAA \";local up=ifportup(%s, {%s}, {selector='all', backupSelector='all', minimumFailures=2}) local m={%s} local r={} for _,a in ipairs(up) do if m[a] then r[#r+1]=m[a] end end return r\"\n" "$port" "$EDGE_LUA" "${m%,}"
+    printf "AAAA \";local up=ifportup(%s, {%s}, {selector='all', backupSelector='all', minimumFailures=2, interval=%s}) local m={%s} local r={} for _,a in ipairs(up) do if m[a] then r[#r+1]=m[a] end end return r\"\n" "$port" "$EDGE_LUA" "$LUA_INTERVAL" "${m%,}"
 }
 
 content_args() {  # name -> every content, double-quoted and escaped for the remote shell, space-separated

@@ -169,3 +169,24 @@ Description: Unique identifier for this HA instance's own Postgres role:
  role becomes homelab_postfix_runtime_<value>. Changing this on an
  already-bootstrapped instance does NOT migrate the old role; run
  'dpkg-reconfigure homelab-postfix' afterward to bootstrap the new one.
+
+Template: homelab-postfix/health_check_clients
+Type: string
+Default:
+Description: Client addresses whose SMTP sessions are health checks (not logged):
+ Space-separated addresses; empty logs everything. A prober that connects
+ and hangs up costs Postfix three log lines (connect, lost connection after
+ CONNECT, disconnect), four on 465 (an SSL_accept error). HAProxy's `check`
+ from three proxies on three ports every 2 s, plus the DNS nodes' ifportup
+ probes of the public port 25 that the proxy passes through, wrote about
+ 1.4 million lines a day per node on this project's own mail pool -- 99% of
+ mail.log, stored twice (mail.log and syslog) -- and filled a root disk
+ (post-cutover #105). Postfix has no setting to not log a connection, so
+ an rsyslog rule this package writes
+ (/etc/rsyslog.d/45-homelab-postfix-health-checks.conf) discards every
+ Postfix line whose client is one of these addresses before it reaches
+ mail.log or syslog. With smtpd_upstream_proxy_protocol=haproxy the address
+ Postfix logs is the one in the PROXY header: a proxy's own checks show the
+ proxy's address, a prober behind the proxy shows its own, and a real
+ client is never one of them. The journal is untouched and keeps every
+ line within its own cap. List only addresses that never send real mail.

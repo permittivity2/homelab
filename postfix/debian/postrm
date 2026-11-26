@@ -15,6 +15,14 @@ case "$1" in
         rm -f "$MAP_CF"
         rm -f "$DOVECOT_SASL_DROPIN"
 
+        # The rsyslog drop-ins (post-cutover #105): ours goes; the shared mail
+        # routing file only when homelab-dovecot is not here to want it.
+        rm -f /etc/rsyslog.d/45-homelab-postfix-health-checks.conf
+        if ! dpkg-query -W -f='${Status}' homelab-dovecot 2>/dev/null | grep -q 'install ok installed'; then
+            rm -f /etc/rsyslog.d/49-homelab-mail.conf
+        fi
+        systemctl try-restart rsyslog 2>/dev/null || true
+
         # Remove our marked block from master.cf, nothing else in it.
         if [ -f "$MASTER_CF" ] && grep -q '^# BEGIN homelab-postfix managed' "$MASTER_CF"; then
             sed -i '/^# BEGIN homelab-postfix managed$/,/^# END homelab-postfix managed$/d' "$MASTER_CF"

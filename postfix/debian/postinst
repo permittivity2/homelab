@@ -565,6 +565,97 @@ case "$1" in
             echo "  running exposed with no HAProxy in front; not recommended, see its debconf description."
         fi
 
+        # --- health checks out of the text logs (post-cutover #105) ---------
+        # A prober that connects and hangs up is three Postfix lines (connect,
+        # lost connection after CONNECT, disconnect), four on 465 (SSL_accept
+        # error). haproxy's `check` from three proxies on three ports every
+        # 2 s, plus the DNS nodes' ifportup probes of the public port 25 that
+        # the proxy passes through, wrote 1.4 million lines a day per node --
+        # 99% of mail.log, stored twice (mail.log AND syslog) -- and filled a
+        # 7.8 GB root disk. Postfix has no setting to skip logging a
+        # connection, so rsyslog drops the lines. Two drop-ins, both read
+        # before Ubuntu's 50-default.conf:
+        #   45-homelab-postfix-health-checks.conf  `stop` for every Postfix
+        #       line whose client is one of homelab-postfix/health_check_clients.
+        #       With smtpd_upstream_proxy_protocol=haproxy that is the address
+        #       in the PROXY header: a proxy's own checks carry the proxy's
+        #       address, a prober behind the proxy its own, a real client
+        #       never one of them. Removed when the list is empty.
+        #   49-homelab-mail.conf  mail-facility messages to mail.log (and
+        #       mail.err) only, then `stop`, so syslog no longer holds a
+        #       second copy of every mail line. homelab-dovecot writes the
+        #       identical file: keep the two in step.
+        # The journal is untouched (bad-ips reads the postfix units' journal).
+        # Validated with `rsyslogd -N1` before rsyslog is restarted; a drop-in
+        # that does not validate is withdrawn and the previous one restored.
+        db_get homelab-postfix/health_check_clients || true
+        HC_CLIENTS="$(printf '%s' "${RET:-}" | tr ',' ' ')"
+        RSYSLOG_CHANGED=0
+        _rsyslog_install() {   # $1 = path; the new content waits at $1.new
+            if [ -f "$1" ] && cmp -s "$1.new" "$1"; then
+                rm -f "$1.new"
+                return 0
+            fi
+            if [ -f "$1" ]; then cp -a "$1" "$1.prev"; fi
+            mv "$1.new" "$1"
+            chmod 644 "$1"
+            RSYSLOG_CHANGED=1
+        }
+        HC_DROPIN=/etc/rsyslog.d/45-homelab-postfix-health-checks.conf
+        if [ -n "$HC_CLIENTS" ]; then
+            HC_RE=""
+            for a in $HC_CLIENTS; do
+                # a literal dot in the regex; rsyslog's string syntax wants the backslash doubled
+                HC_RE="${HC_RE:+$HC_RE|}$(printf '%s' "$a" | sed 's/\./\\\\./g')"
+            done
+            {
+                echo "# Managed by homelab-postfix (postinst) -- do not hand-edit; change the debconf"
+                echo "# question homelab-postfix/health_check_clients (dpkg-reconfigure homelab-postfix)."
+                echo "# Postfix lines whose client is a health checker are dropped before mail.log and"
+                echo "# syslog (post-cutover #105). The journal still has them."
+                printf 'if ($programname == "postfix" or $programname startswith "postfix/") and re_match($msg, "\\\\[(%s)\\\\]") then stop\n' "$HC_RE"
+            } > "$HC_DROPIN.new"
+            _rsyslog_install "$HC_DROPIN"
+        elif [ -f "$HC_DROPIN" ]; then
+            rm -f "$HC_DROPIN"
+            RSYSLOG_CHANGED=1
+        fi
+        MAIL_DROPIN=/etc/rsyslog.d/49-homelab-mail.conf
+        cat > "$MAIL_DROPIN.new" <<'EOF'
+# Managed by homelab-postfix and homelab-dovecot (postinst; both write this same
+# file) -- do not hand-edit. Mail-facility messages go to mail.log (and mail.err)
+# only: with Ubuntu's stock 50-default.conf every one was also copied into syslog,
+# which doubled the mail tier's log writes (post-cutover #105). Read before
+# 50-default.conf; the `stop` keeps its rules from seeing mail messages.
+if $syslogfacility-text == "mail" then {
+    action(type="omfile" file="/var/log/mail.log")
+    if $syslogseverity <= 3 then action(type="omfile" file="/var/log/mail.err")
+    stop
+}
+EOF
+        _rsyslog_install "$MAIL_DROPIN"
+        if [ "$RSYSLOG_CHANGED" = 1 ]; then
+            if rsyslogd -N1 >/dev/null 2>&1; then
+                rm -f "$HC_DROPIN.prev" "$MAIL_DROPIN.prev"
+                systemctl try-restart rsyslog >/dev/null 2>&1 \
+                    || echo "  WARNING: rsyslog restart failed -- check 'systemctl status rsyslog' by hand."
+                if [ -n "$HC_CLIENTS" ]; then
+                    echo "  rsyslog: Postfix lines from $HC_CLIENTS are dropped ($HC_DROPIN)"
+                else
+                    echo "  rsyslog: health_check_clients is empty -- every Postfix line is logged"
+                fi
+                echo "  rsyslog: mail-facility messages go to mail.log only, not syslog ($MAIL_DROPIN)"
+            else
+                echo "  WARNING: rsyslog rejects the new drop-ins ('rsyslogd -N1' fails) -- withdrawing them; rsyslog NOT restarted:"
+                rsyslogd -N1 2>&1 | grep -iE 'error|invalid' | head -5 | sed 's/^/    /'
+                for f in "$HC_DROPIN" "$MAIL_DROPIN"; do
+                    if [ -f "$f.prev" ]; then mv "$f.prev" "$f"; else rm -f "$f"; fi
+                done
+            fi
+        elif [ -n "$HC_CLIENTS" ]; then
+            echo "  rsyslog: health-check drop-in unchanged ($HC_DROPIN)"
+        fi
+
         if postfix check >/dev/null 2>&1; then
             systemctl enable postfix >/dev/null 2>&1 || true
             if systemctl is-active --quiet postfix; then

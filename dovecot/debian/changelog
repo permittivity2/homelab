@@ -1,3 +1,19 @@
+homelab-dovecot (0.1.22) unstable; urgency=medium
+
+  * Health checks out of the text logs (post-cutover #105). New debconf
+    question homelab-dovecot/health_check_clients: every imap-login line
+    whose remote address (rip=) is one of those is dropped by an rsyslog
+    drop-in this package writes
+    (/etc/rsyslog.d/45-homelab-dovecot-health-checks.conf) before it
+    reaches mail.log or syslog. haproxy's `check` from the three edges wrote
+    over 10,000 "haproxy: Client disconnected" lines a day on vm62.
+  * /etc/rsyslog.d/49-homelab-mail.conf (the same file homelab-postfix
+    writes): mail-facility messages go to mail.log and mail.err only, no
+    longer also into syslog. Validated with rsyslogd -N1 before rsyslog is
+    restarted; a drop-in that does not validate is withdrawn.
+
+ -- Gardner <gardner@homelab>  Thu, 26 Nov 2026 14:00:00 -0600
+
 homelab-dovecot (0.1.21) unstable; urgency=medium
 
   * Two drop-ins for dovecot.service (post-cutover #41): Restart=on-failure

@@ -74,11 +74,11 @@ ok(-f $haproxy_cfg, 'haproxy.cfg was written');
 my $cfg = do { local (@ARGV, $/) = $haproxy_cfg; <> };
 like($cfg, qr/frontend smtp_in/, 'smtp frontend block present');
 like($cfg, qr/bind \[::\]:25 v4v6/, 'smtp frontend binds the right port, dual-stack (#73)');
-like($cfg, qr/server smtp 10\.50\.1\.201:25 check send-proxy/, 'smtp backend targets the right host:port, with send-proxy');
+like($cfg, qr/server smtp 10\.50\.1\.201:25 check inter 10s fastinter 2s downinter 5s send-proxy/, 'smtp backend targets the right host:port, with send-proxy');
 like($cfg, qr/frontend smtp_in\s+bind \[::\]:25 v4v6\s+maxconn 250/, 'smtp frontend uses its own explicit maxconn');
 like($cfg, qr/frontend imaps_in/, 'imaps frontend block present');
 like($cfg, qr/bind \[::\]:993 v4v6/, 'imaps frontend binds the right port');
-like($cfg, qr/server imaps 10\.50\.1\.202:993 check send-proxy/, 'imaps backend targets the right host:port, with send-proxy');
+like($cfg, qr/server imaps 10\.50\.1\.202:993 check inter 10s fastinter 2s downinter 5s send-proxy/, 'imaps backend targets the right host:port, with send-proxy');
 like($cfg, qr/frontend imaps_in\s+bind \[::\]:993 v4v6\s+maxconn 500/, 'imaps frontend defaults maxconn to 500 when unset');
 unlike($cfg, qr/__[A-Z_]+__/, 'no template placeholders left unsubstituted');
 
@@ -130,11 +130,11 @@ is($? >> 8, 0, 'script exits 0 with a mix of backend/backends entries') or diag(
 my $cfg4 = do { local (@ARGV, $/) = $haproxy_cfg; <> };
 like($cfg4, qr/frontend imap_in/, 'multi-backend frontend block present');
 like($cfg4, qr/backend imap_out\s+balance roundrobin/, 'multi-backend group gets balance roundrobin');
-like($cfg4, qr/server imap1 10\.50\.2\.45:143 check send-proxy/, 'first HA server line present, numbered');
-like($cfg4, qr/server imap2 10\.50\.2\.50:143 check send-proxy/, 'second HA server line present, numbered');
-like($cfg4, qr/server imap3 10\.50\.2\.56:143 check send-proxy/, 'third HA server line present, numbered');
+like($cfg4, qr/server imap1 10\.50\.2\.45:143 check inter 10s fastinter 2s downinter 5s send-proxy/, 'first HA server line present, numbered');
+like($cfg4, qr/server imap2 10\.50\.2\.50:143 check inter 10s fastinter 2s downinter 5s send-proxy/, 'second HA server line present, numbered');
+like($cfg4, qr/server imap3 10\.50\.2\.56:143 check inter 10s fastinter 2s downinter 5s send-proxy/, 'third HA server line present, numbered');
 unlike($cfg4, qr/backend smtp_out\s+balance/, 'single-backend entry gets no balance line -- nothing to balance');
-like($cfg4, qr/server smtp 10\.50\.2\.46:25 check send-proxy/, 'single-backend entry keeps its unnumbered server name (backward compat)');
+like($cfg4, qr/server smtp 10\.50\.2\.46:25 check inter 10s fastinter 2s downinter 5s send-proxy/, 'single-backend entry keeps its unnumbered server name (backward compat)');
 
 # mode: active_passive -- first server active, rest `backup`, no balance
 # line (the Dovecot IMAP one-authoritative-index requirement).
@@ -165,12 +165,45 @@ my $output5 = `perl script/homelab-haproxy-apply-backends 2>&1`;
 is($? >> 8, 0, 'active_passive mode applies cleanly') or diag($output5);
 my $cfg5 = do { local (@ARGV, $/) = $haproxy_cfg; <> };
 unlike($cfg5, qr/backend imap_out\s+balance/, 'active_passive gets NO balance line');
-like($cfg5, qr/server imap1 10\.50\.2\.52:143 check send-proxy\n/, 'active_passive: first server is active (no backup flag)');
-like($cfg5, qr/server imap2 10\.50\.2\.53:143 check send-proxy backup\n/, 'active_passive: second server is backup');
-like($cfg5, qr/server imap3 10\.50\.2\.54:143 check send-proxy backup\n/, 'active_passive: third server is backup');
+like($cfg5, qr/server imap1 10\.50\.2\.52:143 check inter 10s fastinter 2s downinter 5s send-proxy\n/, 'active_passive: first server is active (no backup flag)');
+like($cfg5, qr/server imap2 10\.50\.2\.53:143 check inter 10s fastinter 2s downinter 5s send-proxy backup\n/, 'active_passive: second server is backup');
+like($cfg5, qr/server imap3 10\.50\.2\.54:143 check inter 10s fastinter 2s downinter 5s send-proxy backup\n/, 'active_passive: third server is backup');
 # send_proxy: false -- no PROXY header (Dovecot LMTP/auth are plain listeners).
-like($cfg5, qr/server lmtp1 10\.50\.2\.52:24 check\n/, 'send_proxy false: first server has NO send-proxy');
-like($cfg5, qr/server lmtp2 10\.50\.2\.53:24 check backup\n/, 'send_proxy false: backup server has NO send-proxy either');
+like($cfg5, qr/server lmtp1 10\.50\.2\.52:24 check inter 10s fastinter 2s downinter 5s\n/, 'send_proxy false: first server has NO send-proxy');
+like($cfg5, qr/server lmtp2 10\.50\.2\.53:24 check inter 10s fastinter 2s downinter 5s backup\n/, 'send_proxy false: backup server has NO send-proxy either');
+
+# check_inter (post-cutover #105): every server line carries the health-check
+# interval, 10s unless the backend sets its own; a value that is not a haproxy
+# time is refused with the config untouched.
+open(my $cifh, '>', $backends_yml) or die $!;
+print $cifh <<YAML;
+backends:
+  - name: imap
+    frontend_port: 143
+    mode: active_passive
+    check_inter: 5s
+    backends:
+      - 10.50.2.52:143
+      - 10.50.2.53:143
+  - name: smtp
+    frontend_port: 25
+    backend: 10.50.2.46:25
+YAML
+close($cifh);
+my $output7 = `perl script/homelab-haproxy-apply-backends 2>&1`;
+is($? >> 8, 0, 'check_inter applies cleanly') or diag($output7);
+my $cfg7 = do { local (@ARGV, $/) = $haproxy_cfg; <> };
+like($cfg7, qr/server imap1 10\.50\.2\.52:143 check inter 5s fastinter 2s downinter 5s send-proxy\n/, 'check_inter: 5s is that backend\'s interval');
+like($cfg7, qr/server imap2 10\.50\.2\.53:143 check inter 5s fastinter 2s downinter 5s send-proxy backup\n/, '... on its backup server too');
+like($cfg7, qr/server smtp 10\.50\.2\.46:25 check inter 10s fastinter 2s downinter 5s send-proxy\n/, 'a backend without check_inter gets the 10s default');
+my $before7 = $cfg7;
+open(my $cibad, '>', $backends_yml) or die $!;
+print $cibad "backends:\n  - name: imap\n    frontend_port: 143\n    check_inter: often\n    backend: 10.50.2.52:143\n";
+close($cibad);
+my $output8 = `perl script/homelab-haproxy-apply-backends 2>&1`;
+isnt($? >> 8, 0, 'a check_inter that is not a haproxy time is rejected');
+like($output8, qr/check_inter/, 'the check_inter error names the key');
+is(do { local (@ARGV, $/) = $haproxy_cfg; <> }, $before7, 'the config is untouched after a bad check_inter');
 
 # Unknown mode is rejected (fail-closed, config untouched).
 open(my $badfh, '>', $backends_yml) or die $!;

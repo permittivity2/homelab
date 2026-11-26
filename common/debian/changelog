@@ -1,3 +1,15 @@
+homelab-common (0.1.41) unstable; urgency=medium
+
+  * /etc/logrotate.d/00-homelab-maxsize: `maxsize 200M` as the default for
+    every logrotate stanza on the host (logrotate reads the directory in name
+    order; a directive outside a stanza applies to the stanzas after it). A
+    log past 200 MB rotates at the next daily run whatever its schedule; the
+    stock weekly rsyslog stanza let two uncompressed weeks of a flooded
+    mail.log and syslog fill prod-homelab39's root disk (post-cutover #105).
+    No Perl changes: nothing needs a restart after this upgrade.
+
+ -- Gardner <gardner@homelab>  Thu, 26 Nov 2026 14:00:00 -0600
+
 homelab-common (0.1.40) unstable; urgency=medium
 
   * homelab-mount-retry calls systemctl without a shell: a mount unit named

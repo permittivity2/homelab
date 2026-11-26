@@ -53,6 +53,14 @@ regression test this gotcha is captured in.
 
 ## Lua records, health checks and geography (item 44)
 
+Since post-cutover #105 every `ifportup` carries `interval=20` (PowerDNS checks
+each address every 5 s by default): each check is a connection the edge's haproxy
+passes on to a postfix node, which logs it as a three-line SMTP session, and
+three DNS nodes at 5 s were over 50,000 connects a day on the mail pool. The
+records are written by `install-orchestrators/dns-lua-orchestrate.sh`
+(`LUA_INTERVAL`); with `minimumFailures=2` a dead edge leaves the answer within
+40 s, against the records' 120 s TTL.
+
 `homelab-dns` writes `/etc/powerdns/pdns.d/94-homelab-dns-lua.conf`: Lua
 records on, EDNS client-subnet processing on, and (when the database file is
 present) the `geoip` backend appended with `launch+=geoip`. The database is

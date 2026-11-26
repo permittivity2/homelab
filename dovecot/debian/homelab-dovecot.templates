@@ -74,3 +74,19 @@ Description: Unique identifier for this HA instance's own Postgres role:
  role becomes homelab_dovecot_runtime_<value>. Changing this on an
  already-bootstrapped instance does NOT migrate the old role; run
  'dpkg-reconfigure homelab-dovecot' afterward to bootstrap the new one.
+
+Template: homelab-dovecot/health_check_clients
+Type: string
+Default:
+Description: Client addresses whose IMAP connections are health checks (not logged):
+ Space-separated addresses; empty logs everything. HAProxy's `check` on the
+ proxies in front of this host connects and hangs up every few seconds, and
+ imap-login logs each one ("haproxy: Client disconnected (rip=...):
+ Connection reset by peer" -- over 10,000 lines a day on this project's own
+ IMAP node, post-cutover #105). An rsyslog rule this package writes
+ (/etc/rsyslog.d/45-homelab-dovecot-health-checks.conf) discards every
+ imap-login line whose remote address (rip=) is one of these before it
+ reaches mail.log or syslog. With behind_haproxy=true the address is the
+ one in the PROXY header, so a proxy's own checks show the proxy's address
+ and a real user never does. The journal is untouched and keeps every line
+ within its own cap. List only addresses that never log in.

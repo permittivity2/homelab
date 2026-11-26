@@ -36,6 +36,14 @@
 #     mode: active_passive
 #     backends: [10.50.2.52:143, 10.50.2.53:143, 10.50.2.54:143]
 #
+# check_inter (optional, default 10s): how often HAProxy health-checks each
+# server of this backend while it is up (its own default is 2s). Every probe
+# is a logged connection on the backend -- three Postfix lines each -- and at
+# 2s from three proxies the mail pool filled a root disk (post-cutover #105).
+# Transitions stay fast (fastinter 2s, downinter 5s are fixed), so 10s only
+# delays the detection of a dead server from about 6s to about 14s. Use 5s
+# where users feel that delay (IMAP); mail, which retries, takes the default.
+#
 # send_proxy (optional, default true): whether HAProxy prepends the
 # PROXY-protocol header to the backend. Keep true for imap/imaps (Dovecot's
 # imap-login runs `haproxy = yes` and REQUIRES the preamble) and SMTP. Set
@@ -79,10 +87,12 @@ backends:
   - name: imap
     frontend_port: 143
     backend: 127.0.0.1:143
+    check_inter: 5s
     maxconn: 500
   - name: imaps
     frontend_port: 993
     backend: 127.0.0.1:993
+    check_inter: 5s
     maxconn: 500
   # An internal HTTP admin API fronted for HA (homelab-domain-admin runs on
   # every signer host in the postfix pool). All-active round-robin (default

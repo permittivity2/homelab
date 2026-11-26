@@ -179,3 +179,24 @@ mount failed is `inactive`, not `failed`, and nothing else would retry it.
 `Homelab::Common::Config::load_config` also forces `server.pid_file` to
 `$RUNTIME_DIRECTORY/hypnotoad.pid` whenever systemd exports `RUNTIME_DIRECTORY`, so a
 stale pid on disk after a power cut can never make hypnotoad signal a stranger.
+
+## A ceiling on every log: `/etc/logrotate.d/00-homelab-maxsize` (post-cutover #105)
+
+Every fleet node has homelab-common, so it carries the one logrotate setting the
+whole fleet should have had: `maxsize 200M`, as a *global* directive in a file
+that sorts first in `/etc/logrotate.d`. logrotate reads that directory in name
+order and a directive outside any stanza is the default for every stanza read
+after it, so the stock stanzas (rsyslog's `syslog`/`mail.log`/`auth.log`/
+`kern.log`, apt, dpkg, haproxy, nginx, ...) all get it without any of their
+conffiles being edited or diverted. A stanza with its own `size`/`maxsize`/
+`minsize` keeps it. Check it with `logrotate -d /etc/logrotate.conf`: the
+rsyslog stanza reports "log files >= 209715200 are rotated earlier".
+
+Why: the stock rsyslog stanza is weekly, four generations, `delaycompress`. At
+the 1.3 GB a week a health-check flood wrote to `mail.log` and `syslog`
+(homelab-postfix's README, "Health checks are not logged"), two uncompressed
+weeks of both filled prod-homelab39's 7.8 GB root disk on 2026-11-26. logrotate
+runs daily (`logrotate.timer`), so with this a flood costs at most a day's
+worth of one log before it rotates. This release changes no Perl, so nothing
+needs restarting after the upgrade.
+`install-orchestrators/probe-logging-orchestrate.sh --verify` checks every node.
