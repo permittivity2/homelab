@@ -122,8 +122,14 @@ DC_GREP="rip=($(grep_re_of $IMAP_PROBERS))[^0-9]"
 # ----------------------------------------------------- mail / imap nodes --
 # TAG is a grep -E pattern for the program in a log line: " postfix/" (postfix/smtpd[1]: in syslog and
 # the journal alike), " dovecot[:[]" (syslog says "dovecot:", the journal "dovecot[pid]:").
+# SYSTAG is the pattern for the MAIL lines that must not reach syslog any more: the postfix daemons
+# that log mail traffic (postfix-script's "refreshing the Postfix mail system" at a reload is a
+# postfix[pid] line, not one of them) and every dovecot line.
 read -r -d '' MAIL_STATE_SCRIPT <<'REMOTE'
 since=$(date -d "-${WINDOW} sec" -Is)
+# ... but never from before the rule took effect: lines older than the drop-in (+5 s for the rsyslog
+# restart that follows the write) were logged under the previous rule and do not count.
+if [ -f "$DROPIN" ]; then eff=$(date -d "$(date -r "$DROPIN" -Is) + 5 sec" -Is); [[ "$eff" > "$since" ]] && since=$eff; fi
 echo "ver=$(dpkg-query -W -f='${Version}' "$PKG" 2>/dev/null)"
 echo "rsyslog=$(systemctl is-active rsyslog)"
 echo "svc=$(systemctl is-active "$UNIT")"
@@ -132,7 +138,7 @@ rsyslogd -N1 >/dev/null 2>&1 && echo valid=yes || echo valid=no
 echo "disk=$(df --output=pcent / | tail -1 | tr -dc 0-9)"
 echo "probe_lines=$(awk -v s="$since" '$1 > s' /var/log/mail.log 2>/dev/null | grep -cE -- "$RE")"
 echo "journal_probe=$(journalctl --since "-${WINDOW}s" --no-pager -q -o short-iso 2>/dev/null | grep -E -- " $TAG" | grep -cE -- "$RE")"
-echo "syslog_mail=$(awk -v s="$since" '$1 > s' /var/log/syslog 2>/dev/null | grep -cE -- " $TAG")"
+echo "syslog_mail=$(awk -v s="$since" '$1 > s' /var/log/syslog 2>/dev/null | grep -cE -- " $SYSTAG")"
 echo "mail_lines=$(awk -v s="$since" '$1 > s' /var/log/mail.log 2>/dev/null | wc -l)"
 echo "rule=$(grep -v '^#' "$DROPIN" 2>/dev/null | head -1)"
 REMOTE
@@ -140,9 +146,9 @@ REMOTE
 mail_checks(){ # $1 = NN, $2 = postfix|dovecot, $3 = window in seconds
     local n=$1 kind=$2 win=$3 ip pkg unit dropin want_v rule_want re tag st v rule
     ip=$(h "$n")
-    if [ "$kind" = postfix ]; then pkg=homelab-postfix; unit=postfix; dropin=$PF_DROPIN; want_v=$WANT_PF; rule_want=$PF_RULE; re=$PF_GREP; tag=postfix/
-    else pkg=homelab-dovecot; unit=dovecot; dropin=$DC_DROPIN; want_v=$WANT_DC; rule_want=$DC_RULE; re=$DC_GREP; tag='dovecot[:[]'; fi
-    st=$(rscript "$ip" "PKG=$pkg" "UNIT=$unit" "DROPIN=$dropin" "MAIL_DROPIN=$MAIL_DROPIN" "RE='$re'" "TAG='$tag'" "WINDOW=$win" <<<"$MAIL_STATE_SCRIPT") \
+    if [ "$kind" = postfix ]; then pkg=homelab-postfix; unit=postfix; dropin=$PF_DROPIN; want_v=$WANT_PF; rule_want=$PF_RULE; re=$PF_GREP; tag=postfix/; systag='postfix/([a-z]+/)?(smtpd|qmgr|cleanup|smtp|lmtp|pickup|anvil|local|bounce|trivial-rewrite)\['
+    else pkg=homelab-dovecot; unit=dovecot; dropin=$DC_DROPIN; want_v=$WANT_DC; rule_want=$DC_RULE; re=$DC_GREP; tag='dovecot[:[]'; systag='dovecot[:[]'; fi
+    st=$(rscript "$ip" "PKG=$pkg" "UNIT=$unit" "DROPIN=$dropin" "MAIL_DROPIN=$MAIL_DROPIN" "RE='$re'" "TAG='$tag'" "SYSTAG='$systag'" "WINDOW=$win" <<<"$MAIL_STATE_SCRIPT") \
         || { bad "$n unreachable"; return; }
     v=$(sed -n 's/^ver=//p' <<<"$st"); rule=$(sed -n 's/^rule=//p' <<<"$st")
     ver_ge "$v" "$want_v" && ok "$n $pkg $v" || finding "$n $pkg ${v:-none} < $want_v"
@@ -163,7 +169,7 @@ mail_checks(){ # $1 = NN, $2 = postfix|dovecot, $3 = window in seconds
         echo "       ${D}last ${win}s: $pl prober lines in mail.log, $jp in the journal${O}"
     fi
     if [ "$(sed -n 's/^mail_dropin=//p' <<<"$st")" = yes ]; then
-        [ "${sm:-0}" = 0 ] && ok "$n no $tag line in syslog in the last ${win}s" || bad "$n $sm $tag line(s) still reached syslog in the last ${win}s"
+        [ "${sm:-0}" = 0 ] && ok "$n no mail line in syslog in the last ${win}s" || bad "$n $sm mail line(s) still reached syslog in the last ${win}s"
     fi
     [ "${ml:-0}" -gt 0 ] && ok "$n mail.log still receives lines ($ml in ${win}s)" || warn "$n mail.log received nothing in ${win}s (quiet, or rsyslog not writing?)"
     [ "${disk:-100}" -lt 85 ] && ok "$n root disk ${disk}%" || bad "$n root disk ${disk}% (RootDiskFilling fires at 85)"
@@ -258,8 +264,8 @@ read -r -d '' FLEET_STATE_SCRIPT <<'REMOTE'
 echo "common=$(dpkg-query -W -f='${Version}' homelab-common 2>/dev/null)"
 if [ -f "$LR_FILE" ] && grep -q "^maxsize $MAXSIZE" "$LR_FILE"; then echo lr=yes; else echo lr=no; fi
 lr_out=$(logrotate -d /etc/logrotate.conf 2>&1)
-echo "lr_errors=$(grep -ci 'error' <<<"$lr_out")"
-echo "lr_error_first=$(grep -i 'error' <<<"$lr_out" | head -1)"
+echo "lr_errors=$(grep -c '^error:' <<<"$lr_out")"
+echo "lr_error_first=$(grep '^error:' <<<"$lr_out" | head -1)"
 echo "lr_earlier=$(grep -c 'rotated earlier' <<<"$lr_out")"
 echo "disk=$(df --output=pcent / | tail -1 | tr -dc 0-9)"
 MID=$(cat /etc/machine-id)
