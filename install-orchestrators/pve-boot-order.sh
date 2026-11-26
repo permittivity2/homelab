@@ -25,20 +25,21 @@
 # orders descending, `down` seconds per guest (default 180) before it forces.
 # A start that fails (a NAS away at boot) is logged and the run goes on.
 #
-# THE ORDER (the fleet fact; edit here, nowhere else):
-#   1   DNS, time, remote access     ns03 116, ntp 108, vpn01 126
-#   30  database (etcd + patroni)    406 407 408           up=60 (quorum), down=300
-#   40  pooler                       409 410 411           up=5
-#   50  control plane                api 412-414, sso 418-420   up=15
-#   60  auth DNS + app pools         403-405 415-417 421-438 445 446, notes 447-449, calendar 450-452, ai 453
-#   80-85 storage VMs, one by one    dovecot 462 463 464, drive 465 466 467   up=20
-#   88  mail + webmail               postfix 439-441, roundcube 442-444   up=5
-#   90  the public edge, all three   400 401 402           up=5
-#   100-104 background VMs           metrics 469, search 470 471 472, mirrors 129   up=20
-#   110 harness                      461
-#   120-123 NAS-backed legacy        administrator 117, aptcacher 122, forwarder01 125, Plex 100   up=10
-#   never (onboot=0)                 spares 454-460, vm68, proxy01 109, 107 111 112, 300-360,
-#                                    old VMs 102-106 110 113-115 118 121 128 200, templates
+# THE ORDER (the fleet fact; edit here, nowhere else). THREE WAVES, one per storage
+# (post-cutover #41 waves plan, after the first real reboot showed 66 boots at once
+# off one spinning disk): wave 1 from pve2's NVMe has every service up in minutes;
+# wave 2 from the NAS flash and wave 3 from the spinner follow, paced so each guest
+# finishes its own boot before the next starts -- ONE container at a time with 30 s
+# after each, VMs one at a time with 90 s after each ("no storms!"). Health over speed.
+#   wave 1 (1-110, local-lvm):   ns03 ntp vpn01 | DB 406 407 (up 60, down 300) | pooler 409 | api 412, sso 418
+#                                | 403 415 421 424 427 430 433 436 445 446 447 450 453 | dovecot 462, drive 465
+#                                | postfix 439, roundcube 442 | edge 400 | metrics 469, search 470
+#   wave 2 (200-222, nfs-speedy): one at a time, 30 s each: 404 416 422 425 428 431 434 437 448 451 440 443 410 413 419 edge 401
+#                                | then VMs 463, 466, 471 (90 s each)
+#   wave 3 (300-343, spinner):    DB 408 (down 300), then one at a time: 405 417 423 426 429 432 435 438 449 452 441 444 411 414 420 edge 402
+#                                | VMs 464, 467, 472, mirrors 129 (90 s each) | harness 461 | NAS legacy 117 122 125 100
+#   never (onboot=0)              spares 454-460, vm68, proxy01 109, 107 111 112, 300-360,
+#                                 old VMs 102-106 110 113-115 118 121 128 200, templates
 # ============================================================================
 set -u
 MODE="${1:---dry-run}"; ARG="${2:-}"
@@ -55,25 +56,33 @@ ITEM=/home/gardner/claude/general/homelab_issues_and_fixes/open/2026-11-02_post-
 
 # id|tier label|order|up|down   (order "" = never starts: onboot=0, startup left as it is)
 WANT=(
+# --- wave 1: pve2's NVMe (local-lvm). Every service up from the fast disk before the spinner is touched. ---
 "116|dns ns03|1|10|"
 "108|time ntp|1|10|"
 "126|vpn01|1|5|"
-"406|database|30|60|300" "407|database|30|60|300" "408|database|30|60|300"
-"409|pooler|40|5|" "410|pooler|40|5|" "411|pooler|40|5|"
-"412|api|50|15|" "413|api|50|15|" "414|api|50|15|" "418|sso|50|15|" "419|sso|50|15|" "420|sso|50|15|"
-"403|auth dns|60||" "404|auth dns|60||" "405|auth dns|60||"
-"415|worker|60||" "416|worker|60||" "417|worker|60||"
-"421|app|60||" "422|app|60||" "423|app|60||" "424|app|60||" "425|app|60||" "426|app|60||" "427|app|60||" "428|app|60||" "429|app|60||"
-"430|app|60||" "431|app|60||" "432|app|60||" "433|app|60||" "434|app|60||" "435|app|60||" "436|app|60||" "437|app|60||" "438|app|60||"
-"445|static+apt|60||" "446|cert issuer|60||"
-"447|notes|60||" "448|notes|60||" "449|notes|60||" "450|calendar|60||" "451|calendar|60||" "452|calendar|60||" "453|ai|60||"
-"462|dovecot vm|80|20|" "463|dovecot vm|81|20|" "464|dovecot vm|82|20|"
-"465|drive vm|83|20|" "466|drive vm|84|20|" "467|drive vm|85|20|"
-"439|postfix|88|5|" "440|postfix|88|5|" "441|postfix|88|5|" "442|roundcube|88|5|" "443|roundcube|88|5|" "444|roundcube|88|5|"
-"400|edge|90|5|" "401|edge|90|5|" "402|edge|90|5|"
-"469|metrics vm|100|20|" "470|search vm|101|20|" "471|search vm|102|20|" "472|search vm|103|20|" "129|mirrors vm|104|20|"
-"461|harness|110||"
-"117|legacy nas administrator|120|10|" "122|legacy nas aptcacher|121|10|" "125|legacy nas forwarder01|122|10|" "100|legacy nas plex|123|10|"
+"406|database|30|60|300" "407|database|30|60|300"
+"409|pooler|40|5|"
+"412|api|50|15|" "418|sso|50|15|"
+"403|auth dns|60||" "415|worker|60||"
+"421|app|60||" "424|app|60||" "427|app|60||" "430|app|60||" "433|app|60||" "436|app|60||"
+"445|static+apt|60||" "446|cert issuer|60||" "447|notes|60||" "450|calendar|60||" "453|ai|60||"
+"462|dovecot vm (active)|80|20|" "465|drive vm|83|20|"
+"439|postfix|88|5|" "442|roundcube|88|5|"
+"400|edge|90|5|"
+"469|metrics vm|100|20|" "470|search vm|101|20|"
+# --- wave 2: the NAS flash (nfs-speedy). Second members. ONE container at a time, 30 s after each; VMs one at a time, 90 s after each. ---
+"404|auth dns|200|30|" "416|worker|201|30|" "422|app|202|30|" "425|app|203|30|" "428|app|204|30|" "431|app|205|30|"
+"434|app|206|30|" "437|app|207|30|" "448|notes|208|30|" "451|calendar|209|30|" "440|postfix|210|30|" "443|roundcube|211|30|"
+"410|pooler|212|30|" "413|api|213|30|" "419|sso|214|30|" "401|edge|215|30|"
+"463|dovecot vm|220|90|" "466|drive vm|221|90|" "471|search vm|222|90|"
+# --- wave 3: the spinner (local-spinner). Third members, standbys, the rest; same pacing. ---
+"408|database|300|30|300"
+"405|auth dns|301|30|" "417|worker|302|30|" "423|app|303|30|" "426|app|304|30|" "429|app|305|30|" "432|app|306|30|"
+"435|app|307|30|" "438|app|308|30|" "449|notes|309|30|" "452|calendar|310|30|" "441|postfix|311|30|" "444|roundcube|312|30|"
+"411|pooler|313|30|" "414|api|314|30|" "420|sso|315|30|" "402|edge|316|30|"
+"464|dovecot vm|320|90|" "467|drive vm|321|90|" "472|search vm|322|90|" "129|mirrors vm|323|90|"
+"461|harness|330|30|"
+"117|legacy nas administrator|340|10|" "122|legacy nas aptcacher|341|10|" "125|legacy nas forwarder01|342|10|" "100|legacy nas plex|343|10|"
 )
 NEVER="454 455 456 457 458 459 460 468 109 107 111 112 300 301 302 303 304 305 306 307 308 309 310 311 312 313 314 315 316 317 318 319 320 321 322 323 324 325 326 327 328 329 330 331 332 333 334 335 336 337 338 339 340 341 342 343 344 345 346 347 348 349 350 360 102 103 104 105 106 110 113 114 115 118 121 128 200 99907 99908 99909 99910 99911 99912 99913"
 
