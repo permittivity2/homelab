@@ -1,3 +1,12 @@
+homelab-roundcube (0.1.29) unstable; urgency=medium
+
+  * Drop-ins for nginx.service and postfix.service on the webmail nodes:
+    Restart=on-failure RestartSec=5. At the first real pve2 reboot postfix's
+    start-pre timed out on all three and stayed down (post-cutover #41,
+    waves plan step 1).
+
+ -- Gardner <gardner@homelab>  Wed, 25 Nov 2026 23:40:00 -0600
+
 homelab-roundcube (0.1.28) unstable; urgency=medium
 
   * The nginx vhost serves /favicon.ico from homelab-webtheme's file

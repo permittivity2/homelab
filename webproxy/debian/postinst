@@ -7,6 +7,8 @@ SHARE_DIR=/usr/share/homelab-webproxy
 
 case "$1" in
     configure)
+        # The nginx restart-policy drop-in this package ships must be known before anything below reloads nginx (post-cutover #41).
+        systemctl daemon-reload >/dev/null 2>&1 || true
         echo "homelab-webproxy post-installation setup..."
         mkdir -p "$CONFIG_DIR"
 

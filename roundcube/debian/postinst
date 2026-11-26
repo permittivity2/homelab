@@ -10,6 +10,8 @@ NGINX_VHOST_ENABLED=/etc/nginx/sites-enabled/homelab-roundcube-internal
 
 case "$1" in
     configure)
+        # unit drop-ins before any restart
+        systemctl daemon-reload >/dev/null 2>&1 || true
         echo "homelab-roundcube post-installation setup..."
 
         PHP_VERSION="$(ls /etc/php/ 2>/dev/null | sort -V | tail -1)"

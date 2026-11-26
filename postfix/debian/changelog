@@ -1,3 +1,11 @@
+homelab-postfix (0.1.32) unstable; urgency=medium
+
+  * A drop-in for postfix.service: Restart=on-failure RestartSec=5. At the
+    first real pve2 reboot postfix's start-pre timed out on one MTA and
+    stayed down (post-cutover #41, waves plan step 1).
+
+ -- Gardner <gardner@homelab>  Wed, 25 Nov 2026 23:40:00 -0600
+
 homelab-postfix (0.1.31) unstable; urgency=medium
 
   * Mail-port hardening (post-cutover #65): no AUTH on port 25

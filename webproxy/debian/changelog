@@ -1,3 +1,11 @@
+homelab-webproxy (0.1.15) unstable; urgency=medium
+
+  * A drop-in for nginx.service: Restart=on-failure RestartSec=5. At the
+    first real pve2 reboot nginx timed out starting on all three edges and
+    stayed down (post-cutover #41, waves plan step 1).
+
+ -- Gardner <gardner@homelab>  Wed, 25 Nov 2026 23:40:00 -0600
+
 homelab-webproxy (0.1.14) unstable; urgency=medium
 
   * Release v0.1.14

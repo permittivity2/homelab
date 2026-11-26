@@ -13,6 +13,8 @@ MASTER_CF=/etc/postfix/master.cf
 
 case "$1" in
     configure)
+        # The postfix restart-policy drop-in this package ships must be known before anything below reloads or restarts postfix (post-cutover #41).
+        systemctl daemon-reload >/dev/null 2>&1 || true
         echo "homelab-postfix post-installation setup..."
 
         # postfix's OWN postinst may or may not have created main.cf,
