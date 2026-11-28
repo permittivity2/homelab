@@ -1,3 +1,18 @@
+homelab-common (0.1.42) unstable; urgency=medium
+
+  * Two unit drop-ins for the containers (post-cutover #108): netplan-configure
+    is skipped in containers (ConditionVirtualization=!container -- it has no
+    netplan configuration to apply there and its "udevadm control --reload"
+    fails without udev), and systemd-networkd-wait-online runs through
+    /usr/bin/homelab-wait-online, which adds --any inside a container (links
+    Proxmox attaches disconnected never get carrier, so the stock wait took its
+    full two minutes at every container boot, failed, and held every service
+    after network-online.target for as long). VMs keep both stock units. The
+    postinst clears the two units' failed state on install. t/wait-online.t.
+    No Perl library changes: nothing needs a restart after this upgrade.
+
+ -- Gardner <gardner@homelab>  Fri, 27 Nov 2026 18:30:00 -0600
+
 homelab-common (0.1.41) unstable; urgency=medium
 
   * /etc/logrotate.d/00-homelab-maxsize: `maxsize 200M` as the default for

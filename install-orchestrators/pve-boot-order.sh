@@ -185,6 +185,11 @@ exit 0 ;;
         # "none" = reachable, no agent package (dpkg prints nothing for one that is not installed, which would look like an unreachable node)
         inst=$(ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$ip" 'dpkg-query -W -f "\${db:Status-Status}" homelab-agent 2>/dev/null || echo none' 2>/dev/null)
         case "$inst" in installed) code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$ip:2520/health"); [ "$code" = 200 ] || bad "agent on $id ($ip): $code";; "") bad "$id ($ip): unreachable over ssh";; *) ;; esac;; esac; done; ok "agents answered where installed (any that did not are listed above)"
+    # post-cutover #108: a boot must leave no failed unit anywhere (before #108 every container was "degraded" by two stock network units)
+    echo "--- failed units on every fleet guest"
+    fu=0; for w in "${WANT[@]}"; do IFS='|' read -r id tier order up down <<<"$w"; case "$id" in 4[0-6][0-9]|47[0-2]) n=$((id-400)); ip=$(printf '10.20.2.%d' $((144+n)));
+        f=$(ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$ip" 'systemctl --failed --no-legend --plain 2>/dev/null | awk "{print \$1}" | paste -sd, -' 2>/dev/null); [ -z "$f" ] || { bad "$id ($ip) failed units: $f"; fu=$((fu+1)); };; esac; done
+    [ "$fu" = 0 ] && ok "no failed unit on any fleet guest"
     pl=$(ssh -o ConnectTimeout=10 -o BatchMode=yes 10.20.2.150 'sudo patronictl -c /etc/patroni/config.yml list 2>/dev/null' 2>/dev/null); echo "$pl" | grep -q -E "Leader.*running" && [ "$(echo "$pl" | grep -c -E "Replica.*(streaming|running)")" -ge 2 ] && ok "patroni: a leader and two replicas" || bad "patroni: $(echo "$pl" | paste -sd' ' - | cut -c1-200)"
     # the TL column only: the Lag columns hold numbers too (three nodes on timeline 4 with lag 0 once counted as two)
     tl=$(echo "$pl" | grep -E "Leader|Replica" | awk -F"|" '{gsub(/ /,"",$6); if ($6 != "") print $6}' | sort -u | wc -l); [ "$tl" = 1 ] && ok "one timeline" || bad "timelines: $tl ($(echo "$pl" | grep -E "Leader|Replica" | awk -F"|" '{gsub(/ /,"",$6); print $6}' | paste -sd, -))"

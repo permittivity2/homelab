@@ -27,6 +27,7 @@ WriteMakefile(
     # server install — see CLAUDE.md.
     EXE_FILES    => [
         'script/homelab-bootstrap-app-role',
+        'script/homelab-wait-online',            # post-cutover #108: wait-online --any inside a container
         'script/homelab-bootstrap-pgbouncer-entry',
         'script/homelab-bootstrap-haproxy-backend',
         'script/homelab-bootstrap-pdns-api-client',

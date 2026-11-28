@@ -1,0 +1,23 @@
+#!/usr/bin/perl
+# homelab-wait-online -- systemd-networkd-wait-online, with --any inside a
+# container (post-cutover #108). Run by the homelab-common drop-in
+# /usr/lib/systemd/system/systemd-networkd-wait-online.service.d/homelab-container.conf
+# in place of the stock command.
+#
+# In an LXC container Proxmox attaches the planes a node does not use as
+# disconnected links (link_down=1); they never get carrier, so the stock "wait
+# for every link to be routable" waited its full two minutes at every boot,
+# failed, and everything ordered after network-online.target waited with it.
+# With --any the target is reached as soon as one link is routable. Outside a
+# container (the VMs, where every link is real) the stock command runs
+# unchanged, arguments passed through either way.
+#
+# HOMELAB_WAIT_ONLINE_BIN overrides the binary (tests).
+use strict;
+use warnings;
+
+my $bin  = $ENV{HOMELAB_WAIT_ONLINE_BIN} || '/usr/lib/systemd/systemd-networkd-wait-online';
+my @args = @ARGV;
+my $in_container = system('systemd-detect-virt', '-cq') == 0;   # list form: no shell
+push @args, '--any' if $in_container && !grep { $_ eq '--any' } @args;
+exec $bin, @args or die "homelab-wait-online: cannot exec $bin: $!\n";
