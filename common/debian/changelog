@@ -1,3 +1,21 @@
+homelab-common (0.1.43) unstable; urgency=medium
+
+  * Homelab::Common::DB::Database: a one-method Mojo::Pg::Database subclass set
+    as the database_class of every runtime_pg handle, to end the runaway
+    "connection not open" log flood (post-cutover #110). Mojo::Pg 4.28's _watch
+    probes a backend with pg_ready while RaiseError is on; when a Patroni leader
+    switch drops the connection mid async query, pg_ready dies, the reactor
+    callback leaves `waiting` set and never unwatches, and the dead socket
+    re-fires the callback every tick forever (~500 lines/s, 2 GB/day; it filled
+    prod-homelab12). The override probes readiness safely: a dead connection
+    fails the pending query once, unwatches, and drops the handle so the pool
+    reconnects on the next ->db; a normal in-flight query is untouched.
+    t/db-watch.t. Only homelab-api runs async query_p today, so it is the one
+    tier that must restart to pick this up; other services load the (inert for
+    them) class at their next restart.
+
+ -- Gardner <gardner@homelab>  Fri, 27 Nov 2026 23:55:00 -0600
+
 homelab-common (0.1.42) unstable; urgency=medium
 
   * Two unit drop-ins for the containers (post-cutover #108): netplan-configure

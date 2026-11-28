@@ -5,6 +5,8 @@ use Mojo::Util qw(url_escape);
 use DBI;
 use Exporter 'import';
 
+use Homelab::Common::DB::Database ();   # the runtime handle's database_class (#110)
+
 our @EXPORT_OK = qw(pg_url runtime_pg migrate_dbh);
 
 # Builds a postgresql:// URL from a config hash — the shape every
@@ -33,7 +35,11 @@ sub pg_url {
 # connect as the narrow, DDL-less `<feature>_runtime` role.
 sub runtime_pg {
     my (%opts) = @_;
-    return Mojo::Pg->new(pg_url(%opts));
+    my $pg = Mojo::Pg->new(pg_url(%opts));
+    # Every runtime handle survives a backend dropped mid async query instead
+    # of looping on the dead socket and flooding the log (post-cutover #110).
+    $pg->database_class('Homelab::Common::DB::Database');
+    return $pg;
 }
 
 # Plain DBI handle for MIGRATION use. By convention the config passed
