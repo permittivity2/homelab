@@ -29,9 +29,13 @@ override_dh_install:
 		debian/homelab-dns/lib/systemd/system/homelab-dns-pull.service
 	install -D -m 644 systemd/homelab-dns-pull.timer \
 		debian/homelab-dns/lib/systemd/system/homelab-dns-pull.timer
+	install -D -m 755 script/homelab-dns-warm-lua \
+		debian/homelab-dns/usr/lib/homelab-dns/homelab-dns-warm-lua
+	install -D -m 644 systemd/pdns.service.d/homelab-warm-lua.conf \
+		debian/homelab-dns/lib/systemd/system/pdns.service.d/homelab-warm-lua.conf
 
 override_dh_auto_build:
 	# Nothing to compile
 
 override_dh_auto_test:
-	# No package-build-time tests
+	prove t

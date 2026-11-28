@@ -217,6 +217,15 @@ case "$MODE" in
     ;;
 
 --verify)
+    step "the Lua warm-up at start on every PowerDNS node (post-cutover #107)"
+    # A fresh PowerDNS answers every address of an ifportup record until its first check has run;
+    # homelab-dns >= 0.2.1 warms the state from a pdns.service drop-in at every start.
+    for ip in $PDNS_NODES; do
+        have=$(ssh -n -o ConnectTimeout=8 "$ip" 'systemctl cat pdns.service 2>/dev/null | grep -c homelab-dns-warm-lua' 2>/dev/null || true)
+        [ "${have:-0}" -ge 1 ] && ok "$ip: pdns.service carries the warm-up drop-in" || bad "$ip: pdns.service has no warm-up drop-in (homelab-dns >= 0.2.1)"
+        warmed=$(ssh -n -o ConnectTimeout=8 "$ip" 'sudo journalctl -u pdns.service -b --no-pager -o cat 2>/dev/null | grep "homelab-dns-warm-lua: warmed" | tail -1' 2>/dev/null || true)
+        [ -n "$warmed" ] && ok "$ip: $warmed" || bad "$ip: no warm-up logged since this boot of pdns (restart pdns once after installing 0.2.1)"
+    done
     step "every converted name, asked of both nameservers from offsite"
     NAMES=$(rn 'for z in $(sudo pdnsutil zone list-all 2>/dev/null | grep -v "\.invalid$"); do
                   sudo pdnsutil zone list "$z" 2>/dev/null | awk "\$4==\"LUA\" {print \$1}"

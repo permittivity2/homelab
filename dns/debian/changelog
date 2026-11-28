@@ -1,3 +1,17 @@
+homelab-dns (0.2.1) unstable; urgency=medium
+
+  * Warm the Lua health-check state at every start (post-cutover #107):
+    /usr/lib/homelab-dns/homelab-dns-warm-lua, run as ExecStartPost by the
+    pdns.service drop-in homelab-warm-lua.conf, lists every LUA record
+    (pdnsutil), queries each once at the local address so PowerDNS starts
+    checking its addresses, waits one check round and logs what is answered
+    now. Without it a fresh PowerDNS hands the first client of every record
+    all of the record's addresses, dead edges included (seen at the pve2
+    reboot of 2026-11-27). Never fails the unit. Depends on libnet-dns-perl.
+    t/warm-lua.t runs at build time. Takes effect at the next pdns start.
+
+ -- Gardner <gardner@homelab>  Fri, 27 Nov 2026 18:30:00 -0600
+
 homelab-dns (0.2.0) unstable; urgency=medium
 
   * Release v0.2.0

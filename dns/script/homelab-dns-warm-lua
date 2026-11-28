@@ -1,0 +1,162 @@
+#!/usr/bin/perl
+# homelab-dns-warm-lua -- warm PowerDNS's Lua health-check state right after it
+# starts. Post-cutover #107; run as ExecStartPost by the drop-in
+# /lib/systemd/system/pdns.service.d/homelab-warm-lua.conf.
+#
+# WHY. A freshly started PowerDNS answers EVERY address of an ifportup()/
+# ifurlup() Lua record until the first health check of those addresses has run,
+# and the checks only begin when the record is first queried: the state is kept
+# per address+port+options and starts empty, and with all of them unknown the
+# record's backupSelector hands out all of them. So the first client to ask a
+# fresh server -- after a boot, a restart, a package upgrade -- gets the dead
+# edges too (2026-11-27: www.mailmasker.org came back with three edges while
+# one was up; webmail and IMAPS flapped from outside for four minutes).
+#
+# WHAT. List every LUA record of every zone (pdnsutil), query each once at the
+# server's own address so its checks start, wait one check round, query again
+# and log what the server now answers. It exits 0 whatever happens and the
+# drop-in prefixes it with "-" as well: a warm-up problem can never fail pdns.
+#
+#   homelab-dns-warm-lua             # from the unit
+#   homelab-dns-warm-lua --dry-run   # print the config and the records; send nothing
+#
+# Environment (the tests use them): PDNS_CONF_DIR (/etc/powerdns), PDNSUTIL
+# (pdnsutil), HOMELAB_WARM_SLEEP (seconds between the two rounds; default one
+# lua-health-checks-interval plus three).
+use strict;
+use warnings;
+
+my $DRY      = grep { $_ eq '--dry-run' } @ARGV;
+my $CONF_DIR = $ENV{PDNS_CONF_DIR} || '/etc/powerdns';
+my $PDNSUTIL = $ENV{PDNSUTIL} || 'pdnsutil';
+$| = 1;
+
+sub say_log { print "homelab-dns-warm-lua: @_\n" }
+
+# pdns.conf, then pdns.d/*.conf in name order; a later file wins for a key.
+sub read_conf {
+    my ($dir) = @_;
+    my %c;
+    for my $f ("$dir/pdns.conf", sort glob("$dir/pdns.d/*.conf")) {
+        open my $fh, '<', $f or next;
+        while (my $l = <$fh>) {
+            next if $l =~ /^\s*(#|$)/;
+            next unless $l =~ /^\s*([a-z0-9-]+)\s*(\+?=)\s*(.*?)\s*$/;
+            my ($k, $op, $v) = ($1, $2, $3);
+            next if $op eq '+=';
+            $c{$k} = $v;
+        }
+        close $fh;
+    }
+    my ($addr) = split /\s*,\s*/, ($c{'local-address'} // '');
+    $addr //= '';
+    $addr =~ s/:(\d+)$// if $addr =~ /^\d+\.\d+\.\d+\.\d+:\d+$/;      # the "10.0.0.1:5300" form
+    my $port = $c{'local-port'};
+    $port = 53 unless defined $port && $port =~ /^\d+$/;
+    my $iv = $c{'lua-health-checks-interval'};
+    $iv = 5 unless defined $iv && $iv =~ /^\d+$/;
+    return { address => ($addr ne '' ? $addr : '127.0.0.1'), port => $port, interval => $iv };
+}
+
+# Run a command without a shell, stderr silenced; its stdout lines.
+sub run_lines {
+    my (@cmd) = @_;
+    my $pid = open(my $fh, '-|');
+    return () unless defined $pid;
+    if ($pid == 0) {
+        open STDERR, '>', '/dev/null';
+        exec @cmd or exit 127;
+    }
+    my @l = <$fh>;
+    close $fh;
+    chomp @l;
+    return @l;
+}
+
+# pdnsutil 5 ("zone list-all" / "zone list ZONE"), the 4.x verbs as a fallback.
+sub zones {
+    my @z = grep { /\S/ } run_lines($PDNSUTIL, 'zone', 'list-all');
+    @z = grep { /\S/ } run_lines($PDNSUTIL, 'list-all-zones') unless @z;
+    return map { my $x = $_; $x =~ s/^\s+|\s+$//g; $x } @z;
+}
+
+sub lua_records {    # zone -> list of [name, qtype]
+    my ($zone) = @_;
+    my @l = run_lines($PDNSUTIL, 'zone', 'list', $zone);
+    @l = run_lines($PDNSUTIL, 'list-zone', $zone) unless @l;
+    my @r;
+    for (@l) {
+        my @f = split /\s+/;
+        next unless @f >= 5 && $f[3] eq 'LUA';
+        my $q = $f[4];
+        $q =~ s/^"//;                       # the content's first token is the record type it answers
+        next unless $q =~ /^[A-Z][A-Z0-9]*$/;
+        (my $n = $f[0]) =~ s/\.$//;
+        push @r, [$n, $q];
+    }
+    return @r;
+}
+
+sub resolver {
+    my ($cfg) = @_;
+    require Net::DNS;
+    return Net::DNS::Resolver->new(
+        nameservers => [$cfg->{address}], port => $cfg->{port},
+        recurse => 0, retry => 1, retrans => 2, udp_timeout => 3, tcp_timeout => 3,
+    );
+}
+
+# -> the number of answer records of the asked type; undef when nothing came back
+sub ask {
+    my ($res, $name, $qtype) = @_;
+    my $pkt = $res->send($name, $qtype) or return undef;
+    return scalar grep { $_->type eq $qtype } $pkt->answer;
+}
+
+sub main {
+    my $cfg   = read_conf($CONF_DIR);
+    my @zones = zones();
+    unless (@zones) { say_log("no zones listed by $PDNSUTIL -- nothing to warm"); return }
+    my $res = $DRY ? undef : resolver($cfg);
+    my (@records, %per_zone);
+    # Round one: a zone's records are queried as soon as the zone is listed, so
+    # the first zone (the busiest) is warm within a second of the start.
+    for my $z (@zones) {
+        my @r = lua_records($z) or next;
+        push @records, @r;
+        $per_zone{$z} = scalar @r;
+        next if $DRY;
+        ask($res, @$_) for @r;
+    }
+    if ($DRY) {
+        print "config: $cfg->{address}:$cfg->{port}, lua-health-checks-interval $cfg->{interval}\n";
+        print "zones: " . scalar(@zones) . "; Lua records: " . scalar(@records) . "\n";
+        print "would query $_->[1] $_->[0]\n" for @records;
+        return;
+    }
+    unless (@records) { say_log("no Lua records in " . scalar(@zones) . " zones -- nothing to warm"); return }
+    my $wait = $ENV{HOMELAB_WARM_SLEEP};
+    unless (defined $wait && $wait =~ /^\d+$/) {
+        $wait = $cfg->{interval} + 3;
+        $wait = 5  if $wait < 5;
+        $wait = 30 if $wait > 30;
+    }
+    say_log(sprintf 'queried %d Lua records in %d zones at %s:%d; waiting %d s for the first check round',
+        scalar @records, scalar keys %per_zone, $cfg->{address}, $cfg->{port}, $wait);
+    sleep $wait if $wait;
+    my (%dist, @empty, $noanswer);
+    for (@records) {
+        my $n = ask($res, @$_);
+        if (!defined $n) { $noanswer++ }
+        elsif ($n == 0)  { push @empty, "$_->[1] $_->[0]" }
+        else             { $dist{$n}++ }
+    }
+    say_log(sprintf 'warmed %d Lua records in %d zones; answers now: %s%s%s',
+        scalar @records, scalar keys %per_zone,
+        (join(', ', map { "$dist{$_} with $_ address" . ($_ == 1 ? '' : 'es') } sort { $a <=> $b } keys %dist) || 'none'),
+        (@empty ? '; EMPTY: ' . join(' ', @empty) : ''),
+        ($noanswer ? "; no answer for $noanswer" : ''));
+}
+
+eval { main(); 1 } or say_log("failed: $@");
+exit 0;

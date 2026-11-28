@@ -348,4 +348,8 @@ case "$1" in
         ;;
 esac
 
+# post-cutover #107: the pdns.service drop-in (the Lua warm-up at start) is new
+# unit configuration; it takes effect at the next start of pdns.
+systemctl daemon-reload >/dev/null 2>&1 || true
+
 exit 0
