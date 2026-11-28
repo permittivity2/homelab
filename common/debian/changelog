@@ -1,3 +1,17 @@
+homelab-common (0.1.44) unstable; urgency=medium
+
+  * logrotate hourly (post-cutover #110, the ceiling): a drop-in overrides
+    logrotate.timer from OnCalendar=daily to hourly. logrotate only acts at its
+    scheduled run, so the `maxsize 200M` homelab-common already ships
+    (/etc/logrotate.d/00-homelab-maxsize, #105) bounded a flooding log only once
+    a day -- a day was enough to fill a root disk twice (#105, #110). Hourly, a
+    log past 200M is caught within the hour; each log's own daily/weekly
+    rotation is unchanged (logrotate tracks last-rotation per log). The journal
+    is separately size-capped, so this bounds the rsyslog text files that
+    actually fill /. postinst restarts logrotate.timer. No Perl change.
+
+ -- Gardner <gardner@homelab>  Sat, 28 Nov 2026 00:05:00 -0600
+
 homelab-common (0.1.43) unstable; urgency=medium
 
   * Homelab::Common::DB::Database: a one-method Mojo::Pg::Database subclass set

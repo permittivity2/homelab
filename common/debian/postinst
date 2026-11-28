@@ -8,6 +8,9 @@ case "$1" in
         # and clear the failed state those two units left at every container boot
         # before them, so "systemctl is-system-running" tells the truth from now.
         systemctl daemon-reload >/dev/null 2>&1 || true
+        # post-cutover #110: logrotate hourly (its drop-in above) -- reload the
+        # timer so maxsize 200M bounds a flood within the hour, not a day.
+        systemctl restart logrotate.timer >/dev/null 2>&1 || true
         if systemd-detect-virt -cq 2>/dev/null; then
             systemctl reset-failed netplan-configure.service systemd-networkd-wait-online.service >/dev/null 2>&1 || true
         fi

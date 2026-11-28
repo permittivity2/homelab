@@ -1,3 +1,4 @@
 logrotate/00-homelab-maxsize etc/logrotate.d
 systemd/dropins/netplan-configure.service.d/homelab-container.conf usr/lib/systemd/system/netplan-configure.service.d
 systemd/dropins/systemd-networkd-wait-online.service.d/homelab-container.conf usr/lib/systemd/system/systemd-networkd-wait-online.service.d
+systemd/dropins/logrotate.timer.d/homelab-hourly.conf etc/systemd/system/logrotate.timer.d
