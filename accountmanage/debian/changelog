@@ -1,7 +1,7 @@
 homelab-accountmanage (0.1.50) unstable; urgency=medium
 
   * Metrics tab: the fleet-health poll no longer fails closed forever on an
-    expired sign-in (post-cutover #110). When /admin/metrics/summary returns
+    expired sign-in (post-cutover #111). When /admin/metrics/summary returns
     401/403 -- the browser's access token lapsed while the page sat open, e.g.
     across a reboot -- the panel now blanks the tiles, stops polling the dead
     session, and shows "Your sign-in has expired. Sign in again" linking to

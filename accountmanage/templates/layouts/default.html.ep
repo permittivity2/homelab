@@ -1794,7 +1794,7 @@
             // A 401/403 means this browser's sign-in lapsed (e.g. the access token
             // expired while the page sat open across a reboot): the poll was failing
             // closed and showing "unavailable" forever, and only a manual sign-out/in
-            // brought it back (post-cutover #110). Say so, stop polling a dead session,
+            // brought it back (post-cutover #111). Say so, stop polling a dead session,
             // and point at re-auth. A real metrics outage (5xx / network) keeps the
             // old message and keeps polling.
             var expired = e && (e.message === '401' || e.message === '403');
