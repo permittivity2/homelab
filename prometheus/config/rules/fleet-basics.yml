@@ -32,6 +32,21 @@ groups:
           summary: "{{ $labels.host }} root filesystem is {{ $value | printf \"%.0f\" }}% full"
           description: "Find what grew: journalctl --disk-usage, /var/log, /var/cache/apt, the service's spool."
 
+      # Catch a runaway writer EARLY, by rate, not only at 85 % full. The three
+      # 2026-11 floods (#104 blackbox, #105 haproxy/DNS checks, #110 the Mojo::Pg
+      # dead-socket loop) each filled a root disk over a day or two and were seen
+      # only by RootDiskFilling, near the end. This fires within the hour when a
+      # host loses more than 100 MB of free space in an hour, sustained 30 min --
+      # well above normal churn, below every one of those floods (85-190 MB/h).
+      - alert: RootDiskGrowingFast
+        expr: (node_filesystem_avail_bytes{job="node",mountpoint="/"} offset 1h) - node_filesystem_avail_bytes{job="node",mountpoint="/"} > 100 * 1024 * 1024
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} root filesystem lost {{ $value | humanize1024 }}B of free space in the last hour"
+          description: "A process is likely writing log or spool without bound. Find it: install-orchestrators/fleet-log-rate.sh, then on the host journalctl --disk-usage and du -sh /var/log/* /var/cache/apt. See post-cutover #110."
+
       # Mail waiting in a Postfix queue: more than 50 messages for 30 minutes
       # means deliveries are deferring (a dead LMTP target, a milter down, an
       # outbound 25 blocked), not normal traffic on this fleet.

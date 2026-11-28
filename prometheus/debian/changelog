@@ -1,3 +1,14 @@
+homelab-prometheus (0.10.6) unstable; urgency=medium
+
+  * fleet-basics: RootDiskGrowingFast (post-cutover #110). RootDiskFilling only
+    fires at 85% full, so the three 2026-11 log floods (#104/#105/#110) were
+    each seen near the end. This fires within the hour when a host loses more
+    than 100 MB of free root space in an hour, sustained 30 min -- above normal
+    churn, below every one of those floods -- so a runaway writer is caught
+    early. Points at install-orchestrators/fleet-log-rate.sh.
+
+ -- Gardner <gardner@homelab>  Sat, 28 Nov 2026 00:20:00 -0600
+
 homelab-prometheus (0.10.5) unstable; urgency=medium
 
   * Scrapes homelab-notes (post-cutover #71): a `notes` pull entry and job
