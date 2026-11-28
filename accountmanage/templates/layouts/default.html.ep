@@ -1789,13 +1789,27 @@
             }
             var up = document.getElementById('metrics-updated'); if (up) up.textContent = new Date().toLocaleTimeString();
           })
-          .catch(function () {
+          .catch(function (e) {
             var body = document.getElementById('metrics-hosts-body');
-            if (body) body.innerHTML = '<tr><td colspan="4" class="muted">Metrics unavailable.</td></tr>';
+            // A 401/403 means this browser's sign-in lapsed (e.g. the access token
+            // expired while the page sat open across a reboot): the poll was failing
+            // closed and showing "unavailable" forever, and only a manual sign-out/in
+            // brought it back (post-cutover #110). Say so, stop polling a dead session,
+            // and point at re-auth. A real metrics outage (5xx / network) keeps the
+            // old message and keeps polling.
+            var expired = e && (e.message === '401' || e.message === '403');
+            if (expired) {
+              if (metricsTimer) { clearInterval(metricsTimer); metricsTimer = null; }
+              ['m-hosts','m-services','m-probes','m-cert','m-cpu','m-mem','m-disk'].forEach(function (id) { setCard(id, '—', null); });
+              if (body) body.innerHTML = '<tr><td colspan="4" class="muted">Your sign-in has expired. <a href="/login">Sign in again</a> to see live metrics.</td></tr>';
+            } else if (body) {
+              body.innerHTML = '<tr><td colspan="4" class="muted">Metrics unavailable.</td></tr>';
+            }
           });
       }
+      var metricsTimer = null;
       load();
-      setInterval(load, 30000);
+      metricsTimer = setInterval(load, 30000);
       var rf = document.getElementById('metrics-refresh');
       if (rf) rf.addEventListener('click', function (e) { e.preventDefault(); load(); });
     })();

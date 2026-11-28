@@ -1,3 +1,16 @@
+homelab-accountmanage (0.1.50) unstable; urgency=medium
+
+  * Metrics tab: the fleet-health poll no longer fails closed forever on an
+    expired sign-in (post-cutover #110). When /admin/metrics/summary returns
+    401/403 -- the browser's access token lapsed while the page sat open, e.g.
+    across a reboot -- the panel now blanks the tiles, stops polling the dead
+    session, and shows "Your sign-in has expired. Sign in again" linking to
+    /login, instead of a permanent "Metrics unavailable" that only a manual
+    sign-out/in cleared. A real metrics outage (5xx/network) keeps the old
+    message and keeps polling. Template-only change.
+
+ -- Gardner <gardner@homelab>  Fri, 27 Nov 2026 23:30:00 -0600
+
 homelab-accountmanage (0.1.49) unstable; urgency=medium
 
   * The unit keeps its hypnotoad pid file in /run (RuntimeDirectory; needs
