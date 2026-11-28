@@ -1,3 +1,11 @@
+homelab-audit (0.1.13) unstable; urgency=medium
+
+  * Guard the 5s drain timer so a persistent failure (DB unreachable, bad grant)
+    logs once per transition instead of the reactor warning every 5s (post-
+    cutover #110 audit). Individual malformed rows are still logged (bounded).
+
+ -- Gardner <gardner@homelab>  Sat, 28 Nov 2026 01:00:00 -0600
+
 homelab-audit (0.1.12) unstable; urgency=medium
 
   * The unit keeps its hypnotoad pid file in /run (RuntimeDirectory; needs

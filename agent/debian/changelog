@@ -1,3 +1,11 @@
+homelab-agent (0.1.11) unstable; urgency=medium
+
+  * Heartbeat failure logs once per transition, not every interval (post-cutover
+    #110 audit): a {_hb_failed} flag warns on the way into failure and notes
+    recovery once, the same idiom as Homelab::Common::Registry.
+
+ -- Gardner <gardner@homelab>  Sat, 28 Nov 2026 01:00:00 -0600
+
 homelab-agent (0.1.10) unstable; urgency=medium
 
   * The unit keeps its hypnotoad pid file in /run (RuntimeDirectory; needs

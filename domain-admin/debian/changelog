@@ -1,3 +1,10 @@
+homelab-domain-admin (0.1.48) unstable; urgency=medium
+
+  * Periodic DKIM materialize failure logs once per transition, not every 60s
+    tick (post-cutover #110 audit).
+
+ -- Gardner <gardner@homelab>  Sat, 28 Nov 2026 01:00:00 -0600
+
 homelab-domain-admin (0.1.47) unstable; urgency=medium
 
   * The ACME DNS-01 endpoint ADDS a challenge value to the _acme-challenge

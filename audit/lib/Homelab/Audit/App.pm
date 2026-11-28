@@ -85,8 +85,20 @@ sub startup ($self) {
     # DDL-capable migrate role at install/upgrade time. Caught for real
     # ("permission denied for schema audit" from the live service), not
     # by inspection.
+    # Guard the 5s drain so a persistent failure (the DB unreachable, a bad
+    # grant) logs ONCE per transition instead of the reactor warning "I/O
+    # watcher failed" every 5s -- ~17k lines/day (post-cutover #110 audit).
+    # _drain_queue still logs an individual malformed row itself (bounded: the
+    # row is deleted, not retried).
     Mojo::IOLoop->recurring(5 => sub {
-        $self->_drain_queue;
+        my $ok = eval { $self->_drain_queue; 1 };
+        if ($ok) {
+            $self->log->info('audit drain: recovered') if delete $self->{_drain_failed};
+        }
+        else {
+            $self->log->warn("audit drain failed: $@") unless $self->{_drain_failed};
+            $self->{_drain_failed} = 1;
+        }
     });
 
     return;

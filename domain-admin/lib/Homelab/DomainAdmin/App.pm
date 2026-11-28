@@ -398,7 +398,15 @@ sub _prune_received_via ($self) {
 
 sub _materialize_dkim ($self) {
     eval { Homelab::DomainAdmin::App::Controller::Dkim::_materialize_dkim($self) };
-    $self->log->warn("periodic DKIM materialize failed: $@") if $@;
+    # Log a persistently failing materialize ONCE per transition, not every
+    # 60s tick (post-cutover #110 audit; same idiom as register_recurring).
+    if ($@) {
+        $self->log->warn("periodic DKIM materialize failed: $@") unless $self->{_dkim_mat_failed};
+        $self->{_dkim_mat_failed} = 1;
+    }
+    else {
+        $self->log->info('periodic DKIM materialize: recovered') if delete $self->{_dkim_mat_failed};
+    }
     return;
 }
 

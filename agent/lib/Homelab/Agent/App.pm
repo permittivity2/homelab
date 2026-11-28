@@ -125,14 +125,22 @@ sub startup ($self) {
     # time, in whichever OS process is actually executing the callback,
     # never at registration time.
     my $interval = $config->{heartbeat_interval_seconds} // 60;
-    Mojo::IOLoop->recurring($interval => sub { $self->_heartbeat_if_owner->catch(sub ($err) {
-        $self->log->warn("heartbeat failed: $err");
-    }) });
+    # Log a persistently failing heartbeat ONCE, not every interval (post-cutover
+    # #110 audit): a {_hb_failed} transition flag, the same idiom as
+    # Homelab::Common::Registry::register_recurring -- warn on the way into
+    # failure, note recovery once on the way out.
+    Mojo::IOLoop->recurring($interval => sub { $self->_heartbeat_if_owner
+        ->then(sub { $self->log->info('heartbeat: recovered') if delete $self->{_hb_failed} })
+        ->catch(sub ($err) {
+            $self->log->warn("heartbeat failed: $err") unless $self->{_hb_failed};
+            $self->{_hb_failed} = 1;
+        }) });
     # Also fire once shortly after startup, not just after the first
     # full interval -- a freshly (re)started agent shouldn't sit
     # invisible to the fleet view for up to $interval seconds.
     Mojo::IOLoop->timer(2 => sub { $self->_heartbeat_if_owner->catch(sub ($err) {
-        $self->log->warn("initial heartbeat failed: $err");
+        $self->log->warn("initial heartbeat failed: $err") unless $self->{_hb_failed};
+        $self->{_hb_failed} = 1;
     }) });
 
     return;
